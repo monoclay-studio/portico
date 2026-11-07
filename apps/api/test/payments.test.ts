@@ -6,8 +6,7 @@
 import { createHmac } from 'node:crypto';
 import { newId } from '@portico/kernel';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { provisionOrganization } from '../src';
-import { type ApiHarness, enrolMfa, startApi } from './helpers';
+import { type ApiHarness, enrolMfa, provisionWithAdmin, startApi } from './helpers';
 
 let h: ApiHarness;
 beforeAll(async () => {
@@ -18,13 +17,17 @@ afterAll(async () => h?.close());
 async function demoOrg(name = 'Demo Resort') {
   const email = `admin-${newId()}@example.mv`;
   const password = 'correct horse battery staple';
-  const { tenantId } = await provisionOrganization(h.t.db, {
-    name,
-    slug: `demo-${newId().slice(-12)}`,
-    environment: 'demo',
-    planCode: 'enterprise',
-    admin: { email, displayName: 'Admin', password },
-  });
+  const { tenantId } = await provisionWithAdmin(
+    h,
+    {
+      name,
+      slug: `demo-${newId().slice(-12)}`,
+      environment: 'demo',
+      planCode: 'enterprise',
+      admin: { email, displayName: 'Admin' },
+    },
+    password,
+  );
   const login = await h.app.inject({ method: 'POST', url: '/v1/auth/login', payload: { email, password } });
   const auth = { authorization: `Bearer ${login.json().token}` };
   // Sensitive (⚑) permissions such as legal entities and payment accounts need MFA (ADR-0017 §8).

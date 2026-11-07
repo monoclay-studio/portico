@@ -4,8 +4,8 @@ import { createServer, type PorticoApp } from '@portico/http';
 import type { IdentityPorts } from '@portico/identity';
 import { fixedClock, newId, randomToken } from '@portico/kernel';
 import { createTestDatabase, type TestDatabase } from '@portico/testing';
-import { compose, MANIFESTS, provisionOrganization } from '../src';
-import { enrolMfa } from './helpers';
+import { compose, MANIFESTS } from '../src';
+import { acceptInvitationOverHttp, enrolMfa, provisionWithAdmin } from './helpers';
 import { totpCode } from './totp';
 
 export interface EnterpriseHarness {
@@ -61,13 +61,17 @@ export async function enterpriseOrg(
   opts: { planCode?: string; name?: string; environment?: 'live' | 'trial'; mfa?: boolean } = {},
 ) {
   const email = `admin-${newId()}@lagoon.mv`;
-  const { tenantId, adminUserId } = await provisionOrganization(h.t.db, {
-    name: opts.name ?? 'Lagoon Collection',
-    slug: `org-${newId().slice(-12)}`,
-    environment: opts.environment ?? 'live',
-    planCode: opts.planCode ?? 'enterprise',
-    admin: { email, displayName: 'Admin', password: PASSWORD },
-  });
+  const { tenantId, adminUserId } = await provisionWithAdmin(
+    h,
+    {
+      name: opts.name ?? 'Lagoon Collection',
+      slug: `org-${newId().slice(-12)}`,
+      environment: opts.environment ?? 'live',
+      planCode: opts.planCode ?? 'enterprise',
+      admin: { email, displayName: 'Admin' },
+    },
+    PASSWORD,
+  );
   // Administrators enrol MFA so their sensitive (⚑) permissions work; `mfa: false` keeps a fresh, unenrolled one.
   const auth = opts.mfa === false ? await login(h, email) : await loginWithMfa(h, email);
   /** Add a second administrator (for separation-of-duties flows) and sign them in. */
@@ -80,11 +84,12 @@ export async function enterpriseOrg(
       payload: {
         email: e,
         displayName: 'Second admin',
-        initialPassword: PASSWORD,
         roles: [{ roleKey: 'org_admin', scopeType: 'organization' }],
       },
     });
     if (res.statusCode !== 201) throw new Error(`create admin failed: ${res.body}`);
+    // ADR-0017 rule 12: the new administrator accepts from their own email and chooses their password.
+    await acceptInvitationOverHttp(h, e, PASSWORD);
     return { userId: res.json().userId as string, email: e, auth: await loginWithMfa(h, e) };
   };
   return { tenantId, adminUserId, email, auth, addAdmin };

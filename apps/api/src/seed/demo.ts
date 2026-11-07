@@ -200,10 +200,12 @@ export async function seedDemo(
       const users = [{ email: adminEmail, role: spec.staff[0]?.role ?? 'org_admin' }];
       for (const s of spec.staff.slice(1)) {
         const email = emailFor(spec.slug, s.name);
-        await identity.createUser(tx, {
+        // ADR-0017 rule 12: passwords are seeded only by this system process, in demo organizations, for
+        // *.portico.invalid addresses (identity refuses anything else).
+        await identity.seedDemoMember(tx, {
           email,
           displayName: s.name,
-          initialPassword: DEMO_PASSWORD,
+          password: DEMO_PASSWORD,
           roles:
             s.scope === 'organization'
               ? [{ roleKey: s.role, scopeType: 'organization' }]

@@ -7,10 +7,11 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { sourcesFromManifests } from '@portico/db';
 import { createServer } from '@portico/http';
-import { fixedClock, newId, randomToken } from '@portico/kernel';
+import { outboxNotifier } from '@portico/identity';
+import { fieldCryptoFromEnv, fixedClock, newId, randomToken, systemAuthorizer } from '@portico/kernel';
 import { createTestDatabase } from '@portico/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { compose, MANIFESTS } from '../src';
+import { compose, createTrialForOrganization, MANIFESTS, provisionOrganization } from '../src';
 import {
   type EnterpriseHarness,
   enterpriseOrg,
@@ -18,6 +19,7 @@ import {
   PASSWORD,
   startEnterpriseApi,
 } from './enterprise-harness';
+import { acceptInvitationOverHttp } from './helpers';
 
 let h: EnterpriseHarness;
 beforeAll(async () => {
@@ -51,7 +53,8 @@ describe('ADR-0017 §2–3 over HTTP: consent and credential links', () => {
       headers: { ...a.auth, 'idempotency-key': newId() },
       payload: { email: b.email, displayName: 'x', initialPassword: 'attacker-chosen-password', roles: [] },
     });
-    expect(withPassword.json().code).toMatch(/already_member|person_already_has_sign_in/);
+    // ADR-0017 rule 12: no organization ever chooses a person's password.
+    expect(withPassword.json()).toMatchObject({ status: 400, code: 'password_not_allowed' });
     // An admin-sent reset or MFA reset is refused: the person works elsewhere too.
     const reset = await h.app.inject({
       method: 'POST',
@@ -194,4 +197,98 @@ describe('P1-7 / ADR-0017 §11: per-IP limits key on the real client address', (
       await t.drop();
     }
   }, 60_000);
+});
+
+describe('R2-P0-1 / R2-P2-5 over HTTP: the first administrator of a new live organization cannot be captured', () => {
+  it('no password can be pre-registered; provisioning invites the first admin by email; only the real GM gets in', async () => {
+    const gmEmail = `gm-${newId().slice(-8)}@new-hotel.mv`;
+    const ATTACKER_PW = 'attacker-chosen-password';
+    const attacker = await enterpriseOrg(h, { name: 'Attacker org' });
+    const pre = await h.app.inject({
+      method: 'POST',
+      url: '/v1/users',
+      headers: { ...attacker.auth, 'idempotency-key': newId() },
+      payload: { email: gmEmail, displayName: 'GM', initialPassword: ATTACKER_PW, roles: [] },
+    });
+    expect(pre.json()).toMatchObject({ status: 400, code: 'password_not_allowed' });
+    const created = await h.app.inject({
+      method: 'POST',
+      url: '/v1/users',
+      headers: { ...attacker.auth, 'idempotency-key': newId() },
+      payload: { email: gmEmail, displayName: 'GM', roles: [] },
+    });
+    expect(created.json()).toMatchObject({ status: 'invited', delivery: { mode: 'queued' } });
+
+    // Monoclay provisions the hotel; the result says the first administrator is still invited (never silent).
+    const notifier = outboxNotifier(fieldCryptoFromEnv({}).cipher);
+    const hotel = await provisionOrganization(
+      h.t.db,
+      {
+        name: 'New Hotel',
+        slug: `hotel-${newId().slice(-12)}`,
+        environment: 'live',
+        planCode: 'enterprise',
+        admin: { email: gmEmail, displayName: 'General manager' },
+      },
+      'operator',
+      { notifier },
+    );
+    expect(hotel).toMatchObject({ adminStatus: 'invited', delivery: { mode: 'queued' } });
+    // The attacker holds no credential for the GM's identity.
+    const attempt = await h.app.inject({
+      method: 'POST',
+      url: '/v1/auth/login',
+      payload: { email: gmEmail, password: ATTACKER_PW },
+    });
+    expect(attempt.statusCode).toBe(401);
+    // The real GM follows the emailed link and chooses their own password.
+    await acceptInvitationOverHttp(h, gmEmail, 'the-real-gm-password');
+    const gm = await h.app.inject({
+      method: 'POST',
+      url: '/v1/auth/login',
+      payload: { email: gmEmail, password: 'the-real-gm-password', organizationId: hotel.tenantId },
+    });
+    expect(gm.json().status).toBe('signed_in');
+    // Provisioning refuses an operator-chosen password and refuses to run without a way to send the invitation.
+    await expect(
+      provisionOrganization(
+        h.t.db,
+        {
+          name: 'X',
+          slug: `x-${newId().slice(-12)}`,
+          environment: 'live',
+          planCode: 'enterprise',
+          admin: { email: `x-${newId().slice(-6)}@x.mv`, displayName: 'X', password: ATTACKER_PW },
+        },
+        'operator',
+        { notifier },
+      ),
+    ).rejects.toMatchObject({ code: 'password_not_allowed' });
+    await expect(
+      provisionOrganization(h.t.db, {
+        name: 'Y',
+        slug: `y-${newId().slice(-12)}`,
+        environment: 'live',
+        planCode: 'enterprise',
+        admin: { email: `y-${newId().slice(-6)}@y.mv`, displayName: 'Y' },
+      }),
+    ).rejects.toMatchObject({ code: 'notifier_required' });
+  });
+
+  it('R2-P3-1: emergency access cannot create a trial', async () => {
+    const live = await enterpriseOrg(h, { name: 'Elevated org' });
+    await expect(
+      createTrialForOrganization(
+        h.t.db,
+        {
+          tenantId: live.tenantId,
+          environment: 'live',
+          actor: { kind: 'user', userId: live.adminUserId, sessionId: newId(), via: 'elevation' } as never,
+          authz: systemAuthorizer,
+          correlationId: newId(),
+        },
+        { name: 'Durable trial' },
+      ),
+    ).rejects.toMatchObject({ code: 'not_during_emergency_access' });
+  });
 });

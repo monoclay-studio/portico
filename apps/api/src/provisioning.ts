@@ -16,19 +16,42 @@ export interface ProvisionInput {
   slug: string;
   environment: TenantEnvironment;
   planCode: string;
+  /**
+   * `password` is for demo seeding ONLY (ADR-0017 rule 12): accepted for a `demo` organization and a
+   * `*.portico.invalid` address; refused everywhere else. Real administrators choose their own password from the
+   * invitation email.
+   */
   admin: { email: string; displayName: string; password?: string };
   liveTenantId?: string;
 }
 
+type InvitationPorts = Pick<IdentityPorts, 'notifier' | 'config' | 'organizationName'>;
+
+export interface ProvisionResult {
+  tenantId: string;
+  adminUserId: string;
+  /** `invited` until the administrator accepts the invitation sent to them (R2-P2-5: never silent). */
+  adminStatus: 'active' | 'invited';
+  delivery?: { mode: 'queued' | 'simulated' | 'sandbox' };
+}
+
 /**
  * Create an organization with system roles and its first administrator — one transaction.
- * Called by Monoclay operators (internal endpoint / CLI) and by demo/test seeding.
+ * Called by Monoclay operators (internal endpoint / CLI) and by demo seeding. ADR-0017 rules 12-13: the first
+ * administrator is invited (new or existing person) and the invitation is sent to their own email — the operator
+ * sees `adminStatus: 'invited'` until they accept. The notifier is required so the invitation can never be lost.
  */
 export async function provisionOrganization(
   database: PorticoDatabase,
   input: ProvisionInput,
   operator = 'operator',
-): Promise<{ tenantId: string; adminUserId: string }> {
+  ports: InvitationPorts = {},
+): Promise<ProvisionResult> {
+  if (!input.admin.password && !ports.notifier)
+    throw new BusinessRuleError(
+      'notifier_required',
+      'Provisioning needs the staff notifier so the first administrator receives their invitation.',
+    );
   const tenantId = newId();
   const ctx: RequestContext = {
     tenantId,
@@ -47,13 +70,28 @@ export async function provisionOrganization(
       ...(input.liveTenantId ? { liveTenantId: input.liveTenantId } : {}),
     });
     await identity.seedSystemRoles(tx);
-    const { userId } = await identity.createUser(tx, {
-      email: input.admin.email,
-      displayName: input.admin.displayName,
-      ...(input.admin.password ? { initialPassword: input.admin.password } : {}),
-      roles: [{ roleKey: 'org_admin', scopeType: 'organization' }],
-    });
-    return { tenantId, adminUserId: userId };
+    const roles = [{ roleKey: 'org_admin', scopeType: 'organization' as const }];
+    if (input.admin.password) {
+      // Demo seeding only; refused outside a demo organization or for a real address.
+      const { userId } = await identity.seedDemoMember(tx, {
+        email: input.admin.email,
+        displayName: input.admin.displayName,
+        password: input.admin.password,
+        roles,
+      });
+      return { tenantId, adminUserId: userId, adminStatus: 'active' as const };
+    }
+    const created = await identity.createUser(
+      tx,
+      { email: input.admin.email, displayName: input.admin.displayName, roles },
+      ports,
+    );
+    return {
+      tenantId,
+      adminUserId: created.userId,
+      adminStatus: created.status,
+      delivery: { mode: created.delivery.mode },
+    };
   });
 }
 
@@ -69,9 +107,7 @@ export interface TrialInput {
    * request is their consent). Otherwise an email: a new person is created; an existing person is INVITED and
    * accepts while signed in as themselves (ADR-0017 §2).
    */
-  admin:
-    | { selfUserId: string; displayName: string }
-    | { email: string; displayName: string; password?: string };
+  admin: { selfUserId: string; displayName: string } | { email: string; displayName: string };
 }
 
 /** A live organization may run at most this many open trials at once (P3-10; plans may set their own later). */
@@ -125,19 +161,16 @@ export async function provisionTrialOrganization(
       });
       return { tenantId, adminUserId: admin.selfUserId, adminStatus: 'active' as const };
     }
-    const { userId, status } = await identity.createUser(tx, {
-      email: admin.email,
-      displayName: admin.displayName,
-      ...(admin.password ? { initialPassword: admin.password } : {}),
-      roles: [{ roleKey: 'org_admin', scopeType: 'organization' }],
-    });
-    if (status === 'invited')
-      await identity.sendInvitation(tx, ports, {
-        userId,
+    const created = await identity.createUser(
+      tx,
+      {
         email: admin.email,
         displayName: admin.displayName,
-      });
-    return { tenantId, adminUserId: userId, adminStatus: status };
+        roles: [{ roleKey: 'org_admin', scopeType: 'organization' }],
+      },
+      ports,
+    );
+    return { tenantId, adminUserId: created.userId, adminStatus: created.status };
   });
   if (input.liveTenantId) {
     // Separate transaction (another tenant). Idempotent: re-running only re-links.
@@ -177,6 +210,12 @@ export async function createTrialForOrganization(
     );
   if (ctx.actor.kind !== 'user' || ctx.actor.impersonatedBy)
     throw new BusinessRuleError('not_a_user', 'A trial is created by a signed-in staff member.');
+  // R2-P3-1 / ADR-0017 §10: emergency access leaves no durable privilege — a trial (and its administrator) is one.
+  if ((ctx.actor as typeof ctx.actor & { via?: string }).via === 'elevation')
+    throw new BusinessRuleError(
+      'not_during_emergency_access',
+      'Creating a trial is not possible during emergency access. End emergency access and ask an administrator.',
+    );
   const userId = ctx.actor.userId;
   const { me, org } = await withTenantTx(database, ctx, async (tx) => {
     const open = (await platform.listLinkedEnvironments(tx)).filter(
