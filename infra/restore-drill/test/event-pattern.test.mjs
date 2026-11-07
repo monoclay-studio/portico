@@ -7,11 +7,12 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 const FAMILY = 'arn:aws:ecs:ap-south-1:123456789012:task-definition/portico-prod-aps1-c01-restore-drill';
+const PLACEHOLDER = ['$', '{family_arn_prefix}'].join(''); // the Terraform template variable
 const pattern = JSON.parse(
   readFileSync(
     new URL('../../terraform/modules/restore-drill/task-stopped-pattern.json.tftpl', import.meta.url),
     'utf8',
-  ).replace('${family_arn_prefix}', FAMILY),
+  ).replace(PLACEHOLDER, FAMILY),
 );
 
 const values = (v) => (v === undefined ? [] : Array.isArray(v) ? v : [v]);
