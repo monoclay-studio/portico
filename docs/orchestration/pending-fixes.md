@@ -21,3 +21,5 @@
 - inventory (ADR-0015, from operations fix round): stop re-checking `inventory.block.manage` on PORT calls (keep it on inventory's own HTTP routes); then remove operations' system-scope workaround in its InventoryPort adapter (apps/api composition)
 - reservations (from operations fix round): set `aggregateVersion` on stay events and include `stays[]` in booking events so operations can mirror stays without guessing
 - decision needed at integration step: composite units (inventory) in operations' unit mirror — excluded for now (operations review P1-8)
+- infra: set `PORTICO_TERMS_SEAL_KEY` (secret, Secrets Manager) for the API — rates seals booking terms with it; required in production
+- reservations + finance (rates merged 4aec0d5): adopt the breaking renames in docs/architecture/domain-map.md § rates (TaxLine.basis, fullPaymentDate + taxPointSplits, nightly/terms, seal, taxCategory/taxInclusion)

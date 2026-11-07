@@ -84,7 +84,7 @@ direction, experience architecture, parity framework, this orchestration folder.
 |---|---|---|---|---|
 | `feat/guests-core` | wt/guests | guests module | **MERGED** to main | — |
 | `feat/inventory-core` | wt/inventory | inventory | **MERGED** to main | — |
-| `feat/rates-core` | wt/rates | rates + tax engine | steward review: P0 (service charge from current config) + contract decisions → **fix round running** | verify fixes → merge first |
+| `feat/rates-core` | wt/rates | rates + tax engine | **MERGED** to main (4aec0d5) — P0 + P1 fixed; parity gate not yet passed (13 P0 rows untested, mostly cross-module; README § Known gaps) | bind `affectedAgreements`, `channelForApiClient` at integration step |
 | `feat/reservations-core` | wt/reservations | bookings/stays/front desk | steward review: P0 (1-cent channel diff drops taxes) → **fix round running** | merge after rates/finance/payments |
 | `feat/finance-core` | wt/finance | ledger, folios, billing rules, AR, invoices, cashier | steward review: 2 P0 (concurrent corrections, credit notes); ADR-0016 → **fix round running** | merge after rates |
 | `feat/payments-core` | wt/payments | payments (simulator, Stripe Connect, Route D) | steward review: 3 P0 → **fix round running** | merge after finance |

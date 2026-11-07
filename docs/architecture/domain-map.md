@@ -126,20 +126,33 @@ Events: `inventory.availability.changed` (coalescible, for distribution), `inven
 
 ## rates (provider)
 
+**Canonical shapes: `modules/rates/README.md` § Provider contract** (merged 2026-11-07; reservations and finance adapt).
+
 ```ts
-quote(tx, { propertyId, nights: DateRange, occupancy: Occupancy, unitTypeIds?, ratePlanIds?,
-            channelId?, companyId?, promoCode?, bookingDate?: LocalDate }): Promise<Offer[]>
-   // Offer = { unitTypeId, ratePlanId, nightly: NightPrice[], inclusions, taxesAndFees: TaxLine[],
-   //           totals: { net, taxes, fees, gross }, policies: { cancellation, guarantee, deposit },
-   //           restrictionViolations: Violation[], terms: TermsSnapshot }
-priceChange(tx, { terms: TermsSnapshot, change: StayChangeRequest }): Promise<RepricingResult>
-   // used by change previews: keeps agreed nights at agreed prices, prices new nights by policy
-computeTaxes(tx, { propertyId, lines: ChargeLine[], occupancy?, stayContext? }): Promise<TaxLine[]>
-   // used by finance for non-room charges too (single tax engine for everything)
-getRatePlan / listRatePlans
+quote / quoteDetailed(tx, QuoteRequest): Promise<Offer[]> / { quoteId, configVector, offers }
+   // channel is derived from the principal; bookingDate = today unless rates.quote.backdate;
+   // companyId is staff-only and verified; non-staff never see unbookable offers.
+   // Offer.taxesAndFees: TaxLine[] (TaxLine.basis, nature, base|null, quantity, fixedAmount, fx, taxPointDate, estimated)
+priceChange(tx, { terms, change }): Promise<{ nightly, penalties, before, after, difference, violations, terms }>
+   // verifies the seal first; supports ratePlanId / typeChange / asOf; returns new sealed terms
+overridePrice / complimentaryTerms(tx, …): Promise<TermsSnapshot>   // rates.price.override, audited; Green Tax kept on comps
+evaluateCancellationPenalty(terms, at, { event?, nights? })          // pure; basis = price + hotel fees, never levies
+instantiatePaymentSchedule(terms); postingPlan / postingChargeLines(terms, stayId)  // lines carry agreedRuleVersionIds
+levyDays(checkInAt, checkOutAt, 12) / levyTrueUp(terms, { checkInAt, checkOutAt })  // Green Tax 12-hour rule
+computeTaxes / computeTaxesDetailed(tx, { lines: ChargeLine[], fullPaymentDate?, expectedInvoiceDate?,
+                                        ruleVersionIds?, fxRates? })  // single tax engine for every charge
+getRulePackStatus(tx, propertyId)                                     // finance live gate (adviser-confirmed rules)
+recordPlanSale / releasePlanSale; getRatePlan / listRatePlans
 ```
-`TermsSnapshot` is a self-contained JSON document (versioned schema) persisted by reservations; it must be
+`TermsSnapshot` v1 is a self-contained JSON document persisted by reservations, sealed with HMAC-SHA256
+(`seal`, `supersedesSeal`; key `PORTICO_TERMS_SEAL_KEY`, required in production); `verifyTerms(terms)`. It is
 sufficient to post every night's charges without reading current rate configuration.
+**Breaking renames for consumers:** `TaxLine.kind` → `basis`; `paymentDate` → `fullPaymentDate` +
+`ChargeLine.taxPointSplits`; `nights`/`candidateTerms` → `nightly`/`terms`; plain hash → `seal`; finance
+`taxGroup`/`priceMode` → `taxCategory`/`taxInclusion`.
+**Ports rates needs:** `listUnitTypes` (inventory, bound), `companyExists` (guests, bound), `channelForApiClient`
+(distribution, wave 2; until then API clients sell as `api_client:<id>`), `affectedAgreements` (reservations/finance,
+for the tax change report).
 Events: `rates.prices.changed`, `rates.restrictions.changed` (for distribution).
 
 ## guests (provider)
