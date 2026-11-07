@@ -43,3 +43,11 @@ run "portico_prefixed_master_refused" {
   }
   expect_failures = [var.master_username]
 }
+
+run "no_bind_values_in_logs" {
+  command = plan
+  assert {
+    condition     = output.parameters["log_parameter_max_length"] == "0" && output.parameters["log_parameter_max_length_on_error"] == "0" && output.parameters["log_error_verbosity"] == "terse"
+    error_message = "Postgres must never log bind values or key values (guest PII; review P2-5)."
+  }
+}

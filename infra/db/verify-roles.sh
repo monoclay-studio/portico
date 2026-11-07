@@ -57,7 +57,7 @@ expect_denied() { # <label> <url> <sql>
 
 # Mirror the image layout (/app/ops/bootstrap-roles.mjs resolving `pg` from /app/node_modules).
 mkdir -p "$WORK/ops" "$WORK/node_modules"
-cp "$ROOT/infra/db/bootstrap-roles.mjs" "$WORK/ops/"
+cp "$ROOT/infra/db/bootstrap-roles.mjs" "$ROOT/infra/db/definer-registry.mjs" "$WORK/ops/"
 ln -s "$(cd "$ROOT/apps/api" && node -e "process.stdout.write(require('path').dirname(require.resolve('pg/package.json')))")" "$WORK/node_modules/pg"
 BOOTSTRAP="$WORK/ops/bootstrap-roles.mjs"
 
@@ -76,7 +76,7 @@ PGHOST="$HOST" PGPORT="$PORT" PGDATABASE="$DB" PGSSLMODE=disable \
   OWNER_SECRET_JSON="{\"username\":\"portico_owner\",\"password\":\"$OWNER_PW\"}" \
   APP_SECRET_JSON="{\"username\":\"portico_app_blue\",\"password\":\"$APP_BLUE_PW\",\"standby_username\":\"portico_app_green\",\"standby_password\":\"$APP_GREEN_PW\"}" \
   WORKER_SECRET_JSON="{\"username\":\"portico_worker_blue\",\"password\":\"$WORKER_BLUE_PW\",\"standby_username\":\"portico_worker_green\",\"standby_password\":\"$WORKER_GREEN_PW\"}" \
-  node "$BOOTSTRAP" >"$WORK/roles.log" 2>&1 && ok "roles phase" || { ko "roles phase"; cat "$WORK/roles.log"; exit 1; }
+  ENABLE_IAM_READONLY_ROLE=true node "$BOOTSTRAP" >"$WORK/roles.log" 2>&1 && ok "roles phase" || { ko "roles phase"; cat "$WORK/roles.log"; exit 1; }
 
 echo "== 2. migrations as portico_owner"
 (cd "$API_DIR" && NODE_ENV=production DATABASE_URL="$OWNER_URL" "${API_CMD[@]}" src/migrate-cli.ts) >"$WORK/migrate.log" 2>&1 \
@@ -193,7 +193,7 @@ grep -q "permission denied for function" "$WORK/worker-as-app.log" \
   && ok "worker as portico_app_blue is refused the routing functions (revocation effective)" \
   || ko "worker as portico_app_blue was not refused: $(tail -3 "$WORK/worker-as-app.log")"
 
-echo "== 7. restore-drill verify.sql on this database (positive, then two planted defects)"
+echo "== 7. restore-drill verify.sql on this database (positive, then one planted defect per check)"
 if psql "$DBURL" -v ON_ERROR_STOP=1 -f "$ROOT/infra/restore-drill/verify.sql" >"$WORK/drill.log" 2>&1; then
   ok "verify.sql passes ($(grep -oE 'ledger balanced: [0-9]+ journal entries|SKIPPED: no finance ledger' "$WORK/drill.log" | head -1))"
 else
@@ -203,7 +203,7 @@ psql "$DBURL" -qc "grant execute on function payments.tenants_for_jobs() to port
 if psql "$DBURL" -v ON_ERROR_STOP=1 -f "$ROOT/infra/restore-drill/verify.sql" >"$WORK/drill-neg1.log" 2>&1; then
   ko "verify.sql missed a routing function granted to portico_app"
 else
-  grep -q "portico_app can execute unreviewed SECURITY DEFINER functions: payments.tenants_for_jobs()" "$WORK/drill-neg1.log" \
+  grep -q "unreviewed SECURITY DEFINER functions reachable by a login group: portico_app→payments.tenants_for_jobs()" "$WORK/drill-neg1.log" \
     && ok "verify.sql catches a routing function re-granted to portico_app" || ko "routing negative: $(grep -m1 'DRILL FAIL' "$WORK/drill-neg1.log")"
 fi
 psql "$DBURL" -qc "revoke execute on function payments.tenants_for_jobs() from portico_app" >/dev/null
@@ -228,6 +228,83 @@ if psql "$DBURL" -v ON_ERROR_STOP=1 -f "$ROOT/infra/restore-drill/verify.sql" >"
 else
   grep -q "unbalanced journal entries: 00000000-0000-0000-0000-00000000000b" "$WORK/drill-neg2.log" && ok "verify.sql catches an unbalanced journal entry" \
     || ko "ledger negative: $(grep -m1 'DRILL FAIL' "$WORK/drill-neg2.log")"
+fi
+psql "$DBURL" -qc "set session_replication_role = replica; delete from finance.journal_lines where entry_id = '00000000-0000-0000-0000-00000000000b'" >/dev/null
+
+# One planted defect per drill check (review P2-4): each must FAIL verify.sql with the named message, then be undone.
+drill_negative() { # <label> <expected message regex> <plant sql> <undo sql>
+  psql "$DBURL" -v ON_ERROR_STOP=1 -qc "$3" >/dev/null 2>"$WORK/plant.err" || { ko "$1: could not plant ($(tail -1 "$WORK/plant.err"))"; return; }
+  if psql "$DBURL" -v ON_ERROR_STOP=1 -f "$ROOT/infra/restore-drill/verify.sql" >"$WORK/drill-n.log" 2>&1; then
+    ko "verify.sql missed: $1"
+  elif grep -qE "$2" "$WORK/drill-n.log"; then ok "verify.sql catches: $1"
+  else ko "$1: failed for another reason: $(grep -m1 'DRILL FAIL' "$WORK/drill-n.log")"; fi
+  psql "$DBURL" -v ON_ERROR_STOP=1 -qc "$4" >/dev/null
+}
+TT="$(psql "$DBURL" -Atqc "select c.oid::regclass from pg_policy p join pg_class c on c.oid = p.polrelid where p.polname = 'tenant_isolation' order by 1 limit 1")"
+drill_negative "tenant policy replaced by USING (true)" "non-standard tenant policy: $TT" \
+  "alter policy tenant_isolation on $TT using (true) with check (true)" \
+  "alter policy tenant_isolation on $TT using (tenant_id = core.current_tenant_id()) with check (tenant_id = core.current_tenant_id())"
+drill_negative "tenant policy widened with OR true" "non-standard tenant policy: $TT" \
+  "alter policy tenant_isolation on $TT using ((tenant_id = core.current_tenant_id()) or true)" \
+  "alter policy tenant_isolation on $TT using (tenant_id = core.current_tenant_id())"
+drill_negative "extra permissive USING (true) policy" "non-standard tenant policy: $TT\\(open\\)" \
+  "create policy open on $TT using (true)" "drop policy open on $TT"
+drill_negative "new non-tenant table with a USING (true) policy" "unreviewed policies on non-tenant tables: core.drill_probe.open" \
+  "create table core.drill_probe (x int); alter table core.drill_probe enable row level security; create policy open on core.drill_probe using (true); grant select on core.drill_probe to portico_app" \
+  "drop table core.drill_probe"
+drill_negative "portico_worker granted DELETE on the audit log" "portico_worker can modify core.audit_log" \
+  "grant delete on core.audit_log to portico_worker" "revoke delete on core.audit_log from portico_worker"
+drill_negative "portico_worker granted SELECT on a non-RLS directory table" "portico_worker→payments.account_directory" \
+  "grant select on payments.account_directory to portico_worker" "revoke select on payments.account_directory from portico_worker"
+drill_negative "worker-only unreviewed definer function" "portico_worker→core.drill_leak\\(\\)" \
+  "create function core.drill_leak() returns int language sql security definer set search_path = core, pg_temp as 'select 1'; revoke execute on function core.drill_leak() from public; grant execute on function core.drill_leak() to portico_worker" \
+  "drop function core.drill_leak()"
+
+echo "== 8. grants phase fails CLOSED on an unreviewed definer function (review P2-2)"
+psql "$DBURL" -v ON_ERROR_STOP=1 -qc "set role portico_owner;
+  create function identity.leak_memberships() returns setof uuid language sql stable security definer
+    set search_path = identity, pg_temp as 'select tenant_id from identity.user_tenants';
+  revoke execute on function identity.leak_memberships() from public;
+  grant execute on function identity.leak_memberships() to portico_app;
+  create function core.leak_worker_only() returns int language sql security definer set search_path = core, pg_temp as 'select 1';
+  revoke execute on function core.leak_worker_only() from public;
+  grant execute on function core.leak_worker_only() to portico_worker;" >/dev/null
+if DATABASE_URL="$OWNER_URL" node "$BOOTSTRAP" grants >"$WORK/grants-unreviewed.log" 2>&1; then
+  ko "grants phase exited 0 with unreviewed definer functions"
+else
+  grep -q "have been REVOKED: core.leak_worker_only(), identity.leak_memberships()" "$WORK/grants-unreviewed.log" \
+    && ok "grants phase exits non-zero and names both unreviewed functions (app and worker-only)" \
+    || ko "grants failure message: $(tail -1 "$WORK/grants-unreviewed.log")"
+fi
+expect_denied "after the failed grants step the app can no longer call the unreviewed function" "$APP_URL" "select count(*) from identity.leak_memberships()"
+expect_denied "after the failed grants step the worker can no longer call either function" "$WORKER_URL" "select core.leak_worker_only()"
+psql "$DBURL" -qc "drop function identity.leak_memberships(); drop function core.leak_worker_only()" >/dev/null
+
+echo "== 9. portico_ops_readonly reaches no tenant or directory data (review P2-3)"
+DATABASE_URL="$OWNER_URL" node "$BOOTSTRAP" grants >/dev/null 2>&1 || ko "grants re-run after cleanup"
+reach="$(psql "$DBURL" -Atqc "select string_agg(t, ',' order by t) from unnest(array['identity.dev_mailbox','identity.login_attempts','identity.user_tenants','identity.users','payments.account_directory','platform.tenant_directory','core.audit_log','core.outbox']) t where to_regclass(t) is not null and has_table_privilege('portico_ops_readonly', t, 'SELECT')")"
+[ -z "$reach" ] && ok "ops role cannot read mailbox, login attempts, memberships, users, directories, audit, outbox" || ko "ops role can read: $reach"
+member="$(psql "$DBURL" -Atqc "select pg_has_role('portico_ops_readonly', 'pg_read_all_data', 'USAGE')")"
+[ "$member" = "f" ] && ok "ops role is not a member of pg_read_all_data" || ko "ops role holds pg_read_all_data"
+ops_ok="$(psql "$DBURL" -Atqc "select has_table_privilege('portico_ops_readonly', 'core.job_runs', 'SELECT') and has_table_privilege('portico_ops_readonly', 'core.schema_migrations', 'SELECT')")"
+[ "$ops_ok" = "t" ] && ok "ops role reads core.job_runs and core.schema_migrations only" || ko "ops role lacks its operational tables"
+
+echo "== 10. no bind values or row values in Postgres logs (review P2-5)"
+if [ -n "${PG_LOG_FILE:-}" ] && [ -r "$PG_LOG_FILE" ]; then
+  log_probe() { # <marker> → 0 when the marker reached the server log
+    psql "$ADMIN_URL" -qc "alter database $DB set log_min_duration_statement = 0" >/dev/null
+    (cd "$API_DIR" && node --input-type=module -e "
+      import pg from 'pg'; const c = new pg.Client({ connectionString: process.env.U }); await c.connect();
+      await c.query('select \$1::text as v', ['$1']); await c.end();" ) 2>/dev/null
+    sleep 1; grep -q "$1" "$PG_LOG_FILE"
+  }
+  psql "$ADMIN_URL" -qc "alter database $DB reset log_parameter_max_length; alter database $DB reset log_parameter_max_length_on_error" >/dev/null
+  if U="$APP_URL" log_probe "probe-unsafe-$DB"; then ok "control: without the settings a bind value DOES reach the log (probe works)"; else ko "control probe found nothing — probe broken"; fi
+  psql "$ADMIN_URL" -qc "alter database $DB set log_parameter_max_length = 0; alter database $DB set log_parameter_max_length_on_error = 0; alter database $DB set log_error_verbosity = terse" >/dev/null
+  if U="$APP_URL" log_probe "probe-guest-$DB"; then ko "bind value reached the log with the shipped settings"; else ok "with the shipped settings (log_parameter_max_length[_on_error]=0, terse) no bind value reaches the log"; fi
+  psql "$ADMIN_URL" -qc "alter database $DB reset log_min_duration_statement" >/dev/null
+else
+  echo "  SKIP  log probe: set PG_LOG_FILE to the server log to run it (not counted as passed)"
 fi
 
 psql "$ADMIN_URL" -qc "drop database $DB with (force)" >/dev/null 2>&1 || true

@@ -48,3 +48,8 @@ output "instance_identifiers" {
 output "has_replicas" {
   value = local.is_aurora ? var.instance_count > 1 : var.multi_az
 }
+
+output "parameters" {
+  description = "Engine parameters applied (name => value), for tests."
+  value       = { for p in local.parameters : p.name => p.value }
+}

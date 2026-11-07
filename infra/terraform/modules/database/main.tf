@@ -85,9 +85,14 @@ locals {
     { name = "ssl_min_protocol_version", value = "TLSv1.2", apply_method = "pending-reboot" },
     { name = "log_min_duration_statement", value = tostring(var.log_min_duration_ms), apply_method = "immediate" },
     { name = "log_lock_waits", value = "1", apply_method = "immediate" },
-    # DDL is logged for audit. Role passwords are sent as SCRAM verifiers by the bootstrap job, so plaintext
-    # passwords never reach these logs.
+    # DDL is logged for audit. Role passwords are sent as SCRAM verifiers, and the bootstrap session turns
+    # statement logging off for its role DDL (review P3-5).
     { name = "log_statement", value = "ddl", apply_method = "immediate" },
+    # Never write bind values or row values to the logs (guest PII would outlive erasure there; review P2-5):
+    # slow-statement and error logs show $n placeholders only, and DETAIL lines such as "Key (email)=(…)" are dropped.
+    { name = "log_parameter_max_length", value = "0", apply_method = "immediate" },
+    { name = "log_parameter_max_length_on_error", value = "0", apply_method = "immediate" },
+    { name = "log_error_verbosity", value = "terse", apply_method = "immediate" },
     { name = "log_temp_files", value = "10240", apply_method = "immediate" },
     { name = "idle_in_transaction_session_timeout", value = "300000", apply_method = "immediate" },
   ]
@@ -245,6 +250,12 @@ data "aws_iam_policy_document" "monitoring_assume" {
     principals {
       type        = "Service"
       identifiers = ["monitoring.rds.amazonaws.com"]
+    }
+    # Confused-deputy guard (review P3-4): only this account's use of the service may assume the role.
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceAccount"
+      values   = [data.aws_caller_identity.current.account_id]
     }
   }
 }

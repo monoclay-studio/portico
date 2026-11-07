@@ -44,23 +44,71 @@ begin
   if bad <> '' then raise exception 'DRILL FAIL: tenant isolation weakened:%', bad; end if;
 end $$;
 
-\echo '== check 3: tables WITHOUT row-level security are not readable by the application role'
+\echo '== check 2b: every tenant-owned table carries exactly the standard tenant policy'
+-- RLS switched on proves nothing if a policy says USING (true). Each tenant-owned table must have exactly one policy,
+-- `tenant_isolation`, permissive, for all commands and all roles, whose USING and WITH CHECK are exactly
+-- (tenant_id = core.current_tenant_id()). Exact comparison: "… OR true" defeats a substring match.
 do $$
-declare r record; bad text := '';
+declare bad text;
 begin
-  for r in
-    select n.nspname as s, c.relname as t
-      from pg_class c join pg_namespace n on n.oid = c.relnamespace
-     where c.relkind in ('r', 'p') and not c.relrowsecurity
-       and n.nspname not in ('pg_catalog', 'information_schema', 'public')
-       and n.nspname not like 'pg\_%'
-  loop
-    if has_table_privilege('portico_app', format('%I.%I', r.s, r.t), 'SELECT')
-       and format('%I.%I', r.s, r.t) not in ('core.schema_migrations') then
-      bad := bad || format(' %I.%I', r.s, r.t);
-    end if;
+  select string_agg(t, ' ' order by t) into bad from (
+    select format('%s(%s)', c.oid::regclass, coalesce(p.polname, 'no policy')) as t
+      from pg_class c
+      join pg_namespace n on n.oid = c.relnamespace
+      join pg_attribute a on a.attrelid = c.oid and a.attname = 'tenant_id' and not a.attisdropped
+      left join pg_policy p on p.polrelid = c.oid
+     where c.relkind in ('r', 'p') and c.relrowsecurity
+       and n.nspname not in ('pg_catalog', 'information_schema') and n.nspname not like 'pg\_%'
+       and (p.polname is null
+            or p.polname <> 'tenant_isolation' or not p.polpermissive or p.polcmd <> '*' or p.polroles <> '{0}'
+            or pg_get_expr(p.polqual, p.polrelid) is distinct from '(tenant_id = core.current_tenant_id())'
+            or pg_get_expr(p.polwithcheck, p.polrelid) is distinct from '(tenant_id = core.current_tenant_id())')
+  ) x;
+  if bad is not null then raise exception 'DRILL FAIL: non-standard tenant policy: %', bad; end if;
+end $$;
+
+\echo '== check 2c: policies on tables without tenant_id are reviewed (exact expressions)'
+do $$
+declare bad text;
+begin
+  select string_agg(format('%s.%s', c.oid::regclass, p.polname), ', ' order by 1) into bad
+    from pg_policy p
+    join pg_class c on c.oid = p.polrelid
+    join pg_namespace n on n.oid = c.relnamespace
+   where n.nspname not in ('pg_catalog', 'information_schema') and n.nspname not like 'pg\_%'
+     and not exists (select 1 from pg_attribute a where a.attrelid = c.oid and a.attname = 'tenant_id' and not a.attisdropped)
+     and (c.oid::regclass::text, p.polname, p.polcmd::text,
+          coalesce(regexp_replace(pg_get_expr(p.polqual, p.polrelid), '\s+', ' ', 'g'), '-'),
+          coalesce(regexp_replace(pg_get_expr(p.polwithcheck, p.polrelid), '\s+', ' ', 'g'), '-')) not in (
+       -- identity (global person records; reviewed in the identity steward reviews, ADR-0017)
+       ('identity.users', 'member_visible', 'r', '(EXISTS ( SELECT 1 FROM identity.memberships m WHERE (m.user_id = users.id)))', '-'),
+       ('identity.users', 'member_update', 'w', '(EXISTS ( SELECT 1 FROM identity.memberships m WHERE (m.user_id = users.id)))', '-'),
+       ('identity.users', 'insert_any', 'a', '-', 'true'),
+       ('identity.mfa_factors', 'member_only', '*', '(EXISTS ( SELECT 1 FROM identity.memberships m WHERE (m.user_id = mfa_factors.user_id)))', '(EXISTS ( SELECT 1 FROM identity.memberships m WHERE (m.user_id = mfa_factors.user_id)))'),
+       ('identity.mfa_recovery_codes', 'member_only', '*', '(EXISTS ( SELECT 1 FROM identity.memberships m WHERE (m.user_id = mfa_recovery_codes.user_id)))', '(EXISTS ( SELECT 1 FROM identity.memberships m WHERE (m.user_id = mfa_recovery_codes.user_id)))'));
+  if bad is not null then raise exception 'DRILL FAIL: unreviewed policies on non-tenant tables: %', bad; end if;
+end $$;
+
+\echo '== check 3: tables WITHOUT row-level security are not readable or writable by any login group (app, worker)'
+do $$
+declare r record; g text; bad text := '';
+begin
+  foreach g in array array['portico_app', 'portico_worker'] loop
+    continue when not exists (select 1 from pg_roles where rolname = g);
+    for r in
+      select n.nspname as s, c.relname as t
+        from pg_class c join pg_namespace n on n.oid = c.relnamespace
+       where c.relkind in ('r', 'p') and not c.relrowsecurity
+         and n.nspname not in ('pg_catalog', 'information_schema', 'public')
+         and n.nspname not like 'pg\_%'
+    loop
+      if format('%I.%I', r.s, r.t) not in ('core.schema_migrations')
+         and has_table_privilege(g, format('%I.%I', r.s, r.t), 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE') then
+        bad := bad || format(' %s→%I.%I', g, r.s, r.t);
+      end if;
+    end loop;
   end loop;
-  if bad <> '' then raise exception 'DRILL FAIL: app role can read non-RLS tables:%', bad; end if;
+  if bad <> '' then raise exception 'DRILL FAIL: login groups can reach non-RLS tables:%', bad; end if;
 end $$;
 
 \echo '== check 4: no Portico role is privileged'
@@ -73,15 +121,19 @@ begin
   if bad is not null then raise exception 'DRILL FAIL: privileged Portico roles: %', bad; end if;
 end $$;
 
-\echo '== check 5: audit log is append-only for the application role'
+\echo '== check 5: audit log is append-only for every login group (app, worker)'
 do $$
+declare g text;
 begin
   if to_regclass('core.audit_log') is null then raise exception 'DRILL FAIL: core.audit_log missing'; end if;
-  if has_table_privilege('portico_app', 'core.audit_log', 'UPDATE')
-     or has_table_privilege('portico_app', 'core.audit_log', 'DELETE')
-     or has_table_privilege('portico_app', 'core.audit_log', 'TRUNCATE') then
-    raise exception 'DRILL FAIL: portico_app can modify core.audit_log';
-  end if;
+  foreach g in array array['portico_app', 'portico_worker'] loop
+    continue when not exists (select 1 from pg_roles where rolname = g);
+    if has_table_privilege(g, 'core.audit_log', 'UPDATE')
+       or has_table_privilege(g, 'core.audit_log', 'DELETE')
+       or has_table_privilege(g, 'core.audit_log', 'TRUNCATE') then
+      raise exception 'DRILL FAIL: % can modify core.audit_log', g;
+    end if;
+  end loop;
 end $$;
 
 \echo '== check 6: financial integrity (every journal entry balances, per currency and in functional currency)'
@@ -113,35 +165,55 @@ begin
   end if;
 end $$;
 
-\echo '== check 7: cross-tenant routing functions are not callable by request handlers (portico_app)'
--- Reviewed SECURITY DEFINER functions portico_app may execute (sign-in, tenant lookups, the public payments webhook
--- route). Keep in sync with APP_DEFINER_FUNCTIONS / ROUTING_FUNCTIONS.workerAndApp in infra/db/bootstrap-roles.mjs.
+\echo '== check 7: SECURITY DEFINER functions reachable by login groups are exactly the reviewed ones'
+-- The lists below are generated from infra/db/bootstrap-roles.mjs and compared by
+-- infra/db/definer-lists.test.mjs (review P3-9): edit the module, then copy the lines it prints.
+-- BEGIN GENERATED app_definers
+create temporary table drill_app_definers (fn text primary key) on commit preserve rows;
+insert into drill_app_definers values
+  ('identity.login_lookup(text)'), ('identity.record_login_result(uuid,boolean)'), ('identity.ensure_user(uuid,text)'),
+  ('identity.record_login_attempt(text,text,boolean,integer)'), ('identity.credential_epoch_for_email(text)'),
+  ('identity.credential_summary(uuid)'), ('identity.first_email_verification(uuid,timestamp with time zone)'),
+  ('identity.lock_person(uuid)'), ('identity.memberships_elsewhere(uuid,uuid)'), ('identity.pending_invitations(uuid)'),
+  ('identity.revoke_sessions_everywhere(uuid,text)'), ('identity.claim_verified_domain(text,uuid,timestamp with time zone)'),
+  ('identity.release_verified_domain(text,uuid)'), ('identity.verified_domain_holder(text)'),
+  ('identity.record_domain_check(uuid,text,boolean,timestamp with time zone)'),
+  ('identity.raise_platform_alert(uuid,text,text,jsonb,text)'), ('identity.list_platform_alerts(integer)'),
+  ('identity.deposit_simulated_message(uuid,uuid,text,text,text,text,text)'), ('identity.read_dev_mailbox(text,integer)'),
+  ('platform.tenant_environment(uuid)'), ('platform.tenant_summaries(uuid[])'),
+  ('payments.route_webhook(text,text,boolean)');
+-- END GENERATED app_definers
+-- BEGIN GENERATED worker_only_definers
+create temporary table drill_worker_definers (fn text primary key) on commit preserve rows;
+insert into drill_worker_definers values
+  ('core.claim_unfanned_events(integer)'), ('core.record_fanout(uuid,text[])'), ('core.claim_deliveries(integer,integer)'),
+  ('core.record_delivery_failure(uuid,text,text,integer)'), ('core.claim_job(text,integer,integer)'),
+  ('core.finish_job(text,boolean,text)'), ('core.purge_expired_idempotency_keys(integer)'),
+  ('payments.tenants_for_jobs()'), ('integration.claim_due_tenants(integer,integer)'),
+  ('inventory.tenants_with_due_expiries(timestamp with time zone,integer)'),
+  ('inventory.tenants_with_ledger_since(date,integer)'), ('operations.job_properties()'),
+  ('guests.tenants_with_expired_documents(date)'), ('guests.tenants_with_active_profiles()'),
+  ('reservations.due_booking_expiries(timestamp with time zone)'), ('identity.purge_login_attempts(integer,integer)'),
+  ('identity.purge_orphan_sso_links()'), ('identity.sso_domains_due(timestamp with time zone)');
+-- END GENERATED worker_only_definers
 do $$
-declare bad text;
+declare g text; bad text := '';
 begin
-  if not exists (select 1 from pg_roles where rolname = 'portico_app') then
-    raise notice 'SKIPPED: no portico_app role'; return;
-  end if;
-  select string_agg(p.oid::regprocedure::text, ', ' order by 1) into bad
-    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-   where p.prosecdef
-     and p.prorettype <> 'trigger'::regtype
-     and n.nspname not in ('pg_catalog', 'information_schema', 'public') and n.nspname not like 'pg\_%'
-     and has_function_privilege('portico_app', p.oid, 'execute')
-     and p.oid::regprocedure::text not in (
-       'identity.login_lookup(text)', 'identity.record_login_result(uuid,boolean)', 'identity.ensure_user(uuid,text)',
-       'identity.record_login_attempt(text,text,boolean,integer)', 'identity.credential_epoch_for_email(text)',
-       'identity.credential_summary(uuid)', 'identity.first_email_verification(uuid,timestamp with time zone)',
-       'identity.lock_person(uuid)', 'identity.memberships_elsewhere(uuid,uuid)', 'identity.pending_invitations(uuid)',
-       'identity.revoke_sessions_everywhere(uuid,text)', 'identity.claim_verified_domain(text,uuid,timestamp with time zone)',
-       'identity.release_verified_domain(text,uuid)', 'identity.verified_domain_holder(text)',
-       'identity.record_domain_check(uuid,text,boolean,timestamp with time zone)',
-       'identity.raise_platform_alert(uuid,text,text,jsonb,text)', 'identity.list_platform_alerts(integer)',
-       'identity.deposit_simulated_message(uuid,uuid,text,text,text,text,text)', 'identity.read_dev_mailbox(text,integer)',
-       'platform.tenant_environment(uuid)', 'platform.tenant_summaries(uuid[])',
-       'payments.route_webhook(text,text,boolean)');
-  if bad is not null then raise exception 'DRILL FAIL: portico_app can execute unreviewed SECURITY DEFINER functions: %', bad; end if;
-  raise notice 'routing functions restricted to portico_worker';
+  foreach g in array array['portico_app', 'portico_worker'] loop
+    if not exists (select 1 from pg_roles where rolname = g) then
+      raise exception 'DRILL FAIL: role % missing — the role model was not restored', g;
+    end if;
+    select bad || coalesce(' ' || g || '→' || string_agg(p.oid::regprocedure::text, ', ' order by 1), '') into bad
+      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where p.prosecdef
+       and p.prorettype <> 'trigger'::regtype
+       and n.nspname not in ('pg_catalog', 'information_schema', 'public') and n.nspname not like 'pg\_%'
+       and has_function_privilege(g, p.oid, 'execute')
+       and p.oid::regprocedure::text not in (select fn from drill_app_definers)
+       and (g = 'portico_app' or p.oid::regprocedure::text not in (select fn from drill_worker_definers));
+  end loop;
+  if bad <> '' then raise exception 'DRILL FAIL: unreviewed SECURITY DEFINER functions reachable by a login group:%', bad; end if;
+  raise notice 'definer functions: app and worker reach only the reviewed lists';
 end $$;
 
 \echo '== evidence: latest committed activity (compare with the restore point to measure data loss)'
