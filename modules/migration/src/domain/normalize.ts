@@ -81,9 +81,10 @@ export function parseDate(
     const d = validDate(Number(m[1]), Number(m[2]), Number(m[3]));
     return d ? { ok: true, date: d } : { ok: false, reason: 'invalid' };
   }
-  m = /^(\d{1,2})[\s-]([A-Za-z]{3,4})[a-z]*[\s-](\d{4})(?:[T\s].*)?$/.exec(v);
+  m = /^(\d{1,2})[\s-]([A-Za-z]{3,9})\.?[\s-](\d{4})(?:[T\s].*)?$/.exec(v);
   if (m) {
-    const month = MONTHS[(m[2] as string).toLowerCase()];
+    const word = (m[2] as string).toLowerCase();
+    const month = MONTHS[word] ?? MONTHS[word.slice(0, 4)] ?? MONTHS[word.slice(0, 3)];
     const d = month ? validDate(Number(m[3]), month, Number(m[1])) : null;
     return d ? { ok: true, date: d } : { ok: false, reason: 'invalid' };
   }

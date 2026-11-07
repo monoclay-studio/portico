@@ -10,7 +10,7 @@ import type { Table } from './csv';
 
 export const XLSX_LIMITS = { maxEntries: 2000, maxUncompressed: 60 * 1024 * 1024, maxRatio: 200 };
 
-interface ZipEntry {
+export interface ZipEntry {
   name: string;
   data: Buffer;
 }
@@ -167,7 +167,8 @@ export function readXlsx(buf: Buffer): Map<string, Table> {
 
 // ───────────────────────────── writer (templates, tests) ─────────────────────────────
 
-function zip(entries: ZipEntry[]): Buffer {
+/** Build a ZIP archive (deflate) — the writer behind templates; exported for tests of the reader. */
+export function zip(entries: ZipEntry[]): Buffer {
   const locals: Buffer[] = [];
   const centrals: Buffer[] = [];
   let offset = 0;

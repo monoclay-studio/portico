@@ -141,7 +141,8 @@ export function parseCsv(input: string, opts: { delimiter?: string } = {}): Tabl
 /** Render rows as CSV (templates and the rollback worklist). Cells that could run as formulas are quoted. */
 export function toCsv(headers: readonly string[], rows: ReadonlyArray<ReadonlyArray<string>>): string {
   const esc = (v: string) => {
-    const safe = /^[=+\-@\t\r]/.test(v) ? `'${v}` : v;
+    // A cell that a spreadsheet would run as a formula is neutralized; plain negative numbers are kept as numbers.
+    const safe = /^[=+\-@\t\r]/.test(v) && !/^-\d+(\.\d+)?$/.test(v) ? `'${v}` : v;
     return /[",\n\r;]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
   };
   return [headers, ...rows].map((r) => r.map(esc).join(',')).join('\n');
