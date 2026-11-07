@@ -73,6 +73,11 @@ regression test made from the reviewer's attack.
 - **The first canary ran at 17:30 (C-L1-01).** A planted signature change in `apps/api` was caught by the worker's
   typecheck once `apps/*` joined the turbo inputs, closing escape E-038.
 
+- **Checkpoint WIP commits must not be rewritten.** At 18:08 an agent replaced a pushed checkpoint WIP commit with
+  proper commits, so the normal push was refused. A force-push was declined by the safety policy, correctly. The
+  resolution was an `-s ours` merge recording the superseded WIP commit, with no history rewritten. Rule for agents:
+  build on top of a checkpoint commit, never amend or reset it.
+
 ## Corrections
 
 - 2026-11-07 17:25: several timeline entries written between 16:45 and 17:22 carried estimated times that were 10–60
