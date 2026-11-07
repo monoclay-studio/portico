@@ -125,6 +125,9 @@ named from `PORTICO_TEST_DB_PREFIX` (agents: set a unique prefix so parallel run
     standalone — document each module's standalone dependencies in its spec.
 16. **Provenance is visible.** Data shown to users carries its provenance: `live`, `simulated`, `copied` (trial),
     `delayed` (stale beyond SLA), `incomplete`, `external` (received from another system, with last-sync time).
+17. **Universal record contract.** Primary records expose `status` (per family), `allowedActions` (with
+    disabled reasons), `issues`, `owner`, `links`; modules declare `recordTypes` and a `SearchProvider`
+    (domain-map § Universal record contract). This is what makes modules feel like one product.
 
 ## 5. Money, time and finance principles (non-negotiable)
 
@@ -200,6 +203,7 @@ No compliance badges, certifications or partner logos without evidence and permi
 
 ## 10. UX principles (for every screen)
 
+Experience architecture (one product, not modules; learning & help anchors): `docs/product/experience-architecture.md`.
 Visual direction: `docs/product/design-direction.md` (simple, minimal, calm — **power before prettiness**).
 Interaction rules: `docs/product/ux-principles.md`.
 

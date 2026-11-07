@@ -239,6 +239,26 @@ re-validation. Events: `integration.connection.statusChanged`, `integration.exce
 
 ---
 
+## Universal record contract (every module — docs/product/experience-architecture.md)
+
+Every primary aggregate's `GET` response includes, in addition to its own fields:
+
+```ts
+status: Record<string, string>      // one entry per status family — never merged into one field
+allowedActions: RecordAction[]      // { action, label, enabled, reason?, previewRequired? } computed server-side
+issues: RecordIssue[]               // { code, severity: blocking|warning|info, message, owner?, since? }
+owner?: RecordOwner                 // responsible user or department
+links: RecordLink[]                 // { rel, type, id, title? } related records across modules
+provenance?: Provenance             // when data is mirrored/simulated/copied/delayed
+```
+Types live in `@portico/kernel` (`records.ts`). Each module also:
+- declares `recordTypes` in its manifest (the `type` equals the `target.type` used in its audit entries), which
+  powers `GET /v1/records/{type}/{id}/history` (one cross-module timeline from the audit log);
+- exports a `SearchProvider` (`@portico/db`) with `search` + `summarize`, permission- and property-scope-aware,
+  registered in the composition root → `GET /v1/search` and hover previews. Reference: `modules/platform/src/search.ts`.
+- never writes secrets or sensitive identity values into audit `before`/`after` (mask them) — history is shown to
+  anyone with read permission on the record.
+
 ## Rules for changing a contract
 
 1. Update this file in the same commit as the provider change.
