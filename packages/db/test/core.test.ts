@@ -221,3 +221,18 @@ describe('scheduled jobs', () => {
     expect(rows[0]?.n).toBeGreaterThanOrEqual(1);
   });
 });
+
+describe('idempotency is bound to the caller', () => {
+  it('never replays a stored response to a different user', async () => {
+    const owner = testContext();
+    const other = { ...testContext({ tenantId: owner.tenantId }), tenantId: owner.tenantId };
+    const run = (ctx: typeof owner) =>
+      runIdempotent(t.db, ctx, { scope: 'POST /guests', key: 'k-actor', request: { a: 1 } }, async () => ({
+        status: 201,
+        body: { secret: 'pii' },
+      }));
+    await run(owner);
+    expect((await run(owner)).replayed).toBe(true);
+    await expect(run(other)).rejects.toThrow(/different user or integration/);
+  });
+});
