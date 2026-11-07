@@ -21,7 +21,7 @@ export * from './manifest';
 export * from './ports';
 export * from './routes';
 export { integrationSearch } from './search';
-export { localSecretStore, type SecretStore, secretStoreFromEnv } from './secrets';
+export { localSecretStore, type SecretStore } from './secrets';
 export type { IntegrationDeps } from './service/common';
 export { integrationJobs, runTenantWork } from './service/jobs';
 export { createIntegrationProvider, type IntegrationProvider } from './service/provider';

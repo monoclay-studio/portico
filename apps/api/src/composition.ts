@@ -21,13 +21,13 @@ import {
   integrationManifest,
   integrationSearch,
   integrationSubscriptions,
+  localSecretStore,
   noAuthorityTransitions,
   PmsSimulatorHub,
-  secretStoreFromEnv,
   unavailableActivationScope,
   unavailableCatalog,
 } from '@portico/integration';
-import type { ModuleManifest } from '@portico/kernel';
+import { fieldCryptoFromEnv, type ModuleManifest } from '@portico/kernel';
 import { platform, platformHttp, platformManifest, platformSearch } from '@portico/platform';
 import { recordsHttp } from './records-routes';
 
@@ -59,6 +59,7 @@ export function compose(database: PorticoDatabase): Composition {
   // Ports: platform is real (on main). Inventory / rates / finance catalogs, platform activation scope (G-04) and
   // authority transitions (G-02) are bound to stubs until those providers merge (see modules/integration/README.md).
   const pmsSimulators = new PmsSimulatorHub();
+  const fieldCrypto = fieldCryptoFromEnv();
   const integrationDeps: IntegrationDeps = {
     ports: {
       platform: {
@@ -89,7 +90,7 @@ export function compose(database: PorticoDatabase): Composition {
       transitions: noAuthorityTransitions,
     },
     connectors: createConnectorRegistry({ pmsSimulator: pmsSimulators }),
-    secrets: secretStoreFromEnv(),
+    secrets: localSecretStore(fieldCrypto.cipher, fieldCrypto.keySource),
     transport: fetchWebhookTransport(),
     simulators: { pms: pmsSimulators },
   };

@@ -1,8 +1,9 @@
 /**
  * SecretStore port: connection credentials and webhook signing secrets are never stored in plaintext.
  *
- *  - Development / test: `localSecretStore` encrypts with the kernel's AES-256-GCM `localFieldCipher` (key from
- *    the environment) and keeps only ciphertext in `integration.secrets`. The AAD binds each ciphertext to its
+ *  - Development / test: `localSecretStore` encrypts with the kernel's AES-256-GCM field cipher — bound in the
+ *    composition root to `fieldCryptoFromEnv().cipher` (PORTICO_FIELD_KEY / PORTICO_FIELD_KEY_ID; production
+ *    refuses development keys) — and keeps only ciphertext in `integration.secrets`. The AAD binds each ciphertext to its
  *    organization, secret id and purpose, so a row copied to another organization or purpose cannot be decrypted.
  *  - Production (documented, not built — needs the AWS SDK and infrastructure): an AWS Secrets Manager store.
  *    `put` creates a secret named `portico/<tenant>/<id>` encrypted with a per-environment KMS key and returns its
@@ -10,9 +11,8 @@
  *
  * Destroying a secret deletes its ciphertext (crypto-shredding): a revoked credential cannot be recovered.
  */
-import { randomBytes } from 'node:crypto';
 import { type TxContext, typed } from '@portico/db';
-import { DomainError, type FieldCipher, localFieldCipher, newId } from '@portico/kernel';
+import { DomainError, type FieldCipher, newId } from '@portico/kernel';
 import type { IntegrationDB } from './tables';
 
 export type SecretPurpose = 'connection_credential' | 'webhook_signing';
@@ -72,34 +72,4 @@ export function localSecretStore(cipher: FieldCipher, keyId = 'local'): SecretSt
       await typed<IntegrationDB>(tx.db).deleteFrom('integration.secrets').where('id', '=', id).execute();
     },
   };
-}
-
-/**
- * Store selected from the environment: `PORTICO_INTEGRATION_SECRET_KEY` (base64, at least 32 bytes). Outside
- * production a missing key falls back to an EPHEMERAL random key (credentials then do not survive a restart) and
- * a warning is printed. In production a missing key is a startup error until the AWS store is built.
- */
-export function secretStoreFromEnv(env: NodeJS.ProcessEnv = process.env): SecretStore {
-  const raw = env.PORTICO_INTEGRATION_SECRET_KEY;
-  if (raw) {
-    const bytes = Buffer.from(raw, 'base64');
-    if (bytes.length < 32) {
-      throw new Error('PORTICO_INTEGRATION_SECRET_KEY must be at least 32 bytes, base64-encoded.');
-    }
-    return localSecretStore(
-      localFieldCipher(raw, env.PORTICO_INTEGRATION_SECRET_KEY_ID ?? 'env'),
-      env.PORTICO_INTEGRATION_SECRET_KEY_ID ?? 'env',
-    );
-  }
-  if (env.NODE_ENV === 'production') {
-    throw new Error(
-      'PORTICO_INTEGRATION_SECRET_KEY is required in production (until the AWS Secrets Manager store is configured). Integration credentials are never stored in plaintext.',
-    );
-  }
-  if (env.NODE_ENV !== 'test') {
-    console.warn(
-      'integration: PORTICO_INTEGRATION_SECRET_KEY is not set — using an ephemeral key; stored connection credentials will not survive a restart.',
-    );
-  }
-  return localSecretStore(localFieldCipher(randomBytes(32).toString('base64'), 'ephemeral'), 'ephemeral');
 }
