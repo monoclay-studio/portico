@@ -71,13 +71,20 @@ create table if not exists core.schema_migrations (
 async function bootstrapRoles(client: pg.Client, appRolePassword: string | undefined): Promise<void> {
   const transient = (err: unknown) => {
     const e = err as { code?: string; message?: string };
-    return e.code === '23505' || e.code === '42710' || e.code === '40001' || /tuple concurrently updated/i.test(e.message ?? '');
+    return (
+      e.code === '23505' ||
+      e.code === '42710' ||
+      e.code === '40001' ||
+      /tuple concurrently updated/i.test(e.message ?? '')
+    );
   };
   for (let attempt = 1; ; attempt++) {
     try {
       await client.query(BOOTSTRAP_SQL);
       if (appRolePassword) {
-        await client.query(`alter role portico_app with login password '${appRolePassword.replace(/'/g, "''")}'`);
+        await client.query(
+          `alter role portico_app with login password '${appRolePassword.replace(/'/g, "''")}'`,
+        );
       }
       return;
     } catch (err) {

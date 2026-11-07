@@ -9,12 +9,14 @@
  *     (except `core.` helpers and `platform.` SECURITY DEFINER lookup functions explicitly allowed below).
  *  3. modules/<m>/src/** must not reference another module's tables in SQL strings ('<schema>.<table>').
  */
-import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
 const root = new URL('..', import.meta.url).pathname;
 const modulesDir = join(root, 'modules');
-const modules = existsSync(modulesDir) ? readdirSync(modulesDir).filter((d) => statSync(join(modulesDir, d)).isDirectory()) : [];
+const modules = existsSync(modulesDir)
+  ? readdirSync(modulesDir).filter((d) => statSync(join(modulesDir, d)).isDirectory())
+  : [];
 const schemaOf = (m) => m.replace(/-/g, '_');
 const ALLOWED_CROSS_SCHEMA = [/\bplatform\.tenant_environment\(/, /\bplatform\.tenant_summaries\(/];
 
@@ -41,9 +43,14 @@ for (const m of modules) {
       }
       const sch = schemaOf(o);
       // Kysely table access: selectFrom('inventory.units'), innerJoin('finance.folios as f'), …
-      const kysely = new RegExp(`\\.(selectFrom|insertInto|updateTable|deleteFrom|innerJoin|leftJoin|rightJoin|fullJoin|mergeInto)\\(\\s*['"\`]${sch}\\.`, 'g');
+      const kysely = new RegExp(
+        `\\.(selectFrom|insertInto|updateTable|deleteFrom|innerJoin|leftJoin|rightJoin|fullJoin|mergeInto)\\(\\s*['"\`]${sch}\\.`,
+        'g',
+      );
       for (const match of text.matchAll(kysely)) {
-        problems.push(`${relative(root, file)}: ${match[1]}('${sch}.…') — another module's table; use a port`);
+        problems.push(
+          `${relative(root, file)}: ${match[1]}('${sch}.…') — another module's table; use a port`,
+        );
       }
       // Raw SQL in sql`…` templates
       for (const block of text.matchAll(/sql(?:<[^>]*>)?`([^`]*)`/g)) {
@@ -63,7 +70,9 @@ for (const m of modules) {
       for (const match of text.matchAll(ref)) {
         const line = text.slice(text.lastIndexOf('\n', match.index) + 1, text.indexOf('\n', match.index));
         if (ALLOWED_CROSS_SCHEMA.some((r) => r.test(line))) continue;
-        problems.push(`${relative(root, file)}: references ${match[0]} — no cross-module foreign keys or objects`);
+        problems.push(
+          `${relative(root, file)}: references ${match[0]} — no cross-module foreign keys or objects`,
+        );
       }
     }
   }
