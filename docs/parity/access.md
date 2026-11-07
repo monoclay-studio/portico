@@ -137,6 +137,31 @@ expectation, P2 differentiator or rare.
 | EC-ACS-031 | A pilot property's scope excludes `doorKeys` | Key issuance stays manual (logged) even in a live organization | P0 | specified | — |
 | EC-ACS-032 | A support export or log would include a PIN or card UID | Never present: hashed references only (ACC-I06) | P0 | specified | — |
 
+## Edge cases from the failure-class sweep (playbook v2)
+
+Classes from `docs/quality/patterns.md` groups A–D that apply to this module and are not already covered by a
+row above; the class is named in brackets. Classes already covered by earlier rows, and classes that do not
+apply (with the reason), are listed in `gaps-ops.md` § Failure-class sweep.
+
+| ID | Situation | Expected Portico behavior | Priority | Status | Test |
+|---|---|---|---|---|---|
+| EC-ACS-033 | [AP-01] A desk agent of property A issues keys for a stay of property B with A's encoder | Refused (scope mismatch) | P0 | specified | — (identity.md IDN-R12; ACS-R06) |
+| EC-ACS-034 | [AP-02] A query forgets the tenant filter on an access table | RLS returns nothing of another tenant; isolation suite per table | P0 | specified | — (CLAUDE.md §4.4) |
+| EC-ACS-035 | [AP-03] Two organizations register the same lock-system site or encoder id | Refused or ownership proven; door events route to exactly one tenant | P0 | missing | — |
+| EC-ACS-036 | [AP-04] The desk client declares that a requester is an occupant | Ignored: occupancy derived from the stay; the identity-check method recorded with the actor | P0 | specified | — (ACS-R07) |
+| EC-ACS-037 | [AP-12] Repeated wrong guesses at the portal's PIN release step, sent concurrently | Limited per stay and per contact, reserved atomically; lock and alert | P1 | specified | — (guest-experience.md GXP-R02) |
+| EC-ACS-038 | [AP-17] An erasure request covers a guest whose door audit trail is attached to an incident | Kept only under the incident's legal hold with a reason; otherwise purged by retention | P1 | specified | — (ACS-R21) |
+| EC-ACS-039 | [AP-19] Packets were pre-encoded in a trial; the organization goes live | Simulated packets void; keys must be encoded live | P1 | missing | — |
+| EC-ACS-040 | [AP-29] Keys will expire in 2 hours while the guest is still in house and nobody opens the stay | A job raises the expiring-key exception (no lazy expiry) | P0 | specified | — (ACS-R08) |
+| EC-ACS-041 | [AP-29] A property in a DST zone: check-out 11:00 on the fall-back day | `valid_to` computed in local time; the grace is neither lost nor doubled | P2 | missing | — |
+| EC-ACS-042 | [AP-31] `checkedOut` is processed before `extended` for the same stay | Keys follow the latest stay state; a late extension never re-extends a checked-out stay | P0 | missing | — |
+| EC-ACS-043 | [AP-32] The lock system reports a credential for a stay Portico does not know | Held as an exception for the desk; no retry loop | P2 | missing | — |
+| EC-ACS-044 | [AP-35] A connector reports a capability value Portico does not know | Treated as unsupported; screens say "cannot be ended remotely — collect" | P1 | specified | — (ACS-R03) |
+| EC-ACS-045 | [AP-37 / AP-46] The key operation is committed, the lock call succeeds, then the follow-up update fails | Operation `pending verification`, resolved by read-back or staff verification; no second key | P0 | specified | — (ACS-R19) |
+| EC-ACS-046 | [AP-41] The simulator cancels remotely but the real lock system cannot | Simulator profiles follow each real capability table; tests run the "remote cancel unsupported" profile | P1 | specified | — (ACS-R18) |
+| EC-ACS-047 | [AP-45] Check-out happens through the portal (express) or arrives from a connected PMS | The same end-of-stay key step runs on every path | P0 | specified | — (ACS-R10; GXP-R26) |
+| EC-ACS-048 | [AP-47] An occupant lost their passport and needs a duplicate key | Identity checks include "known to staff" and "portal verified"; the guest is never locked out by policy | P1 | specified | — (ACS-R07) |
+
 <!-- sources (generated from a verified registry; do not edit by hand) -->
 
 ## Sources

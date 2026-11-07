@@ -159,6 +159,38 @@ compete/pilot, P1 full-service/resort expectation, P2 differentiator or rare.
 | EC-GXP-031 | The guest's bank shows a debit but the payment provider has not confirmed | Portal keeps "pending verification" until the provider confirms | P0 | specified | — |
 | EC-GXP-032 | Self-service fails three times for one guest (ID scan, then payment) | Hand-off to staff with the guest's progress and the failure reasons; counted in the self-service failure metric | P1 | missing | — |
 
+## Edge cases from the failure-class sweep (playbook v2)
+
+Classes from `docs/quality/patterns.md` groups A–D that apply to this module and are not already covered by a
+row above; the class is named in brackets. Classes already covered by earlier rows, and classes that do not
+apply (with the reason), are listed in `gaps-ops.md` § Failure-class sweep.
+
+| ID | Situation | Expected Portico behavior | Priority | Status | Test |
+|---|---|---|---|---|---|
+| EC-GXP-033 | [AP-01] A stay link for booking X is used with booking Y's id (another property) | Refused: the signed token scope decides; nothing of Y shown | P0 | specified | — (GXP-R01) |
+| EC-GXP-034 | [AP-02] A query forgets the tenant filter on a guest-experience table | RLS returns nothing of another tenant; isolation suite per table | P0 | specified | — (CLAUDE.md §4.4) |
+| EC-GXP-035 | [AP-08] Someone holding a forwarded link changes the contact point before step-up | Contact changes need step-up to the existing verified contact; codes never go to an unverified new contact | P0 | specified | — (GXP-R02) |
+| EC-GXP-036 | [AP-04] A portal request carries its own price, tax or child age for an upsell | Ignored: the server re-prices; a preview token is accepted only with a valid keyed seal | P0 | specified | — (GXP-R34; rates) |
+| EC-GXP-037 | [AP-12 / AP-13] Many wrong one-time codes, sent concurrently and from rotating IPs | Limited per link and per contact (atomic reservation), and per client IP behind the trusted proxy; lock and alert | P0 | specified | — (GXP-R02 rate-limited) |
+| EC-GXP-038 | [AP-15] A link token leaks through a referrer, analytics or an idempotent replay to another principal | Tokens exchanged for a session and removed from URLs; replays never return another principal's body | P1 | missing | — |
+| EC-GXP-039 | [AP-17] A guest who checked in online asks for erasure | Portal data (registration, documents, signatures) handled by the guests erasure plan; signatures kept only as legally required evidence | P1 | missing | — |
+| EC-GXP-040 | [AP-19] A payment link created in a trial is opened after the organization goes live | Refused (`environment_changed`); a new live link is needed | P0 | missing | — |
+| EC-GXP-041 | [AP-21] The guest double-taps "Accept upgrade" | One change and one charge (idempotency key from the link principal and action) | P0 | specified | — (GXP-R34) |
+| EC-GXP-042 | [AP-22] The cancellation policy changed after the booking | The portal shows the booked terms snapshot | P0 | specified | — (GXP-R05) |
+| EC-GXP-043 | [AP-24] A late check-out is bought the evening before (service date tomorrow) | Taxed under the rules of the service date | P1 | specified | — (rates tax engine) |
+| EC-GXP-044 | [AP-28] The guest pays the deposit in the portal while the desk takes it by card | One executor per collection: the second is blocked or refunded automatically | P0 | specified | — (payments.md PAY-R20) |
+| EC-GXP-045 | [AP-29] Express checkout opens at 18:00 property time; the guest's phone is in another zone | Opens by property time with the zone named | P1 | specified | — (GXP-R04) |
+| EC-GXP-046 | [AP-31] A request shows "done" from a stale read after staff reopened it | Statuses read live or labelled with their age; never a stale "done" | P1 | specified | — (GXP-R20) |
+| EC-GXP-047 | [AP-33] The guest opens the cached itinerary offline after a disruption | Banner "saved at 09:12 — may be out of date"; cached data never presented as current | P1 | missing | — |
+| EC-GXP-048 | [AP-35] A guest's nationality has no market registration pack | Generic registration with every mandatory field; nothing skipped | P2 | missing | — |
+| EC-GXP-049 | [AP-38] Guest profiles are external read-only and the guest submits online check-in | Stored in Portico, labelled "Portico only — re-key into <PMS>", or forwarded where supported | P1 | specified | — (guest-experience.md §14) |
+| EC-GXP-050 | [AP-44] An upsell is saved with eligibility no stay can meet | Warned at save with the reason | P2 | missing | — |
+| EC-GXP-051 | [AP-45] The same check-in runs at the kiosk, in the portal and in assisted tablet mode | Same step-up, checks and evidence on every path | P0 | specified | — (GXP-R31) |
+| EC-GXP-052 | [AP-46] The document upload fails after registration fields were saved | Submission incomplete with the missing step named; never marked complete | P1 | specified | — (GXP-R14) |
+| EC-GXP-053 | [AP-47] Someone locks a guest's link by entering wrong codes | The guest recovers through the desk or a re-issued link; the attacker cannot keep them locked out | P1 | missing | — |
+| EC-GXP-054 | [AP-48] The IMUGA rule text changes | Content pack versions with valid-from dates; pages show the version valid today with source and verification date | P1 | missing | — (proposed SCR-30) |
+| EC-GXP-055 | [AP-39] Two adults of one stay submit online check-in at the same moment | One pre-check-in record per occupant; neither submission aborts | P2 | missing | — |
+
 <!-- sources (generated from a verified registry; do not edit by hand) -->
 
 ## Sources

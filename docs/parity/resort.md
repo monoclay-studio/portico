@@ -158,6 +158,42 @@ compete/Maldives pilot, P1 full-service/resort expectation, P2 differentiator or
 | EC-RST-033 | A dinner reservation for a guest with a nut allergy | Allergy alert propagated to the outlet and kitchen with acknowledgement (GSV-R07, GSV-R18) | P0 | specified | — |
 | EC-RST-034 | The partner-run spa posts a treatment to a room | Posted with outlet attribution; included in the partner's settlement statement (CNC-R03, CNC-R05) | P1 | specified | — |
 
+## Edge cases from the failure-class sweep (playbook v2)
+
+Classes from `docs/quality/patterns.md` groups A–D that apply to this module and are not already covered by a
+row above; the class is named in brackets. Classes already covered by earlier rows, and classes that do not
+apply (with the reason), are listed in `gaps-ops.md` § Failure-class sweep.
+
+| ID | Situation | Expected Portico behavior | Priority | Status | Test |
+|---|---|---|---|---|---|
+| EC-RST-035 | [AP-01] An outlet at property A posts to a stay id of property B | Refused (scope mismatch) unless an inter-property settlement exists | P0 | specified | — (RST-R01 lookup returns only eligible stays) |
+| EC-RST-036 | [AP-02] A query forgets the tenant filter on a resort table | RLS returns nothing of another tenant; isolation suite per table | P0 | specified | — (CLAUDE.md §4.4) |
+| EC-RST-037 | [AP-03] Two organizations register the same POS outlet code or vendor account | Refused or ownership proven; inbound checks route to exactly one tenant and outlet | P0 | missing | — |
+| EC-RST-038 | [AP-04] The POS sends a line marked "covered by meal plan" or with its own tax amount | Coverage decided by Portico from the entitlement; taxes computed or verified by Portico | P0 | specified | — (RST-R01, RST-R03) |
+| EC-RST-039 | [AP-17] A guest who signed waivers and a dive medical statement is erased | Waiver evidence kept only as legally required (reason recorded); medical details and weights deleted | P1 | missing | — |
+| EC-RST-040 | [AP-19] A trial organization goes live with manifests marked "sent (simulated)" | Never treated as sent; a live send is required | P1 | missing | — |
+| EC-RST-041 | [AP-20] Two staff refund the same weather-cancelled excursion at the same moment | Refunded once: remaining refundable amount checked after the lock | P1 | missing | — |
+| EC-RST-042 | [AP-21] The disruption "apply" is clicked twice or retried after a timeout | Applied once (idempotent; reproducible from its preview) | P0 | specified | — (RST-I04) |
+| EC-RST-043 | [AP-22] The half-board definition changes after a booking was made | The stay keeps its agreed inclusions | P0 | specified | — (RST-R03; CLAUDE.md §5 snapshots) |
+| EC-RST-044 | [AP-23] A dinner exceeds the remaining dining credit by USD 0.01 | Credit used in full; 0.01 charged; no negative balance | P1 | specified | — (finance.md FIN-R21) |
+| EC-RST-045 | [AP-24] Wine is charged over a full-board entitlement | Taxes apply to the charged amount by its charge code; the package portion keeps its tax treatment | P1 | specified | — (rates tax engine) |
+| EC-RST-046 | [AP-25] A spa treatment paid from spa credit is refunded, then the package is re-applied mid-stay | Credit restored once; re-applying the configuration never resets used credit | P1 | missing | — |
+| EC-RST-047 | [AP-26] The seaplane operator's booking API times out | Transfer stays `requested — pending verification`; never shown confirmed | P0 | specified | — (RST-R10 provenance) |
+| EC-RST-048 | [AP-28] An activity paid in the portal is posted again at the activity desk | The second collection is blocked or flagged; one charge | P1 | missing | — |
+| EC-RST-049 | [AP-29] A waitlist seat offer expires and nobody touches the session | A job releases the seat and offers it to the next guest | P2 | missing | — |
+| EC-RST-050 | [AP-31] `transfer.cancelled` is processed before `transfer.delayed` | Final state cancelled; no delay flags are resurrected | P1 | missing | — |
+| EC-RST-051 | [AP-34] The beach-bar tablet re-sends its queue after reconnecting | Each post applied once (idempotency per post) | P0 | specified | — (RST-R02 sync rules as OPS-R21) |
+| EC-RST-052 | [AP-35] An operator feed sends an unknown transfer mode or status | Held with an exception; never mapped by guess | P2 | missing | — |
+| EC-RST-053 | [AP-36] Two staff book the last seat on the sunset cruise at the same moment | One succeeds; capacity checked after the lock | P0 | specified | — (RST-I01) |
+| EC-RST-054 | [AP-37] A manifest is sent to the operator but the transaction then rolls back | Sends happen after commit; the manifest version is "sent" only on the operator's acknowledgement | P0 | specified | — (CLAUDE.md §4.5; RST-I05) |
+| EC-RST-055 | [AP-39] A delay event and a readiness event raise the same itinerary flag at once | One flag; neither transaction aborts | P2 | missing | — |
+| EC-RST-056 | [AP-41] An outlet posts to a folio the real finance provider has closed | Late-charge path per finance rules; tests use the real finance provider, not a lenient fake | P1 | specified | — (finance late charges) |
+| EC-RST-057 | [AP-44] An activity is saved with capacity 0 or a resource without the required qualification | Refused at save with the reason | P2 | missing | — |
+| EC-RST-058 | [AP-45] The same over-entitlement item is posted through the POS and through the outlet app | Both paths give the same coverage decision | P1 | missing | — |
+| EC-RST-059 | [AP-46] A weather disruption refunds 12 guests and one refund fails | Per-guest outcomes recorded; the failed refund retried with the same key and shown pending; nothing silently skipped | P1 | missing | — |
+| EC-RST-060 | [AP-48] The dive price changes on 1 December; a dive was booked on 20 November for 3 December | The booked price applies (snapshot at booking) | P1 | specified | — (CLAUDE.md §5) |
+| EC-RST-061 | [AP-16] Two waiters share one outlet tablet | Each post attributed through a personal PIN switch; the previous waiter's guest lookups are not shown after the switch | P1 | specified | — (identity.md IDN-R04) |
+
 <!-- sources (generated from a verified registry; do not edit by hand) -->
 
 ## Sources

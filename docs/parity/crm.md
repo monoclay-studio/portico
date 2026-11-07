@@ -30,47 +30,47 @@ compete/pilot, P1 full-service/resort/group expectation, P2 differentiator or ra
 
 | ID | Capability | Market evidence | Priority | Status | Spec | Test |
 |---|---|---|---|---|---|---|
-| PAR-CRM-001 | Segments over profile attributes, stay history, spend by category, occasions, survey results and consent, evaluated at send time, with counts and consent breakdown | Revinate [marketing and segmentation][rev-mkt] · OPERA [Responsys profile exports][op-responsys] · verified 2026-11-07 | P1 | specified | crm-marketing.md CRM-R01 | — |
+| PAR-CRM-001 | Segments over profile attributes, stay history, spend by category, occasions, survey results and consent, evaluated at send time, with counts and consent breakdown | Revinate [marketing and segmentation][rev-mkt] · OPERA [Responsys profile exports][op-responsys] · verified 2026-11-07 (Revinate search-located, unverified) | P1 | specified | crm-marketing.md CRM-R01 | — |
 | PAR-CRM-002 | Segments across properties only within the organization's sharing policy and the user's visibility | assumption | P1 | specified | crm-marketing.md CRM-R01, CRM-I05; guests.md GUE-R16 | — |
 | PAR-CRM-003 | Marketing consent re-checked per recipient, purpose and sending legal entity at send time | OPERA [profile subscription][op-subscription] · verified 2026-11-07 | P0 | specified | crm-marketing.md CRM-R02, CRM-I01 | — |
 | PAR-CRM-004 | OTA proxy emails never used for marketing | assumption (R03 §9) | P0 | specified | crm-marketing.md CRM-R02 | — |
-| PAR-CRM-005 | Suppression and fatigue: unsubscribe per legal entity and channel, bounces, complaints, in-house guests, recent detractors, frequency caps; reason per suppressed recipient | Revinate [marketing][rev-mkt] · verified 2026-11-07 | P1 | specified | crm-marketing.md CRM-R03 | — |
+| PAR-CRM-005 | Suppression and fatigue: unsubscribe per legal entity and channel, bounces, complaints, in-house guests, recent detractors, frequency caps; reason per suppressed recipient | Revinate [marketing][rev-mkt] · search-located 2026-11-07, unverified | P1 | specified | crm-marketing.md CRM-R03 | — |
 
 ### 2. Campaigns and journeys
 
 | ID | Capability | Market evidence | Priority | Status | Spec | Test |
 |---|---|---|---|---|---|---|
-| PAR-CRM-006 | Campaigns: segment, channel, marketing template, schedule in the recipient's time zone with quiet hours, preview with real data, test send, approval above an audience size | Revinate [marketing][rev-mkt] · OPERA [mailing action codes][op-mailing] · verified 2026-11-07 | P1 | specified | crm-marketing.md CRM-R04 [SHOULD] | — |
+| PAR-CRM-006 | Campaigns: segment, channel, marketing template, schedule in the recipient's time zone with quiet hours, preview with real data, test send, approval above an audience size | Revinate [marketing][rev-mkt] · OPERA [mailing action codes][op-mailing] · verified 2026-11-07 (Revinate search-located, unverified) | P1 | specified | crm-marketing.md CRM-R04 [SHOULD] | — |
 | PAR-CRM-007 | Per-recipient outcome (sent, delivered, failed, suppressed and why) and cost estimate before sending | journey coverage §1.4 (per-message pricing) | P1 | specified | crm-marketing.md CRM-R04 | — |
-| PAR-CRM-008 | Lifecycle journeys (post-stay, anniversary, win-back, remarketing) on the comms automation semantics | Revinate [marketing][rev-mkt] · verified 2026-11-07 | P1 | specified | crm-marketing.md CRM-R05 [SHOULD] | — |
-| PAR-CRM-009 | Abandoned-booking recovery with the lawful basis chosen by the hotel; never a lower price than seen unless a promotion is attached | Revinate [cart abandonment][rev-mkt] · verified 2026-11-07 | P1 | specified | crm-marketing.md CRM-R06 [SHOULD] | — |
-| PAR-CRM-010 | Direct-booking attribution to campaigns and journeys with the attribution rule stated | Revinate [marketing][rev-mkt] · verified 2026-11-07 | P1 | specified | crm-marketing.md CRM-R07 [SHOULD] | — |
-| PAR-CRM-011 | Drag-and-drop email designer with brand kit | Revinate [marketing][rev-mkt] · verified 2026-11-07 | P2 | missing | — (comms templates are text with variables) | — |
-| PAR-CRM-012 | A/B tests of subject line or content with automatic winner | Revinate [marketing][rev-mkt] · verified 2026-11-07 | P2 | missing | — | — |
+| PAR-CRM-008 | Lifecycle journeys (post-stay, anniversary, win-back, remarketing) on the comms automation semantics | Revinate [marketing][rev-mkt] · search-located 2026-11-07, unverified | P1 | specified | crm-marketing.md CRM-R05 [SHOULD] | — |
+| PAR-CRM-009 | Abandoned-booking recovery with the lawful basis chosen by the hotel; never a lower price than seen unless a promotion is attached | Revinate [cart abandonment][rev-mkt] · search-located 2026-11-07, unverified | P1 | specified | crm-marketing.md CRM-R06 [SHOULD] | — |
+| PAR-CRM-010 | Direct-booking attribution to campaigns and journeys with the attribution rule stated | Revinate [marketing][rev-mkt] · search-located 2026-11-07, unverified | P1 | specified | crm-marketing.md CRM-R07 [SHOULD] | — |
+| PAR-CRM-011 | Drag-and-drop email designer with brand kit | Revinate [marketing][rev-mkt] · search-located 2026-11-07, unverified | P2 | missing | — (comms templates are text with variables) | — |
+| PAR-CRM-012 | A/B tests of subject line or content with automatic winner | Revinate [marketing][rev-mkt] · search-located 2026-11-07, unverified | P2 | missing | — | — |
 | PAR-CRM-013 | Direct-mail lists (printed mailings, labels) from mailing codes | OPERA [mailing action codes][op-mailing] · verified 2026-11-07 | P2 | missing | — | — |
 
 ### 3. Surveys and NPS
 
 | ID | Capability | Market evidence | Priority | Status | Spec | Test |
 |---|---|---|---|---|---|---|
-| PAR-CRM-014 | Versioned surveys per language: NPS, ratings by department and outlet, free text, conditional questions, branding | Revinate [guest feedback][rev-feedback] · Shiji [ReviewPro surveys][shiji-reviewpro] · verified 2026-11-07 | P1 | specified | crm-marketing.md CRM-R08 | — |
-| PAR-CRM-015 | In-stay pulse (day 2) and post-stay survey templates | Shiji [ReviewPro][shiji-reviewpro] · verified 2026-11-07 | P1 | specified | crm-marketing.md CRM-R08 | — |
-| PAR-CRM-016 | Responses linked to the stay and to departments and outlets the guest used, for routing | Shiji [ReviewPro: by department and room type][shiji-reviewpro] · verified 2026-11-07 | P1 | specified | crm-marketing.md CRM-R08 | — |
-| PAR-CRM-017 | Survey distribution by email, WhatsApp and the portal; one per stay per type; sender register prevents two tools asking | Shiji [ReviewPro][shiji-reviewpro] · verified 2026-11-07 | P1 | specified | crm-marketing.md CRM-R09, CRM-I02 | — |
-| PAR-CRM-018 | A detractor or low department rating while the guest is on property opens a service-recovery case with owner and due time | Shiji [ReviewPro case management][shiji-reviewpro] · Revinate [guest feedback][rev-feedback] · verified 2026-11-07 | P1 | specified | crm-marketing.md CRM-R10; guest-services.md GSV-R08 | — |
-| PAR-CRM-019 | Results by property, department, outlet, unit type, segment and period with response counts and small-sample notes | Revinate [guest feedback][rev-feedback] · verified 2026-11-07 | P1 | specified | crm-marketing.md CRM-R11 | — |
-| PAR-CRM-020 | Competitive benchmark of reputation against a competitor set | Shiji [ReviewPro reputation][shiji-reviewpro] · verified 2026-11-07 | P2 | missing | — | — |
+| PAR-CRM-014 | Versioned surveys per language: NPS, ratings by department and outlet, free text, conditional questions, branding | Revinate [guest feedback][rev-feedback] · Shiji [ReviewPro surveys][shiji-reviewpro] · search-located 2026-11-07, unverified | P1 | specified | crm-marketing.md CRM-R08 | — |
+| PAR-CRM-015 | In-stay pulse (day 2) and post-stay survey templates | Shiji [ReviewPro][shiji-reviewpro] · search-located 2026-11-07, unverified | P1 | specified | crm-marketing.md CRM-R08 | — |
+| PAR-CRM-016 | Responses linked to the stay and to departments and outlets the guest used, for routing | Shiji [ReviewPro: by department and room type][shiji-reviewpro] · search-located 2026-11-07, unverified | P1 | specified | crm-marketing.md CRM-R08 | — |
+| PAR-CRM-017 | Survey distribution by email, WhatsApp and the portal; one per stay per type; sender register prevents two tools asking | Shiji [ReviewPro][shiji-reviewpro] · search-located 2026-11-07, unverified | P1 | specified | crm-marketing.md CRM-R09, CRM-I02 | — |
+| PAR-CRM-018 | A detractor or low department rating while the guest is on property opens a service-recovery case with owner and due time | Shiji [ReviewPro case management][shiji-reviewpro] · Revinate [guest feedback][rev-feedback] · search-located 2026-11-07, unverified | P1 | specified | crm-marketing.md CRM-R10; guest-services.md GSV-R08 | — |
+| PAR-CRM-019 | Results by property, department, outlet, unit type, segment and period with response counts and small-sample notes | Revinate [guest feedback][rev-feedback] · search-located 2026-11-07, unverified | P1 | specified | crm-marketing.md CRM-R11 | — |
+| PAR-CRM-020 | Competitive benchmark of reputation against a competitor set | Shiji [ReviewPro reputation][shiji-reviewpro] · search-located 2026-11-07, unverified | P2 | missing | — | — |
 
 ### 4. Reputation
 
 | ID | Capability | Market evidence | Priority | Status | Spec | Test |
 |---|---|---|---|---|---|---|
-| PAR-CRM-021 | Review aggregation from OTAs, Google and TripAdvisor (manual import as labelled fallback): normalized score with original kept, language, stay match, provenance `external` | Revinate [reputation][rev-rep] · Shiji [ReviewPro: 140+ sources][shiji-reviewpro] · verified 2026-11-07 | P1 | specified | crm-marketing.md CRM-R12 [SHOULD] | — |
-| PAR-CRM-022 | Replies drafted by staff or AI (labelled), approved where policy requires, published by API or copied to the extranet with a "posted" confirmation | TrustYou [response features (press)][ty-response] · Revinate [reputation][rev-rep] · verified 2026-11-07 | P1 | specified | crm-marketing.md CRM-R13 [SHOULD] | — |
-| PAR-CRM-023 | Response-time targets and an unanswered-reviews view | Revinate [reputation][rev-rep] · verified 2026-11-07 | P1 | specified | crm-marketing.md CRM-R13 | — |
-| PAR-CRM-024 | Review solicitation for direct, phone, agency and corporate guests; no incentives; no review gating by default | Revinate [guest feedback][rev-feedback] · verified 2026-11-07 | P1 | specified | crm-marketing.md CRM-R14 [SHOULD] | — |
-| PAR-CRM-025 | Topics and sentiment across reviews and survey free text, drill-down count equals the trend count | Revinate [reputation][rev-rep] · Shiji [ReviewPro][shiji-reviewpro] · verified 2026-11-07 | P1 | specified | crm-marketing.md CRM-R15 [SHOULD] | — |
-| PAR-CRM-026 | Social-media mentions monitored with reviews | Revinate [reputation][rev-rep] · verified 2026-11-07 | P2 | missing | — | — |
+| PAR-CRM-021 | Review aggregation from OTAs, Google and TripAdvisor (manual import as labelled fallback): normalized score with original kept, language, stay match, provenance `external` | Revinate [reputation][rev-rep] · Shiji [ReviewPro: 140+ sources][shiji-reviewpro] · search-located 2026-11-07, unverified | P1 | specified | crm-marketing.md CRM-R12 [SHOULD] | — |
+| PAR-CRM-022 | Replies drafted by staff or AI (labelled), approved where policy requires, published by API or copied to the extranet with a "posted" confirmation | TrustYou [response features (press)][ty-response] · Revinate [reputation][rev-rep] · search-located 2026-11-07, unverified | P1 | specified | crm-marketing.md CRM-R13 [SHOULD] | — |
+| PAR-CRM-023 | Response-time targets and an unanswered-reviews view | Revinate [reputation][rev-rep] · search-located 2026-11-07, unverified | P1 | specified | crm-marketing.md CRM-R13 | — |
+| PAR-CRM-024 | Review solicitation for direct, phone, agency and corporate guests; no incentives; no review gating by default | Revinate [guest feedback][rev-feedback] · search-located 2026-11-07, unverified | P1 | specified | crm-marketing.md CRM-R14 [SHOULD] | — |
+| PAR-CRM-025 | Topics and sentiment across reviews and survey free text, drill-down count equals the trend count | Revinate [reputation][rev-rep] · Shiji [ReviewPro][shiji-reviewpro] · search-located 2026-11-07, unverified | P1 | specified | crm-marketing.md CRM-R15 [SHOULD] | — |
+| PAR-CRM-026 | Social-media mentions monitored with reviews | Revinate [reputation][rev-rep] · search-located 2026-11-07, unverified | P2 | missing | — | — |
 
 ### 5. Recognition and loyalty
 
@@ -105,7 +105,7 @@ compete/pilot, P1 full-service/resort/group expectation, P2 differentiator or ra
 | PAR-CRM-043 | Surveys, reputation and review solicitation next to an external PMS; mirrored consent treated as unknown unless evidence is supplied | assumption | P1 | specified | crm-marketing.md §14 | — |
 | PAR-CRM-044 | Permissions: segments, campaigns, campaign approval ⚑, journeys ⚑, surveys, responses, reviews, reply approval, recognition, vouchers ⚑, export ⚑ | OPERA [role tasks][op-roletasks] · verified 2026-11-07 | P1 | specified | crm-marketing.md §8 | — |
 | PAR-CRM-045 | No campaign, survey, invitation or reply reaches a real recipient or platform outside live | assumption | P0 | specified | crm-marketing.md CRM-I06 | — |
-| PAR-CRM-046 | Marketing history per guest (what was sent, delivered, answered) on the profile | Revinate [marketing][rev-mkt] · verified 2026-11-07 | P2 | missing | — (survey responses on the profile only, CRM-R10) | — |
+| PAR-CRM-046 | Marketing history per guest (what was sent, delivered, answered) on the profile | Revinate [marketing][rev-mkt] · search-located 2026-11-07, unverified | P2 | missing | — (survey responses on the profile only, CRM-R10) | — |
 | PAR-CRM-047 | Marketing data included in data-subject export and erasure | R04 C1 | P1 | specified | guests.md GUE-R17, GUE-R18 (module contributors) | — |
 
 ## Edge cases
@@ -142,3 +142,79 @@ compete/pilot, P1 full-service/resort/group expectation, P2 differentiator or ra
 | EC-CRM-028 | The external CRM sends back an opt-out | Recorded as a consent withdrawal with the external source as evidence | P1 | specified | — |
 | EC-CRM-029 | Two profiles with different tiers are merged | Survivor's tier recomputed from the combined history with the reason; unmerge restores both | P2 | missing | — |
 | EC-CRM-030 | An anniversary journey would reach a guest for whom the occasion is sensitive | Staff can suppress the occasion for that guest; journeys honour it | P2 | missing | — |
+
+## Edge cases from the failure-class sweep (playbook v2)
+
+Classes from `docs/quality/patterns.md` groups A–D that apply to this module and are not already covered by a
+row above; the class is named in brackets. Classes already covered by earlier rows, and classes that do not
+apply (with the reason), are listed in `gaps-ops.md` § Failure-class sweep.
+
+| ID | Situation | Expected Portico behavior | Priority | Status | Test |
+|---|---|---|---|---|---|
+| EC-CRM-031 | [AP-01 / AP-18] A segment built at property A reaches guests known only at property B with sharing off | Excluded from counts and sends (CRM-I05) | P0 | specified | — (CRM-R01, CRM-I05) |
+| EC-CRM-032 | [AP-02] A query forgets the tenant filter on a crm table | RLS returns nothing of another tenant; isolation suite per table | P0 | specified | — (CLAUDE.md §4.4) |
+| EC-CRM-033 | [AP-03] Two organizations connect the same Google Business Profile location or OTA review account | Refused or ownership proven; reviews route to exactly one tenant | P1 | missing | — |
+| EC-CRM-034 | [AP-04 / AP-47] A forged survey or unsubscribe link submits answers or opts out a guest | Rejected unless the keyed seal verifies; opt-outs only from the guest's own link | P1 | missing | — |
+| EC-CRM-035 | [AP-15] A voucher code appears in logs, audit or an idempotent replay to another user | Never: codes masked; replays bound to the caller | P1 | missing | — |
+| EC-CRM-036 | [AP-19] A campaign scheduled in a trial runs after the organization goes live | Refused at send time until re-approved in live | P0 | missing | — |
+| EC-CRM-037 | [AP-23] A voucher with USD 50.00 left pays a USD 50.01 bill | USD 50.00 applied; 0.01 due; no negative balance | P1 | specified | — (finance stored value) |
+| EC-CRM-038 | [AP-24 / AP-48] A voucher sold in December (tax at redemption) is redeemed in March after a GST change | Taxed by the rule valid at the tax point; the rule version is kept | P1 | specified | — (CRM-R21 tax rule as data) |
+| EC-CRM-039 | [AP-25] The frequency-cap policy is re-saved mid-month | Messages already sent still count; the cap is not reset | P2 | missing | — |
+| EC-CRM-040 | [AP-26] Publishing a review reply times out | `pending verification`; checked before re-posting; never posted twice | P1 | missing | — |
+| EC-CRM-041 | [AP-29] The day-2 pulse is scheduled for a guest who arrived at 23:50 property time | Day 2 counted in property time; sent within quiet hours | P2 | specified | — (CRM-R08; COM-R08) |
+| EC-CRM-042 | [AP-31] A consent withdrawal event arrives after a campaign batch evaluated consent | Per-recipient re-check at send time blocks the message | P0 | specified | — (CRM-I01) |
+| EC-CRM-043 | [AP-34] A campaign paused by a provider outage is resumed | Continues from the verified checkpoint; recipients with uncertain outcomes are verified, never re-sent blindly | P1 | missing | — |
+| EC-CRM-044 | [AP-35] A review source sends an unknown rating scale | Stored with the original; excluded from scores with a note until mapped | P2 | missing | — |
+| EC-CRM-045 | [AP-37] The transaction that queues a campaign batch rolls back | Nothing sent: sends after commit | P0 | specified | — (CLAUDE.md §4.5) |
+| EC-CRM-046 | [AP-38] Consent is mirrored from the PMS without evidence | Treated as `unknown` for marketing | P1 | specified | — (crm-marketing.md §14) |
+| EC-CRM-047 | [AP-39] Two journeys trigger the same message for a guest at once | Contradiction check at save; one send per purpose | P1 | specified | — (CRM-R05) |
+| EC-CRM-048 | [AP-44] A segment rule uses a profile field that was later removed | The segment is flagged invalid before sending; never silently matches everyone or no one | P2 | missing | — |
+| EC-CRM-049 | [AP-46] Payment for a voucher is confirmed but issuing the voucher fails | Issue retried with the same key until it succeeds; never a paid-but-missing voucher | P1 | specified | — (CRM-R21 on confirmed payment) |
+| EC-CRM-050 | [AP-48] Recognition tier thresholds change on 1 January | Tiers computed under the rule valid for each period; changes explained | P2 | missing | — |
+| EC-CRM-051 | [AP-22] Voucher terms change after a voucher was sold | The sold voucher keeps its terms version | P1 | specified | — (CRM-R20) |
+
+<!-- sources (generated from a verified registry; do not edit by hand) -->
+
+## Sources
+
+Registry checked 2026-11-07. **Opened** = the page was fetched from this environment. **Search-located** = found by web search; the host blocks direct fetches here, so the fact is unverified until re-checked. Press releases and trade press are vendor claims, not verified behaviour.
+
+- [OPERA Cloud 26.3 — About Membership Auto Discounting][op-memberdisc] (opened)
+- [OPERA Cloud 26.3 — Assigning Tasks to a Role][op-roletasks] (opened)
+- [OPERA Cloud 26.3 — Calculating or Expiring Membership Points and Issuing Award][op-points] (opened)
+- [OPERA Cloud 26.3 — Configuring Mailing Action Codes][op-mailing] (opened)
+- [OPERA Cloud 26.3 — Enrolling Guests in External Loyalty Programs][op-extloyalty] (opened)
+- [OPERA Cloud 26.3 — Managing Membership Claims][op-claims] (opened)
+- [OPERA Cloud 26.3 — Managing Membership Tiers][op-tiers] (opened)
+- [OPERA Cloud 26.3 — Managing Profile Subscription][op-subscription] (opened)
+- [OPERA Cloud 26.3 — Managing Profile e-Certificates][op-ecert] (opened)
+- [OPERA Cloud 26.3 — Membership (Loyalty Cloud Service)][op-loyalty] (opened)
+- [OPERA Cloud 26.3 — Redeeming Loyalty Awards][op-redeem] (opened)
+- [OPERA Cloud 26.3 — Redeeming Loyalty Awards for Payment (Pay with Points)][op-paypoints] (opened)
+- [OPERA Cloud 26.3 — Redeeming Promotional e-Certificate][op-promoecert] (opened)
+- [OPERA Cloud 26.3 — Responsys Profile Exports][op-responsys] (opened)
+- [Revinate — Guest feedback (reviews and surveys)][rev-feedback] (search-located)
+- [Revinate — Marketing (email, segmentation, cart abandonment)][rev-mkt] (search-located)
+- [Revinate — Reputation management software][rev-rep] (search-located)
+- [Shiji — ReviewPro: reputation, surveys, case management, guest communications (product page)][shiji-reviewpro] (search-located)
+- [TrustYou — Response features (press)][ty-response] (search-located)
+
+[op-claims]: https://docs.oracle.com/en/industries/hospitality/opera-cloud/26.3/ocsuh/t_loyalty_membership_managing_membership_claims.htm
+[op-ecert]: https://docs.oracle.com/en/industries/hospitality/opera-cloud/26.3/ocsuh/t_managing_profile_ecertificates.htm
+[op-extloyalty]: https://docs.oracle.com/en/industries/hospitality/opera-cloud/26.3/ocsuh/t_managing_profiles_enrolling_guests_in_external_loyalty_programs.htm
+[op-loyalty]: https://docs.oracle.com/en/industries/hospitality/opera-cloud/26.3/ocsuh/c_about_loyalty_new.htm
+[op-mailing]: https://docs.oracle.com/en/industries/hospitality/opera-cloud/26.3/ocsuh/t_admin_client_relations_configuring_mailing_action_codes.htm
+[op-memberdisc]: https://docs.oracle.com/en/industries/hospitality/opera-cloud/26.3/ocsuh/c_cashiering_finance_about_membership_auto_discounting.htm
+[op-paypoints]: https://docs.oracle.com/en/industries/hospitality/opera-cloud/26.3/ocsuh/t_managing_reservations_redeem_awards_pay_with_points.htm
+[op-points]: https://docs.oracle.com/en/industries/hospitality/opera-cloud/26.3/ocsuh/t_loyalty_membership_calculating_or_expiring_membership_points_and_issuing_award.htm
+[op-promoecert]: https://docs.oracle.com/en/industries/hospitality/opera-cloud/26.3/ocsuh/t_booking_reservations_redeeming_promotional_ecertificates.htm
+[op-redeem]: https://docs.oracle.com/en/industries/hospitality/opera-cloud/26.3/ocsuh/t_managing_reservations_redeeming_loyalty_awards.htm
+[op-responsys]: https://docs.oracle.com/en/industries/hospitality/opera-cloud/26.3/ocsuh/t_exports_responsys_general_profile_exports.htm
+[op-roletasks]: https://docs.oracle.com/en/industries/hospitality/opera-cloud/26.3/ocsuh/t_manage_property_roles_assigning_tasks_to_roles.htm
+[op-subscription]: https://docs.oracle.com/en/industries/hospitality/opera-cloud/26.3/ocsuh/t_managing_profile_subscription.htm
+[op-tiers]: https://docs.oracle.com/en/industries/hospitality/opera-cloud/26.3/ocsuh/t_loyalty_membership_managing_membership_tiers.htm
+[rev-feedback]: https://www.revinate.com/solutions/revinate-guest-feedback/
+[rev-mkt]: https://revinate.com/products/marketing/
+[rev-rep]: https://www.revinate.com/hotel-software/reputation-management/
+[shiji-reviewpro]: https://reviewpro.shijigroup.com
+[ty-response]: https://www.trustyou.com/press/new-response-features

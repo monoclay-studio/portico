@@ -145,6 +145,32 @@ compete/pilot, P1 full-service/resort expectation, P2 differentiator or rare.
 | EC-COM-031 | A seaplane delay moves check-in, dinner and a dive (S12) | One guest message summarizing all changes, not one per item (RST-R06) | P0 | specified | — |
 | EC-COM-032 | A staff member who owns 25 open conversations is removed | Conversations return to the department queue with a handover note; nothing orphaned | P1 | missing | — |
 
+## Edge cases from the failure-class sweep (playbook v2)
+
+Classes from `docs/quality/patterns.md` groups A–D that apply to this module and are not already covered by a
+row above; the class is named in brackets. Classes already covered by earlier rows, and classes that do not
+apply (with the reason), are listed in `gaps-ops.md` § Failure-class sweep.
+
+| ID | Situation | Expected Portico behavior | Priority | Status | Test |
+|---|---|---|---|---|---|
+| EC-COM-033 | [AP-01] Staff scoped to property A open or reply in a conversation of property B by id | Refused (not found); nothing sent | P0 | specified | — (comms.md §8; identity.md IDN-R12) |
+| EC-COM-034 | [AP-02] A query forgets the tenant filter on a comms table (conversations, messages, runs) | RLS returns nothing of another tenant for every table; isolation suite per table | P0 | specified | — (CLAUDE.md §4.4) |
+| EC-COM-035 | [AP-03] A second organization registers the same WhatsApp sender number or provider webhook | Refused or proof of ownership required; inbound messages route to exactly one tenant | P0 | missing | — |
+| EC-COM-036 | [AP-04] A forged provider callback claims a message was delivered or read | Rejected unless the provider signature verifies; status never set from unsigned input | P0 | missing | — |
+| EC-COM-037 | [AP-14] An inbound message carries a media URL that resolves to an internal address | Fetched only through the shared safe-fetch (public https, pinned DNS); blocked otherwise | P1 | missing | — |
+| EC-COM-038 | [AP-17] A guest with open conversations is erased | Message bodies, attachments and translations redacted; delivery metadata kept without personal data | P1 | missing | — |
+| EC-COM-039 | [AP-18] Cross-property sharing is off and staff at property B search conversations | No conversation of property A appears, not even a count | P1 | missing | — |
+| EC-COM-040 | [AP-19] A trial organization becomes live while automation sends are scheduled | Each send re-checks the environment at send time; sends scheduled in trial need re-approval before going live | P0 | missing | — |
+| EC-COM-041 | [AP-29] A waiting automation passes its expiry while nothing touches the stay | A job marks the run expired with the reason; it does not wait for the next event | P1 | specified | — (COM-R06 expired state) |
+| EC-COM-042 | [AP-31 / AP-43] `booking.cancelled` is processed before `booking.modified`, or a payload lacks the old dates | No message for the stale modification; run history explains; the consumer parses the producer's exported schema | P1 | missing | — |
+| EC-COM-043 | [AP-34 / AP-46] The provider times out on a send, then the outage ends | Message `pending verification`; checked with the provider by id before any resend; never sent twice | P0 | missing | — |
+| EC-COM-044 | [AP-25 / AP-36] Two automation runs send at the last message of the budget at the same moment | The cap is never exceeded (lock, then check, then send) | P1 | missing | — |
+| EC-COM-045 | [AP-37] The transaction that creates a message rolls back | Nothing is sent: sends happen after commit through the outbox | P0 | specified | — (CLAUDE.md §4.5) |
+| EC-COM-046 | [AP-38] A guest corrects their email in chat while guest profiles are external read-only | Kept as a Portico-only note or forwarded per authority; staff told where to change it; never written to the mirrored profile | P1 | specified | — (comms.md §14) |
+| EC-COM-047 | [AP-39] A guest writes on WhatsApp and by email in the same second | One conversation per guest per stay; neither insert aborts | P1 | missing | — |
+| EC-COM-048 | [AP-44] An automation is saved for a template with no text in the guest's language | Warned at save; at send the property's default language is used and labelled; never an empty message | P1 | missing | — |
+| EC-COM-049 | [AP-48] The Maldives content pack (IMUGA wording) changes while messages are scheduled under the old version | Each send uses the pack version valid at send time with its source and verification date; sent messages keep their version | P1 | missing | — (proposed SCR-30) |
+
 <!-- sources (generated from a verified registry; do not edit by hand) -->
 
 ## Sources
