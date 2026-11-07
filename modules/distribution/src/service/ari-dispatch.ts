@@ -422,16 +422,16 @@ async function record(
   c: Extract<Claim, { kind: 'send' }>,
   kind: AriKind,
   outcome: { ok: true; result: AriResult; ms: number } | { ok: false; failure: HubFailure; ms: number },
-  onRecorded: (tx: TxContext, conn: ConnectionRow) => Promise<void>,
 ): Promise<DispatchResult> {
   return withTenantTx(database, ctx, async (tx) => {
+    // Lock order everywhere: connection row → ARI advisory lock → message row → budget row (no cycles).
+    const conn = await loadConnection(tx, c.connectionId, { forUpdate: true });
     const msg = await db(tx)
       .selectFrom('distribution.ari_messages')
       .selectAll()
       .where('id', '=', c.messageId)
       .forUpdate()
       .executeTakeFirst();
-    const conn = await loadConnection(tx, c.connectionId);
     if (!msg || msg.status !== 'sending' || msg.lease_token !== c.token) {
       // A late answer for a send that was already taken over or decided: logged, never applied.
       await recordExchange(tx, {
@@ -564,7 +564,6 @@ async function record(
         },
         provenance: c.provenance,
       });
-      await onRecorded(tx, conn);
       return { sent: true, nextDueAt: tx.now, outcome: status };
     }
     const f = outcome.failure;
@@ -619,7 +618,6 @@ async function record(
           refusedCells: cells.length,
         },
       });
-      await onRecorded(tx, conn);
       return { sent: true, nextDueAt: tx.now, outcome: 'rejected' };
     }
     const firstFailed = msg.first_failed_at ? new Date(msg.first_failed_at) : tx.now;
@@ -665,14 +663,13 @@ async function record(
         refs: [{ type: RECORD.ariMessage, id: msg.id }],
       });
     }
-    await onRecorded(tx, conn);
     return { sent: true, nextDueAt: f.class === 'auth' ? null : next, outcome: 'failed_transient' };
   });
 }
 
 /**
- * Build and send at most one message for (connection, kind). `onRecorded` runs inside the recording transaction
- * (health refresh and protection), so health always reflects the outcome it follows.
+ * Build and send at most one message for (connection, kind). `onRecorded` (health refresh and protection) runs
+ * after the outcome committed, in its own transaction, so health always reflects the outcome it follows.
  */
 export async function dispatchKind(
   database: PorticoDatabase,
@@ -710,5 +707,11 @@ export async function dispatchKind(
       outcome = { ok: false, failure: err.failure, ms: Date.now() - started };
     }
   }
-  return record(database, ctx, c, kind, outcome, onRecorded);
+  const result = await record(database, ctx, c, kind, outcome);
+  // Health and protection follow the committed outcome, in their own transaction (protection marks cells dirty
+  // under the ARI lock, which must never be awaited while holding a message row).
+  if (result.outcome !== 'late') {
+    await withTenantTx(database, ctx, async (tx) => onRecorded(tx, await loadConnection(tx, c.connectionId)));
+  }
+  return result;
 }

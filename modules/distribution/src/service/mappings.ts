@@ -189,7 +189,7 @@ export async function setRoomMapping(
   connectionId: string,
   input: { unitTypeId: string; channelRoomTypeId: string },
 ) {
-  const conn = await loadConnection(tx, connectionId, { forUpdate: true });
+  const conn = await loadConnection(tx, connectionId);
   requireOnConnection(tx, conn, P.mappingManage);
   if (conn.status === 'disconnected')
     throw new BusinessRuleError('connection_disconnected', 'A disconnected connection cannot be changed.');
@@ -266,7 +266,7 @@ export async function setRateMapping(
   connectionId: string,
   input: { unitTypeId: string; ratePlanId: string; channelRatePlanId: string },
 ) {
-  const conn = await loadConnection(tx, connectionId, { forUpdate: true });
+  const conn = await loadConnection(tx, connectionId);
   requireOnConnection(tx, conn, P.mappingManage);
   if (conn.status === 'disconnected')
     throw new BusinessRuleError('connection_disconnected', 'A disconnected connection cannot be changed.');
