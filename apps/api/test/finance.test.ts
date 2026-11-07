@@ -1,6 +1,21 @@
+import { type FinanceService, financeLedgerForPayments, type TaxPort } from '@portico/finance';
 import { newId } from '@portico/kernel';
+import type { LedgerPort } from '@portico/payments';
+import type { RatesService } from '@portico/rates';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { type ApiHarness, signedInOrg, startApi } from './helpers';
+
+/**
+ * Compile-time proof of the orchestrator's bindings (now that rates and payments are on main): rates' provider
+ * functions satisfy finance's TaxPort, and finance's adapter satisfies payments' LedgerPort. `pnpm typecheck`
+ * fails if either side drifts. (Bound in composition.ts by the orchestrator together with the API tests that
+ * assume the stubs.)
+ */
+export const bindFinanceTax = (rates: RatesService): TaxPort => ({
+  computeTaxesDetailed: (tx, input) => rates.computeTaxesDetailed(tx, input),
+  getRulePackStatus: (tx, propertyId) => rates.getRulePackStatus(tx, propertyId),
+});
+export const bindPaymentsLedger = (finance: FinanceService): LedgerPort => financeLedgerForPayments(finance);
 
 let h: ApiHarness;
 beforeAll(async () => {

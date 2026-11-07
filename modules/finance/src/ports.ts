@@ -57,6 +57,8 @@ export interface RatesChargeLine {
   occupancy?: { adults: number; childrenAges: number[] };
   /** Tax point already fixed for this amount (e.g. a deposit taxed at payment) — ADR-0016 §4. */
   taxPointDate?: LocalDate;
+  /** Under agreed terms: commercial rules (e.g. service charge) pinned to the versions agreed at booking. */
+  agreedRuleVersionIds?: string[];
   adjustment?: 'supply' | 'reversal' | 'price_adjustment';
 }
 

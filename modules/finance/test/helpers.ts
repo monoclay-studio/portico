@@ -30,6 +30,8 @@ export interface Harness {
  */
 export class FakeTax {
   verified = true;
+  /** Every charge line sent to the engine (contract assertions). */
+  readonly seen: RatesChargeLine[] = [];
   /** TGST rate by tax point (time-of-supply tests change it). */
   tgstRate: (date: string) => string = () => '17';
   greenTaxMinor = 1200;
@@ -151,6 +153,7 @@ export async function startHarness(): Promise<Harness> {
     },
     tax: {
       async computeTaxesDetailed(_tx, input): Promise<RatesTaxComputation> {
+        tax.seen.push(...input.lines);
         return { lines: input.lines.map((l) => ({ lineId: l.lineId, ...tax.compute(l, input.occupancy) })) };
       },
       async getRulePackStatus() {

@@ -86,6 +86,8 @@ export interface PostChargeInput {
   /** Required from staff when the service date is before the business date (late-arriving charge). */
   reason?: string;
   occupancy?: Occupancy;
+  /** Commercial tax rules agreed at booking (rates `postingChargeLines`): computed at those versions. */
+  agreedRuleVersionIds?: string[];
 }
 
 type Component = { kind: 'net' } | { kind: 'tax'; tax: PostingTax };
@@ -222,6 +224,7 @@ async function computeComponents(
           quantity,
           serviceDate: input.serviceDate,
           taxInclusion: { mode: priceMode },
+          ...(input.agreedRuleVersionIds?.length ? { agreedRuleVersionIds: input.agreedRuleVersionIds } : {}),
           ...(amount.amountMinor < 0 ? { adjustment: 'price_adjustment' as const } : {}),
           ...(input.occupancy
             ? {

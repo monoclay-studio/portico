@@ -465,3 +465,29 @@ describe('ADR-0016 §3: a missing exchange rate blocks; no silent fallback to an
     );
   });
 });
+
+describe('rates contract: agreed commercial rule versions reach the tax engine', () => {
+  it('passes agreedRuleVersionIds from the posting to the charge line', async () => {
+    const org = await setupOrg(h);
+    const s = await openStay(h, org);
+    const agreed = [newId()];
+    await org.run((tx) =>
+      h.finance.postCharge(tx, {
+        propertyId: org.propertyId,
+        folioId: s.guestFolioId,
+        chargeCode: 'ROOM',
+        amount: usd(20000),
+        serviceDate: '2026-11-07',
+        description: 'Room night',
+        sourceRef: { type: 'stay', id: s.stayId },
+        idempotencyKey: `room:${s.stayId}`,
+        agreedRuleVersionIds: agreed,
+      }),
+    );
+    expect(h.tax.seen.at(-1)).toMatchObject({
+      chargeCode: 'ROOM',
+      taxCategory: 'accommodation',
+      agreedRuleVersionIds: agreed,
+    });
+  });
+});
