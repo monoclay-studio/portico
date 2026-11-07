@@ -335,4 +335,11 @@ Each agent's brief and report are in `agents/`.
   SMB sources, a rehearsal in a trial org, reconciliation, freeze and cutover through data-authority transitions,
   rollback, and a guided checklist of the unavoidable human steps. Money-module rounds and the staff-app real-data
   wiring wait for the integration-step merge.
+- **22:07 — Integration-step fix round 3 done** <!-- t: agent-a29fdf2e9c7d0e9dc @ 2026-11-07T22:07:37.353Z (Integration step: bind module ports) -->.
+  - Consent is enforced on every money movement, and mandate amounts are running totals.
+  - The payment request is rebuilt as a state machine with the provider as an external writer: deactivate first,
+    then replace.
+  - New tests on the pre-fix commit: r3 11/12 failed (the 12th is a lock probe that also passed pre-fix), lifecycle
+    5/5 failed.
+  - Focused re-review #4 launched.
 
