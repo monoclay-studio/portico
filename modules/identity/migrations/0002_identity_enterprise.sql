@@ -8,6 +8,7 @@ alter table identity.sessions
   add column mfa_verified_at timestamptz,
   add column auth_method     text not null default 'password' check (auth_method in ('password', 'sso')),
   add column idp_mfa         boolean not null default false,
+  add column mfa_failures    int not null default 0,
   add column revoked_by      text;
 create index sessions_user_idx on identity.sessions (tenant_id, user_id) where revoked_at is null;
 
@@ -423,6 +424,16 @@ begin
   perform set_config('app.tenant_id', coalesce(previous, ''), true);
   return n;
 end $$;
+
+-- How many organizations a person is an active member of (MFA reset by an organization admin is only allowed when
+-- the sign-in identity is not shared with another organization). Returns a count, never which organizations.
+create or replace function identity.active_membership_count(p_user_id uuid) returns int
+  language sql stable security definer set search_path = identity, pg_temp as $$
+    select count(*)::int from identity.user_tenants where user_id = p_user_id and status = 'active'
+$$;
+
+revoke execute on function identity.active_membership_count(uuid) from public;
+grant execute on function identity.active_membership_count(uuid) to portico_app;
 
 revoke execute on function identity.record_login_attempt(text, text, boolean, int),
   identity.raise_platform_alert(uuid, text, text, jsonb, text), identity.list_platform_alerts(int),

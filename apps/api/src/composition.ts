@@ -5,9 +5,22 @@
  */
 import type { PorticoDatabase, TxEventSubscription } from '@portico/db';
 import type { Authenticator, HttpModule } from '@portico/http';
-import { type IdentityPorts, identityAuthenticator, identityHttp, identityManifest } from '@portico/identity';
+import {
+  fetchOidcHttp,
+  fieldCipherFromEnv,
+  fieldEncryptedSecretStore,
+  type IdentityPorts,
+  identity,
+  identityAuthenticator,
+  identityHttp,
+  identityManifest,
+  operatorDirectoryFromConfig,
+  outboxNotifier,
+  unknownGeo,
+} from '@portico/identity';
 import type { ModuleManifest } from '@portico/kernel';
-import { platform, platformHttp, platformManifest } from '@portico/platform';
+import { type PlatformPorts, platform, platformHttp, platformManifest } from '@portico/platform';
+import { createTrialForOrganization, provisioningHttp } from './provisioning';
 
 export const MANIFESTS: readonly ModuleManifest[] = [
   platformManifest,
@@ -19,20 +32,67 @@ export interface Composition {
   authenticator: Authenticator;
   httpModules: HttpModule[];
   subscriptions: TxEventSubscription[];
+  identityPorts: IdentityPorts;
+  platformPorts: PlatformPorts;
 }
 
-export function compose(database: PorticoDatabase): Composition {
+export interface CompositionOptions {
+  /** Configuration source (defaults to process.env). */
+  env?: Record<string, string | undefined>;
+  /** Test/integration overrides for identity ports (e.g. a fake identity provider, a GeoIP fake). */
+  identity?: Partial<IdentityPorts>;
+  platform?: Partial<PlatformPorts>;
+}
+
+export function compose(database: PorticoDatabase, options: CompositionOptions = {}): Composition {
+  const env = options.env ?? process.env;
+
   // ── platform ──
-  const platformModule = platformHttp({ database });
+  const platformPorts: PlatformPorts = {
+    // Other modules append their configuration sections, trial participants and activation checks here.
+    configurationSections: platform.platformConfigurationSections(),
+    trialParticipants: [],
+    activationChecks: [],
+    trialProvisioner: { createTrial: createTrialForOrganization },
+    ...options.platform,
+  };
+  const platformModule = platformHttp({ database, ports: platformPorts });
 
   // ── identity ──
-  const identityPorts: IdentityPorts = { propertyIdsInScope: platform.propertyIdsInScope };
-  const identityModule = identityHttp({ database });
+  const cipher = fieldCipherFromEnv(env);
+  const appBaseUrl = env.PORTICO_APP_BASE_URL ?? 'http://localhost:5173';
+  const identityPorts: IdentityPorts = {
+    propertyIdsInScope: platform.propertyIdsInScope,
+    permissionCatalog,
+    cipher,
+    secrets: fieldEncryptedSecretStore(cipher),
+    notifier: outboxNotifier(cipher),
+    oidcHttp: fetchOidcHttp(),
+    geo: unknownGeo,
+    operators: operatorDirectoryFromConfig(env.PORTICO_OPERATORS),
+    hasEntitlement: (tx, feature) => platform.hasEntitlement(tx, feature),
+    organizationName: async (tx) => (await platform.getOrganization(tx)).name,
+    assertPropertyExists: async (tx, propertyId) => {
+      await platform.getPropertyFacts(tx, propertyId);
+    },
+    config: {
+      appBaseUrl,
+      ssoRedirectUri: env.PORTICO_SSO_REDIRECT_URI ?? `${appBaseUrl}/auth/sso/callback`,
+      totpIssuer: 'Portico',
+    },
+    ...options.identity,
+  };
+  const identityModule = identityHttp({ database, ports: identityPorts });
+
+  // ── provisioning (operator console: trials for prospects) ──
+  const provisioningModule = provisioningHttp({ database, ports: identityPorts });
 
   return {
     authenticator: identityAuthenticator(database, identityPorts),
-    httpModules: [platformModule, identityModule],
+    httpModules: [platformModule, identityModule, provisioningModule],
     subscriptions: [],
+    identityPorts,
+    platformPorts,
   };
 }
 
@@ -40,3 +100,5 @@ export function compose(database: PorticoDatabase): Composition {
 export function permissionCatalog() {
   return MANIFESTS.flatMap((m) => m.permissions);
 }
+
+export { identity };

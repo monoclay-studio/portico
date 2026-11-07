@@ -81,6 +81,7 @@ export interface IdentityDB {
     mfa_verified_at: Date | null;
     auth_method: Generated<'password' | 'sso'>;
     idp_mfa: Generated<boolean>;
+    mfa_failures: Generated<number>;
     revoked_by: string | null;
   };
   'identity.api_clients': {
