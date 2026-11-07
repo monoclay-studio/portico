@@ -40,3 +40,8 @@ days, so pace against it as well:
 - **≥ 80% seven-day:** run only the merge/integration critical path (steward reviews, fix rounds, integration step),
   at most 3 agents at once; the UX heartbeat and research pause until the window resets.
 - **≥ 92% seven-day:** PAUSE + CHECKPOINT as for the 5-hour window and schedule the resume at the seven-day reset.
+
+## Resume messages (orchestrator v3)
+When resuming an agent after a checkpoint, say: "your WIP was committed and pushed as `<sha>`; build on top of it;
+never amend, reset or rebase it". Never force-push; reconcile diverged branches with a normal merge or `git merge -s ours`.
+

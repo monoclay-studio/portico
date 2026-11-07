@@ -48,6 +48,8 @@ Related permanent records the chronicle points to rather than copies:
 3. Commit with `docs(chronicle): …` and push. Agent transcripts live in the container and are lost when it is
    reclaimed, so **extract before every pause**.
 4. Nothing is deleted or rewritten after the fact. Corrections are appended with a date.
+5. **Times come only from `tools/chronicle/when.py`** (`agent "<title>"`, `commit <sha>` or `now`). Each timeline entry
+   carries the printed `<!-- t: … -->` token; `tools/commit-checked.sh` runs `verify-times.py` and refuses typed times.
 
 **Known gaps in the record:**
 - Full logs of agent runs from the first container (before 11:11 UTC on 2026-11-07) are not preserved. For those
