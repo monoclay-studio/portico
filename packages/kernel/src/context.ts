@@ -56,6 +56,31 @@ export const systemAuthorizer: Authorizer = {
   propertyScope: () => 'all',
 };
 
+/**
+ * ADR-0015 provider delegation, PROPERTY-SCOPED. A provider module called through a port does not re-check its own
+ * permission keys for the caller (the entry module authorized the user's intent at `propertyId`). This returns the
+ * context with an authorizer that additionally grants the provider's own `permissions` **at exactly `propertyId`**:
+ * a check for a record of any other property, and any organization-wide check, falls back to the actor's own
+ * grants, so a referenced record of another property is still refused. The actor (and therefore audit) is unchanged.
+ */
+export function delegateAtProperty<T extends { readonly authz: Authorizer }>(
+  ctx: T,
+  permissions: readonly string[],
+  propertyId: string,
+): T {
+  const base = ctx.authz;
+  const authz: Authorizer = {
+    can: (permission, scope) =>
+      (permissions.includes(permission) && scope?.propertyId === propertyId) || base.can(permission, scope),
+    propertyScope: (permission) => {
+      const own = base.propertyScope(permission);
+      if (!permissions.includes(permission) || own === 'all' || own.includes(propertyId)) return own;
+      return [...own, propertyId];
+    },
+  };
+  return { ...ctx, authz };
+}
+
 /** Simple authorizer from a static grant list — used by API clients, tests and the identity module. */
 export function staticAuthorizer(
   grants: ReadonlyArray<{ permission: string; propertyIds: readonly string[] | 'all' }>,

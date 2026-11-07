@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { requirePermission, staticAuthorizer } from './context';
+import { delegateAtProperty, requirePermission, staticAuthorizer } from './context';
 import { localFieldCipher } from './crypto';
 import { assertExternalEffectAllowed, effectMode } from './environment';
 
@@ -107,5 +107,19 @@ describe('staticAuthorizer grant union', () => {
     expect(a.can('finance.folio.read', { propertyId: 'P3' })).toBe(false);
     expect(a.propertyScope('finance.folio.read')).toEqual(['P1', 'P2']);
     expect(a.can('reservations.booking.read')).toBe(false);
+  });
+});
+
+describe('delegateAtProperty (ADR-0015 provider delegation)', () => {
+  it('grants the provider keys at the authorized property only; everything else stays the actor\'s own', () => {
+    const ctx = { authz: staticAuthorizer([{ permission: 'reservations.booking.create', propertyIds: ['P1'] }]) };
+    const d = delegateAtProperty(ctx, ['inventory.assignment.manage'], 'P1');
+    expect(d.authz.can('inventory.assignment.manage', { propertyId: 'P1' })).toBe(true);
+    expect(d.authz.can('inventory.assignment.manage', { propertyId: 'P2' })).toBe(false);
+    expect(d.authz.can('inventory.assignment.manage')).toBe(false);
+    expect(d.authz.can('inventory.overbooking.authorize', { propertyId: 'P1' })).toBe(false);
+    expect(d.authz.can('reservations.booking.create', { propertyId: 'P1' })).toBe(true);
+    expect(d.authz.propertyScope('inventory.assignment.manage')).toEqual(['P1']);
+    expect(ctx.authz.can('inventory.assignment.manage', { propertyId: 'P1' })).toBe(false);
   });
 });
