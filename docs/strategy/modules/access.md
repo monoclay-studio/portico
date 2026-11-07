@@ -1,7 +1,7 @@
 # access — 10x brief (keys and credentials bound to the stay)
 
 Status: v1 · 2026-11-07 · Gap strategist · **Planned** (wave 2; manual key log is pilot-critical) · Spec
-`docs/specs/access.md` (ACC-R01–R24 — **prefix collision:** `accounting` also uses `ACC-Rnn`; cite as `access ACC-Rnn` until the orchestrator renames one, e.g. access → `KEY`) · Parity: **none** (planned on `docs/parity-ops`) · Source key:
+`docs/specs/access.md` (ACS-R01–R24; renamed from `ACC-R` on 2026-11-07 to end a prefix collision with `accounting`) · Parity: **none** (planned on `docs/parity-ops`) · Source key:
 `docs/strategy/gap-plan.md` §0. **All targets are TARGETS until validated with hotel staff and a lock vendor.**
 
 ## 1. Current state (evidence)
@@ -30,15 +30,15 @@ Recommendation from research: integrate lock vendors' certified SDKs; never inve
 
 | # | Gap | Spec |
 |---|---|---|
-| 1 | Manual key log and mechanical-key register — the P0 path for every pilot without a live lock connection | ACC-R16, R17 |
-| 2 | Credential aggregate bound to the stay; truthful, idempotent key operations ("encoding pending verification", never "issued" before the encoder confirms) | ACC-R01, R19 |
-| 3 | Key lifecycle on stay events: issue at check-in, additional/duplicate, extension/late checkout, room move, end of stay (checkout, early departure, no-show, cancellation, reverse check-in) | ACC-R06–R10 |
-| 4 | Lock-system connection model with a capability truth table per connection; unit ↔ lock mapping | ACC-R02, R03, R05 |
-| 5 | Outage behaviour and exceptions to desk, handover and Day Close (keys still active after checkout = blocker) | ACC-R22, R23 |
-| 6 | Pre-encoded key packets for jetty/airport/villa check-in; lost or stolen keys with charges | ACC-R11, R12 |
-| 7 | Encoder simulator (fault matrix), then one vendor SDK via the local connector | ACC-R04, R18; Q80 |
-| 8 | Mobile keys and PIN codes for self check-in (guesthouses, late arrivals) | ACC-R13, R15 |
-| 9 | Door audit-trail retrieval for incidents and disputes | ACC-R21 |
+| 1 | Manual key log and mechanical-key register — the P0 path for every pilot without a live lock connection | ACS-R16, R17 |
+| 2 | Credential aggregate bound to the stay; truthful, idempotent key operations ("encoding pending verification", never "issued" before the encoder confirms) | ACS-R01, R19 |
+| 3 | Key lifecycle on stay events: issue at check-in, additional/duplicate, extension/late checkout, room move, end of stay (checkout, early departure, no-show, cancellation, reverse check-in) | ACS-R06–R10 |
+| 4 | Lock-system connection model with a capability truth table per connection; unit ↔ lock mapping | ACS-R02, R03, R05 |
+| 5 | Outage behaviour and exceptions to desk, handover and Day Close (keys still active after checkout = blocker) | ACS-R22, R23 |
+| 6 | Pre-encoded key packets for jetty/airport/villa check-in; lost or stolen keys with charges | ACS-R11, R12 |
+| 7 | Encoder simulator (fault matrix), then one vendor SDK via the local connector | ACS-R04, R18; Q80 |
+| 8 | Mobile keys and PIN codes for self check-in (guesthouses, late arrivals) | ACS-R13, R15 |
+| 9 | Door audit-trail retrieval for incidents and disputes | ACS-R21 |
 
 ## 4. The 10x outcome (TARGETS)
 
@@ -60,15 +60,15 @@ exception; and a guesthouse with brass keys gets the same truth from a simple ke
 - Module skeleton; credential aggregate (kind, unit, validity, status, source); manual key log (staff record keys made
   outside Portico, with expiry) and mechanical-key register (guesthouse default); bind reservations' `AccessPort` to the
   module; key exceptions in the common shape (active after checkout, lost key, missing return).
-- **Acceptance:** ACC-R16, R17, R19, R23 tested; check-in/check-out/move/extension produce correct credential records
+- **Acceptance:** ACS-R16, R17, R19, R23 tested; check-in/check-out/move/extension produce correct credential records
   with the manual path; Day Close shows active keys after checkout as blocking.
 
 ### Increment 2 — Lifecycle on stay events + encoder simulator
-- Full lifecycle (ACC-R06–R12) on reservations events with `aggregateVersion`; encoder simulator with faults (timeout →
+- Full lifecycle (ACS-R06–R12) on reservations events with `aggregateVersion`; encoder simulator with faults (timeout →
   pending verification, duplicate request, wrong encoder); capability truth table per connection; unit ↔ lock mapping in
   integration; pre-encoded packets; lost/stolen with charge via finance.
 - **Acceptance:** lifecycle tests for every stay event incl. reverse check-in and early departure; no duplicate encode
-  under retries; ACC-R02–R05, R11, R12, R18, R22 tested against the simulator.
+  under retries; ACS-R02–R05, R11, R12, R18, R22 tested against the simulator.
 
 ### Increment 3 — First vendor through the local connector (only with Q80/Q62 approval)
 - Local connector agent (with integration) and one vendor's certified SDK in a sandbox; door audit-trail retrieval

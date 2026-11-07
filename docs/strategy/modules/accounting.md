@@ -1,7 +1,7 @@
 # accounting — 10x brief (complete books on the hotel ledger)
 
 Status: v1 · 2026-11-07 · Gap strategist · **Planned** (wave 4, BOH-2 stage A; pilots keep their accounting system
-via journal export until then) · Spec `docs/specs/accounting.md` (ACC-R01–R51 — **prefix collision:** `access` also uses `ACC-Rnn`; cite as `accounting ACC-Rnn` until the orchestrator renames one) · Parity `docs/parity/accounting.md` ·
+via journal export until then) · Spec `docs/specs/accounting.md` (ACC-R01–R51; the `access` spec now uses `ACS-R`) · Parity `docs/parity/accounting.md` ·
 Source key: `docs/strategy/gap-plan.md` §0. **All targets are TARGETS until validated with a hotel controller.** Owner
 questions: Q100, Q105 (USALI), Q106 (Maldives items for the adviser), Q107 (bank formats), Q109 (packaging).
 
