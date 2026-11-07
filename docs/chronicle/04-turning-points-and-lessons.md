@@ -67,6 +67,12 @@ regression test made from the reviewer's attack.
 - **Do not circumvent bot checks.** MIRA's site blocks automated fetches. Research used official pages through
   restricted web search instead.
 
+- **The orchestrator commits only explicit paths.** Two commits (`1179c98`, `012652e`) used broad `git add docs/…`
+  paths and swept a running reviewer's unfinished report and PoC files into main. From 17:30, commits name exact
+  files. A running reviewer's files are committed only as explicitly labelled WIP, and again when it reports.
+- **The first canary ran at 17:30 (C-L1-01).** A planted signature change in `apps/api` was caught by the worker's
+  typecheck once `apps/*` joined the turbo inputs, closing escape E-038.
+
 ## Corrections
 
 - 2026-11-07 17:25: several timeline entries written between 16:45 and 17:22 carried estimated times that were 10–60

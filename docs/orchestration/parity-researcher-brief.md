@@ -1,3 +1,5 @@
+> **Superseded** by `docs/quality/playbooks/parity-researcher.md` (latest version). Kept for history.
+
 # Parity researcher brief (shared)
 
 Goal (owner, 2026-11-07): "We can't miss anything that current systems on the market do to remain competitive" —

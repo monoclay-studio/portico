@@ -24,7 +24,9 @@ Reviews found both failure modes of cross-module calls:
    domains it owns. Violations throw — they are never silently accepted.
 4. **Provider HTTP routes keep their own permissions.** Direct calls to a provider's routes check that provider's
    permission keys as usual.
-5. **Sensitive cross-module effects are explicit.** Where a port call performs something the entry permission should
+5. **Sensitive cross-module effects are explicit.** The explicit capability names the module whose key is checked
+   (e.g. `payments.payment.collect`). Choosing the payment method, amount or account is explicit unless it is bound to
+   the agreed guarantee (integration-step review P1-2). Where a port call performs something the entry permission should
    not imply (e.g. refunds, overbooking), the provider requires an explicit capability argument whose presence the
    entry module checked (e.g. `overbooking: { authorizedBy }` after `inventory.overbooking.authorize`).
 6. **Composite failures do not lose user work.** When a port call refuses (e.g. unit already blocked, external system

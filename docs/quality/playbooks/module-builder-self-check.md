@@ -2,9 +2,9 @@
 
 | | |
 |---|---|
-| **Current version** | **v2** (2026-11-07, round 0) |
-| **Theme of v2** | Re-verify every change you make in a fix round or a merge, the way a reviewer would |
-| **Previous** | `archive/module-builder-self-check-v1.md`. That is the 32-item "done" checklist: the gates from the briefs actually used, plus the defect classes the first ten reviews found in branches that had passed their own tests |
+| **Current version** | **v3** (2026-11-07, round 1) |
+| **Theme of v3** | Contract integrity: import shared vocabularies, never copy them; use the value's own family; scope parameters are required. The v2 theme (re-verify every change in a fix round or merge) stays in force, unchanged |
+| **Previous** | `archive/module-builder-self-check-v2.md` (v2); `archive/module-builder-self-check-v1.md`. That is the 32-item "done" checklist: the gates from the briefs actually used, plus the defect classes the first ten reviews found in branches that had passed their own tests |
 | **Launch** | Builders run it before saying "done" and in every fix round. The final reply includes the § 3 table. The orchestrator links this file from `module-agent-playbook.md` (retro, edit 2) |
 | **Measured by** | `scorecard.md`: escapes attributed to L1-BSC (round 0: 7); P0/P1 findings per first review (round 0: 17 P0 and 94 P1 across 10 reviews); defects that a fix round introduced or left behind, found by re-reviews (round 0, identity-plus: 6, of which 1 P0, 2 P1 and 3 P2) |
 
@@ -16,13 +16,22 @@
 | v2 | 2026-11-07 | **BS2-1** | **Re-attack your own fix.** For every finding fixed: (a) run the attack in reverse order; (b) apply the fix to every sibling path; (c) make the failure path commit nothing; (d) check that a third party cannot trigger the new refusal against a legitimate user (griefing); (e) reserve every new counter or limit atomically, and test it concurrently | The identity-plus fix round closed all 11 original attacks, yet introduced or left 1 P0, 2 P1 and 3 P2 that only a second review found. 7 other modules merged on fix verification alone, with no second review | E-001, E-003, E-004, E-005, E-006, E-007 | Fix-introduced defects found by re-reviews or canaries (round 0: 6 in identity-plus); canaries C-L2-08 and C-L2-13 |
 | v2 | 2026-11-07 | **BS2-2** | The fix-round reply table gains columns: siblings checked, reverse-order probe, failure-path probe, griefing probe | Makes BS2-1 auditable by the re-reviewer and the orchestrator | as BS2-1 | Columns filled in 100 % of fix-round replies |
 | v2 | 2026-11-07 | **BS2-3** | **The gate block, after any merge of `main`:** `pnpm install --frozen-lockfile` (commit the lockfile if it changed); the gates on the **merged** tree with `--force`; both test commands (`pnpm test` and `pnpm turbo run test --force`); exit codes read directly, never piped | Lockfile drift and duplicate imports surfaced only after merging. A demo-seed timeout appeared only under turbo's default concurrency. Lint failures were committed through piped output. Cached typecheck hid type errors | E-008, E-009, E-010, E-015, E-017, E-018 | Merge-time breakages that the branch's own gate should have caught (round 0: E-008, E-010, E-011, E-018) |
+| v3 | 2026-11-07 | **BS3-1** | **Import, never copy, a shared vocabulary.** No module-local `z.enum` or union may copy a kernel or provider vocabulary: provenance, environment, data-authority domains, payer types, statuses, error codes. Grep before "done" (§ 4). If the owner does not export it, request it in `FOUNDATION_REQUESTS.md` and import the type meanwhile | RC-2 recurred. Five modules hold six literal provenance copies, four of them different from the kernel's, and reservations lacks `sandbox`. A planted kernel value was caught only through payments' copy (canary C-L1-02b) | E-008, E-009, E-011, **E-058** | Module-local copies of kernel or provider vocabularies (R1 baseline: 6 provenance literals in 5 modules; see `scorecard.md` § 7); merge-time drift breakages |
+| v3 | 2026-11-07 | **BS3-2** | **Use the value's own family.** Every status chip, badge or stored label uses the vocabulary of the field the value comes from | The backoffice rendered a discrepancy value (`skip`) with the occupancy vocabulary | **E-054** | Wrong-family call sites (UX-03b) found later |
+| v3 | 2026-11-07 | **BS3-3** | **Scope parameters are required.** No port function takes an optional `propertyId` or `legalEntityId`. An omitted scope throws; it never widens to every property | Finance's reservations port widened delegation to every property when `propertyId` was omitted. That is the shape of round-0 finance P0-1 | **E-045** | Optional scope parameters on port surfaces (R1 baseline: 22 matches of the § 4 grep; 6 functions in `financeForReservations` per the review) |
+
+### Why v3 is published before v2 has been measured
+
+No builder has yet run v2. The round-1 fix rounds (integration step, identity round 4) are the first to use it. v3
+targets a **separate** metric: vocabulary copies, wrong-family call sites and optional scope parameters. v2 targets
+defects that fix rounds introduce or leave behind. So round 2 can still attribute each change. The trigger was RC-2
+recurring twice in one round (E-054, E-058), with a canary confirming that the gate catches drift only by accident.
 
 ### Queued for later versions (one theme each)
 
-- **v3, contract drift.** Never copy a kernel or provider enum, status vocabulary or error code: import it. Grep the
-  workspace for near-duplicates of every enum you add or change. Prompted by E-008, E-009, E-011 and RC-2 (provenance
-  copies, a 9-domain vs 10-domain enum, `module_unavailable` vs `module_not_available`, three payer-type vocabularies).
-  Pairs with the lint rule proposed in the retro (edit 5).
+- *(v3 contract drift: published in round 1; see the change log.)*
+- **v5, assert what you claim (RC-10).** Every test that touches a money path asserts the amount and the counterparty.
+  Every README "tested" claim cites its asserting line. Prompted by E-041, E-042, E-043 and E-044 (AP-55).
 - **v4, effective-dated data.** Every rule pack has an explicit first `valid_from` and refuses dates before it
   (AP-48, E-023).
 
@@ -88,3 +97,22 @@ Reply table (BS2-2):
 | Finding | Fix commit | Regression test | (a) reverse | (b) siblings checked (list) | (c) failure path | (d) griefing | (e) atomic |
 |---|---|---|---|---|---|---|---|
 | e.g. P1-6 | `abc123` | `review-regressions.test.ts` "P1-6 …" | n/a (no exception added) | revoke, suspend, remove, reset password, reset MFA, **transfer**, SCIM group, SSO group | refusal leaves 0 rows | an invited membership from another org cannot block it | n/a |
+
+## 4. Contract integrity (v3: BS3-1, BS3-2, BS3-3)
+
+Run before "done", and after every merge of `main`.
+
+```bash
+# BS3-1: copies of shared vocabularies (each hit must be an import or a re-export, never a literal copy)
+grep -rnE "z\.enum\(\[ *'(live|demo|trial|portico|external|guest_profile|module_)" modules/*/src packages/ui/src apps/*/src
+grep -rn -A2 "z\.enum(\[\s*$" modules/*/src packages/ui/src apps/*/src | grep -E "'(live|sandbox|simulated|portico|guest_profile)'"   # multi-line literals
+grep -rnE "'module_(un)?available'|'module_not_available'" modules/*/src apps/*/src
+# BS3-3: optional scope on port surfaces
+grep -rnE "propertyId\?: *string|legalEntityId\?: *string" modules/*/src/ports.ts modules/*/src/service/index.ts modules/*/src/*-port.ts
+```
+
+| Check | Pass condition |
+|---|---|
+| BS3-1 | Every vocabulary your module shares with the kernel or another module is imported from the owner's contracts, or a foundation request is filed |
+| BS3-2 | Every `StatusBadge`/label call site passes the vocabulary of the value's own field. No family receives another family's values |
+| BS3-3 | No port function your module exposes or consumes accepts an omitted scope. `delegated(…, undefined)` throws |

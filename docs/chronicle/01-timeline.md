@@ -181,4 +181,33 @@ Each agent's brief and report are in `agents/`.
     suite 11/11, including an axe scan with zero violations (WCAG 2.2 AA, every screen, drawer and palette open,
     light and dark).
   - All ten wave-1 code branches except identity-plus and the integration step are now on main.
+- **17:27 — Quality steward round 0 done.**
+  - 38 escapes traced (2 P0, 9 P1, 17 P2, 10 P3); L2 steward review is the largest source at 11.
+  - v2 playbooks for 7 checkers; 51 attack patterns and 17 UX traps; a canary catalogue; a checker scorecard.
+  - Top improvement: re-attack every fix before merge. The 14 P0 fixes already on main have never been re-attacked.
+  - Merged; its 8 process edits applied 17:30, including the `apps/*` turbo inputs, verified by canary C-L1-01.
+- **17:27 — Integration-step review: merge after fixes** (P0 0, P1 3, P2 7, P3 9). The P1s: a deposit can land on
+  another property's books, check-in can hold any card for any amount, and late charges over-collect from a folio in
+  credit. The fix round goes back to the integration engineer with the new self-check playbook.
+- **17:35 — Third identity review: merge after fixes.** P0 0, P1 2, P2 3, P3 5. Every earlier attack is refused.
+  The new P1s are a race that lets a pre-registered authenticator survive the first-verification wipe, and the SSO
+  groups-claim name not being treated as a root change. Fix round 4 is sent. Merge condition: the W-1 to W-3
+  regression tests, spot-checked by the orchestrator, with no fourth full review.
+  - Pattern across the three identity reviews: P0 2 → 1 → 0, and each round's fix opened a narrower new class. This
+    is the strongest evidence for the quality steward's "re-attack every fix" rule.
+- **17:31 — Owner-requested checkpoint** before logging out and back in (the usage display wasn't updating). Four
+  agents were stopped, all work was committed and pushed, and the resume order was written in STATUS.
+- **17:38 — Resumed** after the owner's re-login (5-hour 41%, seven-day 64%). The four agents were resumed by message
+  with their transcripts intact: integration-step fixes, identity fix round 4, parity-ops, and quality steward
+  round 1.
+- **17:57 — Quality steward round 1 done:** 24 new escapes, 62 cumulative. Half of round 1's escapes came from
+  *fixes*: residuals of fixes already on main, defects fix rounds introduced, and reviewers' own recommendations.
+  - New: an orchestrator playbook (the orchestrator is now a measured loop, L-orch, with 8 escapes attributed),
+    steward v2.1, builder self-check v3, and the first scripted canaries (5/7 held).
+  - It caught a wrong pending-fix (`skip` is a call-site bug, not a vocabulary gap) and two orchestrator timestamps
+    still estimated. Both were corrected.
+- **17:59 — Fix re-attack sweep launched** over every merged P0 and money/security P1 fix, strictly from steward
+  playbook v2.1. It is the first run that measures v2.
+- **18:00 — Owner: "only check 5hour window on checks".** The seven-day pacing rule is retired; the guardrail checks
+  and the heartbeat now read only the 5-hour window.
 

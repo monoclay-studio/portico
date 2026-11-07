@@ -76,3 +76,7 @@ never stop to ask questions — decide using the docs, record genuine owner ques
    anything external is at most R1/R2 — never claim more).
 3. Final reply to the orchestrator (≈300 words): what is built, test counts, scenarios proven, contract changes,
    foundation requests, ports needing binding, risks. Be factual; do not overstate.
+
+**Self-check (quality steward, 2026-11-07):** before you say done, and in every fix round, run
+`docs/quality/playbooks/module-builder-self-check.md` and put its tables in your final reply. Never pipe a gate's
+output; read its exit code.

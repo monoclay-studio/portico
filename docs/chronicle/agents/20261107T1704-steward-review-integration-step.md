@@ -1,7 +1,7 @@
 # Agent run: Steward review: integration step
 
-- Started: 2026-11-07T17:04:43.667Z · last activity: 2026-11-07T17:24:23.306Z
-- Turns: 281 · tool uses: 152 · output tokens: 237,187
+- Started: 2026-11-07T17:04:43.667Z · last activity: 2026-11-07T17:26:52.018Z
+- Turns: 295 · tool uses: 161 · output tokens: 244,791
 - Type: general-purpose
 
 ## Brief (2026-11-07T17:04:43.667Z)
@@ -72,5 +72,53 @@ Write your report to /home/user/portico/docs/orchestration/reviews/review-integr
 Turn every attack you prove into a PoC test file in docs/orchestration/reviews/integration-step-poc/ with a .ts.txt suffix.
 
 Reply with the verdict, counts, the top findings in plain English and the report path.
+````
+
+## Report (2026-11-07T17:26:51.854Z)
+
+````text
+**Verdict: merge after fixes.** Counts: P0 0 · P1 3 · P2 7 · P3 9.
+
+All gates pass on copies merged with main, both at `b44cd4c` and at `1179c98` after the backoffice merge (later `012652e` is docs only):
+- `pnpm lint`: exit 0.
+- `pnpm turbo run typecheck --force`: exit 0 (16/16, then 18/18).
+- `pnpm turbo run test --force --concurrency=2` with `PORTICO_TEST_DB_PREFIX=review_intstep`: exit 0 (14/14, then 16/16). api has 68 passed and 29 todo.
+
+The second merge has trivial conflicts in two docs, `docs/OPEN_QUESTIONS.md` and `docs/orchestration/pending-fixes.md`. Both are append-only and merge as a union; question numbers don't collide. My test databases are all dropped. Both scratch worktrees are removed, and the branch worktree is untouched at `dcddb8b`.
+
+**Top findings.** Each P1 and P2 marked "PoC" is proven by a test that passes today because it asserts the buggy behaviour. The two unmarked P2s (the S04 test and the overstated binding claim) are code-reading findings.
+1. **P1-1 — deposit at the wrong property or company (PoC).** A desk agent with rights only at Hiyani can charge a deposit "for" a Kandu booking. It posts to Hiyani's legal entity. Kandu's own check-in then fails with a misleading 403 saying the booking belongs to another property. A deposit for a booking id that exists nowhere is also accepted and posted. The cause is that payments skips the ownership check for bookings (`modules/payments/src/service/shared.ts:149`), and finance binds a booking to whichever property takes its first deposit. Fix: a booking-directory port from reservations, and refuse unknown or other-property bookings the way folios already are.
+2. **P1-2 — check-in can hold any card for any amount (PoC).** A custom role with `reservations.stay.checkIn` and no payments permission placed a USD 25,000 hold on a card saved for a different guest. Payments' own route refuses that same user. The check-in request supplies the card and amount, and the new permission hand-off removed payments' own check (`workflows.ts:483,514,524`). Fix: require `payments.payment.collect` when the card or amount is overridden, check the card belongs to the booking's guest or payer, and cap the amount.
+3. **P1-3 — late charges over-collect (PoC).** A late charge on a folio still in credit sends the guest a payment link for the full charge. In the PoC the folio was −383 USD (guest owed money) and an 117 USD request was opened (`finance/src/service/postings.ts:754`). The existing bindings test has the same flaw but doesn't check the amount. Fix: request at most what the folio actually owes.
+4. **P2s:**
+   - **Money hiding (FD-15) is only partial (PoC).** The housekeeping supervisor still sees which arrivals have paid (the payment check's status is kept, only its message is hidden). They can also read booking totals and payment status.
+   - **Finance's port grants rights at every property when no property is passed (PoC).** Reservations always passes one today, but the parameter is optional. That is the shape of the earlier finance P0-1.
+   - **The rates adapter never verifies the terms seal (PoC).** A tampered sealed document gives a cancellation penalty of 0 instead of 297,000, and no deposit. Today this needs direct database access.
+   - **S04 doesn't prove what it claims.** It compares a Water Villa with children against a cheaper Beach Villa. That doesn't show child ages or Green Tax drive the price.
+   - **"Every stubbed port bound" is overstated.** Still stubbed: integration's inbound handlers and catalogs, and rates' `affectedAgreements`.
+   - **Rates and guests still re-check their own permissions on port calls.** Pending-fixes points to an OPEN_QUESTIONS entry that doesn't exist.
+
+**What held up under testing:**
+- The kernel `delegateAtProperty` helper.
+- Inventory and operations refusing records of another property.
+- House-use blocks and lock overrides staying explicit.
+- The new platform routes.
+- `priceChange` rejecting altered terms, and the preview fingerprint still catching price changes between preview and commit.
+- The deposit `valueOnly` fix (it changes no declared tax; Green Tax stays due per guest-night).
+- Payment-to-ledger idempotency.
+- Collection requests that only record intent.
+- S01's genuinely concurrent test, and the global consistency checks running in all 12 scenario files.
+
+**Process note:** the orchestrator's commits `1179c98` and `012652e` swept my uncommitted PoC files and an earlier version of the report into main. I did not commit anything. The final report now shows as a working-tree modification on main.
+
+Files are in `/home/user/portico/docs/orchestration/reviews/`:
+- review-integration-step.md
+- integration-step-poc/poc-deposit-wrong-property.test.ts.txt
+- integration-step-poc/poc-checkin-any-card.test.ts.txt
+- integration-step-poc/poc-late-charge-overcollect.test.ts.txt
+- integration-step-poc/poc-fd15-money-leak.test.ts.txt
+- integration-step-poc/poc-finance-unscoped-delegation.test.ts.txt
+- integration-step-poc/poc-rates-adapter.test.ts.txt
+- integration-step-poc/poc-connected-checkin.test.ts.txt
 ````
 

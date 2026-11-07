@@ -17,7 +17,8 @@ updates the counts table. If an entry is corrected later, add a dated note below
 ## How entries are classified
 
 - **Loops:** L1 = code gates; L2 = steward review; L3 = scenario proof; L4 = UX loop; L5 = market and parity; L6 =
-  usage; L7 = owner; L8 = meta loop (this file's author).
+  usage; L7 = owner; L8 = meta loop (this file's author). **L-orch** (added in round 1) = the orchestrator's own process
+  steps: briefs, mid-run messages, hand-offs, commits, merges and records (`playbooks/orchestrator.md`).
 - **L1 has two parts:**
   - **L1-gate:** the automated gates and shared tooling (lint, typecheck, tests, boundary and catalogue checks, turbo).
   - **L1-BSC:** the builder's own self-check before "done", including fix rounds. That is
@@ -41,53 +42,78 @@ updates the counts table. If an entry is corrected later, add a dated note below
 
 ### By the earliest loop that should have caught it
 
-| Loop | Round 0 (2026-11-07) | Entries |
-|---|---|---|
-| L1-gate | **9** | E-008, E-009, E-010, E-012, E-013, E-014, E-015, E-016, E-038 |
-| L1-BSC (builder self-check, incl. fix rounds) | **7** | E-003, E-004, E-005, E-006, E-007, E-017, E-018 |
-| L2 steward review | **11** | E-001, E-002, E-011, E-025, E-026, E-027, E-028, E-029, E-030, E-031, E-037 |
-| L3 scenario proof | **0** | No L3 run had finished. L3 has caught nothing yet and has also missed nothing measurable. |
-| L4 UX loop (tester, hand-off, refiner) | **5** | E-032, E-033, E-034, E-035, E-036 |
-| L5 market, parity and research | **6** | E-019, E-020, E-021, E-022, E-023, E-024 |
-| L6 / L7 | 0 | — |
-| **Total** | **38** | |
+**Reclassification (round 1, 2026-11-07).** The orchestrator became a measured loop in round 1, so five round-0
+entries whose earliest point was an orchestrator step now count under **L-orch**:
+- E-010, the commit step (from L1-gate);
+- E-027, the review brief (from L2);
+- E-032 and E-036, the hand-off and the brief (from L4);
+- E-019, the mid-run instruction (from L5).
+
+Before reclassification, round 0 read L1-gate 9 / L1-BSC 7 / L2 11 / L3 0 / L4 5 / L5 6.
+
+| Loop | Round 0 (reclassified) | Round 1 | Cumulative | Round-1 entries |
+|---|---|---|---|---|
+| L1-gate | 8 | **2** | 10 | E-052, E-059 |
+| L1-BSC (builder self-check, incl. fix rounds) | 7 | **13** | 20 | E-039, E-040, E-041, E-043, E-044, E-045, E-046, E-047, E-049, E-053, E-054, E-058, E-062 |
+| L2 steward review | 10 | **3** | 13 | E-048, E-050, E-051 (all from review 2's own fix recommendations) |
+| L3 scenario proof | 0 | **1** | 1 | E-042 (the first L3 escape) |
+| L4 UX loop | 3 | **0** | 3 | No L4 round ran |
+| L5 market, parity and research | 5 | **1** | 6 | E-061 |
+| L-orch (orchestrator process) | 5 | **3** | 8 | E-055, E-057, E-060 |
+| L8 meta loop | 0 | **1** | 1 | E-056 |
+| L6 / L7 | 0 | 0 | 0 | — |
+| **Total** | **38** | **24** | **62** | |
 
 ### By where they were found
 
-| Found by | Count | Entries |
-|---|---|---|
-| L1 at merge time (orchestrator) | 4 | E-008, E-010, E-011, E-018 |
-| L1 builder gate runs | 5 | E-009 (also by the second review), E-012, E-014, E-015, E-016 |
-| L2 first-round reviews (merge simulation, probes) | 7 | E-013, E-017, E-019, E-020, E-021, E-022, E-023 |
-| L2 second review (identity-plus) | 7 | E-001 … E-007 |
-| L4 black-box tester | 7 | E-025 … E-031 |
-| L4 refiner or the delivery step | 4 | E-032, E-033, E-035, E-036 |
-| L7 owner | 1 | E-024 |
-| L8 meta loop (this round) | 2 | E-034, E-038 |
-| The checker itself (self-reported) | 1 | E-037 |
+| Found by | Round 0 | Round 1 | Round-1 entries |
+|---|---|---|---|
+| L1 at merge time (orchestrator) | 4 | 2 | E-053, E-054 (backoffice merge verification) |
+| L1 builder gate runs | 5 | 0 | — |
+| L2 first-round reviews | 7 | — | — |
+| L2 re-reviews (identity-plus 2 and 3) | 7 | 6 | E-047 … E-052 |
+| L2 integration-step review | — | 8 | E-039 … E-046 |
+| L4 black-box tester | 7 | 0 | — |
+| L4 refiner or the delivery step | 4 | 0 | — |
+| L5 gap strategist | — | 2 | E-060, E-061 |
+| L7 owner | 1 | 0 | — |
+| L8 meta loop | 2 | 4 | E-056, E-058, E-059, E-062 (three of them by scripted canary or static scan) |
+| The orchestrator about its own process | — | 2 | E-055, E-057 |
+| The checker itself (self-reported) | 1 | 0 | — |
 
 ### By severity and kind
 
-| | D | G | C | Ev | Pr | Total |
-|---|---|---|---|---|---|---|
-| P0 | 1 | — | 1 *(est.)* | — | — | 2 |
-| P1 | 5 | 2 | 2 | — | — | 9 |
-| P2 | 10 | 5 | 2 | — | — | 17 |
-| P3 | — | 4 | — | 4 | 2 | 10 |
-| **Total** | **16** | **11** | **5** | **4** | **2** | **38** |
+| | D (R0 / R1) | G | C | Ev | Pr | Total R0 | Total R1 |
+|---|---|---|---|---|---|---|---|
+| P0 | 1 / 0 | — | 1 / 0 | — | — | 2 | **0** |
+| P1 | 5 / 5 | 2 / 0 | 2 / 0 | — | — | 9 | **5** |
+| P2 | 10 / 7 | 5 / 3 | 2 / 3 | — | 0 / 1 | 17 | **14** |
+| P3 | — / 2 | 4 / 0 | 0 / 1 | 4 / 1 | 2 / 1 | 10 | **5** |
+| **Total** | 16 / 14 | 11 / 3 | 5 / 4 | 4 / 1 | 2 / 2 | **38** | **24** |
+
+"Fix-related" escapes in round 1 are those a fix introduced, or a fix left incomplete, or that a reviewer's own
+recommended fix caused. There are **12 of 24**:
+- incomplete or residual fixes: E-039, E-044, E-045, E-046, E-049, E-053, E-054, E-062;
+- introduced by the fix: E-047;
+- caused by the recommendation: E-048, E-050, E-051.
 
 ### Root causes shared by several escapes
 
 | Root cause | Escapes | Main fix |
 |---|---|---|
 | **RC-1.** The turbo cache key ignored workspace dependencies (fixed in `1be3ddc`). `apps/*` sources are still not hashed (E-038). | E-008, E-009, E-038 | Forced gates; turbo inputs; L1 gate self-test canary `C-L1-01` |
-| **RC-2.** A closed enum or error code is copied into each module instead of imported. | E-008, E-009, E-011 | Builder self-check; pattern `AP-42`; proposed lint rule |
+| **RC-2.** A closed enum or error code is copied into each module instead of imported. | E-008, E-009, E-011; round 1: E-054, E-058, E-062 | Builder self-check; pattern `AP-42`; proposed lint rule |
 | **RC-3.** A review's cross-module "notes for the orchestrator" have no owner and no tracking. | E-008, E-011 | Merge-procedure edit (retro, edit 4) |
 | **RC-4.** A fix is applied to the named path only: no sibling, reverse-order, failure-path or abuse probe. | E-001, E-003, E-004, E-005, E-006, E-007 | Builder self-check v2; steward v2 SR2-2 and SR2-4 |
 | **RC-5.** The UI review scope was narrower than the personas' reality (viewports, invalid input, roles, results). | E-025 … E-031 | Steward v2 SR2-5 |
 | **RC-6.** Evidence is not verified before it is handed off. | E-032, E-033, E-034, E-035 | Black-box tester v2; refiner v2; hand-off checklist |
 | **RC-7.** The catalogue is built from features, not from failure classes. | E-020, E-021, E-022, E-024 | Parity v2 PR2-2; gap strategist v2 |
 | **RC-8.** The gate command differed from one brief to the next. | E-010, E-015 | Builder self-check v2 runs the gate as CI runs it |
+| **RC-4 (round 1).** It recurred as the main source: residuals of merged fixes (E-039, E-045, E-046), sibling paths (E-044, E-049, E-053, E-054) and races in fix code (E-047) | 8 in round 1 | Builder self-check v2 § 3 (first used by the round-2 fix rounds); orchestrator v3 (re-check P1 fixes, audit exemptions) |
+| **RC-9.** A reviewer's fix recommendation was given as a list rather than a principle, or made a known weakness load-bearing, and was never attacked itself | E-001, E-048, E-050, E-051 | Steward v2.1 (SR2-2 clarified) |
+| **RC-10.** A test exercises the path but asserts neither the outcome nor the claim | E-041, E-042, E-043, E-044 | Pattern AP-55; scenario tests v2 ST2-2; builder self-check v1 items 31–32 |
+| **RC-11.** The test environment is not the production environment: superuser migrations, a single e2e port, Playwright outside the gate | E-052, E-053 | Retro edits 3c and 1c; orchestrator v4 queued |
+| **RC-12.** The orchestrator passed things on or recorded them inexactly: paraphrased claims, broad commits, estimated times, generated files not refreshed | E-043 (contributing), E-055, E-057, E-060 | Orchestrator v2 (O2-1…O2-4) |
 
 ---
 
@@ -128,6 +154,8 @@ Sources used for every entry:
   - Builder self-check v2: **BS2-1(a)**.
   - Canary **C-L2-08**.
 - **Status.** ADR-0017 Amendment 1 (17:00); fix round 3 running; a third review is pending.
+- *Note (round 1, 2026-11-07):* times corrected (E-056). The second review ran **16:15–16:43**, and ADR-0017
+  Amendment 1 is dated **16:43**, not 16:42–16:52 and 17:00. Both come from commit and transcript timestamps.
 
 #### E-002 · P1 · D · `identity.sso.manage` alone is administrator-equivalent
 - **Defect.** Holding this permission alone lets a user repoint the SSO issuer to an IdP they control. That IdP then
@@ -188,6 +216,8 @@ Sources used for every entry:
   - The reviewer measured 1280 to 1920 only (P1-4).
 - **Checks added.** Steward reviewer v2: **SR2-5** (a viewport matrix from the personas: 390, 768, 1024, 1280, 1440
   and 1920). Pattern **UX-07**.
+- *Note (round 1, 2026-11-07):* reclassified. The earliest loop is now **L-orch**: the launch brief set
+  1280–1920, and the reviewer followed it. Check now in orchestrator O2-1 (scope parameters come from the personas).
 
 #### E-028 · P2 · D · The UI does not reflect permissions honestly
 - **Defect.**
@@ -318,6 +348,8 @@ the 8 merged modules are unchecked for this class (retro, improvement 1).
   - Pattern **AP-42**.
   - Canary **C-L1-01** (gate self-test).
   - Proposed lint rule against duplicated closed enums (retro, edit 5).
+- *Note (round 1, 2026-11-07):* `1be3ddc` was committed at **16:44**, not 17:00 (E-056). The residual hole E-038 was
+  closed by the round-0 edit 6, and canary C-L1-01 was caught at 17:30.
 
 #### E-009 · P2 · G · A data-authority domain type mismatch was hidden by the cache on the identity-plus branch
 - **Defect.** Platform's view grew to 10 domains (`guestCommunications`), while integration's own enum had 9. As a
@@ -344,6 +376,9 @@ the 8 merged modules are unchecked for this class (retro, improvement 1).
 - **Checks added.**
   - `tools/commit-checked.sh` (`1241174`, 16:41).
   - Builder self-check v2: read every exit code; never pipe gate output.
+- *Note (round 1, 2026-11-07):* reclassified. The earliest loop is now **L-orch** (the orchestrator's commit step).
+  The orchestrator counts three incidents before `tools/commit-checked.sh` existed; git shows four fix-up commits.
+  Check now in `playbooks/orchestrator.md` O2-2.
 
 #### E-012 · P2 · G · The module-boundary checker reported a false positive
 - **Defect.** The checker read `${input.operations.length}` inside a `sql` template as a reference to the `operations`
@@ -436,6 +471,8 @@ the 8 merged modules are unchecked for this class (retro, improvement 1).
   - Black-box tester v2 **BT2-3** (evidence manifest).
   - Black-box tester v2 orchestrator hand-off checklist (H-1: cited-file check after any copy or compression).
   - Retro edit 7 (copy the six files now, while the scratchpad still exists).
+- *Note (round 1, 2026-11-07):* reclassified. The earliest loop is now **L-orch** (the hand-off). The six files were
+  restored at 17:28 (`8ed5bf8`). Check now in orchestrator O2-3.
 
 #### E-033 · P3 · Ev · A screenshot shows only loading placeholders
 - **Defect.** `screens/p1-03-today-full.jpg` shows loading placeholders only. It is cited for "the first ~830 px are
@@ -475,6 +512,8 @@ the 8 merged modules are unchecked for this class (retro, improvement 1).
 - **Should have been caught by.** The L4 refiner brief, which asked for a file the harness classifies as a report.
 - **Checks added.** Refiner v2 **UR2-2** (return the summary in the final reply as well; if a write is refused, put the
   full text in the reply with its target path).
+- *Note (round 1, 2026-11-07):* reclassified. The earliest loop is now **L-orch** (the brief asked for a file type
+  the harness refuses). Check now in orchestrator O2-1.
 
 ### L5 — market, parity and research should have caught it
 
@@ -493,6 +532,9 @@ the 8 merged modules are unchecked for this class (retro, improvement 1).
   - `tested` was set from test names, not from what the tests assert.
   - An overclaimed P0 row lets the parity gate pass.
 - **Checks added.** Parity researcher v2 **PR2-1**.
+- *Note (round 1, 2026-11-07):* reclassified. The earliest loop is now **L-orch**, because the evidence rule was
+  changed by the orchestrator's mid-run instruction. Check now in orchestrator O2-1 (no evidence-rule changes in
+  mid-run messages).
 
 #### E-020 · P2 · C · Rates edge-case catalogue lacked the failure classes the review found
 - **Defect.** After the review, the rates builder added 6 capabilities (PAR-RAT-088…093) and 16 edge cases
@@ -553,4 +595,316 @@ the 8 merged modules are unchecked for this class (retro, improvement 1).
 
 ---
 
-<!-- Round 1 entries go below this line: "## Round 1 — <date>" -->
+## Round 1 — 2026-11-07, 17:04–17:38 UTC (the integration-step review, identity review 3, the backoffice merge verification, the orchestrator's process)
+
+Sources:
+- `docs/orchestration/reviews/review-integration-step.md` and `integration-step-poc/`;
+- `review-identity-plus-3.md` and `identity-plus-poc/*review3*`;
+- `docs/orchestration/pending-fixes.md` (the backoffice entry);
+- `docs/chronicle/04-turning-points-and-lessons.md` §§ "Process lessons" and "Corrections";
+- `docs/chronicle/agents/20261107T1616-integration-step-bind-module-ports.md` (the builder's report);
+- `docs/chronicle/agents/20261107T1642-gap-strategist-10x-module-briefs.md`;
+- `git log main`;
+- the canary run `r1-l1` (`canaries.md` § 6).
+
+**Classification rule added this round.** From round 1, a defect found by L2 counts as an **L1-BSC escape** in two
+cases:
+- its class was already in the builder's brief or self-check (for example the integration step's own "refusal test
+  (wrong property …)" requirement, or v1 items 6, 16–18 and 31–32);
+- it is a residual of an earlier fix.
+
+Defects of a class nobody had listed still go into the self-check as new classes.
+
+**Playbook versions in force.** Both reviews launched (17:04 and 17:09) before steward v2 was published (17:20 on
+`docs/quality`, merged 17:26). The integration step (16:16) and identity fix round 3 started before builder self-check
+v2 existed. So **no v2 playbook was used in round 1**, and the v2 effect is still unmeasured.
+
+### L1-BSC — the builder's self-check, or an earlier fix round
+
+#### E-039 · P1 · D · A booking deposit is never checked against the property that owns the booking
+- **Found.** L2 integration-step review, P1-1 (PoC `poc-deposit-wrong-property`). A desk agent at Hiyani posted a
+  deposit to Kandu's booking, at legal entity B. A deposit for a booking that does not exist anywhere was also
+  accepted. Kandu's check-in then threw 403.
+- **Should have been caught by.** L1-BSC, at two points:
+  - **The round-0 payments and finance fix rounds.** Their P0-1 fix (cross-property posting) added `describeTarget`
+    checks for folios, but **exempted bookings**: `payments/src/service/shared.ts:149`
+    `if (ref.type === 'booking') return; // first deposit…`, and finance `assertTargetInScope`, "a booking without any
+    finance record yet is accepted".
+  - **The integration step.** Its brief required "a refusal test (wrong property …)" for every binding.
+- **Why it was missed.**
+  - The fix covered the path named in the finding (folios), and the exemption was never attacked (RC-4).
+  - The stub hid it until binding made it live.
+  - The P0 fix was merged without a re-attack, because the re-attack rule applied only from round 0's edits onward.
+- **Checks added.**
+  - Orchestrator v3 (queued): re-check **P1 and P0** fixes and audit exemptions.
+  - Retro edit 1: run the sweep now.
+  - Pattern AP-01, extended (booking refs, "first X accepted" exemptions).
+  - Canary C-L2-01.
+
+#### E-040 · P1 · D · Check-in can place a hold of any amount on any saved card, with no payments permission
+- **Found.** L2 integration-step review, P1-2 (PoC `poc-checkin-any-card`): USD 25,000 held on another guest's card by
+  a role with no `payments.*` key.
+- **Should have been caught by.** L1-BSC, the integration engineer. Applying ADR-0015, it listed which effects stay
+  explicit (refunds, overbooking, house use, lock override) but not **which card** or **how much**.
+- **Why it was missed.**
+  - A delegated port call accepts parameters chosen by the caller, and those parameters carry the risk.
+  - ADR-0015 §5 does not name *whose* key gates an explicit effect. The orchestrator wrote the ADR, so L-orch
+    contributed.
+- **Checks added.**
+  - New pattern **AP-53** (delegation widens authority through caller-chosen effect parameters).
+  - Canary **C-L2-16**.
+  - Retro edit 6 (ADR-0015 §5 wording).
+
+#### E-041 · P1 · D · A late-charge collection asks a guest in credit to pay money they do not owe
+- **Found.** L2 integration-step review, P1-3 (PoC `poc-late-charge-overcollect`). A payment request for 11,700 was
+  opened while the folio stood at −38,300.
+- **Should have been caught by.** L1-BSC. The builder's own binding test (`bindings.test.ts`, the "late spa charge"
+  step) **ran this path, and over-collected** 64,000 against a 14,000 debt, but it asserted neither the amount nor
+  the outcome.
+- **Why it was missed.** RC-10: the test exercised the path but asserted nothing. AP-28 (collecting money twice) did not
+  name over-collection against existing credit.
+- **Checks added.**
+  - New pattern **AP-55** (exercised but not asserted).
+  - Pattern AP-28, extended (net against credit).
+  - Scenario tests v3 (queued): cross-module money invariants.
+
+#### E-043 · P2 · C · Binding completeness was overclaimed
+- **Found.** L2 integration-step review, P2-5 and P2-6.
+  - The builder's headline read "every reservations, finance and payments port that was still a 503 stub now goes to
+    its real provider". It also listed four unbound groups, but missed:
+    - integration's and rates' `asSystem` reads;
+    - the permission re-checks that rates and guests still do;
+    - a dangling reference to OPEN_QUESTIONS.
+  - The orchestrator's review brief **broadened** the claim to "binds every cross-module port that was stubbed".
+- **Should have been caught by.** L1-BSC (v1 item 31: claims). The orchestrator contributed (RC-12).
+- **Checks added.**
+  - Orchestrator v2 **O2-1** (quote claims verbatim).
+  - Builder self-check v1, items 31–32 (unchanged; this is a v1 miss).
+
+#### E-044 · P2 · D · FD-15 money hiding was claimed "tested" while payment state still leaks
+- **Found.** L2 integration-step review, P2-1 (PoC `poc-fd15-money-leak`).
+  - The builder's report said: "balances and payment detail are hidden on the front-desk boards … (tested)".
+  - Housekeeping still sees `payment_secured.status` and `ready`.
+  - `getBooking` returns totals and `status.payment`.
+- **Should have been caught by.** L1-BSC. The redaction was applied to one field (`message`), not to the fields derived
+  from it, and not to the record routes.
+- **Why it was missed.** A sibling path (AP-45) within a privacy rule (AP-18), and a claim broader than its assertion
+  (RC-10).
+- **Checks added.** Patterns AP-18 and AP-45, extended (derived fields and other routes).
+
+#### E-045 · P2 · D · Finance's reservations port still delegates organization-wide when the property is omitted
+- **Found.** L2 integration-step review, P2-2 (PoC `poc-finance-unscoped-delegation`). It is not reachable over HTTP
+  today. It has the exact shape of finance's round-0 P0-1.
+- **Should have been caught by.** L1-BSC, the round-0 finance fix round (F-07 / ADR-0015). The fix made the scope
+  *possible* but left `propertyId?` optional, and `delegated(tx, perms, undefined)` grants at every property.
+- **Why it was missed.** An optional scope parameter defaults to the widest scope (fail-open). The fix was not
+  re-attacked (RC-4).
+- **Checks added.**
+  - Pattern AP-35, extended (an omitted scope means refusal, never "all").
+  - Builder self-check **v3** (scope parameters required on port surfaces).
+
+#### E-046 · P2 · D · Sealed terms are not verified before penalties and deposits are evaluated
+- **Found.** L2 integration-step review, P2-3 (PoC `poc-rates-adapter`). A document with its policies nulled gave a
+  penalty of 0 instead of 297,000.
+- **Should have been caught by.** L1-BSC, at two points:
+  - **The round-0 rates fix round (R-05, keyed seal).** `priceChange` verifies the seal, but the sibling evaluators
+    (`evaluateCancellationPenalty`, `instantiatePaymentSchedule`) do not.
+  - **The new adapter** in the integration step.
+- **Why it was missed.** The fix was applied to the named path only (RC-4).
+- **Checks added.** Pattern AP-04, extended (verify before **every** use).
+
+#### E-047 · P1 · D · The first-verification wipe is not serialized against credential writes already in flight
+- **Found.** L2 identity review 3, R3-P1-1 (PoC W-1). A pending authenticator confirmed during the wipe survives it, and
+  the real GM is locked out at onboarding.
+- **Should have been caught by.** L1-BSC, identity fix round 3. That round introduced the wipe (ADR-0017 rule 12).
+- **Why it was missed.**
+  - A one-time security transition was added without serializing the credential writers against it: `confirmTotp`
+    reads before it locks, and activation does not re-check `status`.
+  - Concurrency was not part of re-attacking the fix. BS2-1(e) existed only from 17:20, after the round had started.
+- **Checks added.**
+  - New pattern **AP-56** (a one-time security transition races in-flight writers; use lock order plus an epoch).
+  - Canary **C-L2-17**.
+  - Retro edit 4 (identity fix round 4 uses the § 3 table).
+
+#### E-049 · P2 · D · SSO managers can delete group mappings they could not create
+- **Found.** L2 identity review 3, R3-P2-1 (PoC W-3).
+- **Should have been caught by.** L1-BSC, identity fix round 3. Power ordering was checked on added mappings but not
+  on removed ones. It is the R2-P2-2 class again.
+- **Why it was missed.** A sibling path (RC-4).
+- **Checks added.** Pattern AP-45, extended (removal is a sibling of addition).
+
+#### E-053 · P2 · G · The backoffice e2e passes only on port 5180
+- **Defect.**
+  - `apps/backoffice/e2e/fixtures.ts` hard-codes `127.0.0.1:5180` (lines 67 and 75). A run on other ports fails 8 of 11.
+  - With `reuseExistingServer`, a run can silently test another branch's server.
+  - Playwright is also outside `turbo test`, so the integration-step reviewer did not run it.
+- **Found.** The orchestrator's backoffice merge verification (`pending-fixes.md`, backoffice entry).
+- **Should have been caught by.** L1-BSC, the backoffice fix round. Its fix for review P3-7 ("env-driven e2e ports",
+  `5b6a46a`) changed the config but not the fixtures, which are a sibling.
+- **Why it was missed.** RC-4 and RC-11.
+- **Checks added.**
+  - Retro edit 1c (e2e on non-default ports at merge).
+  - Orchestrator v4 (queued).
+  - Pattern AP-52, extended.
+
+#### E-054 · P3 · D · A discrepancy value is rendered with the occupancy vocabulary
+- **Found.** The orchestrator's merge verification, reported as "occupancy value `skip` unknown to the UI vocabulary".
+- **Diagnosis (L8, this round).**
+  - `apps/backoffice/src/features/housekeeping/housekeeping-page.tsx` (occupancy column) renders
+    `<StatusBadge vocabulary="occupancy" value={r.discrepancy} />`.
+  - Operations' occupancy is `vacant|occupied` (`modules/operations/src/domain/model.ts:10`).
+  - `skip` is a **discrepancy** value, and the UI already has a `discrepancy` vocabulary containing it
+    (`packages/ui/src/components/status-badge.tsx:77`).
+  - So the defect is the **wrong vocabulary family** at the call site, not a missing occupancy value.
+- **Risk in the planned fix.** The pending-fixes remedy ("add `skip` to the UI occupancy vocabulary") would hide the
+  defect and merge two status families. That breaks consistency rule C3.2 ("separate questions get separate chips").
+- **Should have been caught by.** L1-BSC, the backoffice fix round's P1-3 vocabulary alignment.
+- **What held.** The neutral fallback added by the P1-3 fix worked as designed: there was no crash.
+- **Checks added.**
+  - Pattern UX-03, extended (wrong family).
+  - Builder self-check **v3** (use the owner's vocabulary for the value's own family).
+  - Retro edit 2 (correct the pending-fixes entry).
+
+#### E-058 · P2 · D · *Latent:* module-local provenance enums have drifted from the kernel
+- **Defect.** The kernel `Provenance` has 7 values, including `sandbox` (`packages/kernel/src/context.ts:21`). Five
+  modules hold six literal copies, with five distinct value sets, **four of which differ from the kernel's**:
+  - reservations `contracts.ts:200` lacks `sandbox`, and `:525` allows only `live|simulated`;
+  - guests `:13` allows `live|copied|external`;
+  - operations `:48` allows `live|external|copied|simulated`;
+  - inventory and payments allow all 7.
+- **Why it matters.** CLAUDE.md §4.12 requires sandbox results to be labelled.
+- **Found.** L8, by a static scan and canary C-L1-02b. A planted kernel value was caught **only** through payments'
+  copy (in `shared.ts`), and the other four copies drift silently.
+- **Should have been caught by.** L1-BSC (RC-2). The lint rule from round-0 edit 5 is queued but not built.
+- **Checks added.** Builder self-check **v3**; retro edit 3a (the lint rule, with this drift list).
+
+#### E-062 · P3 · D · *Latent:* integration still defines its own `ModuleUnavailableError` with the code `module_unavailable`
+- **Found.** L8 in round 1, while validating builder self-check v3's BS3-1 grep.
+- **Where.** `modules/integration/src/ports.ts:153-161` declares a local class with the code `'module_unavailable'`. The
+  kernel and every other module use `module_not_available` (`apps/api/src/composition.ts:159`;
+  `operations/src/service/maintenance.ts:645`; `reservations/src/service/context.ts:60`).
+- **Why it matters.** Any caller that maps the kernel code, such as reservations' refusal handling or the UI, treats
+  integration's refusal as an unknown error.
+- **Should have been caught by.** L1-BSC. The E-011 fix (`5c2b5ee`) unified the code in the composition root, but not
+  this sibling declaration inside integration (RC-2 and RC-4).
+- **Checks added.** Builder self-check v3 BS3-1 (its second grep finds it); retro edit 3a (the lint rule).
+
+### L1-gate — the gates or shared tooling
+
+#### E-052 · P2 · G · *Latent:* tests run migrations as the superuser, so logic that depends on RLS in SECURITY DEFINER functions cannot fail a test
+- **Found.** L2 identity review 3, R3-P3-1. PoC W-6 passes: the orphan purge is wrong under the superuser and right only
+  under the production owner, which has `nobypassrls`.
+- **Should have been caught by.** L1-gate, in the design of the test harness (`packages/testing`).
+- **Why it was missed.** RC-11: the test environment differs from production in the one property that the isolation
+  P0 tests depend on.
+- **Checks added.** Pattern AP-02, extended; retro edit 3c (`nobypassrls` migration owner in tests).
+
+#### E-059 · P2 · G · *Latent:* the boundary checker misses cross-schema SQL in `sql.raw(...)`
+- **Found.** L8 scripted canary C-L1-03b2 (run `r1-l1`). `sql.raw('select * from operations.units')` in `inventory`
+  passed `tools/check-boundaries.mjs` with exit 0. The `` sql`…` `` form was caught.
+- **Should have been caught by.** L1-gate, in the tool's own test corpus, which still does not exist.
+- **Checks added.**
+  - Canary **C-L1-04**, a permanent corpus entry.
+  - Retro edit 3a (extend the checker to string literals in `sql.raw`, `executeQuery` and `.raw`).
+
+### L2 — the steward review's own recommendations
+
+#### E-048 · P1 · D · Changing the SSO groups claim (and `jit_provisioning`, `client_id`) is not treated as a root change
+- **Found.** L2 identity review 3, R3-P1-2 (PoC W-2). An `identity.sso.manage` holder re-points the groups claim to a
+  self-editable profile field and becomes `org_admin`.
+- **Should have been caught by.** L2 identity review 2. Its fix for R2-P1-1 **enumerated** the root changes as
+  "issuer, allow-list, `trustIdpMfa` and SSO-required". ADR-0017 rule 15 copied the list, so L-orch contributed, and
+  the builder implemented exactly that list.
+- **Why it was missed.** RC-9: the fix was written as a list instead of the principle ("anything that decides who
+  signs in or which roles a sign-in grants"), and the recommendation itself was never attacked.
+- **Checks added.**
+  - Steward **v2.1** (SR2-2: recommend a principle with examples, and attack the principle's boundary).
+  - Pattern AP-09, extended.
+  - Retro edit 6 (ADR-0017 rule 15 wording).
+
+#### E-050 · P2 · D · A stale, non-exclusive domain verification became a global email-verification authority
+- **Found.** L2 identity review 3, R3-P2-2 (PoC W-4).
+- **Should have been caught by.** L2 identity review 2. Its fix for R2-P0-1, item (2), made a verified-domain sign-in
+  set `email_verified_at` globally. In the **same review**, R2-P3-5 rated "domain verification is never re-checked
+  and not bound" as only a P3.
+- **Why it was missed.** RC-9: a fix made a known weakness **load-bearing**, and nobody re-rated the weakness.
+- **Checks added.** New pattern **AP-54** (a fix makes a weakness load-bearing); steward **v2.1**.
+
+#### E-051 · P2 · D · The first-verification wipe permanently locks an SSO-only member out of an SSO-required organization
+- **Found.** L2 identity review 3, R3-P2-3 (PoC W-5). The README's stated remedy does not work.
+- **Should have been caught by.** L2 identity review 2. Its wipe recommendation ("wipe … other orgs' `sso_identities`
+  links …") did not consider legitimate links held by a person who later verifies elsewhere in good faith.
+- **Why it was missed.** RC-9. The wipe was attacked for takeover but not for lock-out of the legitimate user (AP-47).
+- **Checks added.** Steward **v2.1**; pattern AP-47, extended.
+
+### L3 — scenario proof
+
+#### E-042 · P2 · C · Scenario S04 does not prove the claim it makes about child ages and Green Tax (the first L3 escape)
+- **Found.** L2 integration-step review, P2-4 and P3-8.
+  - S04 compares a Water Villa with children against a cheaper Beach Villa, and never asserts Green Tax.
+  - S01's "nothing posted at booking" is a comment, not an assertion.
+  - S05's "second attempt" goes through the port, not the user path.
+- **Should have been caught by.** L3, the scenario author (the integration step, under scenario-tests v1).
+- **Why it was missed.** RC-10. There was no assertion map from catalogue lines to asserting lines. That is exactly
+  scenario-tests v2 ST2-2, which this run predates.
+- **Checks added.** Scenario tests v2 ST2-2, already published. This escape is the first evidence for it, and the
+  fix round now runs under v2.
+
+### L5 — market, parity and research
+
+#### E-061 · P3 · C · Two specs used the same requirement prefix (`ACC-R` for both access and accounting)
+- **Found.** L5 gap strategist. Fixed by the orchestrator in `ba6bf62` (access → `ACS-R`).
+- **Should have been caught by.** L5 spec production: the journey audit and the back-of-house audit wrote specs in
+  parallel, with no registry of prefixes.
+- **Checks added.** None in a playbook. This is a small data-quality class; it is noted for the parity tool, which
+  could reject duplicate prefixes. It is not urgent.
+
+### L-orch — the orchestrator's own process
+
+#### E-055 · P3 · Pr · Estimated timestamps were written into the chronicle
+- **Defect.** Timeline entries written between 16:45 and 17:22 were 10–60 minutes off, some of them **ahead of the
+  clock**.
+- **Found.** By the orchestrator. Corrected at 17:25 (`012652e`; `04-…lessons.md` § Corrections).
+- **Should have been caught by.** L-orch, the recording step.
+- **Checks added.** Orchestrator v2 **O2-4**.
+
+#### E-057 · P2 · Pr · A broad `git add` swept a running reviewer's unfinished files into `main`
+- **Defect.**
+  - `1179c98` (17:22) swept the integration-step reviewer's PoC files into `main`.
+  - `012652e` (17:24) swept its **unfinished** 400-line report into `main`. The reviewer reported at 17:26:52, and the
+    final text landed in `8ed5bf8`.
+  - An unfinished report on `main` can be read as final by builders, by fix rounds, or by the timeline.
+- **Found.** By the orchestrator (`04-…lessons.md`, "commits only explicit paths").
+- **Should have been caught by.** L-orch, the commit step.
+- **Checks added.** Orchestrator v2 **O2-2**, already practised since 17:30 (`3decba7` is labelled WIP).
+
+#### E-060 · P2 · C · Parity statuses and the generated coverage file went stale after merges
+- **Defect.**
+  - The parity files for inventory and reservations showed 1 % tested, while their READMEs prove dozens of rows.
+  - The committed `docs/parity/COVERAGE.md` showed rates at 2 %, where a fresh run gives 61 %.
+  - As a result, the completion gate reports false failures, and the gate itself becomes untrustworthy.
+- **Found.** L5 gap strategist (its report, "measurement problems"). The orchestrator regenerated the coverage file in
+  `ba6bf62`.
+- **Should have been caught by.** L-orch, the merge procedure. Step 4 refreshes the domain map, the seed, the role
+  templates and the readiness register, but not the parity rows or the coverage file. The round-0 inventory builder
+  said it "couldn't edit `docs/parity/inventory.md` because it is on another branch".
+- **Checks added.** Orchestrator v2 **O2-4**; retro edit 1b.
+
+### L8 — the meta loop itself
+
+#### E-056 · P3 · Ev · Round 0 of the meta loop carried estimated chronicle times and costs cut off by the extraction
+- **Defect.**
+  - The round-0 escapes, scorecard and retro used the timeline's estimated times: the second review "16:42–16:52",
+    the ADR amendment and turbo fix at "17:00", the refiner at "≈16:58". The true times are 16:43, 16:43, 16:44 and
+    16:43.
+  - It also reported the second review's and the refiner's costs as "≥" figures from a mid-run extraction. The final
+    figures are 235 turns, 347,021 output tokens and 68.0M input for the second review, and 123 turns, 428,145 output
+    tokens and 27.2M input for the refiner.
+- **Found.** L8, this round, after the orchestrator's correction (E-055).
+- **Should have been caught by.** L8. Times must be cross-checked against git and `agents.json` before they are used.
+- **Checks added.** In this file and the scorecard: times come from git or `agents.json`, and "≥" figures are re-read
+  each round (scorecard § 1, method). Corrections are appended in the scorecard's "Corrections" section.
+
+---
+
+<!-- Round 2 entries go below this line: "## Round 2 — <date>" -->
