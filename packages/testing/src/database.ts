@@ -67,8 +67,18 @@ export async function createTestDatabase(
       await db.close();
       await adminDb.close();
       const c = new pg.Client({ connectionString: ADMIN_URL });
+      c.on('error', () => {});
       await c.connect();
       try {
+        // Wait (bounded) until Postgres has released this database's backends, then force-drop the rest.
+        for (let i = 0; i < 50; i++) {
+          const { rows } = await c.query<{ n: number }>(
+            'select count(*)::int as n from pg_stat_activity where datname = $1',
+            [name],
+          );
+          if ((rows[0]?.n ?? 0) === 0) break;
+          await new Promise((r) => setTimeout(r, 100));
+        }
         await c.query(`drop database if exists "${name}" with (force)`);
       } finally {
         await c.end();

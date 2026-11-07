@@ -6,7 +6,15 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["**", "!**/dist", "!**/node_modules", "!**/*.gen.ts", "!docs/research", "!**/*.md"]
+    "includes": [
+      "**",
+      "!**/dist",
+      "!**/node_modules",
+      "!**/*.gen.ts",
+      "!docs/research",
+      "!docs/chronicle/data",
+      "!**/*.md"
+    ]
   },
   "formatter": {
     "enabled": true,

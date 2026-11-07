@@ -22,6 +22,19 @@ Then read `docs/product/decisions.md`, `docs/product/glossary.md`, `docs/archite
 
 ---
 
+## 0. Operating model
+
+The orchestrator owns the vision and coherence; **each module agent owns making its module 3x–10x more powerful,
+seamless, friendly and well-rounded than anything on the market — measured against its 10x brief**
+(`docs/orchestration/operating-model.md`, `docs/strategy/modules/<module>.md`).
+
+Chronicle (owner request): the orchestrator records how Portico is built, from the first message, in
+`docs/chronicle/` (timeline, cast, owner directions verbatim, every agent's brief and report, metrics snapshots) and
+updates it after every merge, review verdict, owner direction and pause (`docs/chronicle/README.md`).
+
+Usage guardrail: at ≥92% of the 5-hour limit the orchestrator pauses, checkpoints everything and schedules the
+resume (`docs/orchestration/usage-guardrail.md`). Agents: commit after every meaningful step so a pause loses nothing.
+
 ## 1. Autonomy rule (applies to every Claude session and agent)
 
 **Never stop working because you need an answer from the owner, as long as some other part of the work is unblocked.**

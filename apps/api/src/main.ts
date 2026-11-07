@@ -12,6 +12,9 @@ const app = await buildApp({
   database,
   logger: { level: config.LOG_LEVEL },
   corsOrigins: config.CORS_ORIGINS.split(','),
+  trustedProxies: config.TRUSTED_PROXY_CIDRS.split(',')
+    .map((s) => s.trim())
+    .filter(Boolean),
 });
 
 const shutdown = async (signal: string) => {

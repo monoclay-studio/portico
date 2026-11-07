@@ -17,7 +17,8 @@ export type TenantEnvironment = 'live' | 'trial' | 'sandbox' | 'training' | 'dem
  * Where a piece of displayed information comes from. Shown to users so they never mistake simulated, copied
  * or stale information for live facts.
  */
-export type Provenance = 'live' | 'simulated' | 'copied' | 'delayed' | 'incomplete' | 'external';
+/** CLAUDE.md rule 16. `sandbox` = produced against a provider's test environment (rule 12: simulated *or* sandbox). */
+export type Provenance = 'live' | 'simulated' | 'sandbox' | 'copied' | 'delayed' | 'incomplete' | 'external';
 
 /** Resolved permissions of the current actor. Implemented by the identity module (and test fakes). */
 export interface Authorizer {
@@ -70,17 +71,20 @@ export function staticAuthorizer(
     for (const p of g.propertyIds) set.add(p);
     index.set(g.permission, set);
   }
+  // Union of every matching grant: the exact key plus each wildcard level ('module.*', '*'). A narrower exact
+  // grant must never shadow a broader wildcard grant (identity-plus review P2-10).
   const lookup = (permission: string): Set<string> | 'all' | undefined => {
-    const direct = index.get(permission);
-    if (direct) return direct;
-    // wildcard grants: 'module.*' or '*'
     const parts = permission.split('.');
-    for (let i = parts.length - 1; i >= 0; i--) {
-      const wildcard = i === 0 ? '*' : `${parts.slice(0, i).join('.')}.*`;
-      const w = index.get(wildcard);
-      if (w) return w;
+    const keys = [permission];
+    for (let i = parts.length - 1; i >= 0; i--) keys.push(i === 0 ? '*' : `${parts.slice(0, i).join('.')}.*`);
+    let union: Set<string> | undefined;
+    for (const key of keys) {
+      const g = index.get(key);
+      if (!g) continue;
+      if (g === 'all') return 'all';
+      union = union ? new Set([...union, ...g]) : new Set(g);
     }
-    return undefined;
+    return union;
   };
   return {
     can(permission, scope) {

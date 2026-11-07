@@ -1,0 +1,186 @@
+diff --git a/apps/backoffice/src/app/shell/app-shell.tsx b/apps/backoffice/src/app/shell/app-shell.tsx
+index 65f2550..381b16c 100644
+--- a/apps/backoffice/src/app/shell/app-shell.tsx
++++ b/apps/backoffice/src/app/shell/app-shell.tsx
+@@ -227,10 +227,10 @@ function ShellBody(p: {
+   const mod = isApplePlatform() ? '⌘' : 'Ctrl';
+   return (
+     <div className="flex min-h-0 flex-1">
+-      <aside className="hidden shrink-0 bg-surface-muted md:flex lg:bg-[linear-gradient(to_right,var(--pt-surface-muted)_5.75rem,var(--pt-surface)_5.75rem)]">
++      <aside className="hidden shrink-0 bg-surface-muted md:flex ">
+         <div className="sticky top-0 flex h-dvh">
+           <WorkspaceRail workspaces={workspaces} active={active?.id ?? null} />
+-          <div className="hidden w-56 border-e border-line bg-surface lg:block">
++          <div className={cn('hidden w-56 border-e border-line bg-surface', (active?.items.length ?? 0) > 1 && 'lg:block')}>
+             <SectionList workspace={active} />
+           </div>
+         </div>
+diff --git a/apps/backoffice/src/features/front-desk/arrivals-page.tsx b/apps/backoffice/src/features/front-desk/arrivals-page.tsx
+index bc6f053..5d990d9 100644
+--- a/apps/backoffice/src/features/front-desk/arrivals-page.tsx
++++ b/apps/backoffice/src/features/front-desk/arrivals-page.tsx
+@@ -69,25 +69,25 @@ export function ArrivalsPage() {
+         sort: { columnId: 'eta', direction: 'asc' },
+         filters: {},
+         search: '',
+-        hidden: ['nights'],
++        hidden: ['nights', 'payment', 'stay'],
+       }),
+       builtInView('blocked', t('arrivals.viewBlocked'), {
+         sort: { columnId: 'eta', direction: 'asc' },
+         filters: { readiness: 'blocked' },
+         search: '',
+-        hidden: ['nights'],
++        hidden: ['nights', 'payment', 'stay'],
+       }),
+       builtInView('vip', t('arrivals.viewVip'), {
+         sort: { columnId: 'eta', direction: 'asc' },
+         filters: { vip: 'yes' },
+         search: '',
+-        hidden: ['nights'],
++        hidden: ['nights', 'payment', 'stay'],
+       }),
+       builtInView('seaplane', t('arrivals.viewSeaplane'), {
+         sort: { columnId: 'eta', direction: 'asc' },
+         filters: { transport: 'seaplane' },
+         search: '',
+-        hidden: ['nights'],
++        hidden: ['nights', 'payment', 'stay'],
+       }),
+     ],
+     [t],
+@@ -112,6 +112,7 @@ export function ArrivalsPage() {
+                 </span>
+               )}
+               <span className="truncate">{r.guestName}</span>
++              {r.stayStatus !== "expected" && <StatusBadge vocabulary="stay" value={r.stayStatus} />}
+             </span>
+             <span className="pt-code truncate text-xs text-ink-muted">
+               {r.bookingCode}
+@@ -120,18 +121,31 @@ export function ArrivalsPage() {
+           </span>
+         ),
+       },
++      {
++        id: 'readiness',
++        header: t('arrivals.readiness'),
++        accessor: (r) => (r.readiness.ready ? 'ready' : 'blocked'),
++        compare: (a, b) => (a === b ? 0 : a === 'blocked' ? -1 : 1),
++        width: 'minmax(18rem, 3fr)',
++        filter: 'select',
++        filterOptions: [
++          { value: 'ready', label: t('arrivals.ready') },
++          { value: 'blocked', label: t('arrivals.notReady') },
++        ],
++        cell: (r) => <ReadinessCell row={r} />,
++      },
+       {
+         id: 'eta',
+         header: t('arrivals.eta'),
+         accessor: (r) => r.eta,
+-        width: '8.5rem',
++        width: '6.5rem',
+         cell: (r) => <EtaCell row={r} timeZone={tz} />,
+       },
+       {
+         id: 'unit',
+         header: t('arrivals.villa'),
+         accessor: (r) => r.unitName ?? '',
+-        width: 'minmax(8rem, 0.8fr)',
++        width: 'minmax(7.5rem, 0.7fr)',
+         cell: (r) => (
+           <span className="flex min-w-0 flex-col leading-tight">
+             {r.unitName && r.unitId ? (
+@@ -149,17 +163,17 @@ export function ArrivalsPage() {
+       },
+       {
+         id: 'condition',
+-        header: t('arrivals.condition'),
++        header: `${t('arrivals.condition')} · ${t('arrivals.payment')}`,
+         accessor: (r) => r.unitCondition ?? '',
+-        width: '9.5rem',
++        width: '10rem',
+         filter: 'select',
+         filterOptions: STATUS_VALUES.condition.map((v) => ({ value: v, label: strings.status.condition[v] })),
+-        cell: (r) =>
+-          r.unitCondition ? (
+-            <StatusBadge vocabulary="condition" value={r.unitCondition} />
+-          ) : (
+-            <span className="text-ink-subtle">—</span>
+-          ),
++        cell: (r) => (
++          <span className="flex min-w-0 flex-col items-start gap-0.5">
++            {r.unitCondition ? <StatusBadge vocabulary="condition" value={r.unitCondition} /> : <span className="text-ink-subtle">—</span>}
++            <StatusBadge vocabulary="payment" value={r.paymentStatus} />
++          </span>
++        ),
+       },
+       {
+         id: 'payment',
+@@ -170,19 +184,6 @@ export function ArrivalsPage() {
+         filterOptions: STATUS_VALUES.payment.map((v) => ({ value: v, label: strings.status.payment[v] })),
+         cell: (r) => <StatusBadge vocabulary="payment" value={r.paymentStatus} />,
+       },
+-      {
+-        id: 'readiness',
+-        header: t('arrivals.readiness'),
+-        accessor: (r) => (r.readiness.ready ? 'ready' : 'blocked'),
+-        compare: (a, b) => (a === b ? 0 : a === 'blocked' ? -1 : 1),
+-        width: 'minmax(14rem, 2fr)',
+-        filter: 'select',
+-        filterOptions: [
+-          { value: 'ready', label: t('arrivals.ready') },
+-          { value: 'blocked', label: t('arrivals.notReady') },
+-        ],
+-        cell: (r) => <ReadinessCell row={r} />,
+-      },
+       {
+         id: 'stay',
+         header: t('arrivals.stayStatus'),
+@@ -195,7 +196,7 @@ export function ArrivalsPage() {
+         id: 'owner',
+         header: t('arrivals.owner'),
+         accessor: (r) => r.owner ?? '',
+-        width: 'minmax(9rem, 1fr)',
++        width: '8rem',
+       },
+       {
+         id: 'vip',
+diff --git a/apps/backoffice/src/features/front-desk/readiness.tsx b/apps/backoffice/src/features/front-desk/readiness.tsx
+index f56a5d9..0de4d91 100644
+--- a/apps/backoffice/src/features/front-desk/readiness.tsx
++++ b/apps/backoffice/src/features/front-desk/readiness.tsx
+@@ -17,13 +17,13 @@ export function ReadinessCell({ row }: { row: ArrivalRow }) {
+   if (r.ready) {
+     const attention = r.checks.filter((c) => c.status === 'attention').length;
+     return (
+-      <span className="flex min-w-0 items-center gap-1.5 text-sm">
++      <span className="flex min-w-0 flex-wrap items-center gap-x-1.5 text-sm leading-tight">
+         <CircleCheck aria-hidden className="size-4 shrink-0 text-success-fg" />
+         <span className="whitespace-nowrap font-medium text-success-fg">{t('arrivals.noBlocker')}</span>
+         {attention > 0 && (
+           <span className="inline-flex min-w-0 items-center gap-1 text-xs text-warning-fg">
+             <TriangleAlert aria-hidden className="size-3.5 shrink-0" />
+-            <span className="truncate">{r.checks.find((c) => c.status === 'attention')?.message}</span>
++            <span className="line-clamp-2">{r.checks.find((c) => c.status === 'attention')?.message}</span>
+           </span>
+         )}
+       </span>
+@@ -33,10 +33,13 @@ export function ReadinessCell({ row }: { row: ArrivalRow }) {
+   const unknown = r.checks.find((c) => c.key === b?.key)?.status === 'unknown';
+   const { Icon, cls } = unknown ? checkIcon.unknown : checkIcon.blocking;
+   return (
+-    <span className="flex min-w-0 items-center gap-1.5 text-sm" title={b?.message}>
+-      <Icon aria-hidden className={cn('size-4 shrink-0', cls)} />
+-      <span className="pt-sr-only">{t('arrivals.blocker')}: </span>
+-      <span className="truncate">{b?.message}</span>
++    <span className="flex min-w-0 items-start gap-1.5 text-sm leading-tight" title={b?.message}>
++      <Icon aria-hidden className={cn('mt-0.5 size-4 shrink-0', cls)} />
++      <span className="flex min-w-0 flex-col">
++        <span className="pt-sr-only">{t('arrivals.blocker')}: </span>
++        <span className="line-clamp-2 font-medium">{b?.message}</span>
++        {b?.owner && <span className="truncate text-xs text-ink-muted">{b.owner}</span>}
++      </span>
+     </span>
+   );
+ }

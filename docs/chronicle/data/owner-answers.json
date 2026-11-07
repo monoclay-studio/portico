@@ -1,0 +1,186 @@
+[
+ {
+  "ts": "2026-11-07T06:47:24.482Z",
+  "questions": {
+   "questions": [
+    {
+     "question": "Who should be the merchant of record when hotels on the platform collect guest payments? (Your brief says selling the software does not automatically make Monoclay the merchant.)",
+     "header": "Payments",
+     "multiSelect": false,
+     "options": [
+      {
+       "label": "Hotel is merchant, Stripe Connect (Recommended)",
+       "description": "Each hotel's legal entity has its own connected payment account and is merchant of record. Monoclay is the platform and can take a platform fee. Fastest to build and keeps card data out of our systems. Adyen or other providers can be added later behind the same interface."
+      },
+      {
+       "label": "Hotels bring their own processor",
+       "description": "Hotels connect a gateway they already have (Adyen, Stripe, local banks). Monoclay earns nothing on payments, and we need more adapters."
+      },
+      {
+       "label": "Monoclay as payment facilitator",
+       "description": "Monoclay onboards merchants and earns a payment margin, like Mews Payments and Cloudbeds Payments. Requires payment-facilitator registration, merchant identity checks (KYC), risk management and much heavier compliance."
+      }
+     ]
+    },
+    {
+     "question": "Which country or region should the first pilot be built for? This sets which taxes, fiscal rules, currency, languages and data residency come first. Other regions follow later.",
+     "header": "First market",
+     "multiSelect": false,
+     "options": [
+      {
+       "label": "Maldives / Indian Ocean",
+       "description": "Island resorts with seaplane and boat transfers, TGST, Green Tax per guest-night, service charge, and USD/MVR."
+      },
+      {
+       "label": "GCC (UAE / Saudi)",
+       "description": "VAT, municipality and tourism fees, ZATCA e-invoicing in Saudi Arabia, Arabic right-to-left UI."
+      },
+      {
+       "label": "EU / UK",
+       "description": "VAT, GDPR, card authentication rules (SCA/3DS2) and country fiscalization (Germany TSE, Italy, Portugal, etc.)."
+      },
+      {
+       "label": "United States",
+       "description": "State and city occupancy taxes, FTC resort-fee disclosure rule, USD only."
+      }
+     ]
+    },
+    {
+     "question": "Which property type should the first pilot be? Every type stays in scope. This only sets build order and the first end-to-end demo.",
+     "header": "First segment",
+     "multiSelect": false,
+     "options": [
+      {
+       "label": "Independent / boutique hotel",
+       "description": "Fastest path to a live pilot. Core reservations, front desk, housekeeping, folios, night audit and a booking engine, with no resort extras at first."
+      },
+      {
+       "label": "Resort",
+       "description": "Villas, meal plans and allowances, transfers, activities, spa and outlets linked to the stay. Heavier, but this is where the strongest differentiation is."
+      },
+      {
+       "label": "Hotel group / multi-property",
+       "description": "Portfolio policies, cross-property guest profiles and consolidated reporting from the start."
+      },
+      {
+       "label": "Serviced apartments",
+       "description": "Long stays, unit-based inventory, owner accounting and automated communication."
+      }
+     ]
+    },
+    {
+     "question": "Which tech stack should the platform use?",
+     "header": "Stack",
+     "multiSelect": false,
+     "options": [
+      {
+       "label": "TypeScript end-to-end (Recommended)",
+       "description": "Node.js backend, React web apps, mobile as an offline-capable web app (React Native later), PostgreSQL. One language across API, web and mobile, the largest hiring pool, and the fastest to build with AI assistance."
+      },
+      {
+       "label": "Kotlin/JVM backend + TS frontend",
+       "description": "Spring/Kotlin backend in the style of banking systems. Very strong typing for finance, but slower to iterate and two languages for the team."
+      },
+      {
+       "label": "Go backend + TS frontend",
+       "description": "Fast, simple services with a small runtime. Less expressive for complex domain logic."
+      },
+      {
+       "label": ".NET (C#) backend + TS frontend",
+       "description": "Strong for enterprise and Microsoft-heavy hotel groups. Two languages for the team."
+      }
+     ]
+    }
+   ]
+  },
+  "answer": "The user answered: \"Who should be the merchant of record when hotels on the platform collect guest payments? (Your brief says selling the software does not automatically make Monoclay the merchant.)\"=\"Hotel is merchant, Stripe Connect (Recommended)\", \"Which country or region should the first pilot be built for? This sets which taxes, fiscal rules, currency, languages and data residency come first. Other regions follow later.\"=\"Maldives / Indian Ocean\", \"Which property type should the first pilot be? Every type stays in scope. This only sets build order and the first end-to-end demo.\"=\"i want this to be complete from the beginning. it should account for small guesthouses, large resorts, multi property integrations.. in other words it should be as small and as large as it needs to be.. we will have different pricing models for small businesses vs. large businesses. so it needs to account for that when building\", \"Which tech stack should the platform use?\"=\"whichever is best to ship it to the market. be extremely secure. do everything it needs to do. easy migration between current software on the market. easy integration to any platform. POS, cloud, salesforce, payments, any other APIs we will build in the future\". Read the answers carefully — they may request clarification, changes, or that you not proceed — and follow what they actually say."
+ },
+ {
+  "ts": "2026-11-07T06:54:30.858Z",
+  "questions": {
+   "questions": [
+    {
+     "question": "Which cloud should the platform run on? I'll define all infrastructure as code (Terraform) and run everything locally and in CI until you provide cloud credentials.",
+     "header": "Cloud",
+     "multiSelect": false,
+     "options": [
+      {
+       "label": "AWS (Recommended)",
+       "description": "The broadest managed services and what hotel-group IT and security reviewers usually expect. Regions near the Maldives: Mumbai, UAE and Singapore."
+      },
+      {
+       "label": "Google Cloud",
+       "description": "Strong managed Kubernetes and data/analytics tools. Regions in Mumbai, Delhi, Doha and Singapore."
+      },
+      {
+       "label": "Azure",
+       "description": "Good fit for hotel groups that run on Microsoft. Regions in the UAE and India."
+      },
+      {
+       "label": "Cloud-agnostic Kubernetes",
+       "description": "Portable across clouds, but more operational work and less use of managed services."
+      }
+     ]
+    },
+    {
+     "question": "This session can't create GitHub repositories itself. What should the main repository be called? You'll create it empty and private at github.com/monoclay-studio, and I'll attach it and push. Until then I work locally, so nothing is blocked.",
+     "header": "Repo name",
+     "multiSelect": false,
+     "options": [
+      {
+       "label": "monoclay (Recommended)",
+       "description": "One private monorepo for the whole platform: services, web apps, mobile, SDKs, infrastructure, docs."
+      },
+      {
+       "label": "monoclay-platform",
+       "description": "Same monorepo with a more explicit name."
+      },
+      {
+       "label": "monoclay-pms",
+       "description": "Named after the core product."
+      }
+     ]
+    },
+    {
+     "question": "How should real OTA connections (Booking.com, Expedia, Airbnb, Agoda) start? Either way I build our own channel-manager core plus an OTA simulator for testing. This decides which real path you pursue commercially.",
+     "header": "OTA access",
+     "multiSelect": false,
+     "options": [
+      {
+       "label": "Connectivity hub first (Recommended)",
+       "description": "Plug into a white-label channel API (e.g. Channex) for quick access to hundreds of channels, with a per-property cost. Apply for direct certifications later."
+      },
+      {
+       "label": "Direct certifications first",
+       "description": "You apply now to the Booking.com and Expedia connectivity partner programs. No hub fees, but months of certification before going live."
+      },
+      {
+       "label": "Both in parallel",
+       "description": "Use a hub to launch and pursue direct certifications at the same time."
+      }
+     ]
+    },
+    {
+     "question": "Is there a pilot property, and what system does it run today? This decides which migration importer I build first (all of them are planned).",
+     "header": "Pilot",
+     "multiSelect": false,
+     "options": [
+      {
+       "label": "Yes, runs OPERA / Fidelio",
+       "description": "Prioritise the OPERA importer, which handles profiles, future reservations, deposits, AR and rate codes."
+      },
+      {
+       "label": "Yes, on another cloud PMS",
+       "description": "For example Cloudbeds, Mews, eZee or RoomRaccoon. Prioritise CSV and API importers."
+      },
+      {
+       "label": "No pilot yet",
+       "description": "Build with realistic Maldives sample data: a guesthouse, a 120-villa resort and a 3-property group."
+      }
+     ]
+    }
+   ]
+  },
+  "answer": "The user answered: \"Which cloud should the platform run on? I'll define all infrastructure as code (Terraform) and run everything locally and in CI until you provide cloud credentials.\"=\"AWS (Recommended)\", \"This session can't create GitHub repositories itself. What should the main repository be called? You'll create it empty and private at github.com/monoclay-studio, and I'll attach it and push. Until then I work locally, so nothing is blocked.\"=\"i've made a rep named \"portico\"\", \"How should real OTA connections (Booking.com, Expedia, Airbnb, Agoda) start? Either way I build our own channel-manager core plus an OTA simulator for testing. This decides which real path you pursue commercially.\"=\"Connectivity hub first (Recommended)\", \"Is there a pilot property, and what system does it run today? This decides which migration importer I build first (all of them are planned).\"=\"No pilot yet\". Read the answers carefully — they may request clarification, changes, or that you not proceed — and follow what they actually say."
+ }
+]
