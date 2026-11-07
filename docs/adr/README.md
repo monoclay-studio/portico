@@ -16,5 +16,6 @@
 | [0012](0012-identity-portico-sessions-now-enterprise-sso-and-mfa-next.md) | Identity: Portico sessions now; enterprise SSO and MFA next | Accepted |
 | [0013](0013-web-applications-react-spa-shared-design-system-offline-capa.md) | Web applications: React SPA, shared design system, offline-capable staff PWA | Accepted |
 | [0014](0014-data-authority-system-of-record-per-data-domain.md) | Data authority (system of record) per data domain | Accepted |
+| [0015](0015-authorization-across-module-ports.md) | Authorization and integrity across module ports | Accepted |
 
 New ADRs: copy the structure, next number, status Proposed → Accepted after review.
