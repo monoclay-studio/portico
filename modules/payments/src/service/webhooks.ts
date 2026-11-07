@@ -324,13 +324,11 @@ export async function runEventBackstop(
             last_error: null,
           })
           .onConflict((oc) =>
-            oc
-              .column('account_id')
-              .doUpdateSet({
-                cursor: page.cursor ?? cursorRow?.cursor ?? null,
-                last_run_at: tx.now,
-                last_error: null,
-              }),
+            oc.column('account_id').doUpdateSet({
+              cursor: page.cursor ?? cursorRow?.cursor ?? null,
+              last_run_at: tx.now,
+              last_error: null,
+            }),
           )
           .execute(),
       );
@@ -346,12 +344,10 @@ export async function runEventBackstop(
             last_error: err instanceof Error ? err.message : String(err),
           })
           .onConflict((oc) =>
-            oc
-              .column('account_id')
-              .doUpdateSet({
-                last_run_at: tx.now,
-                last_error: err instanceof Error ? err.message : String(err),
-              }),
+            oc.column('account_id').doUpdateSet({
+              last_run_at: tx.now,
+              last_error: err instanceof Error ? err.message : String(err),
+            }),
           )
           .execute(),
       );

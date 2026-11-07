@@ -1,6 +1,7 @@
 /**
  * Payments over HTTP through the real composition root (finance not merged yet → its LedgerPort is an
- * "unavailable" stub, so confirmed payments show `ledger: failed` + an owned exception — never a fake posting).
+ * "unavailable" stub: folio collections are refused because nobody can confirm which property owns the folio;
+ * booking deposits are taken and show `ledger: failed` + an owned exception — never a fake posting).
  */
 import { createHmac } from 'node:crypto';
 import { newId } from '@portico/kernel';
@@ -73,6 +74,7 @@ async function demoOrg(name = 'Demo Resort') {
     post,
     propertyId: prop.json().id as string,
     accountId: account.json().id as string,
+    accountEtag: account.headers.etag as string,
     method,
   };
 }
@@ -82,12 +84,12 @@ describe('payments API', () => {
     const org = await demoOrg();
     const m = await org.method('sim_timeout_then_succeeded');
     expect(m.statusCode).toBe(201);
-    const folioId = newId();
+    const bookingId = newId();
     const body = {
       propertyId: org.propertyId,
       methodId: m.json().id,
       amount: { amountMinor: 84_000, currency: 'USD' },
-      ref: { type: 'folio', id: folioId },
+      ref: { type: 'booking', id: bookingId },
     };
     const noKey = await org.post('/v1/payments/charges', body, null);
     expect(noKey.statusCode).toBe(400);
@@ -125,7 +127,7 @@ describe('payments API', () => {
     expect(check.statusCode).toBe(200);
     const status = await h.app.inject({
       method: 'GET',
-      url: `/v1/payments/status-by-ref?refType=folio&refId=${folioId}`,
+      url: `/v1/payments/status-by-ref?refType=booking&refId=${bookingId}`,
       headers: org.auth,
     });
     expect(status.json().payments).toHaveLength(1);
@@ -150,7 +152,7 @@ describe('payments API', () => {
       propertyId: org.propertyId,
       methodId: m.json().id,
       amount: { amountMinor: 1_000, currency: 'USD' },
-      ref: { type: 'folio', id: newId() },
+      ref: { type: 'booking', id: newId() },
     });
     expect(res.statusCode).toBe(402);
     expect(res.json()).toMatchObject({
@@ -158,6 +160,27 @@ describe('payments API', () => {
       details: { payment: { status: { payment: 'failed' } } },
     });
     expect(res.json().detail).toMatch(/insufficient funds[\s\S]*payment link[\s\S]*Nothing was collected/);
+  });
+
+  it('without finance, a folio collection is refused before any money moves (nobody can place the folio)', async () => {
+    const org = await demoOrg();
+    const m = await org.method('pm_card_visa');
+    const folioId = newId();
+    const res = await org.post('/v1/payments/charges', {
+      propertyId: org.propertyId,
+      methodId: m.json().id,
+      amount: { amountMinor: 1_000, currency: 'USD' },
+      ref: { type: 'folio', id: folioId },
+    });
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toMatchObject({ code: 'module_unavailable', retryable: true });
+    expect(res.json().detail).toMatch(/booking deposit/);
+    const status = await h.app.inject({
+      method: 'GET',
+      url: `/v1/payments/status-by-ref?refType=folio&refId=${folioId}`,
+      headers: org.auth,
+    });
+    expect(status.json()).toMatchObject({ status: 'none', payments: [] });
   });
 
   it('card numbers are refused at the boundary', async () => {
@@ -192,13 +215,21 @@ describe('payments API', () => {
       headers: org.auth,
       payload: { outage: 'refuse' },
     });
-    expect(ctl.statusCode).toBe(200);
+    expect(ctl.statusCode).toBe(400);
+    expect(ctl.json().code).toBe('if_match_required');
+    const ok = await h.app.inject({
+      method: 'PUT',
+      url: `/v1/payments/accounts/${org.accountId}/simulator-controls`,
+      headers: { ...org.auth, 'if-match': org.accountEtag },
+      payload: { outage: 'refuse' },
+    });
+    expect(ok.statusCode).toBe(200);
     const charge = () =>
       org.post('/v1/payments/charges', {
         propertyId: org.propertyId,
         methodId: m.json().id,
         amount: { amountMinor: 1_000, currency: 'USD' },
-        ref: { type: 'folio', id: newId() },
+        ref: { type: 'booking', id: newId() },
       });
     for (let i = 0; i < 3; i++) expect((await charge()).statusCode).toBe(402);
     const down = await charge();
@@ -231,7 +262,7 @@ describe('payments API', () => {
       propertyId: victim.propertyId,
       methodId: m.json().id,
       amount: { amountMinor: 1_000, currency: 'USD' },
-      ref: { type: 'folio', id: newId() },
+      ref: { type: 'booking', id: newId() },
     });
     expect(paid.statusCode).toBe(201);
     const attacker = await demoOrg('Attacker');

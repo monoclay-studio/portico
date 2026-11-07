@@ -7,7 +7,6 @@
  */
 import { type TxContext, type TxEventSubscription, withTenantTx } from '@portico/db';
 import { DomainError, type RequestContext } from '@portico/kernel';
-import type { z } from 'zod';
 import type { Authorization, Payment, PaymentRequest, Refund } from '../contracts';
 import { type BreakerConfig, DEFAULT_BREAKER } from '../domain/circuit-breaker';
 import { PaymentsEvents } from '../events';

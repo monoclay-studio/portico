@@ -106,7 +106,10 @@ describe('P0-1: a collection can only post to a folio/booking of the caller’s 
       ),
     ).rejects.toMatchObject({ code: 'ledger_target_other_property' });
     const foreignBooking = newId();
-    h.ledger.owners.set(foreignBooking, { propertyId: org.otherPropertyId, legalEntityId: org.legalEntityId });
+    h.ledger.owners.set(foreignBooking, {
+      propertyId: org.otherPropertyId,
+      legalEntityId: org.legalEntityId,
+    });
     await expect(
       withTenantTx(h.db, desk, (tx) =>
         svc.tx.registerVirtualCard(tx, {
@@ -146,12 +149,20 @@ describe('P0-1: a collection can only post to a folio/booking of the caller’s 
     h.ledger.owners.set(foreign, { propertyId: org.otherPropertyId, legalEntityId: org.legalEntityId });
     await expect(
       org.tx((tx) =>
-        svc.tx.capture(tx, { authorizationId: auth.id, ledgerRef: { type: 'folio', id: foreign }, businessKey: newId() }),
+        svc.tx.capture(tx, {
+          authorizationId: auth.id,
+          ledgerRef: { type: 'folio', id: foreign },
+          businessKey: newId(),
+        }),
       ),
     ).rejects.toMatchObject({ code: 'ledger_target_other_property' });
     const own = newId();
     const c = await org.tx((tx) =>
-      svc.tx.capture(tx, { authorizationId: auth.id, ledgerRef: { type: 'folio', id: own }, businessKey: newId() }),
+      svc.tx.capture(tx, {
+        authorizationId: auth.id,
+        ledgerRef: { type: 'folio', id: own },
+        businessKey: newId(),
+      }),
     );
     await svc.settle(org.ctx, { type: 'payment', id: c.id });
     const [posting] = await postings(h, org, 'payment');
@@ -184,7 +195,9 @@ describe('P0-2: provider accounts belong to exactly one organization; status and
       code: 'provider_account_claimed',
     });
     const { rows } = await sql<{ tenant_id: string }>`
-      select tenant_id from payments.route_webhook('stripe_connect', 'acct_1SharedVictim', false)`.execute(h.db.kysely);
+      select tenant_id from payments.route_webhook('stripe_connect', 'acct_1SharedVictim', false)`.execute(
+      h.db.kysely,
+    );
     expect(rows.map((r) => r.tenant_id)).toEqual([victim.tenantId]);
     // A tenant admin cannot activate the Stripe account (only Stripe can) — disabling it is allowed.
     const acc = await victim.tx((tx) => h.module.service.tx.getAccount(tx, victimAccount));
@@ -196,7 +209,11 @@ describe('P0-2: provider accounts belong to exactly one organization; status and
     expect(accountUpdate.safeParse({ applicationFeeBps: 1000 }).success).toBe(false);
     await expect(
       victim.tx((tx) =>
-        h.module.service.operator.setApplicationFee(tx, { accountId: acc.id, applicationFeeBps: 1000, approvedBy: 'me' }),
+        h.module.service.operator.setApplicationFee(tx, {
+          accountId: acc.id,
+          applicationFeeBps: 1000,
+          approvedBy: 'me',
+        }),
       ),
     ).rejects.toMatchObject({ status: 403 });
     // Stripe's account.updated activates it — routed to the victim only.
@@ -212,7 +229,9 @@ describe('P0-2: provider accounts belong to exactly one organization; status and
     await h.module.service.receiveStripeWebhook(body, {
       [STRIPE_SIGNATURE_HEADER]: signatureHeader(h.secrets.webhookSecret, t, body),
     });
-    expect((await victim.tx((tx) => h.module.service.tx.getAccount(tx, victimAccount))).status).toBe('active');
+    expect((await victim.tx((tx) => h.module.service.tx.getAccount(tx, victimAccount))).status).toBe(
+      'active',
+    );
     h.secrets.sandbox = null;
   });
 });
@@ -304,7 +323,9 @@ describe('P1-1: one collection in flight per folio — genuinely concurrent', ()
       });
     const results = await Promise.allSettled([start('A'), start('B'), start('C')]);
     const ok = results.filter((r) => r.status === 'fulfilled') as PromiseFulfilledResult<{ id: string }>[];
-    const errs = results.filter((r) => r.status === 'rejected').map((r) => (r as PromiseRejectedResult).reason.code);
+    const errs = results
+      .filter((r) => r.status === 'rejected')
+      .map((r) => (r as PromiseRejectedResult).reason.code);
     expect(ok).toHaveLength(1);
     expect(errs.every((c) => c === 'payment_pending_verification')).toBe(true);
     await svc.settle(org.ctx, { type: 'payment', id: ok[0]?.value.id as string });
@@ -343,7 +364,9 @@ describe('P1-2: a payment request owns its purpose on a reference', () => {
       });
     await expect(deskCharge()).rejects.toMatchObject({ code: 'collection_owned_by_payment_request' });
     expect(await postings(h, org, 'deposit')).toHaveLength(1);
-    const second = await deskCharge({ separateCollection: { reason: 'Second villa added; separate deposit' } });
+    const second = await deskCharge({
+      separateCollection: { reason: 'Second villa added; separate deposit' },
+    });
     expect(second.status.payment).toBe('succeeded');
     // And a new deposit link for the same booking is refused while the deposit is already collected.
     await expect(
@@ -365,11 +388,18 @@ describe('P1-2: a payment request owns its purpose on a reference', () => {
 describe('P1-3: Route D duplicates are database facts', () => {
   it('the same approval code recorded concurrently: exactly one record; an audited override allows a real repeat', async () => {
     const org = await setupOrg(h);
-    const both = await Promise.allSettled([recordTerminal(org, 'APPR-778899'), recordTerminal(org, 'APPR-778899')]);
+    const both = await Promise.allSettled([
+      recordTerminal(org, 'APPR-778899'),
+      recordTerminal(org, 'APPR-778899'),
+    ]);
     expect(both.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
-    expect((both.find((r) => r.status === 'rejected') as PromiseRejectedResult).reason.code).toBe('duplicate_reference');
+    expect((both.find((r) => r.status === 'rejected') as PromiseRejectedResult).reason.code).toBe(
+      'duplicate_reference',
+    );
     expect(await postings(h, org, 'payment')).toHaveLength(1);
-    await recordTerminal(org, 'APPR-778899', { duplicateOverride: { reason: 'Bank reuses 6-digit codes; second card' } });
+    await recordTerminal(org, 'APPR-778899', {
+      duplicateOverride: { reason: 'Bank reuses 6-digit codes; second card' },
+    });
     expect(await postings(h, org, 'payment')).toHaveLength(2);
     // A different terminal (or another day) is not a duplicate.
     await recordTerminal(org, 'APPR-778899', { terminalId: 'TID-2' });
@@ -470,7 +500,9 @@ describe('P1-5/P1-6/P1-7/P1-9: Route D and deposits reach finance correctly', ()
     expect((await svc.view.payment(org.ctx, bt.id)).status.payment).toBe('awaiting_receipt');
     const desk = org.as(['payments.payment.collect', 'payments.externalRecord.create']);
     await expect(
-      withTenantTx(h.db, desk, (tx) => svc.tx.confirmBankTransfer(tx, { paymentId: bt.id, bankReference: 'BML-123' })),
+      withTenantTx(h.db, desk, (tx) =>
+        svc.tx.confirmBankTransfer(tx, { paymentId: bt.id, bankReference: 'BML-123' }),
+      ),
     ).rejects.toMatchObject({ status: 403 });
     const before = (await postings(h, org, 'payment')).length;
     await org.tx((tx) => svc.tx.confirmBankTransfer(tx, { paymentId: bt.id, bankReference: 'BML-123' }));
@@ -526,7 +558,9 @@ describe('P1-11: an intent recorded in one environment is never sent in another'
         businessKey: newId(),
       }),
     );
-    await sql`update platform.tenants set environment = 'live' where id = ${org.tenantId}`.execute(h.t.admin.kysely);
+    await sql`update platform.tenants set environment = 'live' where id = ${org.tenantId}`.execute(
+      h.t.admin.kysely,
+    );
     const liveCtx = { ...org.ctx, environment: 'live' as const };
     await svc.execute(liveCtx, s.operationId as string);
     const p = await svc.view.payment(liveCtx, s.id);
@@ -545,7 +579,9 @@ describe('P2 fixes', () => {
     const [ex] = (await org.tx((tx) => svc.tx.listExceptions(tx, { status: 'open' }))).filter(
       (e) => e.kind === 'ledger_posting_failed',
     );
-    await org.tx((tx) => svc.tx.resolveException(tx, ex?.id as string, ex?.version as number, 'looked at it'));
+    await org.tx((tx) =>
+      svc.tx.resolveException(tx, ex?.id as string, ex?.version as number, 'looked at it'),
+    );
     h.clock.advance(61_000);
     await svc.runReconciliation(org.ctx);
     const open = (await org.tx((tx) => svc.tx.listExceptions(tx, { status: 'open' }))).filter(
@@ -588,8 +624,11 @@ describe('P2 fixes', () => {
 
   it('P2-6: card numbers are refused in every free-text field and in statement files', async () => {
     expect(
-      refundInput.safeParse({ paymentId: newId(), amount: { amountMinor: 1, currency: 'USD' }, reason: 'card 4242 4242 4242 4242' })
-        .success,
+      refundInput.safeParse({
+        paymentId: newId(),
+        amount: { amountMinor: 1, currency: 'USD' },
+        reason: 'card 4242 4242 4242 4242',
+      }).success,
     ).toBe(false);
     expect(
       recordPaymentInput.safeParse({
@@ -631,7 +670,12 @@ describe('P2 fixes', () => {
     await svc.deliverSimulatorWebhooks(org.ctx, org.simAccountId);
     await expect(
       org.tx((tx) =>
-        svc.tx.refund(tx, { paymentId: p.id, amount: { amountMinor: 20_000, currency: 'USD' }, reason: 'x', businessKey: newId() }),
+        svc.tx.refund(tx, {
+          paymentId: p.id,
+          amount: { amountMinor: 20_000, currency: 'USD' },
+          reason: 'x',
+          businessKey: newId(),
+        }),
       ),
     ).rejects.toMatchObject({ code: 'payment_disputed' });
   });
