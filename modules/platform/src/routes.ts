@@ -3,7 +3,6 @@ import { type HttpModule, idParams, requireIdempotencyKey, requireIfMatch, setVe
 import { requirePermission } from '@portico/kernel';
 import { z } from 'zod';
 import {
-  dataAuthority,
   legalEntity,
   legalEntityInput,
   organization,
@@ -93,26 +92,9 @@ export function platformHttp(deps: { database: PorticoDatabase; ports?: Platform
         },
       );
 
-      // UX round 1 INT-03 / SET-05 (read side): who is the system of record per domain, the resolved value of a
-      // policy with its source, and a preview of a policy change across properties. Writes (authority transitions,
-      // policy changes) follow the identity-plus approval rules and are not exposed here yet.
-      app.get(
-        '/properties/:id/data-authority',
-        {
-          schema: {
-            tags: ['Properties'],
-            params: idParams,
-            response: { 200: z.object({ items: z.array(dataAuthority) }) },
-          },
-        },
-        async (req) => ({
-          items: await withTenantTx(database, req.ctx, async (tx) => {
-            await svc.getProperty(tx, req.params.id); // 404 for a property this organization does not have
-            return svc.listDataAuthority(tx, req.params.id);
-          }),
-        }),
-      );
-
+      // UX round 1 SET-05 (read side): the resolved value of a policy with its source, and a preview of a policy change
+      // across properties. Who is the system of record per domain (INT-03) is served by the enterprise routes
+      // (`GET /properties/:id/data-authority`, routes-enterprise.ts).
       app.get(
         '/properties/:id/policies/:key',
         {

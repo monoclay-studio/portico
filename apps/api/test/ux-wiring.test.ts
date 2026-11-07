@@ -5,6 +5,7 @@
  * money on the front-desk boards only for roles that handle money (FD-15, proven in reservations' permission test).
  */
 import { newId } from '@portico/kernel';
+import { dataDomain } from '@portico/platform';
 import type { Booking } from '@portico/reservations';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
@@ -36,7 +37,8 @@ describe('UX round 1 wiring', () => {
       headers: auth,
     });
     expect(da.statusCode).toBe(200);
-    expect(da.json().items).toHaveLength(9);
+    // One row per data domain platform knows (main added guestCommunications).
+    expect(da.json().items).toHaveLength(dataDomain.options.length);
     expect(da.json().items.find((d: { domain: string }) => d.domain === 'roomStatus')).toMatchObject({
       authority: 'external',
       systemName: 'Legacy PMS',

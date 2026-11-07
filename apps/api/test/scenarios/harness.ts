@@ -32,6 +32,7 @@ import type { NewBookingInput } from '@portico/reservations';
 import { createTestDatabase, type TestDatabase } from '@portico/testing';
 import { expect } from 'vitest';
 import { buildApp, type Composition, compose, MANIFESTS, provisionOrganization } from '../../src';
+import { enrolMfa } from '../helpers';
 
 export interface Scenario {
   t: TestDatabase;
@@ -102,7 +103,11 @@ export async function organization(
   opts: { name?: string; environment?: TenantEnvironment } = {},
 ): Promise<ScenarioOrg> {
   const environment = opts.environment ?? 'demo';
-  const admin = { email: `admin-${newId()}@example.mv`, password: 'correct horse battery staple' };
+  // Demo seeding only (ADR-0017 rule 12): a demo organization, a reserved fictitious address.
+  const admin = {
+    email: `admin-${newId()}@scenarios.portico.invalid`,
+    password: 'correct horse battery staple',
+  };
   const { tenantId } = await provisionOrganization(s.t.db, {
     name: opts.name ?? 'Azure Isles Group',
     slug: `org-${newId().slice(-12)}`,
@@ -332,25 +337,45 @@ export async function makeExternal(
     | 'accounting',
   writeMode: 'read_only' | 'forward' = 'read_only',
 ): Promise<void> {
-  await org.run(org.setup, (tx) =>
-    platform.setDataAuthority(tx, {
-      propertyId,
-      domain,
-      authority: 'external',
-      connectionId: newId(),
-      systemName: 'Legacy PMS',
-      writeMode,
+  // Identity-plus / platform enterprise (G-02): moving a domain's system of record is an authority transition —
+  // planned by one person, approved by another, frozen, then made effective. Scenarios use the real flow.
+  const planner = { ...org.setup, actor: { kind: 'user' as const, userId: newId(), displayName: 'Planner' } };
+  const approver = {
+    ...org.setup,
+    actor: { kind: 'user' as const, userId: newId(), displayName: 'Approver' },
+  };
+  const plan = await org.run(planner, (tx) =>
+    platform.planAuthorityTransition(tx, propertyId, {
+      changes: [
+        { domain, authority: 'external', connectionId: newId(), systemName: 'Legacy PMS', writeMode },
+      ],
       reason: 'Scenario: the hotel keeps its existing system of record for this domain',
+      freezeMinutes: 5,
     }),
   );
+  if (plan.approvalRequired) {
+    await org.run(approver, (tx) => platform.approveAuthorityTransition(tx, plan.id, 'scenario setup'));
+  }
+  await org.run(planner, (tx) => platform.freezeAuthorityTransition(tx, plan.id));
+  await org.run(planner, (tx) => platform.completeAuthorityTransition(tx, {}, plan.id));
 }
 
-/** Sign in over HTTP (the single place scenarios use password sign-in; identity-plus adds MFA here). */
+const sessions = new Map<string, Record<string, string>>();
+
+/**
+ * Sign in over HTTP — the single place scenarios use password sign-in. Identity-plus: sensitive (⚑) permissions need
+ * MFA, so the administrator enrols an authenticator once (codes from the scenario clock) and the session is reused.
+ */
 export async function signIn(s: Scenario, org: ScenarioOrg): Promise<Record<string, string>> {
+  const cached = sessions.get(org.tenantId);
+  if (cached) return cached;
   const res = await s.app.inject({ method: 'POST', url: '/v1/auth/login', payload: org.admin });
   const body = res.json();
   if (body.status !== 'signed_in') throw new Error(`login failed: ${res.body}`);
-  return { authorization: `Bearer ${body.token}` };
+  const auth = { authorization: `Bearer ${body.token}` };
+  await enrolMfa(s.app, auth, org.admin.password, s.clock.now());
+  sessions.set(org.tenantId, auth);
+  return auth;
 }
 
 // ───────────────────────────── global consistency checks (scenarios README) ─────────────────────────────

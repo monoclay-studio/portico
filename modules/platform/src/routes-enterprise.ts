@@ -108,7 +108,11 @@ export function registerEnterpriseRoutes(
       },
     },
     async (req) => ({
-      items: await withTenantTx(database, req.ctx, (tx) => svc.listDataAuthority(tx, req.params.id)),
+      items: await withTenantTx(database, req.ctx, async (tx) => {
+        // A property this organization does not have is a 404, never a list of fabricated defaults (UX INT-03).
+        await svc.getProperty(tx, req.params.id);
+        return svc.listDataAuthority(tx, req.params.id);
+      }),
     }),
   );
   app.post(
