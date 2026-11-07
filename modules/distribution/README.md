@@ -106,7 +106,7 @@ only the two Channex hosts). The staging run must check, and record in the readi
 | DST-I04 channel_state = last accepted payload (lease token; sequence guard) | `ari-engine.test.ts` "connect → full resync…", `delivery-edges.test.ts` "a late answer…", `regressions.test.ts` "OLDER message" |
 | DST-I05 no ARI while availability (or, for rates, rates) is external | `ari-engine.test.ts` "nothing is published while an external system is authoritative…" |
 | ≤ limit requests in any 60 s per connection and kind (atomic reservation) | `ari-engine.test.ts` burst and "20 concurrent reservations"; `domain.test.ts` property test |
-| A refused key on any path (ARI, ack, feed, verify) pauses this connection only, with an urgent exception | `ari-engine.test.ts` "a revoked key…" |
+| A refused key on any path (ARI, ack, feed, verify, "re-request since T") pauses this connection only, with an urgent exception | `ari-engine.test.ts` "a revoked key…"; `inbound.test.ts` "\"re-request since T\" ingests…" |
 | The environment decides the hub at every call (target re-checked) | `isolation-permissions.test.ts` "…never reaches a hub its organization's environment does not allow" |
 | Secrets never in responses, idempotency records, audit or the simulator view | `apps/api/test/distribution.test.ts` "permissions, isolation, idempotent create…", "…publishes its calendar" |
 | Tenant isolation and permission at the record's property | `isolation-permissions.test.ts` |
