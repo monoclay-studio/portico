@@ -282,6 +282,7 @@ export async function disposeLostFound(
 ): Promise<LostFoundView> {
   const row = await load(tx, id);
   const facts = await propertyFacts(d, tx, row.property_id);
+  assertLostFoundTransition(row.status as LostFoundStatus, 'disposed');
   assertDisposalAllowed(facts.businessDate, row.retention_until, input.reason);
   return transition(
     d,
