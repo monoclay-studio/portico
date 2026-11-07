@@ -11,11 +11,11 @@ Portico's terms are original. Where staff know an industry term, the UI may show
 | Term | Meaning |
 |---|---|
 | **Organization** [`tenant`] | The software customer (a hotel company, group, or single-property owner). The hard isolation boundary for data and money. Code uses `tenantId`. |
-| **Environment** | Every organization has a `live` environment and may have `training` and `demo` environments. They are separate tenants, visibly labeled, and never share data or money. |
+| **Environment** | Every organization has a `live` environment and may have `trial` (isolated organization holding an authorized copy of a hotel's data), `sandbox` (partner/integration testing against provider sandboxes), `training` and `demo` environments. They are separate tenants, visibly labeled, and never share data or money. Non-live environments cannot cause real-world effects. |
 | **Brand** | A named product line within an organization (e.g. "Azure Isles Resorts"). Optional. |
 | **Region** | A geographic or management grouping of properties. Optional; nestable. |
 | **Portfolio** | The hierarchy Organization → Brand/Region → Property used for policy inheritance and reporting. |
-| **Property** [`property`] | A single operated hotel, resort, guesthouse, apartment building, etc. Has a timezone, base currency, business date and a **property profile** (guesthouse, hotel, resort, serviced apartments, hostel). |
+| **Property** [`property`] | A single operated hotel, resort, guesthouse, apartment building, etc. Has a timezone, base currency, business date, a **property profile** (`guesthouse`, `boutique_hotel`, `hotel` = full-service hotel, `resort`, `serviced_apartments`, `hostel`) and a status (`setup → pilot → active → inactive`). |
 | **Legal entity** [`legalEntity`] | The company that operates a property, issues invoices, owns the payment account and the books. A property has exactly one operating legal entity at a time. |
 | **Owner** [`owner`] | An individual or company that owns units (e.g. condo-hotel villas, apartments) and requires separate owner accounting/statements. |
 | **Department** | An operational team at a property (Front Office, Housekeeping, Engineering, F&B, Reservations, Finance…). Tasks and conversations are owned by departments. |
@@ -140,3 +140,56 @@ Portico's terms are original. Where staff know an industry term, the UI may show
 | **Connection health** | Last successful exchange, pending updates, failures, mapping problems, open discrepancies. |
 | **Discrepancy** | A detected mismatch between Portico and an external system (inventory, reservation, payment), with a resolution workflow. |
 | **Import job** | A migration run with mapping, validation, a comparison report, and financial reconciliation. |
+
+## Adoption and integration
+
+| Term | Meaning |
+|---|---|
+| **Adoption path** | A: connect alongside existing systems; B: replace selected capabilities; C: full migration to Portico. Defined by data authority, so it is checkable in data. |
+| **System of record** [`dataAuthority`] | The one system authoritative for a governed data domain at a property: Portico or an external connection. |
+| **Governed domain** | `reservations`, `availability`, `rates`, `guestProfiles`, `charges`, `payments`, `roomStatus`, `maintenance`, `accounting`. |
+| **Room status** [`roomStatus`] | The governed domain covering unit condition, occupancy discrepancies and DND. UI copy keeps the term **unit condition** for the housekeeping state. |
+| **Write mode** | `exclusive` (Portico authoritative), `forward` or `read_only` (external authoritative). |
+| **Authority transition** | A controlled move of a domain's system of record: `planned → frozen → effective`. |
+| **Connected mode** | A module working on mirrored records whose system of record is external. |
+| **Standalone module** | A capability offered without the Portico PMS core, running in connected mode. |
+| **Connection** | An authorized link between a Portico organization/property and one external product. |
+| **Connector** | Portico's adapter code for a provider product/version. |
+| **Local connector** | Portico software installed on the hotel network for systems that cannot reach the cloud. |
+| **Workflow** | A defined exchange (e.g. POS charge posting) with capabilities read / create / update / receive-changes and a sync mode. |
+| **Sync mode** | Immediate, periodic, manual or file. A file exchange is never presented as a live connection. |
+| **Mapping** / **Mapping suggestion** | A link between a Portico entity and an external one / a proposed link with confidence and reasons, requiring review when ambiguous or financially significant. |
+| **Validation run** | Recorded checks proving a connection behaves correctly before activation. |
+| **Activation scope** | The approved set of properties, workflows and external effects a connection or pilot may perform. |
+| **Exchange** / **Exchange log** | One message or record sent or received / the log of all of them. |
+| **Outbound operation** | A change Portico sends to another system, tracked until confirmed or resolved. Never blindly replayed after reconnection. |
+| **Integration exception** | A failed or incomplete exchange or workflow needing a person; severity urgent or routine; with business impact, responsible party and next step. |
+| **Sender register** | Per property, which system sends each automated guest message type (prevents duplicate messages). |
+| **Promotion package** | Configuration carried from a trial to production after review. |
+| **Cutover journal** | Record of every business change after a migration switch, used for rollback without losing post-cutover activity. |
+| **Historical archive** | Read-only record of source-system history that was not migrated. |
+| **Continuity snapshot** | Read-only local copy of essential operational lists for outages. |
+| **Provenance** | Where displayed information comes from: `live`, `simulated`, `copied`, `delayed`, `incomplete`, `external`. |
+
+## Product and workspace terms
+
+| Term | Meaning |
+|---|---|
+| **Workspace** | A role's home screen: its saved views, the exceptions it owns and its next actions. |
+| **Exception** | Something that needs a person (a blocker, mismatch or failure) with an owner and states `open → acknowledged → resolved` or `ignored` (with reason). |
+| **Saved view** | A named, shareable set of filters, columns and sort on a list, calendar or timeline. |
+| **Timeline** | The unit × date grid showing stays, holds, blocks and assignments; the primary reservation view. |
+| **Command palette** | Keyboard-invoked (Ctrl/Cmd+K) search-and-act box for records and actions. |
+| **Mirror** | A read-only copy of records whose system of record is external, labeled `external` with last-sync time. |
+| **Forwarding** | Sending a Portico action to an external system of record; it stays **pending** until acknowledged. |
+| **Pilot scope** | The activation scope of a property in `pilot` status: which modules, workflows and external effects are live. |
+| **Unit block** | An out-of-order, out-of-service or house-use period on a unit, with reason and source. |
+| **Relocation** | Moving a guest to another unit or property because the booked unit cannot be provided (overbooking, outage), with a recorded reason, costs and guest communication. |
+| **Payment schedule** | The agreed deposit and balance due dates and amounts in a booking's terms. |
+| **Collection plan** | The per-booking plan that carries out the payment schedule; each scheduled collection has exactly one owner (Portico, the channel, or the hotel's own terminal) so it can never be collected twice. |
+| **Breakage** | Revenue recognised from an unused allowance or forfeited deposit under its policy, posted as an explicit entry. |
+| **Service date** | The date a service was delivered (e.g. a dinner); distinct from business date, stay date, revenue date and transaction timestamp. |
+| **Revenue date** | The date revenue is recognised in the ledger (usually the night or service date). |
+| **Supplementary folio** | An additional folio for the same stay or booking created for a different payer or purpose (e.g. late charges after departure). |
+| **Resource** | A bookable non-accommodation capacity: function room, spa therapist, treatment room, dive boat, equipment. |
+| **Connect plan** / **Pack** | Commercial packaging for hotels that keep their PMS: modules sold as packs (e.g. housekeeping & maintenance pack) running in connected mode. |
