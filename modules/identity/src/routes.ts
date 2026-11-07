@@ -16,6 +16,9 @@ import { z } from 'zod';
 import * as svc from './api';
 import {
   acceptInvitationRequest,
+  apiClientCreated,
+  apiClientRequest,
+  apiClientSummary,
   cloneRoleRequest,
   createRoleRequest,
   createUserRequest,
@@ -645,6 +648,41 @@ function registerAdminRoutes(app: PorticoApp, database: PorticoDatabase, ports: 
         svc.revokeAllSessions(tx, req.params.id, req.body.reason),
       ),
     }),
+  );
+
+  // API clients (integrations, SCIM provisioning). The token is returned once.
+  app.get(
+    '/api-clients',
+    { schema: { tags: ['API clients'], response: { 200: z.object({ items: z.array(apiClientSummary) }) } } },
+    async (req) => ({ items: await withTenantTx(database, req.ctx, (tx) => svc.listApiClients(tx)) }),
+  );
+  app.post(
+    '/api-clients',
+    { schema: { tags: ['API clients'], body: apiClientRequest, response: { 201: apiClientCreated } } },
+    async (req, reply) => {
+      const key = requireIdempotencyKey(req);
+      const res = await runIdempotent(
+        database,
+        req.ctx,
+        { scope: 'POST /api-clients', key, request: req.body },
+        async (tx) => ({
+          status: 201,
+          body: await svc.issueApiClient(tx, ports, {
+            ...req.body,
+            expiresAt: req.body.expiresAt ? new Date(req.body.expiresAt) : undefined,
+          }),
+        }),
+      );
+      return reply.status(201).send(res.body);
+    },
+  );
+  app.post(
+    '/api-clients/:id/revoke',
+    { schema: { tags: ['API clients'], params: idParams, body: reasonRequest, response: { 204: z.null() } } },
+    async (req, reply) => {
+      await withTenantTx(database, req.ctx, (tx) => svc.revokeApiClient(tx, req.params.id, req.body.reason));
+      return reply.status(204).send(null);
+    },
   );
 
   // Roles. GET /roles keeps its wave-0 fields and adds the role-editor view (additive).

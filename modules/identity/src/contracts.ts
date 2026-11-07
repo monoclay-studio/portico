@@ -436,3 +436,28 @@ export const scimListQuery = z.object({
   startIndex: z.coerce.number().int().min(1).optional(),
   count: z.coerce.number().int().min(0).max(200).optional(),
 });
+
+// ───────────────────────────── API clients ─────────────────────────────
+
+export const apiClientRequest = z.object({
+  name: z.string().min(1).max(200),
+  permissions: z.array(z.string().max(120)).min(1).max(200),
+  propertyIds: z.array(z.uuid()).max(500).optional(),
+  expiresAt: z.iso.datetime().optional(),
+});
+export const apiClientCreated = z.object({
+  clientId: z.uuid(),
+  /** Shown once. Store it in the integration's secret store. */
+  token: z.string(),
+});
+export const apiClientSummary = z.object({
+  clientId: z.uuid(),
+  name: z.string(),
+  permissions: z.array(z.string()),
+  propertyIds: z.array(z.uuid()).nullable(),
+  status: z.enum(['active', 'revoked']),
+  createdBy: z.string(),
+  createdAt: z.string(),
+  expiresAt: z.string().nullable(),
+  lastUsedAt: z.string().nullable(),
+});

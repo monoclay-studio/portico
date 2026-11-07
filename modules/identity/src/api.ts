@@ -1,5 +1,6 @@
 // Public service surface of the identity module (exported as the `identity` namespace from index.ts).
 export * from './service';
+export * from './services/api-clients';
 export * from './services/break-glass';
 export * from './services/lifecycle';
 export * from './services/mfa';
