@@ -16,3 +16,4 @@
 - foundation (from reservations review): move a PROPERTY-SCOPED provider-delegation helper into a shared package and use it in every provider (finance's version widened to all properties); every producer exports its event payload schemas (Zod) from contracts so consumers parse with the producer's schema
 - finance: add reservations' penalty/fee charge codes (5) or a mapping; accept late-checkout/early-check-in fees with the correct service date rules
 - unowned: `reservations.booking.cancelled` deposit treatment (forfeit/refund per terms) and no-show merchant-initiated charging — assign at integration step (payments + finance + reservations)
+- foundation (later): extract integration's safeFetch (resolve-and-pin, private/link-local/metadata range blocking, port rules) into a shared package for every outbound HTTP adapter (payments/Stripe, comms, channels)
