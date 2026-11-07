@@ -3,7 +3,7 @@
 Problems found while building `@portico/guests` that need a change outside this module. Each lists the problem,
 the proposed change, and how the module works around it today.
 
-## 1. Idempotency records keep personal data indefinitely (`packages/db`) — PARTLY DONE on main (30-day expiry, actor-bound replay)
+## 1. Idempotency records keep personal data indefinitely (`packages/db`) — DONE (30-day expiry, actor-bound replay, replay plans + erasure redaction in fix/guests-erasure-idempotency)
 
 **Problem.** `runIdempotent` stores the full response body in `core.idempotency_keys`. For `POST /v1/guests/profiles`
 that body contains names and contact details; erasure (GUE-R18 / GUE-I06) cannot reach it, and nothing expires it.
@@ -14,6 +14,11 @@ re-read the record on replay.
 separately and rebuilt per download). Still open: erasure cannot purge a profile-create response before its 30-day
 expiry — `runIdempotent(…, { storeBody: false })` (store `{status, resourceRef}`, re-read with the caller's
 permissions on replay) would close it.
+**Done (SW-GUE-1).** `runIdempotent(…, { replay: { store, rebuild } })` stores ids only and rebuilds the response
+in the replaying caller's transaction; `redactIdempotencyResponses(tx, { mentions })` turns stored responses that
+mention a data subject into an erased marker (replay → 410); replays read FOR SHARE. **Ask of other modules:** every
+endpoint whose response embeds a guest's name or contact (reservations booker/occupants, payments payer, finance
+payer details) should adopt a replay plan — redaction by id/email/phone is only the safety net.
 
 ## 2. Query strings with personal data reach request logs (`packages/http`) — DONE on main (path-only request logs)
 
@@ -79,3 +84,6 @@ reason contains a guest's name, erasure cannot remove it (GUE-I06 holds for ever
 reasons typed into the shared audit log).
 **Proposal.** UI guidance + a reason-redaction mechanism for erasure (e.g. an `audit_log_redactions` table read by
 the history endpoint, or reasons stored by reference in a redactable table).
+**Mitigation in guests (SW-GUE-1).** Every staff-typed reason guests writes is scrubbed of the subject's own names
+(all scripts), contact values and date of birth before it is stored (`scrubReason`). Misspellings and other
+people's names remain the residual; other modules' reasons are not covered.
