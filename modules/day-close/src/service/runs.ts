@@ -277,16 +277,16 @@ export async function overrideItem(
     const all = [...r.blocking, ...r.warnings, ...r.info];
     const item = all.find((i) => i.key === input.itemKey);
     const keepExpected = item?.code === 'arrival_not_checked_in';
+    if (item && isIntegrityCode(item.code)) {
+      throw new BusinessRuleError(
+        'integrity_not_overridable',
+        'Ledger integrity checks cannot be overridden: the business date advances only when the books balance. Finance must correct the cause.',
+      );
+    }
     if (!item || (!item.overridable && !keepExpected)) {
       throw new BusinessRuleError(
         'nothing_to_override',
         'This item is not a blocking item of this Day Close any more (it may have been resolved). Refresh the list.',
-      );
-    }
-    if (isIntegrityCode(item.code)) {
-      throw new BusinessRuleError(
-        'integrity_not_overridable',
-        'Ledger integrity checks cannot be overridden: the business date advances only when the books balance. Finance must correct the cause.',
       );
     }
     code = item.code;
