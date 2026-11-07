@@ -48,7 +48,11 @@ regression test made from the reviewer's attack.
   included a duplicate import, an error code drift (`module_unavailable` vs `module_not_available`), a missing enum
   value, and lockfile drift.
 - **Build caches can lie.** Turbo served a cached typecheck that hid a real type error twice; it was caught both times.
-  Since then, verification runs `--force`.
+  Since then, verification runs `--force`. Root cause, found by the second identity review: `turbo.json` gave `typecheck`
+  and `test` no dependency on other workspace packages, so a change in `kernel` did not invalidate `api`'s cached
+  result. The `^transit` pattern failed on a `db` ↔ `testing` dependency cycle. The fix (2026-11-07 17:00) makes both
+  tasks hash every package's sources (`$TURBO_ROOT$` inputs). It was verified: a kernel edit turns `api`'s cache hit
+  into a miss.
 - **Pipe output hides failures.** One commit went in while lint was failing because the output was piped through
   `tail`. Since then, exit codes are checked before every commit. It happened twice more on 2026-11-07 (a formatting
   slip and generated JSON). A git pre-commit hook was considered but declined by the session's safety policy (a
