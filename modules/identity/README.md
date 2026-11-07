@@ -31,6 +31,14 @@ organization's first administrator) are regression tests that assert refusal (`t
 `apps/api/test/review-regressions.test.ts`), and the first review's 11 attacks stay refused
 (`test/review2-original-attacks.test.ts`).
 
+**Third review (merge after fixes).** The first-verification wipe is now serialized with every credential write:
+each path that creates or activates a credential takes the person's row lock first and checks its session belongs to
+the current **credential epoch**; the wipe increments the epoch, and factors, recovery codes, SSO links, sessions and
+MFA challenges from an older epoch never count. Every SSO setting that decides who signs in or which roles a sign-in
+grants is a root change; removing a group mapping needs the power to grant its role; a verified domain is held by one
+organization at a time, is re-checked live before it verifies an email for the first time, and lapses unless seen in
+DNS within 30 days. Attacks W-1 … W-6 are regression tests that assert refusal (`test/review3-regressions.test.ts`).
+
 ## Capabilities
 
 | Capability | Spec | Status | Readiness | Evidence |
@@ -182,6 +190,17 @@ Emitted: `identity.mfa.enrolled|disabled`, `identity.membership.invited|activate
 Configuration: `PORTICO_APP_BASE_URL`, `PORTICO_SSO_REDIRECT_URI`, `PORTICO_OPERATORS`, `PORTICO_FIELD_KEY*`.
 Jobs: `IDENTITY_JOBS` (`identity.purgeLoginAttempts`), registered in the composition root.
 
+## Contract changes in the third-review fix round
+- New columns: `users.credential_epoch`; `credential_epoch` on `sessions`, `mfa_factors`, `mfa_recovery_codes`,
+  `mfa_challenges`, `sso_identities`; `credential_tokens.delivery_mode`; `sso_login_states.issuer`;
+  `sso_domains.checked_at`; table `identity.verified_domains` (cross-organization registry, app role has no access).
+- New definer functions: `lock_person`, `credential_epoch_for_email`, `claim_verified_domain`,
+  `release_verified_domain`, `verified_domain_holder`, `sso_domains_due`, `record_domain_check`.
+- `createSession` and `createMfaChallenge` take `credentialEpoch`; `startSsoLink(…, organizationId?)` and
+  `POST /v1/me/sso/link { organizationId? }`; job factory `ssoDomainRecheckJob(dnsTxt)` (registered in the
+  composition root); `verifySsoDomain` answers `domain_held_by_another_organization` when another organization holds it.
+- `configureSso`: omitted optional settings keep their current value (they used to reset to defaults).
+
 ## Contract changes for ADR-0017 amendment 1 (second review, breaking)
 - `createUser(tx, input, ports)` lives in lifecycle, always returns `{ userId, status: 'invited', invitationExpiresAt,
   delivery }` and sends the invitation; `initialPassword` → `password_not_allowed`. `createUserResponse.status` is
@@ -247,11 +266,16 @@ their own memberships — trial access never implies live access. SSO/SCIM are g
 - Rule 15's "second administrator approves" path for SSO root changes is not built; only the stricter branch
   (organization-wide `*`) is accepted, so a delegated SSO manager cannot change root settings at all.
 - A person who signs in ONLY through SSO at organization A (unverified domain) and later verifies their email
-  elsewhere loses A's link (first-verification wipe); A re-links them only after domain verification or their proof.
+  elsewhere loses A's link (first-verification wipe). Recovery (R3-P2-3, tested): they sign in with their password to
+  any organization they belong to and link A's identity provider account from there (`POST /v1/me/sso/link` with
+  `organizationId` = A). If no organization of theirs allows password sign-in, A's administrator can exempt them from
+  SSO-required for the re-link.
 - R2-P2-4: a determined administrator who controls a second mailbox can still create a second identity (inherent);
   with no organization-set passwords it is no longer free or invisible (the person must accept from that mailbox).
   Approver-age or created-by checks were not added.
-- R2-P3-5: domain verification is reset on an issuer change but not re-checked periodically.
+- R2-P3-5 / R3-P2-2: done — domain verification is re-checked daily and before any first verification, lapses after
+  30 days unseen and is exclusive. Not done: scoping consent to the verifying organization (`email_verified_via`): a
+  person verified through organization X's verified domain may accept other organizations' invitations in-app.
 - R2-P3-7: API keys survive their creator's role revocation (they are revoked on suspension, password reset and MFA
   reset); re-checking key permissions against the creator's current grants is not built.
 - R2-P2-6 (turbo cache) is a repository setting outside this module; gates run with `--force`.
