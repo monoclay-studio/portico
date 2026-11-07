@@ -1,0 +1,10 @@
+# Terraform working files and anything that may contain secrets or account specifics.
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+*.tfvars
+*.tfvars.json
+backend.hcl
+!*.example
