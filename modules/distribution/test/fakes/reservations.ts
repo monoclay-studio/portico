@@ -21,6 +21,16 @@ export class FakeReservations implements ReservationsPort {
   mode: FakeMode = { kind: 'normal' };
   /** Every call that reached the fake (committed or not). */
   calls: Array<{ externalId: string; revision: number; status: string }> = [];
+  /** Concurrency probes: after its writes, the call announces `entered` and waits for `gate` (transaction open). */
+  hold: { entered: () => void; gate: Promise<void> } | null = null;
+
+  private async pause() {
+    const h = this.hold;
+    if (!h) return;
+    this.hold = null;
+    h.entered();
+    await h.gate;
+  }
 
   private take(): FakeMode['kind'] {
     const m = this.mode;
@@ -104,6 +114,7 @@ export class FakeReservations implements ReservationsPort {
       );
       const outcome = mode === 'conflict' ? 'conflict' : 'created';
       await record(outcome, true, id);
+      await this.pause();
       return { outcome, bookingId: id };
     }
     if (mode === 'needs_review') {
@@ -116,6 +127,7 @@ export class FakeReservations implements ReservationsPort {
     );
     const outcome = payload.status === 'cancelled' ? 'cancelled' : 'modified';
     await record(outcome, true, booking.id);
+    await this.pause();
     return { outcome, bookingId: booking.id };
   }
 }
