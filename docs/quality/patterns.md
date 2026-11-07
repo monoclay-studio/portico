@@ -50,6 +50,10 @@ proves useless is marked *retired* with a date, never deleted.
     that does not exist anywhere.
   - **Probe addition:** for every ref type a provider accepts (folio, booking, stay, account), run the A/B probe and
     the non-existent-id probe. **Grep for exemptions**: early `return`s and comments such as "first X is accepted".
+- **Round 2:** fix sweep SW-PAY-3 (E-065). P0-1's fix checked the ledger target but not the **card**. A user who cannot
+  read a method saved at property B charged it USD 2,500 onto an A folio. **Probe addition:** apply the A/B probe to
+  **every record-valued parameter** of the command (method, authorization, request, account, VCC), not only to its
+  target. A record the actor cannot read at the acting property cannot be a parameter of a command there.
 
 ### AP-02 · Cross-tenant access by id (per-table isolation)
 - **Seen in:**
@@ -203,6 +207,8 @@ proves useless is marked *retired* with a date, never deleted.
   - The call must go through the shared `safeFetch` (resolve and pin).
 - **Applies to:** integration, identity, payments, comms, distribution, AI.
 - **Canary:** C-L2-07.
+- **Round 2:** SW-INT-1 (E-072). The RFC 2765 IPv4-translated form `::ffff:0:a.b.c.d` (`::ffff:0:0:0/96`) was not
+  decoded. Add it to the bypass list.
 
 ### AP-15 · Secrets or credentials persisted, returned or replayable
 - **Seen in:**
@@ -237,6 +243,10 @@ proves useless is marked *retired* with a date, never deleted.
   legally retained, with a reason, or the test fails.
 - **Applies to:** guests, integration, comms, finance (payer names), reservations.
 - **Canary:** C-L2-10.
+- **Round 2:** SW-GUE-1 (E-067). After erasure, `core.idempotency_keys` still held the name and date of birth, and
+  **replaying the original key returned them** (201 `Idempotent-Replayed`). **Probe addition:** after erasure, replay
+  every idempotency key the subject's requests used. The replay must not return personal data. Scan every `core` jsonb
+  store, not only the module schema, the outbox and the audit log.
 
 ### AP-18 · A privacy or sharing setting is bypassed through a secondary path
 - **Seen in:**
@@ -250,6 +260,9 @@ proves useless is marked *retired* with a date, never deleted.
   `blockingReason.key`, and the booking and stay records still returned totals and `status.payment`. Housekeeping could
   read the payment state. **Probe addition:** after redacting, check every **derived** field (status, readiness,
   counts, sort order) and every **other route** that returns the same record.
+- **Round 2:** integration-step R2-P2-2 (E-076). This was the second sibling miss on FD-15: workflow runs (check-in
+  step results) and stay issues built from them still gave payment state to every booking reader. **Probe addition:**
+  enumerate every **derived** artefact (step results, issues, counts, messages), not only routes.
 
 ### AP-19 · A simulator or dev path is reachable in live, or the environment changes mid-operation
 - **Seen in:**
@@ -277,6 +290,10 @@ proves useless is marked *retired* with a date, never deleted.
 - **Applies to:** every ADR-0015 delegation: reservations → payments, finance and inventory; finance → payments;
   operations → inventory.
 - **Canary:** C-L2-16.
+- **Round 2:** integration-step R2-P1-1 (E-073). The fix required that "the card belongs to the booker, an occupant or
+  the payer", but a role without payments rights writes those links. The exception "bound to the agreed guarantee" was
+  controlled by the role it restrains. **Probe addition:** for each exception that allows a delegated effect, ask who
+  writes the facts that make the exception apply (AP-57).
 
 ---
 
@@ -354,6 +371,8 @@ proves useless is marked *retired* with a date, never deleted.
   check, and never "cancelled", "paid" or "safe to retry".
 - **Applies to:** payments, integration, backoffice client, comms.
 - **Canary:** UX-11 is the L4 form.
+- **Round 2:** integration-step R2-P2-4 (E-078). When the domain was external, the money step was marked `done` with
+  "taken in Legacy PMS", and nobody attested anything. An external domain changes **who** confirms, not **whether**.
 
 ### AP-27 · Net-of-fee settlement does not reconcile
 - **Seen in:** payments P1-9: settlements without fee columns produced amount mismatches, and the recovery text told
@@ -370,6 +389,10 @@ proves useless is marked *retired* with a date, never deleted.
 - **Round 1:** integration-step P1-3 (E-041), **over-collection**. A late charge on a folio still in credit
   opened a payment request for the full charge (11,700 against a folio at −38,300). **Probe addition:** every collection
   request equals `min(charge, max(0, balance after posting))`. A balance in credit creates no request.
+- **Round 2:** fix sweep SW-PAY-1 (E-063). With a deposit paid by link, a desk **authorize, then capture** posted the
+  deposit a second time. The guard covered `chargeNow` only. **Probe addition:** run the double-collection probe
+  through every path that turns money into a posting (charge, authorize and capture, recorded payment, VCC, link,
+  check-in guarantee), and under a lock per (ref, purpose).
 
 ### AP-29 · Time semantics and deadlines: the wrong clock, or a deadline that nothing enforces
 - **Seen in:**
@@ -454,6 +477,16 @@ proves useless is marked *retired* with a date, never deleted.
   `delegated(tx, perms, undefined)` granted folio and posting permissions at all properties. **Probe addition:** call
   each port function with no `propertyId` or legal entity. It must refuse, never widen. Scope parameters on port
   surfaces are required, not optional.
+- **Round 2:**
+  - SW-PAY-2 (E-064): `purpose: 'custom'` skips the guard, a label the client chooses.
+  - SW-RAT-1 (E-069): `nature` defaults to `statutory`, so the R-01 protection is off by default.
+  - R2-P2-3 (E-077): the reference check `return`s for unknown types or an unbound directory.
+  - R2-P3-1: a non-numeric policy makes the cap `NaN`, and `amount > NaN` is false.
+
+  **Probe addition:**
+  - every exemption a fix adds is listed and attacked;
+  - a default is the safe value;
+  - a non-finite or unknown configuration falls back to the safe default.
 
 ### AP-36 · Rows are read before the lock is taken
 - **Seen in:**
@@ -630,6 +663,43 @@ proves useless is marked *retired* with a date, never deleted.
   fixed in the same round.
 - **Applies to:** every fix round, and every reviewer recommendation.
 
+### AP-57 · Premise writers: the fact a fix trusts can be written by someone the fix does not restrain (numbered in order of discovery)
+- **Seen in:**
+  - R2-P1-1 (E-073): booker, occupant and guarantee links are written by the role the card rule restrains;
+  - R2-P1-3 (E-075): opening-deposit imports write the `deposit_accounts` that the P1-1 fallback trusts;
+  - SW-PAY-4 (E-066): the P1-8 fix trusts `entry_channel`, which the client writes;
+  - G-P0-1 → SW-GUE-1 (E-067): "erased" was trusted to mean "absent from the scanned tables", while another store
+    held the data.
+- **Probe:**
+  - For each fix, write down the **facts it reads to decide** (fields, rows, links, flags, statuses).
+  - For each fact, enumerate **every writer**: routes, service functions, imports, channel ingestion, merges and
+    unmerges, jobs, seeds, migrations.
+  - Attack each writer with the actor the fix restrains. A writer that is not held to the same rule makes the fix
+    bypassable.
+  - "One step back" (N−1) from the refused attack is: **control the premise**.
+- **Applies to:** every fix round (builder self-check v4 BS4-1(a)) and every reviewer recommendation (steward
+  SR2-6).
+- **Canary:** C-L2-18.
+
+### AP-58 · Lifecycle closure: the fixed quantity drifts after a repeated or inverse operation (numbered in order of discovery)
+- **Seen in:** R2-P1-2 (E-074), on a departed folio:
+  - a **second** late charge was never requested;
+  - a **reversal** left the request open;
+  - the fix's own exception kept its first severity (routine), although the case was urgent.
+
+  Also SW-FIN-1 (E-070): an edit to the rule reset the cap lineage.
+- **Probe:**
+  - State the fix as an **invariant over stored state**, for example "after departure a folio has at most one open
+    balance request, and it equals the folio's debt".
+  - Then apply the guarded operation **three times**, with the artefact the fix creates **already open**.
+  - Apply every **inverse or compensating** operation: reversal, adjustment, transfer, refund, cancel, unmerge.
+  - Check the fix's **own records** (exceptions, statuses, audits, requests) after each step. They are recomputed,
+    never frozen at their first value.
+  - "One step forward" (N+1) from the refused attack is: **repeat it, or undo it**.
+- **Applies to:** money and collection logic, caps and limits, inventory consumption, redaction rules, any fix that
+  creates a record of its own.
+- **Canary:** C-L2-19.
+
 ---
 
 ## E. Claims and gates
@@ -677,6 +747,8 @@ proves useless is marked *retired* with a date, never deleted.
   **Probe addition:**
   - run every gate on non-default ports and with the production database roles;
   - list the checks the merge gate does **not** run.
+- **Round 2:** E-079. An end-to-end test (409 toast) was flaky on non-default ports and passed on re-run. A flake is a
+  tracked defect with an owner. Never accept a silent re-run.
 
 ### AP-55 · A test exercises the path but asserts neither the outcome nor the claim (numbered in order of discovery)
 - **Seen in:**
@@ -693,6 +765,11 @@ proves useless is marked *retired* with a date, never deleted.
     nothing.
 - **Applies to:** scenario tests (ST2-2 assertion map), binding tests, README "tested" claims, parity `tested` rows
   (PR2-1).
+- **Round 2:**
+  - SW-BO-1 (E-068): the P0-1 e2e test used `page.goto`, a full reload, so it passes with or without the fix.
+  - R2-P2-4 (E-078): the regression test asserts `done`, not the attestation.
+
+  **Probe addition:** remove or revert the fix; the regression test must fail. If it still passes, it proves nothing.
 
 ---
 
