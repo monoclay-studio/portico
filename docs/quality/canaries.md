@@ -97,6 +97,10 @@ Severity is the steward-scale severity of the planted defect. **Expected detecti
 | C-L1-03 | AP-52 tool false positives and negatives (E-012, E-013, E-010) | (a) A `${x.operations.length}` interpolation inside a `sql` template. (b) A real cross-schema reference `operations.units` from another module. (c) `requirePermission(` inside a comment. (d) A lint error, then `tools/commit-checked.sh` | (a) Passes. (b) Fails. (c) Not counted. (d) "NOT COMMITTED" |
 | C-L1-04 | AP-52 boundary-checker false negative (E-059), added in round 1 | `sql.raw('select * from operations.units')` and a raw string passed to `executeQuery` that names `finance.folios`, inside another module's `src` | `tools/check-boundaries.mjs` fails. In round 1 this **passed silently**; that is the gap being tracked |
 | C-L1-05 | AP-52 environment-coupled gate (E-053, E-052), added in round 1 | (a) Run the backoffice Playwright suite with `WEB_PORT`/`API_PORT` set to free ports other than 5180/4100. (b) Run `packages/db` and identity tests with migrations owned by a `nobypassrls` role | (a) The same 11/11 as on the default ports. (b) Same results as under the superuser, with no RLS-dependent test passing only as superuser |
+| C-L1-06 | AP-55 mutation proof (E-114), added in round 3 | In a detached copy of a fix round's head, remove **one guard element** at a time (a lock, a branch, an audit, an exemption, a call on one sibling path) and run the module's tests | Each mutant turns at least one test red. A survivor is a guard no test protects. Round 3: 1 survivor of 6 (the collection lock) |
+| C-L1-07 | AP-52 warnings pass the gate (E-094), added in round 3 | Add one Biome **warning** (for example `a && a.b` where `useOptionalChain` applies) in a module, then run `pnpm lint` and `tools/commit-checked.sh` | `pnpm lint` exits ≠ 0. Today it is expected to **exit 0**; that is the gap being tracked until the lint script uses `--error-on-warnings` |
+| C-L1-08 | AP-61 dead-man's switch (E-097), added in round 3 | In a `terraform test` copy, point the restore drill (or any scheduled job) at an image tag that does not exist, and publish no success metric | A plan-time assertion or an alarm on the **age of the last success** exists for the job. Today none exists |
+| C-L1-09 | AP-62 recorded default vs code (E-104), added in round 3 | In a copy of `docs/OPEN_QUESTIONS.md`, change one "Default we are proceeding with" to the option the code does **not** implement | The O4-1 check (every default cites the implementing file:line or a pending-fix line) flags it |
 
 ### 3.2 L2: seeded bugs for the steward reviewer
 
@@ -121,6 +125,8 @@ Severity is the steward-scale severity of the planted defect. **Expected detecti
 | C-L2-17 | AP-56 one-time transition race (added round 1) | P1 | Move a credential writer's row lock below its state read, beside a one-time wipe or rotation | A concurrent writer during the transition, with a test-only delay |
 | C-L2-18 | AP-57 premise writer (added round 2) | P1 | Keep a correct guard on the main path, and add a second writer (an import or patch route) of the fact the guard trusts, without the guard's rule | A writer enumeration of the trusted fact; attack through the unguarded writer |
 | C-L2-19 | AP-58 lifecycle closure (added round 2) | P1 | A derived amount (a request, a cap, a counter) correct after one operation but not recomputed on a second operation or on reversal | Repetition ×3 plus the inverse operation; check the fix's own records |
+| C-L2-20 | AP-59 external holder (added round 3) | P1 | On amend or cancel of a payment request, cancel it in Portico but do not deactivate the provider link; the simulator keeps the old link payable | Each Portico transition is mirrored at the external holder first; pay the superseded link in the simulator |
+| C-L2-21 | AP-60 stored control fact (added round 3) | P1 | Enforce one field of a stored consent or limit (amount cap, purposes, bookings) on the main path, and not on one sibling path (increment, capture beyond the authorization, request drawn on the card) | The path × field grid; charge beyond the cap through the sibling |
 
 Combine them into **sets** so that each run covers one theme:
 
@@ -131,6 +137,7 @@ Combine them into **sets** so that each run covers one theme:
 | C: events and authority | C-L2-09, C-L2-14, C-L2-15, C-L2-05b | operations or reservations |
 | D: outbound and privacy | C-L2-07, C-L2-10, C-L2-03 | integration or guests |
 | E: UI | C-L2-11, plus two UX-trap probes from § 3.3 planted in code | backoffice |
+| F: fix closure (added round 3) | C-L2-18, C-L2-19, C-L2-20, C-L2-21 planted in one fix branch | payments and finance (a fix-round copy) |
 
 ### 3.3 L4: lab traps for the black-box tester (and the refiner)
 
@@ -147,6 +154,8 @@ Combine them into **sets** so that each run covers one theme:
 | C-L4-09 | UX-15 shared-desk handover | The previous user's name stays in the header after another user signs in on the tab | …reports another person's identity or data |
 | C-L4-10 | UX-06 focus | A dialog that does not take focus | …reports it in the keyboard pass |
 | C-L4-11 | Refiner evidence check (E-034) | In the findings handed to the refiner, one cited screenshot is swapped for one showing a different state | The refiner flags the evidence as invalid (UR2-1) |
+| C-L4-12 | Disposition check (E-105), added in round 3; **scripted** | In a copy of a round's findings file, add one planted finding ID that no pending-fix line, refinement or acceptance check names | The disposition script (O4-2) lists it as "no disposition". Round 3's real run listed 39 of 49 |
+| C-L4-13 | Named reproduction (E-106), added in round 3 | In the lab build, break the validation of the exact form and field a past finding named (E-025: the property's empty Name) | The tester reports it, and the backoffice gate fails, because the reproduction is a regression test (BS5-8). Today only the tester would catch it |
 
 ### 3.4 L3 and L5 (scripted or cheap)
 
@@ -204,6 +213,8 @@ metrics the round exists to measure (`docs/ux/scorecard.md`). Keep L4 canaries i
 | r1-l1 | 2026-11-07 17:40–17:47 | L1 gates and tools, as on `main` @ `af73991` | C-L1-02 a/b, C-L1-03 a/b/b2/c/d | 7 conditions | 5 | 0.71 | 1 (C-L1-03c: a comment counted as a permission check) | ≈ 7 min | 0 (CPU) | **C-L1-03b2** (`sql.raw` not detected, E-059); **C-L1-03c** (known false positive E-013, still open). C-L1-02b passed only through payments' copy (E-058) |
 | r2-l3 | 2026-11-07 ≈18:52–18:56 | L3 global consistency checks, as on `feat/integration-step` @ `9bbb6a4` | C-L3-03(a): a deposit account at Hiyani for Kandu's booking, via `importOpeningDeposits` (the R2-F path) | 1 | 1 | 1.00 | 0 | ≈ 5 min | 0 (CPU + local Postgres) | none. C-L3-03(b) (open request > folio debt) has **no check** in the harness (code-read; not run) |
 
+| r3-l1 | 2026-11-07 22:01–22:04 | L1-BSC proof of the integration-step fix round 2 (pre-fix-commit method, builder v4 BS4-3), as on `feat/integration-step` @ `db6ae8c` | C-L1-06: 6 mutants of `modules/payments/src/service/collect.ts`, one guard element each, plus a baseline | 6 | 5 | 0.83 | 0 | ≈ 4 min (≈ 10 s per payments run) | 0 (CPU + local Postgres) | **M4** (the per-reference collection lock in `assertCollectionOwnership`) survives: 137/137 payments tests green. Re-checked on the fix-round-3 head `7b0c59c`: 142/142 payments and 129/129 API tests green (E-114) |
+
 <!-- Append one row per canary run. After scoring, append the answer key under "### <run-id> key". -->
 
 ### r1-l1 key (scored 2026-11-07)
@@ -230,3 +241,30 @@ Detached worktree `<scratchpad>/canary-l3-r2` at `feat/integration-step` `9bbb6a
 |---|---|---|---|
 | C-L3-03(a) | `apps/api/test/zz-canary-l3.test.ts`: the review PoC R2-F (a Hiyani finance user imports an opening deposit for Kandu's booking), then `assertGlobalConsistency(s, org)` | The consistency check fails | **Caught.** The stray-deposit query returns 1 row, and `assertGlobalConsistency` throws ("expected [ Array(1) ] to deeply equal []"). The builder's new cross-module check works once a scenario exercises the writer. No scenario exercises the import path today: S18 is still todo |
 | C-L3-03(b) | An open balance request larger than the folio's debt | Fails | **No such check exists** (harness code-read). Expected miss, not run. Scenario tests v3 (ST3-1) adds it |
+
+### r3-l1 key (scored 2026-11-07)
+
+Detached worktree `/home/user/wt/canary-r3` at `db6ae8c` (the fix-round-2 head, whose builder proved its tests by a
+run at the pre-fix commit `9bbb6a4`). Installed offline. Runner: `canary-scripts/r3_mutate.py` in the session
+scratchpad. `PORTICO_TEST_DB_PREFIX=canary_r3_<mutant>`. Afterwards no `canary%` database is left and both canary
+worktrees are removed.
+
+| Mutant | Guard element removed | Want | Got |
+|---|---|---|---|
+| M0 | none (baseline) | all green | 137/137 ✓ |
+| M1 | SW-PAY-2: `custom` maps to any open link | red | 2 failed ✓ |
+| M2 | the audit of a separate-collection override | red | 2 failed ✓ |
+| M3 | the legal-entity and property scope check in `assertMitAllowed` | red | 1 failed ✓ |
+| M4 | `lockCollectionRefs` in `assertCollectionOwnership` | red | **137/137 green ✗** |
+| M5 | the ownership guard on the capture path (SW-PAY-1) | red | 1 failed ✓ |
+| M6 | the ownership guard on the recorded-payment path | red | 1 failed ✓ |
+| M4 on `7b0c59c` | the same lock, fix-round-3 head (worktree `/home/user/wt/canary-r3b`) | red | **payments 142/142 and API 129/129 green ✗** |
+
+**Why M4 survives.** `review-sweep-regressions.test.ts` "(e) atomic: ten concurrent desk deposit charges against a
+fresh link race" commits the link before the ten charges start, so each charge reads a committed link with or without
+the lock. The race the lock exists for (link creation or link payment **concurrent** with a desk charge) is not set
+up. The builder's report noted that the concurrency test "already passed before the fix"; the pre-fix method surfaced
+the signal, and nothing required acting on it.
+
+**What the pre-fix method reported for the same invariant (d):** "pay SW-PAY-1 ×4, SW-PAY-2 ×2 (yes). Exceptions:
+'recorded payment' and '10 concurrent desk charges' already passed before the fix."
