@@ -12,6 +12,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   applied,
   bookingInput,
+  cardOnFile,
   guestWithCard,
   hiyani,
   kandu,
@@ -243,12 +244,9 @@ describe('R2-P1-1 — whoever links the cardholder to a booking does not choose 
       'pm_card_visa',
     );
     // The same person saves their card again, this time with an agreement that names the booking.
-    const named = await (async () => {
-      const { cardOnFile } = await import('./scenarios/harness');
-      return cardOnFile(s, org, k.id, k.legalEntityId, 'pm_card_mastercard', card.owner as never, {
-        mandateFor: [b.id],
-      });
-    })();
+    const named = await cardOnFile(s, org, k.id, k.legalEntityId, 'pm_card_mastercard', card.owner as never, {
+      mandateFor: [b.id],
+    });
     const ok = applied<Booking>(
       await org.run(agent, (tx) =>
         reservations.patchBooking(tx, {
@@ -563,7 +561,9 @@ describe('R2-P1-3 — opening deposits ask reservations who owns the booking (on
       where booking_id = ${b.id}`.execute(s.t.admin.kysely);
     expect(acct.rows[0]?.n).toBe(0);
     const kDesk = org.staff('front_desk', 'Kandu desk', [k.id]);
-    const { card } = await guestWithCard(s, org, k);
+    const card = await cardOnFile(s, org, k.id, k.legalEntityId, 'pm_card_visa', undefined, {
+      mandateFor: [b.id],
+    });
     const paid = await payments.chargeNow(kDesk, {
       propertyId: k.id,
       methodId: card.id,

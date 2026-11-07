@@ -30,11 +30,17 @@ describe('S06 — refund retried after an interruption', () => {
     const auth = await signIn(s, org);
     const post = (url: string, payload: object, key: string = newId()) =>
       s.app.inject({ method: 'POST', url, headers: { ...auth, 'idempotency-key': key }, payload });
-    const card = await cardOnFile(s, org, k.id, k.legalEntityId);
+    // The guest's own card pays the guest's own folio (ADR-0015 Amendment 2: a standing card-on-file agreement covers
+    // its cardholder's bills).
+    const guest = newId();
+    const card = await cardOnFile(s, org, k.id, k.legalEntityId, 'pm_card_visa', {
+      type: 'guest_profile',
+      id: guest,
+    });
     const folio = await post('/v1/finance/folios', {
       propertyId: k.id,
       owner: { type: 'stay', id: newId() },
-      payer: { type: 'guest', name: 'Nadia Rasheed' },
+      payer: { type: 'guest', id: guest, name: 'Nadia Rasheed' },
     });
     const paid = await post('/v1/payments/charges', {
       propertyId: k.id,

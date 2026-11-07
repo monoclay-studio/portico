@@ -599,6 +599,9 @@ export interface GuaranteeCardAssessment {
   card: { brand: string | null; last4: string | null } | null;
   /** Who the card belongs to (payments' owner type and id). */
   owner: { type: string; id: string } | null;
+  /** Whether a guarantee hold on this booking (for the amount, when given) is inside the cardholder's consent. */
+  withinConsent: boolean;
+  consentReason: string | null;
   reason: string;
 }
 

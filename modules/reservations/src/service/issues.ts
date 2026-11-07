@@ -9,7 +9,7 @@ import {
 } from '@portico/kernel';
 import { RESERVATIONS_EVENTS as E } from '../events';
 import { RESERVATIONS_PERMISSIONS as P } from '../manifest';
-import { actorKey, type Deps, db, json, parseNights } from './context';
+import { actorKey, type Deps, db, issueForReader, json, parseNights } from './context';
 import { emitReservationEvent } from './event-payload';
 import type { StayRecord } from './repo';
 
@@ -88,19 +88,23 @@ export async function listIssues(tx: TxContext, input: { propertyId: string; sta
     .orderBy('created_at', 'desc')
     .limit(500)
     .execute();
-  return rows.map((r) => ({
-    id: r.id,
-    propertyId: r.property_id,
-    kind: r.kind,
-    severity: r.severity as 'urgent' | 'routine',
-    bookingId: r.booking_id,
-    stayId: r.stay_id,
-    message: r.message,
-    ownerId: r.owner_id,
-    status: r.status as 'open' | 'resolved',
-    details: (r.details ?? {}) as Record<string, unknown>,
-    createdAt: r.created_at.toISOString(),
-  }));
+  return rows.map((r) => {
+    // R3-P2-2: money issues without amounts or details for roles that do not handle money.
+    const shown = issueForReader(tx, r.property_id, r);
+    return {
+      id: r.id,
+      propertyId: r.property_id,
+      kind: r.kind,
+      severity: r.severity as 'urgent' | 'routine',
+      bookingId: r.booking_id,
+      stayId: r.stay_id,
+      message: shown.message,
+      ownerId: r.owner_id,
+      status: r.status as 'open' | 'resolved',
+      details: shown.details,
+      createdAt: r.created_at.toISOString(),
+    };
+  });
 }
 
 // ───────────────────────────── relocation (RES-R34) ─────────────────────────────

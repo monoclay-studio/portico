@@ -62,6 +62,9 @@ async function demoOrg(name = 'Demo Resort') {
     currencies: ['USD'],
   });
   expect(account.statusCode).toBe(201);
+  // The guest whose folios these tests charge, and whose card is on file (ADR-0015 Amendment 2: a standing card-on-file
+  // agreement covers its cardholder's own bills).
+  const guestId = newId();
   const method = (token: string) =>
     post('/v1/payments/methods', {
       accountId: account.json().id,
@@ -70,13 +73,17 @@ async function demoOrg(name = 'Demo Resort') {
       providerToken: token,
       brand: 'visa',
       last4: '4242',
-      owner: { type: 'guest_profile', id: newId() },
+      owner: { type: 'guest_profile', id: guestId },
       // The cardholder's recorded card-on-file agreement: every staff use of a stored card is merchant-initiated (SW-PAY-4).
       mitAgreement: true,
       mandate: {
         termsVersion: 'card-on-file-2027-01',
         acceptedAt: new Date().toISOString(),
         channel: 'front_desk',
+        scope: {
+          legalEntityId: le.json().id,
+          purposes: ['guarantee', 'deposit', 'balance', 'incidentals', 'no_show'],
+        },
       },
     });
   /** A folio of this property (payments refuse unknown bookings and folios — review P1-1). */
@@ -85,7 +92,7 @@ async function demoOrg(name = 'Demo Resort') {
       await post('/v1/finance/folios', {
         propertyId: prop.json().id,
         owner: { type: 'stay', id: newId() },
-        payer: { type: 'guest', name: 'Guest' },
+        payer: { type: 'guest', id: guestId, name: 'Guest' },
       })
     ).json().id as string;
   return {
@@ -93,6 +100,7 @@ async function demoOrg(name = 'Demo Resort') {
     auth,
     post,
     folio,
+    guestId,
     propertyId: prop.json().id as string,
     accountId: account.json().id as string,
     accountEtag: account.headers.etag as string,
@@ -189,7 +197,7 @@ describe('payments API', () => {
     const folio = await org.post('/v1/finance/folios', {
       propertyId: org.propertyId,
       owner: { type: 'stay', id: newId() },
-      payer: { type: 'guest', name: 'Nadia Rasheed' },
+      payer: { type: 'guest', id: org.guestId, name: 'Nadia Rasheed' },
     });
     expect(folio.statusCode).toBe(201);
     const charge = (propertyId: string, folioId: string) =>
@@ -241,7 +249,7 @@ describe('payments API', () => {
     const otherFolio = await org.post('/v1/finance/folios', {
       propertyId: p2.json().id,
       owner: { type: 'stay', id: newId() },
-      payer: { type: 'guest', name: 'Other guest' },
+      payer: { type: 'guest', id: org.guestId, name: 'Other guest' },
     });
     expect(otherFolio.statusCode).toBe(201);
     const cross = await charge(org.propertyId, otherFolio.json().id);

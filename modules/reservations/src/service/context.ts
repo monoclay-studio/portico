@@ -124,3 +124,25 @@ export function seesPaymentMethods(tx: TxContext, propertyId: string): boolean {
   );
 }
 export const MONEY_NOT_SHOWN = 'Payment detail is not shown for your role.';
+
+/** Re-review #3 R3-P2-2: stored issues whose text or details are derived from money (balances, payments, cards). */
+export const MONEY_ISSUE_KINDS: ReadonlySet<string> = new Set([
+  'departed_with_balance',
+  'payment_follow_up',
+  'guarantee_card_not_attached',
+]);
+
+/**
+ * The text and details of a stored issue as this reader may see them: a money issue is shown to roles without money
+ * permissions as "there is a payment matter for a colleague who handles payments", never with amounts or details.
+ */
+export function issueForReader(
+  tx: TxContext,
+  propertyId: string,
+  issue: { kind: string; message: string; details?: unknown },
+): { message: string; details: Record<string, unknown> } {
+  if (!MONEY_ISSUE_KINDS.has(issue.kind) || seesMoney(tx, propertyId)) {
+    return { message: issue.message, details: (issue.details ?? {}) as Record<string, unknown> };
+  }
+  return { message: `${MONEY_NOT_SHOWN} A colleague who handles payments follows this up.`, details: {} };
+}

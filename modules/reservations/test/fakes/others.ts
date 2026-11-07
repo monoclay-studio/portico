@@ -143,6 +143,8 @@ export class FakePayments implements PaymentsPort {
     return id;
   }
 
+  /** Cards whose cardholder agreement does not cover a guarantee here (consent outside its scope). */
+  outsideConsent = new Set<string>();
   /** Cards their cardholder supplied for a specific booking (hosted entry / self-service), method → booking. */
   suppliedFor = new Map<string, string>();
 
@@ -162,6 +164,8 @@ export class FakePayments implements PaymentsPort {
         basis: null,
         card: null,
         owner: null,
+        withinConsent: false,
+        consentReason: null,
         reason: 'This payment method is not a saved card of this property.',
       };
     }
@@ -172,6 +176,8 @@ export class FakePayments implements PaymentsPort {
         basis: 'cardholder_supplied',
         card,
         owner,
+        withinConsent: true,
+        consentReason: null,
         reason: 'Supplied for this booking.',
       };
     }
@@ -180,6 +186,8 @@ export class FakePayments implements PaymentsPort {
       basis: null,
       card,
       owner,
+      withinConsent: !this.outsideConsent.has(input.methodId),
+      consentReason: this.outsideConsent.has(input.methodId) ? 'Outside the cardholder agreement.' : null,
       reason:
         "This card was not supplied by its cardholder for this booking. Linking a person to a booking does not let staff use that person's saved card.",
     };

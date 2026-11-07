@@ -44,6 +44,7 @@ export async function checkGuaranteeCard(
   if (a.basis) return { basis: a.basis };
   if (!tx.authz.can(PAYMENT_COLLECT, { propertyId: input.propertyId }))
     return { basis: null, reason: a.reason };
+
   // A user with payment rights chooses the card — still only one of the booking's own people (review P1-2, invariant
   // (e) "owned by the payer"): never a stranger's saved card, whoever chooses it.
   const owners = await bookingPeople(tx, input.bookingId);
@@ -54,11 +55,15 @@ export async function checkGuaranteeCard(
         'This card belongs to someone who is not a guest, booker or payer of this booking, so it cannot secure it. Use a card of the guest (or of the paying company), or send the guest a card link for this booking.',
     };
   }
+  // ADR-0015 Amendment 2: a payment user decides WHO initiates — never beyond what the cardholder agreed to.
+  if (!a.withinConsent) {
+    return { basis: null, reason: a.consentReason ?? 'This is outside what the cardholder agreed to.' };
+  }
   return { basis: 'designated' };
 }
 
 /** Profile, company, agency and booking ids of the people a payment user may choose a guarantee card from. */
-async function bookingPeople(tx: TxContext, bookingId: string): Promise<Set<string>> {
+export async function bookingPeople(tx: TxContext, bookingId: string): Promise<Set<string>> {
   const b = await db(tx)
     .selectFrom('reservations.bookings')
     .select(['id', 'booker_profile_id', 'company_id', 'agency_id', 'billing'])

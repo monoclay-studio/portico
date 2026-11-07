@@ -3,7 +3,7 @@ import { BusinessRuleError, type EntityRef, NotFoundError, newId, requirePermiss
 import type { Handover } from '../contracts';
 import { RESERVATIONS_EVENTS as E } from '../events';
 import { RESERVATIONS_PERMISSIONS as P } from '../manifest';
-import { actorKey, actorName, db, json } from './context';
+import { actorKey, actorName, db, issueForReader, json } from './context';
 
 /**
  * Shift handover (RES-R37, RES-I10, brief §6 "important information must survive a change of shift"). Items have
@@ -146,7 +146,7 @@ export async function openHandoverItems(tx: TxContext, input: { propertyId: stri
     ...issues.map((i) => ({
       itemId: `issue:${i.id}`,
       kind: ['payment_follow_up', 'departed_with_balance'].includes(i.kind) ? 'financial_exception' : 'task',
-      title: i.message,
+      title: issueForReader(tx, i.property_id, i).message,
       ownerId: i.owner_id,
       ownerName: null,
       source: 'reservations_issue',

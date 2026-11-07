@@ -107,7 +107,10 @@ describe('P1-1 — a deposit is checked against the property that owns the booki
     expect(viaFinance).toMatchObject({ code: 'scope_mismatch' });
     // (d) the legitimate owner is unaffected: Kandu takes the deposit and checks in its own guest.
     const kDesk = org.staff('front_desk', 'Kandu desk', [k.id]);
-    const kCard = await cardOnFile(s, org, k.id, k.legalEntityId);
+    // The cardholder's agreement names this booking (ADR-0015 Amendment 2: consent covers what may be charged).
+    const kCard = await cardOnFile(s, org, k.id, k.legalEntityId, 'pm_card_visa', undefined, {
+      mandateFor: [b.id],
+    });
     const ok = await payments.chargeNow(kDesk, {
       propertyId: k.id,
       methodId: kCard.id,
@@ -424,7 +427,9 @@ describe('P2-1 — FD-15: housekeeping cannot tell paid from unpaid arrivals nor
       );
     const paid = await book('Paid');
     const unpaid = await book('Unpaid');
-    const card = await cardOnFile(s, org, k.id, k.legalEntityId);
+    const card = await cardOnFile(s, org, k.id, k.legalEntityId, 'pm_card_visa', undefined, {
+      mandateFor: [paid.id],
+    });
     await payments.chargeNow(desk, {
       propertyId: k.id,
       methodId: card.id,

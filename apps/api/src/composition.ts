@@ -319,6 +319,9 @@ export function compose(database: PorticoDatabase, options: CompositionOptions =
     payments: {
       syncBalanceRequest: (tx, input) =>
         paymentsCollectionsForFinance(bound(paymentsRef, 'payments')).syncBalanceRequest(tx, input),
+      // Re-review #3 (R3-P3-3): finance takes payments' collection lock before locking a folio (one lock order).
+      lockCollections: (tx, input) =>
+        paymentsCollectionsForFinance(bound(paymentsRef, 'payments')).lockCollections(tx, input),
     },
     // Payer names and invoice particulars for folios and tax invoices: guest profiles, companies and agencies (guests).
     payers: {

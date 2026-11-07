@@ -4,6 +4,7 @@ import type { Stay } from '../contracts';
 import { RESERVATIONS_PERMISSIONS as P } from '../manifest';
 import type { TermsSnapshot } from '../ports';
 import { type Deps, db } from './context';
+import { bookingPeople } from './guarantee';
 import { stayRecordView } from './record';
 import { loadBooking, loadSnapshots, loadStay, loadStayRecords, snapshotOf } from './repo';
 
@@ -53,28 +54,46 @@ export async function describeReference(
   _deps: Deps,
   tx: TxContext,
   ref: { type: string; id: string },
-): Promise<{ propertyId: string; source?: string; channelConnectionId?: string | null } | null | undefined> {
-  if (ref.type === 'booking') {
-    if (!UUID.test(ref.id)) return null;
-    // Review R2-P1-1: where the booking came from — payments accepts a channel's virtual card only for a booking of
-    // that channel connection.
-    const b = await db(tx)
-      .selectFrom('reservations.bookings')
-      .select(['property_id', 'source', 'channel_connection_id'])
-      .where('id', '=', ref.id)
-      .executeTakeFirst();
-    return b
-      ? { propertyId: b.property_id, source: b.source, channelConnectionId: b.channel_connection_id }
-      : null;
-  }
-  if (ref.type !== 'stay') return undefined;
+): Promise<
+  | {
+      propertyId: string;
+      source?: string;
+      channelConnectionId?: string | null;
+      bookingId: string;
+      people: string[];
+    }
+  | null
+  | undefined
+> {
+  if (ref.type !== 'booking' && ref.type !== 'stay') return undefined;
   if (!UUID.test(ref.id)) return null;
-  const row = await db(tx)
-    .selectFrom('reservations.stays')
-    .select('property_id')
-    .where('id', '=', ref.id)
+  const bookingId =
+    ref.type === 'booking'
+      ? ref.id
+      : (
+          await db(tx)
+            .selectFrom('reservations.stays')
+            .select('booking_id')
+            .where('id', '=', ref.id)
+            .executeTakeFirst()
+        )?.booking_id;
+  if (!bookingId) return null;
+  // Review R2-P1-1: where the booking came from — payments accepts a channel's virtual card only for a booking of that
+  // channel connection. Re-review #3: its booking (the collection family) and its people (whose cards a standing
+  // card-on-file consent covers).
+  const b = await db(tx)
+    .selectFrom('reservations.bookings')
+    .select(['property_id', 'source', 'channel_connection_id'])
+    .where('id', '=', bookingId)
     .executeTakeFirst();
-  return row ? { propertyId: row.property_id } : null;
+  if (!b) return null;
+  return {
+    propertyId: b.property_id,
+    source: b.source,
+    channelConnectionId: b.channel_connection_id,
+    bookingId,
+    people: [...(await bookingPeople(tx, bookingId))],
+  };
 }
 
 export async function getStay(deps: Deps, tx: TxContext, stayId: string): Promise<Stay> {

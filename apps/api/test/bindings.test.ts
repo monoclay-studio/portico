@@ -325,7 +325,9 @@ describe('reservations → guests, payments, finance, operations (check-in and c
     await expect(
       org.run(desk, (tx) => ports.inventory.release(tx, { propertyId: h.id, ref: stayRef })),
     ).rejects.toMatchObject({ code: 'scope_mismatch' });
-    const card = await cardOnFile(s, org, k.id, k.legalEntityId);
+    const card = await cardOnFile(s, org, k.id, k.legalEntityId, 'pm_card_visa', undefined, {
+      mandateFor: [b.id],
+    });
     await org.run(desk, (tx) =>
       ports.payments.authorize(tx, {
         propertyId: k.id,

@@ -10,6 +10,7 @@ import {
   type Deps,
   db,
   isModuleUnavailable,
+  issueForReader,
   MONEY_NOT_SHOWN,
   policy,
   seesCommercialValue,
@@ -151,7 +152,7 @@ async function stayExtras(
     issues.push({
       code: i.kind,
       severity: ISSUE_SEVERITY[i.severity] ?? 'warning',
-      message: i.message,
+      message: issueForReader(tx, propertyId, i).message,
       since: i.created_at.toISOString(),
       ...(i.owner_id ? { owner: { kind: 'user' as const, id: i.owner_id } } : {}),
     });
@@ -273,7 +274,7 @@ export async function bookingRecord(deps: Deps, tx: TxContext, rec: BookingRecor
     issues.push({
       code: i.kind,
       severity: ISSUE_SEVERITY[i.severity] ?? 'warning',
-      message: i.message,
+      message: issueForReader(tx, propertyId, i).message,
       since: i.created_at.toISOString(),
       ...(i.owner_id ? { owner: { kind: 'user' as const, id: i.owner_id } } : {}),
     });
