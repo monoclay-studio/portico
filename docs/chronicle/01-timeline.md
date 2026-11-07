@@ -189,4 +189,10 @@ Each agent's brief and report are in `agents/`.
 - **17:24 — Integration-step review: merge after fixes** (P0 0, P1 3, P2 7, P3 9). The P1s: a deposit can land on
   another property's books, check-in can hold any card for any amount, and late charges over-collect from a folio in
   credit. The fix round goes back to the integration engineer with the new self-check playbook.
+- **17:35 — Third identity review: merge after fixes.** P0 0, P1 2, P2 3, P3 5. Every earlier attack is refused.
+  The new P1s are a race that lets a pre-registered authenticator survive the first-verification wipe, and the SSO
+  groups-claim name not being treated as a root change. Fix round 4 is sent. Merge condition: the W-1 to W-3
+  regression tests, spot-checked by the orchestrator, with no fourth full review.
+  - Pattern across the three identity reviews: P0 2 → 1 → 0, and each round's fix opened a narrower new class. This
+    is the strongest evidence for the quality steward's "re-attack every fix" rule.
 
