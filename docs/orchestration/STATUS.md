@@ -183,19 +183,24 @@ expected — the readiness register and README state exactly what is and isn't b
 Pending cross-module fixes awaiting the next round for each author: `docs/orchestration/pending-fixes.md`.
 
 
-1. Branch reports done → launch steward review from `docs/quality/playbooks/steward-reviewer.md` (latest) → report in
+1. Branch reports done → launch steward review strictly from the launch brief in `docs/quality/playbooks/steward-reviewer.md`
+   (latest), quoting the builder's claims verbatim → report in
    `docs/orchestration/reviews/`; its PoC and probe files are saved as `reviews/<module>-poc/*.ts.txt` next to it.
 2. Every cross-module note in the review becomes a `pending-fixes.md` entry with an owner before the fix round
-   starts. Every P0 fix needs the builder's re-attack table plus a targeted re-check on the merged copy before merge.
+   starts. Every P0 **and P1** fix needs the builder's re-attack table (self-check §3), an audit of every exemption the fix
+   leaves (early returns, "first X is accepted"), and a targeted re-check that attacks the fix itself on the merged copy.
    Send P0/P1 (and cheap P2) findings back to the module author (resume the same agent if available, else a new
    agent on the same branch with the playbook + findings) → fix → re-run checks.
 3. In the worktree: `git merge --no-edit main`, resolve, `pnpm lint && pnpm typecheck && pnpm test`.
-4. On main: `git merge --no-ff feat/<m>-core`; update `docs/architecture/domain-map.md` with the module's
+4. On main: `git merge --no-ff feat/<m>-core`; regenerate `docs/parity/COVERAGE.md` and queue the parity owner to update
+   the merged module's rows; update `docs/architecture/domain-map.md` with the module's
    "Contract changes"; register its demo seed in `apps/api/src/seed/demo.ts` `DEMO_SEED_STEPS`, its search
    provider and jobs in `composition.ts`; bind ports provided by already-merged modules; update role templates
    (`modules/identity/src/domain/role-templates.ts`) with the module's permissions; update
    `docs/readiness/readiness-register.md`.
-5. Run full checks on main (`pnpm lint && pnpm turbo run typecheck --force && pnpm turbo run test --force --concurrency=2`), push.
+5. Run full checks on main (`pnpm lint && pnpm turbo run typecheck --force && pnpm turbo run test --force --concurrency=2`);
+   for UI branches also run Playwright on the merged copy with non-default `PORTICO_E2E_WEB_PORT`/`API_PORT`. Commit by
+   exact paths only (`tools/commit-checked.sh`). Push.
 6. Chronicle: append the merge to `docs/chronicle/01-timeline.md`; refresh with `tools/chronicle/extract.py` +
    `snapshot.py` (pass the test log); commit `docs(chronicle): …`.
 7. Quality meta loop: after every steward review / fix round / scenario run / UX round, resume the quality steward

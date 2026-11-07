@@ -47,3 +47,4 @@ scenario tests, parity researchers and the gap strategist. After each round it:
 Checkers launch from their latest playbook. The orchestrator applies playbook changes that never weaken a gate.
 Details: `docs/quality/README.md`.
 
+The orchestrator runs from `docs/quality/playbooks/orchestrator.md` (latest) and is measured in `docs/quality/scorecard.md` § 9.

@@ -186,7 +186,7 @@ Each agent's brief and report are in `agents/`.
   - v2 playbooks for 7 checkers; 51 attack patterns and 17 UX traps; a canary catalogue; a checker scorecard.
   - Top improvement: re-attack every fix before merge. The 14 P0 fixes already on main have never been re-attacked.
   - Merged; its 8 process edits applied 17:30, including the `apps/*` turbo inputs, verified by canary C-L1-01.
-- **17:24 — Integration-step review: merge after fixes** (P0 0, P1 3, P2 7, P3 9). The P1s: a deposit can land on
+- **17:27 — Integration-step review: merge after fixes** (P0 0, P1 3, P2 7, P3 9). The P1s: a deposit can land on
   another property's books, check-in can hold any card for any amount, and late charges over-collect from a folio in
   credit. The fix round goes back to the integration engineer with the new self-check playbook.
 - **17:35 — Third identity review: merge after fixes.** P0 0, P1 2, P2 3, P3 5. Every earlier attack is refused.
