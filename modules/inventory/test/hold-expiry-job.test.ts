@@ -9,6 +9,7 @@ import {
   assertLedgerConsistent,
   cell,
   createInventoryTestDatabase,
+  dropTestDatabase,
   inventory,
   setupProperty,
   unitTypeWithUnits,
@@ -20,7 +21,7 @@ beforeAll(async () => {
 });
 afterAll(async () => {
   if (t) await assertLedgerConsistent(t);
-  await t?.drop();
+  await dropTestDatabase(t);
 });
 
 describe('inventory.expireHolds job', () => {

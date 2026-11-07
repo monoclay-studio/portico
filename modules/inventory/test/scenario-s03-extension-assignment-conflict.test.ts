@@ -13,6 +13,7 @@ import {
   assertLedgerConsistent,
   cell,
   createInventoryTestDatabase,
+  dropTestDatabase,
   inventory,
   setupProperty,
   stay,
@@ -25,7 +26,7 @@ beforeAll(async () => {
 });
 afterAll(async () => {
   if (t) await assertLedgerConsistent(t);
-  await t?.drop();
+  await dropTestDatabase(t);
 });
 
 const ORIGINAL = { from: '2026-11-10', to: '2026-11-13' };

@@ -164,6 +164,25 @@ export async function adminQuery<R extends pg.QueryResultRow>(
   }
 }
 
+/**
+ * Close the pools, wait until Postgres has really let go of their backends, then drop the database. Avoids
+ * TestDatabase.drop() force-terminating half-closed connections (FOUNDATION_REQUESTS.md #1).
+ */
+export async function dropTestDatabase(t: TestDatabase | undefined): Promise<void> {
+  if (!t) return;
+  await t.db.close();
+  await t.admin.close();
+  for (let i = 0; i < 100; i++) {
+    const rows = await adminQuery<{ n: number }>(
+      t,
+      'select count(*)::int as n from pg_stat_activity where datname = current_database() and pid <> pg_backend_pid()',
+    );
+    if ((rows[0]?.n ?? 0) === 0) break;
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  await t.drop();
+}
+
 export async function assertLedgerConsistent(t: TestDatabase): Promise<void> {
   const rows = await adminQuery<{
     unit_type_id: string;

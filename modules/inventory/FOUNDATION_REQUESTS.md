@@ -8,8 +8,12 @@ waiting for the connection to terminate, then immediately runs `DROP DATABASE �
 half-closed backend (`57P01 terminating connection due to administrator command`) and the client emits an `error` with
 no listener → Vitest reports an *unhandled error* and the file fails even though every test passed.
 
-**Workaround in this module.** `test/harness.ts` → `adminQuery()` uses a short-lived `pg.Client` on `t.adminUrl` and
-ends it before returning; inventory tests never touch `t.admin`.
+The same happens on the application pool (`portico_app`) after a test file used many concurrent connections
+(observed intermittently in the S01 concurrency test).
+
+**Workaround in this module.** `test/harness.ts` → `adminQuery()` uses a short-lived `pg.Client` on `t.adminUrl`, and
+`dropTestDatabase(t)` closes both pools, waits until `pg_stat_activity` shows no other backend on the test database,
+then calls `t.drop()`. Every inventory test file uses it.
 
 **Proposed diff** (`packages/testing/src/database.ts`):
 
@@ -21,7 +25,8 @@ ends it before returning; inventory tests never touch `t.admin`.
      async drop() {
        await db.close();
        await adminDb.close();
-+      await new Promise((r) => setTimeout(r, 50)); // let terminated clients finish closing
++      // wait until Postgres has released every backend of this database before DROP … WITH (FORCE)
++      await waitUntilNoBackends(name);
 ```
 
 ## 2. Domain map § inventory needs the additive contract changes

@@ -15,6 +15,7 @@ import {
   assertLedgerConsistent,
   cell,
   createInventoryTestDatabase,
+  dropTestDatabase,
   inventory,
   setupProperty,
   stay,
@@ -27,7 +28,7 @@ beforeAll(async () => {
 });
 afterAll(async () => {
   if (t) await assertLedgerConsistent(t);
-  await t?.drop();
+  await dropTestDatabase(t);
 });
 
 const NIGHTS = { from: '2026-12-20', to: '2026-12-24' };
