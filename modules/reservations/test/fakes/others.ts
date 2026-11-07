@@ -176,35 +176,47 @@ export class FakeOperations implements OperationsPort {
 }
 
 /**
- * Fake access module (door locks / mobile keys). Honors environment safety like a real adapter, journals by
- * idempotency key, and can be switched to `unavailable` (lock system down) or `pending`.
+ * Fake access module (door locks / mobile keys), TWO-PHASE like the real contract: a call inside the caller's
+ * transaction records the operation and returns `pending`; the "lock system" acts only after commit (tx.afterCommit),
+ * so a rollback leaves no key changed. A repeated idempotency key returns the settled result. Honors environment
+ * safety; `mode` simulates an unavailable lock system.
  */
 export class FakeAccess implements AccessPort {
-  mode: 'issued' | 'unavailable' | 'pending' = 'issued';
+  mode: 'issued' | 'unavailable' = 'issued';
   calls: Array<{ op: string; input: Record<string, unknown> }> = [];
+  /** Operations the lock system actually performed (after commit). */
+  executed: Array<{ op: string; stayId: string; idempotencyKey: string }> = [];
   private journal = new Map<string, KeyOperationResult>();
   private run(
     tx: TxContext,
     op: string,
-    input: { idempotencyKey: string } & Record<string, unknown>,
+    input: { idempotencyKey: string; stayId: string } & Record<string, unknown>,
     ok: KeyOperationResult['status'],
-  ) {
+  ): KeyOperationResult {
     this.calls.push({ op, input });
     const mode = assertExternalEffectAllowed(tx, 'access.key');
-    const prior = this.journal.get(input.idempotencyKey);
-    if (prior && prior.status !== 'unavailable' && prior.status !== 'pending') return prior;
-    const result: KeyOperationResult =
-      mode === 'simulate'
-        ? { status: 'simulated', keyRefs: [`sim-${op}`] }
-        : this.mode === 'issued'
-          ? { status: ok, keyRefs: ok === 'cancelled' ? [] : [`key-${newId().slice(-6)}`] }
-          : {
-              status: this.mode,
-              keyRefs: [],
-              message: this.mode === 'unavailable' ? 'Lock server offline' : 'Encoder busy',
-            };
-    this.journal.set(input.idempotencyKey, result);
-    return result;
+    const settled = this.journal.get(input.idempotencyKey);
+    if (
+      settled &&
+      settled.status !== 'pending' &&
+      !(settled.status === 'unavailable' && this.mode !== 'unavailable')
+    ) {
+      return settled;
+    }
+    const pending: KeyOperationResult = { status: 'pending', keyRefs: [] };
+    this.journal.set(input.idempotencyKey, pending);
+    tx.afterCommit(() => {
+      const result: KeyOperationResult =
+        mode === 'simulate'
+          ? { status: 'simulated', keyRefs: ok === 'cancelled' ? [] : [`sim-${op}`] }
+          : this.mode === 'issued'
+            ? { status: ok, keyRefs: ok === 'cancelled' ? [] : [`key-${newId().slice(-6)}`] }
+            : { status: 'unavailable', keyRefs: [], message: 'Lock server offline' };
+      this.journal.set(input.idempotencyKey, result);
+      if (result.status !== 'unavailable')
+        this.executed.push({ op, stayId: input.stayId, idempotencyKey: input.idempotencyKey });
+    });
+    return pending;
   }
   async issueKeys(tx: TxContext, input: Parameters<AccessPort['issueKeys']>[1]) {
     return this.run(tx, 'issue', input, 'issued');

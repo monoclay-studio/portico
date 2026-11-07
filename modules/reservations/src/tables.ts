@@ -266,6 +266,7 @@ export interface ForwardedChangesTable {
   system_name: string | null;
   payload: unknown;
   status: Generated<string>;
+  dedupe_key: string;
   external_ref: string | null;
   detail: string | null;
   created_by: string;

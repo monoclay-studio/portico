@@ -301,8 +301,10 @@ describe('booking lifecycle', () => {
     expect(
       await org.run((tx) => org.fakes.inventory.consumptionOf(tx, { type: 'stay', id: stay?.id ?? '' })),
     ).toHaveLength(0);
-    const after = await org.run((tx) =>
-      org.svc.confirmWaitlistedStay(tx, { stayId: stay?.id ?? '', expectedVersion: b.version }),
+    const after = created<Booking>(
+      await org.run((tx) =>
+        org.svc.confirmWaitlistedStay(tx, { stayId: stay?.id ?? '', expectedVersion: b.version }),
+      ),
     );
     expect(after.stays[0]?.status.stay).toBe('expected');
     expect(

@@ -239,7 +239,7 @@ describe('room moves', () => {
     expect(p.totals.difference.amountMinor).toBe(0); // complimentary move to a better type keeps the agreed price
     const res = created(await org.svc.commitChangeSafely(t.db, org.ctx, { previewToken: p.token }));
     expect(res.keys).toEqual([
-      { stayId, action: 'move', result: expect.objectContaining({ status: 'issued' }) },
+      { stayId, action: 'move', result: expect.objectContaining({ status: 'pending' }) },
     ]);
     expect(res.booking.stays[0]?.unitId).toBe(org.units.W201);
     const ev = await org.run((tx) =>
@@ -282,12 +282,44 @@ describe('room moves', () => {
       }),
     );
     const res = created(await org.svc.commitChangeSafely(t.db, org.ctx, { previewToken: p.token }));
-    expect(res.keys[0]?.result.status).toBe('unavailable');
-    const issues = await org.run((tx) => org.svc.listIssues(tx, { propertyId: org.propertyId }));
-    expect(issues.find((i) => i.kind === 'keys_manual_action')).toMatchObject({
-      severity: 'urgent',
-      message: expect.stringMatching(/lock console/),
+    // Two-phase: the move commits with the key operation recorded; the lock system (down) never re-encoded keys.
+    expect(res.keys[0]?.result.status).toBe('pending');
+    expect(res.booking.stays[0]?.unitId).toBe(org.units.V102);
+    expect(org.fakes.access.executed.filter((e) => e.op === 'move')).toEqual([]);
+  });
+
+  it('R-09: keys are changed only after commit — a rolled-back move leaves no key re-encoded', async () => {
+    const org = await setupOrg(t);
+    const b = created<Booking>(
+      await org.run((tx) => org.svc.createBooking(tx, org.booking({}, { unitId: org.units.V101 }))),
+    );
+    const stayId = b.stays[0]?.id as string;
+    await org.svc.performWorkflow(t.db, org.ctx, {
+      stayId,
+      kind: 'check_in',
+      checkIn: { registration: { identityVerified: true } },
     });
+    expect(org.fakes.access.executed.map((e) => e.op)).toEqual(['issue']);
+    const p = await org.run((tx) =>
+      org.svc.previewChange(tx, {
+        kind: 'move',
+        stayId,
+        unitId: org.units.V102 as string,
+        reason: 'guest_request',
+        chargeable: false,
+      }),
+    );
+    await expect(
+      org.run(async (tx) => {
+        await org.svc.commitChange(tx, { previewToken: p.token });
+        throw new Error('crash after the key call, before commit');
+      }),
+    ).rejects.toThrow(/crash/);
+    expect(org.fakes.access.executed.map((e) => e.op)).toEqual(['issue']);
+    expect((await org.run((tx) => org.svc.getBooking(tx, b.id))).stays[0]?.unitId).toBe(org.units.V101);
+    // The committed move executes the key change after commit.
+    created(await org.svc.commitChangeSafely(t.db, org.ctx, { previewToken: p.token }));
+    expect(org.fakes.access.executed.map((e) => e.op)).toEqual(['issue', 'move']);
   });
 });
 

@@ -548,7 +548,13 @@ export interface KeyOperationResult {
   message?: string;
 }
 
-/** Provided by the `access` module (bound by the orchestrator). Every adapter calls assertExternalEffectAllowed. */
+/**
+ * Provided by the `access` module (bound by the orchestrator). Every adapter calls assertExternalEffectAllowed.
+ * TWO-PHASE (ADR-0007 pattern, review R-09): a call made inside the caller's transaction only RECORDS the operation
+ * (keyed by idempotencyKey) and returns `pending` — or, for a repeated key, the settled result. The lock system is
+ * contacted only AFTER COMMIT, so a rolled-back command never leaves keys encoded, moved or cancelled. Callers
+ * resume by calling again with the same idempotency key.
+ */
 export interface AccessPort {
   issueKeys(
     tx: TxContext,

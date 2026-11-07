@@ -255,14 +255,20 @@ export function reservationsHttp(deps: {
 
       app.patch(
         '/stays/:id',
-        { schema: { tags, params: stayParams, body: stayPatch, response: { 200: booking } } },
+        {
+          schema: {
+            tags,
+            params: stayParams,
+            body: stayPatch,
+            response: { 200: booking, 202: forwardedBody },
+          },
+        },
         async (req, reply) => {
           const expectedVersion = requireIfMatch(req);
           const b = await tx(req, (t) =>
             svc.patchStay(t, { stayId: req.params.id, expectedVersion, patch: req.body }),
           );
-          setVersion(reply, b.version);
-          return b;
+          return reply202OrBody(reply, b);
         },
       );
 
@@ -273,7 +279,7 @@ export function reservationsHttp(deps: {
             tags: deskTags,
             params: stayParams,
             body: z.object({ unitId: z.uuid() }),
-            response: { 200: booking },
+            response: { 200: booking, 202: forwardedBody },
           },
         },
         async (req, reply) => {
@@ -281,8 +287,7 @@ export function reservationsHttp(deps: {
           const b = await tx(req, (t) =>
             svc.assignUnit(t, { stayId: req.params.id, unitId: req.body.unitId, expectedVersion }),
           );
-          setVersion(reply, b.version);
-          return b;
+          return reply202OrBody(reply, b);
         },
       );
 
@@ -306,14 +311,13 @@ export function reservationsHttp(deps: {
 
       app.post(
         '/stays/:id/waitlist/confirm',
-        { schema: { tags, params: stayParams, response: { 200: booking } } },
+        { schema: { tags, params: stayParams, response: { 200: booking, 202: forwardedBody } } },
         async (req, reply) => {
           const expectedVersion = requireIfMatch(req);
           const res = await idem(req, `POST /stays/${req.params.id}/waitlist/confirm`, (t) =>
             svc.confirmWaitlistedStay(t, { stayId: req.params.id, expectedVersion }),
           );
-          setVersion(reply, res.body.version);
-          return res.body;
+          return reply202OrBody(reply, res.body);
         },
       );
 
@@ -335,10 +339,12 @@ export function reservationsHttp(deps: {
               body: kind === 'check_in' ? checkInInputs.default({}) : checkOutInputs.default({}),
               response: {
                 200: z.object({
-                  run: workflowRun,
+                  /** null when the check-in/out was forwarded to the external system of record. */
+                  run: workflowRun.nullable(),
                   interrupted: z
                     .object({ step: z.string(), error: z.object({ code: z.string(), message: z.string() }) })
                     .nullable(),
+                  forwarded: forwardedBody.nullable(),
                 }),
               },
             },
@@ -357,13 +363,15 @@ export function reservationsHttp(deps: {
               tags: deskTags,
               params: stepParams,
               body: kind === 'check_in' ? checkInInputs.default({}) : checkOutInputs.default({}),
-              response: { 200: workflowRun },
+              response: { 200: workflowRun, 202: forwardedBody },
             },
           },
           async (
             req: FastifyRequest<{ Params: { id: string; step: StepKey }; Body: Record<string, unknown> }>,
+            reply: FastifyReply,
           ) => {
-            await tx(req, (t) => svc.startWorkflow(t, { stayId: req.params.id, kind }));
+            const started = await tx(req, (t) => svc.startWorkflow(t, { stayId: req.params.id, kind }));
+            if (isForwarded(started)) return reply.status(202).send(started);
             return tx(req, (t) =>
               svc.runStep(t, {
                 stayId: req.params.id,

@@ -35,7 +35,8 @@ export async function keyOperation(
       throw err;
     result = { status: 'unavailable', keyRefs: [], message: 'The key system is not available.' };
   }
-  if ((result.status === 'unavailable' && !input.quietIfUnavailable) || result.status === 'pending') {
+  // `pending` is the normal two-phase answer (executed after commit); only an unavailable lock system needs staff.
+  if (result.status === 'unavailable' && !input.quietIfUnavailable) {
     await raiseIssue(tx, {
       propertyId: input.propertyId,
       kind: 'keys_manual_action',

@@ -351,6 +351,7 @@ create table reservations.forwarded_changes (
   system_name      text,
   payload          jsonb not null,
   status           text not null default 'pending' check (status in ('pending', 'acknowledged', 'rejected')),
+  dedupe_key       text not null,          -- the same pending instruction is forwarded once (R-08)
   external_ref     text,
   detail           text,
   created_by       text not null,
@@ -359,6 +360,8 @@ create table reservations.forwarded_changes (
   version          int not null default 1
 );
 create index forwarded_changes_pending_idx on reservations.forwarded_changes (tenant_id, property_id, status);
+create unique index forwarded_changes_dedupe_uq on reservations.forwarded_changes (tenant_id, dedupe_key)
+  where status = 'pending';
 select core.enable_tenant_isolation('reservations.forwarded_changes');
 
 ---------------------------------------------------------------------------------------------------------

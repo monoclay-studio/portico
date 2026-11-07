@@ -1,5 +1,12 @@
 import { sql, type TxContext } from '@portico/db';
-import { BusinessRuleError, NotFoundError, newId, requirePermission } from '@portico/kernel';
+import {
+  BusinessRuleError,
+  canonicalJson,
+  NotFoundError,
+  newId,
+  requirePermission,
+  sha256Hex,
+} from '@portico/kernel';
 import { RESERVATIONS_EVENTS as E } from '../events';
 import { RESERVATIONS_PERMISSIONS as P } from '../manifest';
 import { actorKey, type Deps, db, json } from './context';
@@ -44,6 +51,38 @@ export async function guardAuthority(
   const mode = await deps.ports.platform.assertWritable(tx, input.propertyId, 'reservations');
   if (mode === 'portico') return null;
   const authority = await deps.ports.platform.getDataAuthority(tx, input.propertyId, 'reservations');
+  const system = authority.systemName ?? 'the external system of record';
+  const message = `${system} is the system of record for reservations here. Your change was sent to it and is pending until it confirms; nothing has changed in Portico yet.`;
+  // The same pending instruction is forwarded once: repeated confirms return the existing record (R-08).
+  const dedupeKey = sha256Hex(
+    canonicalJson({
+      kind: input.kind,
+      bookingId: input.bookingId ?? null,
+      stayId: input.stayId ?? null,
+      payload: input.payload,
+    }),
+  );
+  const pending = await db(tx)
+    .selectFrom('reservations.forwarded_changes')
+    .selectAll()
+    .where('dedupe_key', '=', dedupeKey)
+    .where('status', '=', 'pending')
+    .executeTakeFirst();
+  if (pending) {
+    return {
+      forwarded: true,
+      forwardedChange: {
+        id: pending.id,
+        kind: pending.kind,
+        status: 'pending',
+        systemName: pending.system_name,
+        bookingId: pending.booking_id,
+        stayId: pending.stay_id,
+        createdAt: pending.created_at.toISOString(),
+      },
+      message: `${message} (already sent ${pending.created_at.toISOString()})`,
+    };
+  }
   const id = newId(tx.now.getTime());
   await db(tx)
     .insertInto('reservations.forwarded_changes')
@@ -57,6 +96,7 @@ export async function guardAuthority(
       connection_id: authority.connectionId,
       system_name: authority.systemName,
       payload: json(input.payload),
+      dedupe_key: dedupeKey,
       created_by: actorKey(tx),
       created_at: tx.now,
     })
@@ -79,7 +119,6 @@ export async function guardAuthority(
       stayId: input.stayId ?? null,
     },
   });
-  const system = authority.systemName ?? 'the external system of record';
   return {
     forwarded: true,
     forwardedChange: {
@@ -91,7 +130,7 @@ export async function guardAuthority(
       stayId: input.stayId ?? null,
       createdAt: tx.now.toISOString(),
     },
-    message: `${system} is the system of record for reservations here. Your change was sent to it and is pending until it confirms; nothing has changed in Portico yet.`,
+    message,
   };
 }
 

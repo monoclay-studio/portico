@@ -32,7 +32,7 @@ async function scenario(org: Org) {
     kind: 'check_in',
     checkIn: { registration: { identityVerified: true } },
   });
-  expect(run.status).toBe('completed');
+  expect(run?.status).toBe('completed');
   return { x, stayId };
 }
 
@@ -108,7 +108,7 @@ describe('S03: extension into nights where the assigned villa is taken', () => {
     ).toEqual(['2026-12-10', '2026-12-11', '2026-12-12', '2026-12-13', '2026-12-14']);
     // Keys follow the extension (access module) and the outcome is reported, not assumed.
     expect(result.keys).toEqual([
-      { stayId, action: 'extend', result: expect.objectContaining({ status: 'issued' }) },
+      { stayId, action: 'extend', result: expect.objectContaining({ status: 'pending' }) },
     ]);
     // The same preview cannot be committed twice.
     await expect(

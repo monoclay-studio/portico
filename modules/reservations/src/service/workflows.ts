@@ -34,7 +34,7 @@ import {
 import { RESERVATIONS_EVENTS as E } from '../events';
 import { RESERVATIONS_PERMISSIONS as P } from '../manifest';
 import type { GuaranteeKind, KeyKind, KeyOperationResult, UnitCondition } from '../ports';
-import { guardAuthority } from './authority';
+import { type ForwardedResult, guardAuthority, isForwarded } from './authority';
 import { actorKey, actorName, type Deps, db, isModuleUnavailable, json, policy } from './context';
 import { emitReservationEvent } from './event-payload';
 import { resolveGuest } from './guests';
@@ -116,9 +116,19 @@ export async function startWorkflow(
   deps: Deps,
   tx: TxContext,
   input: { stayId: string; kind: WorkflowKind },
-): Promise<WorkflowRun> {
+): Promise<WorkflowRun | ForwardedResult> {
   const stay = await loadStay(tx, input.stayId);
   requirePermission(tx, permissionFor(input.kind), { propertyId: stay.row.property_id });
+  // Data authority is decided BEFORE any step with an external effect (card authorization, keys) — R-08:
+  // read_only refuses here; forward records ONE pending check-in/out for the system of record and runs nothing.
+  const forwarded = await guardAuthority(deps, tx, {
+    propertyId: stay.row.property_id,
+    kind: input.kind,
+    payload: { stayId: stay.row.id },
+    bookingId: stay.row.booking_id,
+    stayId: stay.row.id,
+  });
+  if (forwarded) return forwarded;
   const existing = await activeRun(tx, stay.row.id, input.kind);
   if (existing) return toView(existing);
   const booking = await loadBooking(tx, stay.row.booking_id);
@@ -581,7 +591,8 @@ async function stepAccess(
     case 'pending':
       return {
         status: 'pending',
-        message: `The key system accepted the request but has not confirmed it yet. Resume to check again.`,
+        message:
+          'The key request is recorded and is sent to the lock system once this step is saved; resume to confirm it.',
         result: { ...result },
         idempotencyKey,
       };
@@ -1009,12 +1020,16 @@ export async function performWorkflow(
   ctx: RequestContext,
   input: { stayId: string; kind: WorkflowKind; checkIn?: CheckInInputs; checkOut?: CheckOutInputs },
 ): Promise<{
-  run: WorkflowRun;
+  run: WorkflowRun | null;
   interrupted: { step: StepKey; error: { code: string; message: string } } | null;
+  forwarded: ForwardedResult | null;
 }> {
-  let run = await withTenantTx(database, ctx, (tx) =>
+  const started = await withTenantTx(database, ctx, (tx) =>
     startWorkflow(deps, tx, { stayId: input.stayId, kind: input.kind }),
   );
+  if (isForwarded(started)) return { run: null, interrupted: null, forwarded: started };
+  let run: WorkflowRun = started;
+  const polled = new Set<StepKey>();
   for (;;) {
     const next = run.steps.find((s) => s.status === 'pending' || s.status === 'failed');
     if (!next || run.status !== 'in_progress') break;
@@ -1045,11 +1060,16 @@ export async function performWorkflow(
         );
         return toView(await saveSteps(tx, row, steps));
       });
-      return { run, interrupted: { step: key, error } };
+      return { run, interrupted: { step: key, error }, forwarded: null };
     }
     const after = run.steps.find((s) => s.key === key);
+    // Two-phase external steps (payments, keys) settle after their transaction commits: poll each once (R-09/R-11).
+    if (after?.status === 'pending' && after.external && !polled.has(key)) {
+      polled.add(key);
+      continue;
+    }
     if (after?.status !== 'done') break;
     if (after.status === before && after.attempts === attemptsBefore) break;
   }
-  return { run, interrupted: null };
+  return { run, interrupted: null, forwarded: null };
 }

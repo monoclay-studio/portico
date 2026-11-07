@@ -32,16 +32,16 @@ describe('check-in as a resumable workflow', () => {
       checkIn: { registration: { identityVerified: true } },
     });
     expect(first.interrupted).toMatchObject({ step: 'guarantee', error: { code: 'external_service_error' } });
-    expect(first.run.summary).toMatchObject({
+    expect(first.run?.summary).toMatchObject({
       succeeded: ['registration', 'unit'],
       remaining: ['guarantee', 'deposits', 'access', 'confirm'],
     });
-    const g1 = first.run.steps.find((s) => s.key === 'guarantee');
+    const g1 = first.run?.steps.find((s) => s.key === 'guarantee');
     expect(g1).toMatchObject({ status: 'failed', message: expect.stringMatching(/Interrupted/) });
 
     // Resume: same idempotency key → the payments journal returns the SAME attempt: pending verification.
     const second = await org.svc.performWorkflow(t.db, org.ctx, { stayId, kind: 'check_in' });
-    expect(second.run.steps.find((s) => s.key === 'guarantee')).toMatchObject({
+    expect(second.run?.steps.find((s) => s.key === 'guarantee')).toMatchObject({
       status: 'pending',
       message: expect.stringMatching(/pending verification/),
     });
@@ -58,11 +58,11 @@ describe('check-in as a resumable workflow', () => {
     const third = await org.svc.performWorkflow(t.db, org.ctx, { stayId, kind: 'check_in' });
     expect(org.fakes.payments.authorizeCalls).toBe(callsBefore);
     expect(org.fakes.payments.attempts.size).toBe(1);
-    expect(third.run.steps.find((s) => s.key === 'guarantee')?.status).toBe('done');
+    expect(third.run?.steps.find((s) => s.key === 'guarantee')?.status).toBe('done');
     // Keys: lock system down → step failed with instructions, never silently done.
-    const access = third.run.steps.find((s) => s.key === 'access');
+    const access = third.run?.steps.find((s) => s.key === 'access');
     expect(access).toMatchObject({ status: 'failed', message: expect.stringMatching(/lock console/) });
-    expect(third.run.status).toBe('in_progress');
+    expect(third.run?.status).toBe('in_progress');
 
     // Staff confirm the manual fallback; check-in completes.
     const done = await org.svc.performWorkflow(t.db, org.ctx, {
@@ -72,8 +72,8 @@ describe('check-in as a resumable workflow', () => {
         access: { manualFallback: { confirmed: true, note: 'Card 2 encoded on the lock console' } },
       },
     });
-    expect(done.run.status).toBe('completed');
-    expect(done.run.steps.find((s) => s.key === 'access')).toMatchObject({
+    expect(done.run?.status).toBe('completed');
+    expect(done.run?.steps.find((s) => s.key === 'access')).toMatchObject({
       status: 'done',
       result: expect.objectContaining({ manualFallback: true }),
     });
@@ -106,17 +106,17 @@ describe('check-in as a resumable workflow', () => {
       kind: 'check_in',
       checkIn: { registration: { identityVerified: true } },
     });
-    expect(r.run.steps.find((s) => s.key === 'unit')).toMatchObject({
+    expect(r.run?.steps.find((s) => s.key === 'unit')).toMatchObject({
       status: 'failed',
       message: expect.stringMatching(/failed inspection/),
     });
-    expect(r.run.summary.succeeded).toEqual(['registration']);
+    expect(r.run?.summary.succeeded).toEqual(['registration']);
     const resumed = await org.svc.performWorkflow(t.db, org.ctx, {
       stayId,
       kind: 'check_in',
       checkIn: { unit: { unitId: org.units.V102 } },
     });
-    expect(resumed.run.status).toBe('completed');
+    expect(resumed.run?.status).toBe('completed');
     expect(
       (await org.run((tx) => org.fakes.inventory.assignmentsOf(tx, { type: 'stay', id: stayId }))).map(
         (a) => a.unitId,
@@ -186,18 +186,18 @@ describe('check-out as a resumable workflow', () => {
     // Advance the business date by one day: the guest leaves early (agreed departure 2026-12-14).
     await org.run((tx) => sql`update platform.properties set business_date = '2026-12-11'`.execute(tx.db));
     const r1 = await org.svc.performWorkflow(t.db, org.ctx, { stayId, kind: 'check_out' });
-    expect(r1.run.steps.find((s) => s.key === 'settle')).toMatchObject({
+    expect(r1.run?.steps.find((s) => s.key === 'settle')).toMatchObject({
       status: 'failed',
       message: expect.stringMatching(/Open balance/),
     });
-    expect(r1.run.summary.succeeded).toEqual(['charges']);
+    expect(r1.run?.summary.succeeded).toEqual(['charges']);
     const r2 = await org.svc.performWorkflow(t.db, org.ctx, {
       stayId,
       kind: 'check_out',
       checkOut: { settle: { leaveOpenReason: 'Company will settle by bank transfer' } },
     });
-    expect(r2.run.status).toBe('completed');
-    expect(org.fakes.access.calls.map((c) => c.op)).toEqual(['issue', 'cancel']);
+    expect(r2.run?.status).toBe('completed');
+    expect(org.fakes.access.executed.map((c) => c.op)).toEqual(['issue', 'cancel']);
     const after = await org.run((tx) => org.svc.getBooking(tx, b.id));
     expect(after.stays[0]).toMatchObject({ status: { stay: 'departed' }, departure: '2026-12-11' });
     expect(after.status.booking).toBe('completed');

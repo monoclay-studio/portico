@@ -950,10 +950,18 @@ export async function patchStay(
   deps: Deps,
   tx: TxContext,
   input: { stayId: string; expectedVersion: number; patch: StayPatch },
-): Promise<Booking> {
+): Promise<Booking | ForwardedResult> {
   const stay = await loadStay(tx, input.stayId);
   const row = await lockBooking(tx, stay.row.booking_id, input.expectedVersion);
   requirePermission(tx, P.bookingUpdate, { propertyId: row.property_id });
+  const forwarded = await guardAuthority(deps, tx, {
+    propertyId: row.property_id,
+    kind: 'modify_stay',
+    payload: input.patch,
+    bookingId: row.id,
+    stayId: stay.row.id,
+  });
+  if (forwarded) return forwarded;
   const p = input.patch;
   await updateStay(tx, stay.row.id, {
     ...(p.eta !== undefined ? { eta: p.eta } : {}),
@@ -982,10 +990,18 @@ export async function assignUnit(
   deps: Deps,
   tx: TxContext,
   input: { stayId: string; unitId: string; expectedVersion: number },
-): Promise<Booking> {
+): Promise<Booking | ForwardedResult> {
   const stay = await loadStay(tx, input.stayId);
   const row = await lockBooking(tx, stay.row.booking_id, input.expectedVersion);
   requirePermission(tx, P.stayMove, { propertyId: row.property_id });
+  const forwarded = await guardAuthority(deps, tx, {
+    propertyId: row.property_id,
+    kind: 'assign_unit',
+    payload: { unitId: input.unitId },
+    bookingId: row.id,
+    stayId: stay.row.id,
+  });
+  if (forwarded) return forwarded;
   if (!['expected', 'in_house'].includes(stay.row.status)) {
     throw new BusinessRuleError(
       'stay_not_assignable',
@@ -1174,10 +1190,18 @@ export async function confirmWaitlistedStay(
   deps: Deps,
   tx: TxContext,
   input: { stayId: string; expectedVersion: number },
-): Promise<Booking> {
+): Promise<Booking | ForwardedResult> {
   const stay = await loadStay(tx, input.stayId);
   const row = await lockBooking(tx, stay.row.booking_id, input.expectedVersion);
   requirePermission(tx, P.waitlistManage, { propertyId: row.property_id });
+  const forwarded = await guardAuthority(deps, tx, {
+    propertyId: row.property_id,
+    kind: 'confirm_waitlisted',
+    payload: {},
+    bookingId: row.id,
+    stayId: stay.row.id,
+  });
+  if (forwarded) return forwarded;
   assertStayTransition(stay.row.status as StayStatus, 'expected');
   if (stay.row.status !== 'waitlisted') {
     throw new BusinessRuleError(

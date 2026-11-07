@@ -131,3 +131,80 @@ describe('reservations data authority', () => {
     ).rejects.toThrow(/system of record/);
   });
 });
+
+describe('data authority on every write (steward R-07, R-08)', () => {
+  it('read_only refuses stay edits, unit assignment, waitlist confirmation and check-in BEFORE any external effect', async () => {
+    const org = await setupOrg(t);
+    const b = created<Booking>(
+      await org.run((tx) => org.svc.createBooking(tx, org.booking({}, { unitId: org.units.V101 }))),
+    );
+    const wl = created<Booking>(
+      await org.run((tx) =>
+        org.svc.createBooking(
+          tx,
+          org.booking({ intent: 'waitlist' }, { waitlist: { priority: 1, expiresAt: '2026-12-09' } }),
+        ),
+      ),
+    );
+    await setAuthority(org, 'read_only');
+    const stayId = b.stays[0]?.id as string;
+    const refused = /Legacy PMS is the system of record/;
+    await expect(
+      org.run((tx) =>
+        org.svc.patchStay(tx, { stayId, expectedVersion: b.version, patch: { notes: 'local only' } }),
+      ),
+    ).rejects.toThrow(refused);
+    await expect(
+      org.run((tx) =>
+        org.svc.assignUnit(tx, { stayId, unitId: org.units.V102 as string, expectedVersion: b.version }),
+      ),
+    ).rejects.toThrow(refused);
+    await expect(
+      org.run((tx) =>
+        org.svc.confirmWaitlistedStay(tx, { stayId: wl.stays[0]?.id ?? '', expectedVersion: wl.version }),
+      ),
+    ).rejects.toThrow(refused);
+    await expect(
+      org.svc.performWorkflow(t.db, org.ctx, {
+        stayId,
+        kind: 'check_in',
+        checkIn: { registration: { identityVerified: true } },
+      }),
+    ).rejects.toThrow(refused);
+    expect(org.fakes.payments.authorizeCalls).toBe(0);
+    expect(org.fakes.access.calls).toEqual([]);
+  });
+
+  it('forward: check-in is forwarded once, however often it is confirmed, and nothing external happens', async () => {
+    const org = await setupOrg(t);
+    const b = created<Booking>(
+      await org.run((tx) => org.svc.createBooking(tx, org.booking({}, { unitId: org.units.V101 }))),
+    );
+    await setAuthority(org, 'forward');
+    const stayId = b.stays[0]?.id as string;
+    for (let i = 0; i < 3; i++) {
+      const r = await org.svc.performWorkflow(t.db, org.ctx, {
+        stayId,
+        kind: 'check_in',
+        checkIn: { registration: { identityVerified: true } },
+      });
+      expect(r.run).toBeNull();
+      expect(r.forwarded?.forwardedChange).toMatchObject({ kind: 'check_in', status: 'pending' });
+    }
+    const n = await org.run((tx) =>
+      sql<{
+        n: number;
+      }>`select count(*)::int as n from reservations.forwarded_changes where kind = 'check_in'`.execute(
+        tx.db,
+      ),
+    );
+    expect(n.rows[0]?.n).toBe(1);
+    expect(org.fakes.payments.authorizeCalls).toBe(0);
+    expect(org.fakes.access.calls).toEqual([]);
+    const patched = await org.run((tx) =>
+      org.svc.patchStay(tx, { stayId, expectedVersion: b.version, patch: { eta: '16:00' } }),
+    );
+    expect(isForwarded(patched)).toBe(true);
+    expect((await org.run((tx) => org.svc.getBooking(tx, b.id))).stays[0]?.eta).toBeNull();
+  });
+});
