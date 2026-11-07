@@ -218,4 +218,12 @@ Each agent's brief and report are in `agents/`.
     split and out-of-order on an occupied unit were decided by the orchestrator.
   - A new P0 foundation gap: trial → live effect re-checks at execution, and cross-tenant uniqueness of external
     identifiers.
+- **18:06 — Usage check (5-hour 57%):** infra resumes as a new agent on `feat/infra-aws` from its saved checkpoint and
+  original brief. Deploy nothing.
+- **18:07 — Integration-step fix round done.**
+  - All 3 P1s, 7 P2s and 6 P3s are fixed; every PoC is now a regression test.
+  - The builder corrected its own earlier overclaim and listed the remaining stubs.
+  - It filled the re-attack table and declared its own gaps: no concurrent late-charge test, no cap-boundary test.
+  - Under the new rule (re-attack P0/P1 fixes before merge), a focused re-review launches from steward playbook v2.1
+    before merge.
 
