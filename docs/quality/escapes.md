@@ -54,14 +54,14 @@ Before reclassification, round 0 read L1-gate 9 / L1-BSC 7 / L2 11 / L3 0 / L4 5
 | Loop | Round 0 (reclassified) | Round 1 | Round 2 | Cumulative | Round-2 entries |
 |---|---|---|---|---|---|
 | L1-gate | 8 | 2 | **1** | 11 | E-079 |
-| L1-BSC (builder self-check, incl. fix rounds) | 7 | 13 | **12** | 32 | E-063, E-064, E-066, E-068, E-069, E-070, E-071, E-072 (residuals of round-0 fixes); E-075, E-076, E-077, E-078 (integration-step fix round) |
-| L2 steward review | 10 | 3 | **4** | 17 | E-065, E-067 (recall misses of round-0 reviews); E-073, E-074 (recommendation defects of a v1-era review) |
+| L1-BSC (builder self-check, incl. fix rounds) | 7 | 13 | **15** | 35 | E-063, E-064, E-066, E-068, E-069, E-070, E-071, E-072 (residuals of round-0 fixes); E-075, E-076, E-077, E-078 (integration-step fix round); E-082, E-084, E-085 (guests fix round) |
+| L2 steward review | 10 | 3 | **5** | 18 | E-065, E-067, E-083 (recall misses of round-0 reviews; L8 contributed to E-083); E-073, E-074 (recommendation defects of a v1-era review) |
 | L3 scenario proof | 0 | 1 | **0** | 1 | — |
 | L4 UX loop | 3 | 0 | **0** | 3 | No L4 round ran |
 | L5 market, parity and research | 5 | 1 | **0** | 6 | — |
 | L-orch (orchestrator process) | 5 | 3 | **2** | 10 | E-080, E-081 |
 | L8 meta loop | 0 | 1 | **0** | 1 | — |
-| **Total** | **38** | **24** | **19** | **81** | |
+| **Total** | **38** | **24** | **23** | **85** | |
 
 ### By where they were found
 
@@ -84,7 +84,8 @@ Before reclassification, round 0 read L1-gate 9 / L1-BSC 7 / L2 11 / L3 0 / L4 5
 - the L2 fix sweep: 10 (E-063 … E-072);
 - the L2 integration-step re-review: 6 (E-073 … E-078);
 - the orchestrator's merge verification: 1 (E-079);
-- the orchestrator about its own process: 2 (E-080, E-081).
+- the orchestrator about its own process: 2 (E-080, E-081);
+- the L2 guests erasure re-review: 4 (E-082 … E-085).
 
 ### By severity and kind
 
@@ -102,14 +103,15 @@ recommended fix caused. There are **12 of 24**:
 - introduced by the fix: E-047;
 - caused by the recommendation: E-048, E-050, E-051.
 
-**Round 2 by severity:** P0 0, P1 7, P2 8, P3 4. **By kind:** D 15, G 2, Pr 2.
+**Round 2 by severity:** P0 0, P1 7, P2 12, P3 4. **By kind:** D 18, G 2, C 1, Pr 2.
 
-**Round 2, fix-related: 14 of 19 (74 %).**
+**Round 2, fix-related: 17 of 23 (74 %).**
 - Residuals of round-0 fixes: 8 (sweep).
 - Introduced or missed by the integration-step fix round: 4.
+- Introduced by the guests fix round: 3.
 - Recommendation-induced: 2.
 
-The trend is 7 of 38 → 12 of 24 → 14 of 19. As P0/P1 classes close, the remaining defects come increasingly from
+The trend is 7 of 38 → 12 of 24 → 17 of 23. As P0/P1 classes close, the remaining defects come increasingly from
 fixes.
 
 ### Root causes shared by several escapes
@@ -943,7 +945,7 @@ Sources:
 - The integration-step fix round ran **scenario tests v2**.
 - Parity-ops ran **parity v2**.
 
-The guests erasure re-review was still running at 18:44, and is folded into the next round.
+The guests erasure re-review landed at 18:53, and is folded in below (E-082 to E-085).
 
 ### L1-BSC — residuals of round-0 fixes, found by the sweep
 
@@ -1114,6 +1116,45 @@ The guests erasure re-review was still running at 18:44, and is folded into the 
   - Orchestrator **v3** O3-2 (the resume message names the WIP commit and the build-on-top rule; never force-push;
     reconcile by merge).
   - Retro edit 2.
+
+### Guests erasure fix — the focused re-review on v2.1, landed at 18:53 and folded in here
+
+#### E-082 · P2 · D · The erasure redaction net matches free text as substrings, so one erasure makes unrelated replays answer 410 (R2-P2-1)
+- **Found.** L2 guests re-review, on v2.1 (`review-guests-erasure-fix.md` R2-P2-1).
+  - Erasing a guest whose address was `Maldives` made `POST /v1/properties` replays answer 410.
+  - `7771234` redacted a response containing `17771234`.
+  - A shared family email 410'd another guest's responses, including one under legal hold.
+  - The capability can be weaponized (AP-47).
+- **Should have been caught by.** L1-BSC, the guests fix round. The fix defined "a mention" as any contact value,
+  matched as a substring. The invariant was right; its **identifier** (premise) was wrong.
+- **Checks added.**
+  - Pattern AP-17, extended (match exact identifiers, never substrings).
+  - Pattern AP-47, extended.
+  - Builder v4 BS4-1(a).
+
+#### E-083 · P2 · D · A guests write that passed its checks before an erasure commits after it, and its data survives (R2-P2-2)
+- **Found.** L2 guests re-review (a gated concurrency PoC).
+- **Should have been caught by.** The **L2 round-0 guests review**. The defect existed before the fix branch:
+  `requireWritableProfile` reads the status without a lock.
+- **L8 contributed.** The round-2 fix sweep marked AP-56 "not applicable (no one-time security transition)",
+  because AP-56's examples (credential wipe, key rotation, revocation, offboarding, cutover) did not name
+  **erasure**. The pattern's wording narrowed a reviewer's sweep.
+- **Checks added.** AP-56's examples now include erasure and anonymization (L8 correction). Builder v4 BS4-1(a):
+  writers of the subject's data.
+
+#### E-084 · P2 · D · Redaction scans every stored response of the tenant inside the erasure transaction; erasure fails at about 340,000 stored responses (R2-P2-3)
+- **Found.** L2 guests re-review (benchmark: 4.4 s for 50,000 rows).
+- **Should have been caught by.** L1-BSC, the guests fix round. The fix made "erasure completes" depend on the volume
+  of data (AP-54, re-rated to P2 by the reviewer).
+- **Checks added.** Pattern AP-54, extended (volume and time as load-bearing premises). Builder v4 BS4-1 (the fix's
+  own cost).
+
+#### E-085 · P2 · C · Personal data in finance and payments is not reached, and the README cites consumer tests that do not exist (R2-P2-4)
+- **Found.** L2 guests re-review. No module consumes `guests.profile.anonymized`. `finance.folios.payer_name` and
+  `payments` `holder_name` and payer keep the name.
+- **Should have been caught by.** L1-BSC, guests' claims (v1 item 31, AP-50).
+- **Checks added.** Builder v1 items 31–32 already cover it; this is a miss under them. Pending-fixes lines with owners
+  (retro, edit 5).
 
 ### Not counted as escapes this round (recorded for completeness)
 

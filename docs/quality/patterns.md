@@ -247,6 +247,13 @@ proves useless is marked *retired* with a date, never deleted.
   **replaying the original key returned them** (201 `Idempotent-Replayed`). **Probe addition:** after erasure, replay
   every idempotency key the subject's requests used. The replay must not return personal data. Scan every `core` jsonb
   store, not only the module schema, the outbox and the audit log.
+- **Round 2 (E-082):** a redaction net can **over-reach**. Matching free-text contact values as substrings 410'd
+  unrelated records and other guests' replays. **Probe addition:**
+  - plant the erased subject's values inside unrelated records, such as `Maldives` inside `Indian/Maldives`;
+  - plant another guest with a shared email.
+
+  Only records that **identify** the subject (exact ids, normalized email or phone as whole JSON strings) may be
+  touched.
 
 ### AP-18 · A privacy or sharing setting is bypassed through a secondary path
 - **Seen in:**
@@ -543,6 +550,10 @@ proves useless is marked *retired* with a date, never deleted.
     every credential and checked when it is used.
 - **Applies to:** identity, payments (provider account switch), integration (cutover, disconnect), migration.
 - **Canary:** C-L2-17.
+- **Round 2 (wording correction, L8):** **erasure and anonymization** are one-time transitions too. The fix sweep marked
+  AP-56 "not applicable" for G-P0-1 because the examples above did not name them, and a write racing an erasure
+  survived it (E-083). **Probe addition:** a writer of the subject's data (contacts, documents, notes, consents)
+  started concurrently with the erasure, with a test-only gate.
 
 ---
 
@@ -644,6 +655,8 @@ proves useless is marked *retired* with a date, never deleted.
 - **Round 1:** identity R3-P2-3 (E-051). A credential wipe triggered by the person's own good-faith verification
   elsewhere permanently locked them out of an SSO-required organization. **Probe addition:** for every *protective*
   transition (wipe, revoke, lock), check whether the legitimate user can be left with no way back.
+- **Round 2 (E-082):** a holder of `guests.privacy.erase` could deny replays of any stored response containing a
+  chosen value, by creating and erasing a dummy guest with that value as its "address".
 
 ### AP-48 · Effective-dated data without explicit bounds
 - **Seen in:** rates R-19 (E-023): the earliest TGST version was open-ended backwards, so 2021 was taxed at 16 %
@@ -662,6 +675,9 @@ proves useless is marked *retired* with a date, never deleted.
   open lower-severity findings and known gaps. A weakness the fix now depends on is re-rated at the fix's severity and
   fixed in the same round.
 - **Applies to:** every fix round, and every reviewer recommendation.
+- **Round 2 (E-084):** **volume and time** are load-bearing premises too. The erasure fix made completion depend on an
+  unindexed scan of every stored response (4.4 s per 50,000 rows), so it fails under the 30 s statement timeout at
+  about 340,000 rows. **Probe addition:** benchmark any new scan inside a command at 10× the largest expected tenant.
 
 ### AP-57 · Premise writers: the fact a fix trusts can be written by someone the fix does not restrain (numbered in order of discovery)
 - **Seen in:**
