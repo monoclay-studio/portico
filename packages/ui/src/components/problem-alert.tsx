@@ -38,14 +38,8 @@ export function ProblemAlert({
   const Icon = unknownOutcome ? Hourglass : severe ? TriangleAlert : CircleAlert;
   // Offer "Try again" only when the problem is retryable AND the caller did not mark the request unsafe to repeat.
   const canRetry = problem.retryable && problem.safeToRetry !== false && Boolean(onRetry);
-  const hint =
-    canRetry && problem.safeToRetry === true
-      ? problem.retryBasis === 'idempotency_key'
-        ? strings.problem.retrySafeKeyed
-        : problem.retryBasis === 'read'
-          ? strings.problem.retrySafeRead
-          : null
-      : null;
+  // No retry boilerplate (UX round 1, C7.5): the detail says whether repeating helps; the button appears only
+  // when repeating is known to be safe.
   const showReference = Boolean(problem.correlationId) && !problem.correlationId.startsWith('client');
   return (
     <div
@@ -87,7 +81,6 @@ export function ProblemAlert({
             </ul>
           </div>
         )}
-        {hint && <p className="text-xs text-ink-muted">{hint}</p>}
         <div className="flex flex-wrap items-center gap-2 pt-1">
           {canRetry && onRetry && (
             <Button size="sm" variant="secondary" icon={<RefreshCw />} loading={retrying} onClick={onRetry}>

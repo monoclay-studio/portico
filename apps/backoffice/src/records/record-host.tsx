@@ -7,6 +7,7 @@ import { problemFromUnknown } from '../api/errors';
 import { scopeKey } from '../api/queries';
 import { useApp } from '../app/app-context';
 import { ErrorBoundary } from '../app/error-boundary';
+import { useMediaQuery } from '../app/use-media-query';
 import { ExtendStayDialog } from '../features/reservations/extend-stay-dialog';
 import { RecordLink } from './entity-link';
 import { definitionFor, type RecordCtx, serverHistory } from './registry';
@@ -23,6 +24,8 @@ export function RecordHost() {
   const router = useRouter();
   const toast = useToast();
   const nav = useRecordNav();
+  // Wide screens: a non-modal panel beside the list (j/k keep working). Narrower: a modal sheet over it.
+  const wide = useMediaQuery('(min-width: 1280px)');
   const [extendStay, setExtendStay] = useState<string | null>(null);
   const top = nav.trail.at(-1);
   const def = top ? definitionFor(top.type) : undefined;
@@ -92,6 +95,8 @@ export function RecordHost() {
               : titles.get(`${userId}:${e.type}:${e.id}`)) ??
             t(`records.types.${e.type}`, { defaultValue: e.type }),
         }))}
+        mode={wide ? 'panel' : 'modal'}
+        recordKey={`${top.type}:${top.id}`}
         onNavigateTrail={nav.jump}
         onBack={nav.back}
         onClose={nav.close}

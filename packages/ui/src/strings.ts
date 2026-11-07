@@ -24,8 +24,6 @@ export const defaultUiStrings = {
   problem: {
     reference: 'Reference',
     copyReference: 'Copy reference {{id}}',
-    retrySafeKeyed: 'Trying again is safe: this request carries a key that prevents it from happening twice.',
-    retrySafeRead: 'Trying again is safe: it only reloads information.',
     unknownOutcome: 'Outcome not confirmed',
     fieldErrors: 'Check these fields:',
 

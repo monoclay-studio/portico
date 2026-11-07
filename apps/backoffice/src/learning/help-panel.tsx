@@ -13,10 +13,6 @@ export function HelpPanel({ helpKey, onClose }: { helpKey: string | null; onClos
   return (
     <Drawer open onOpenChange={(o) => !o && onClose()} title={t('help.forScreen')} description={undefined}>
       <div className="flex flex-col gap-4 text-sm" data-help-panel={helpKey}>
-        <p className="flex items-center gap-2">
-          <span className="text-ink-muted">{t('help.anchor')}:</span>
-          <span className="pt-data text-ink normal-case">{helpKey}</span>
-        </p>
         {link ? (
           <div className="flex flex-col gap-2">
             {link.article && (

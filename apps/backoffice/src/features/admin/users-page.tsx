@@ -16,12 +16,13 @@ import {
 } from '@portico/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { UserPlus } from 'lucide-react';
-import { type FormEvent, useMemo, useRef, useState } from 'react';
+import { type FormEvent, useCallback, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api, type CreateUserRequest, type UserSummary } from '../../api';
-import { problemFromUnknown } from '../../api/errors';
+import { isApiError, problemFromUnknown } from '../../api/errors';
 import { IntentKeys } from '../../api/intent';
 import { queries, scopeKey } from '../../api/queries';
+import { issuesToErrors } from '../../api/validation';
 import { useApp } from '../../app/app-context';
 import { useScreenAction } from '../../app/screen-actions';
 import { learning } from '../../learning/progress';
@@ -40,7 +41,7 @@ const EMPTY = {
 /** GET /v1/users + GET /v1/roles; POST /v1/users with an intent-scoped Idempotency-Key. */
 export function UsersPage() {
   const { t } = useTranslation();
-  const { session, properties } = useApp();
+  const { session, properties, property } = useApp();
   const toast = useToast();
   const nav = useRecordNav();
   const queryClient = useQueryClient();
@@ -50,7 +51,16 @@ export function UsersPage() {
   const [form, setForm] = useState(EMPTY);
   const [problem, setProblem] = useState<ProblemDetails | null>(null);
   const intent = useRef(new IntentKeys()).current;
-  useScreenAction('new', () => setOpen(true));
+  // Least privilege by default: a new staff member applies to the current property unless widened (C11).
+  const startInvite = () => {
+    setForm({ ...EMPTY, scope: property?.id ?? 'organization' });
+    setOpen(true);
+  };
+  useScreenAction('new', startInvite);
+  const roleName = useCallback(
+    (key: string) => roles.data?.find((r) => r.key === key)?.name ?? t('admin.roleUnknown'),
+    [roles.data, t],
+  );
   const propName = (id: string | null) =>
     properties.find((p) => p.id === id)?.name ?? t('admin.wholeOrganization');
 
@@ -67,7 +77,8 @@ export function UsersPage() {
   });
   const create = useMutation({
     mutationFn: (b: CreateUserRequest) =>
-      api.createUser(b, intent.keyFor({ ...b, initialPassword: b.initialPassword ? '•' : undefined })),
+      // The intent fingerprint is a hash, so the password is part of it without being kept (P3-10).
+      api.createUser(b, intent.keyFor(b)),
     onSuccess: () => {
       intent.settle();
       setOpen(false);
@@ -90,7 +101,7 @@ export function UsersPage() {
         detail: t('admin.checkFieldsDetail'),
         retryable: false,
         correlationId: 'client',
-        errors: parsed.error.issues.map((i) => ({ path: `/${i.path.join('/')}`, message: i.message })),
+        errors: issuesToErrors(parsed.error.issues, t),
       });
       return;
     }
@@ -119,21 +130,21 @@ export function UsersPage() {
       {
         id: 'roles',
         header: t('admin.roles'),
-        accessor: (u) => u.roles.map((r) => r.key).join(' '),
+        accessor: (u) => u.roles.map((r) => roleName(r.key)).join(' '),
         width: 'minmax(16rem, 2fr)',
         cell: (u) => (
           <span className="truncate text-sm">
             {u.roles
               .map(
                 (r) =>
-                  `${r.key} · ${r.scopeType === 'organization' ? t('admin.wholeOrganization') : propName(r.scopeId)}`,
+                  `${roleName(r.key)} · ${r.scopeType === 'organization' ? t('admin.wholeOrganization') : propName(r.scopeId)}`,
               )
               .join('; ')}
           </span>
         ),
       },
     ],
-    [t, properties],
+    [t, properties, roleName],
   );
 
   return (
@@ -144,9 +155,12 @@ export function UsersPage() {
         helpKey="settings.users"
         context={false}
         actions={
-          <Button variant="primary" icon={<UserPlus />} onClick={() => setOpen(true)} aria-keyshortcuts="N">
-            {t('admin.newUser')}
-          </Button>
+          // Page-level create is hidden when the server refuses this list to the user (C11.1).
+          !(users.isError && isApiError(users.error) && users.error.status === 403) && (
+            <Button variant="primary" icon={<UserPlus />} onClick={startInvite} aria-keyshortcuts="N">
+              {t('admin.newUser')}
+            </Button>
+          )
         }
       />
       <Tabs
@@ -194,7 +208,6 @@ export function UsersPage() {
                       <span className="font-semibold">{r.name}</span>
                       <DataText>{t('admin.permissions', { count: r.permissions.length })}</DataText>
                     </span>
-                    <span className="pt-code text-xs text-ink-muted">{r.key}</span>
                     {r.description && <span className="text-sm text-ink-muted">{r.description}</span>}
                   </li>
                 ))}

@@ -19,6 +19,7 @@ import { api, type LegalEntity, type LegalEntityInput } from '../../api';
 import { problemFromUnknown } from '../../api/errors';
 import { IntentKeys } from '../../api/intent';
 import { queries, scopeKey } from '../../api/queries';
+import { issuesToErrors } from '../../api/validation';
 import { useApp } from '../../app/app-context';
 import { useScreenAction } from '../../app/screen-actions';
 import { learning } from '../../learning/progress';
@@ -88,7 +89,7 @@ export function LegalEntitiesPage() {
         detail: t('admin.checkFieldsDetail'),
         retryable: false,
         correlationId: 'client',
-        errors: parsed.error.issues.map((i) => ({ path: `/${i.path.join('/')}`, message: i.message })),
+        errors: issuesToErrors(parsed.error.issues, t),
       });
       return;
     }

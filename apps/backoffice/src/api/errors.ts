@@ -25,7 +25,30 @@ export function isApiError(e: unknown): e is ApiError {
  * (it goes to `details` for support); the reference is marked as client-side so it is not offered as a server id.
  */
 export function problemFromUnknown(e: unknown, where: string): ProblemDetails {
-  if (e instanceof ApiError) return e.problem;
+  if (e instanceof ApiError) {
+    // Staff language (NAV-08): no permission codes; the server's wording stays in details for support.
+    if (e.problem.status === 403)
+      return {
+        ...e.problem,
+        title: 'You don’t have access to this',
+        detail:
+          'Your role does not include this. If you need it for your work, ask your Portico administrator.',
+        details: { ...(e.problem.details ?? {}), serverDetail: e.problem.detail },
+      };
+    if (e.problem.errors?.length)
+      return {
+        ...e.problem,
+        errors: e.problem.errors.map((f) => ({
+          ...f,
+          message: /^(Too (small|big)|Invalid (input|option|string|enum|type)|Expected |Required$)/i.test(
+            f.message,
+          )
+            ? 'Check this value.'
+            : f.message,
+        })),
+      };
+    return e.problem;
+  }
   if (isProblemDetails(e)) return e;
   return {
     type: 'about:blank#client',

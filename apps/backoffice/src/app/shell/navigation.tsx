@@ -130,3 +130,35 @@ export function useActiveWorkspace(workspaces: readonly Workspace[]) {
   const id = workspaceOf(pathname);
   return workspaces.find((w) => w.id === id) ?? workspaces[0];
 }
+
+/**
+ * Mid widths (and whenever the side list is hidden): the active workspace's sections as tabs above the page
+ * (UX round 1, C2.1). Shown only when the workspace has two or more sections.
+ */
+export function SectionTabs({
+  workspace,
+  className,
+}: {
+  workspace: Workspace | undefined;
+  className?: string;
+}) {
+  const { t } = useTranslation();
+  if (!workspace || workspace.items.length < 2) return null;
+  return (
+    <nav aria-label={t(workspace.labelKey)} className={cn('-mt-1 mb-3 overflow-x-auto', className)}>
+      <ul className="flex gap-1 border-b border-line">
+        {workspace.items.map((item) => (
+          <li key={item.to}>
+            <Link
+              to={item.to}
+              activeProps={{ 'aria-current': 'page' }}
+              className="inline-flex min-h-10 items-center whitespace-nowrap border-b-2 border-transparent px-3 text-sm text-ink-muted hover:text-ink data-[status=active]:border-accent data-[status=active]:font-semibold data-[status=active]:text-ink"
+            >
+              {t(item.labelKey)}
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </nav>
+  );
+}

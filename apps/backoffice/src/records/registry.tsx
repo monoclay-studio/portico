@@ -745,9 +745,18 @@ export function definitionFor(type: string): RecordDefinition | undefined {
 export async function serverHistory(type: string, id: string): Promise<HistoryState> {
   try {
     const r = await api.recordHistory(type, id);
-    return { state: 'ready', items: r.data.items };
+    // Machine actors get staff names ("demo-seeder" → "System setup").
+    const items = r.data.items.map((i) =>
+      i.actor.kind !== 'user' || /seeder|system|worker/i.test(i.actor.label)
+        ? { ...i, actor: { ...i.actor, label: /seed/i.test(i.actor.label) ? 'System setup' : 'Portico' } }
+        : i,
+    );
+    return { state: 'ready', items };
   } catch (e) {
     if (isApiError(e) && e.status === 404) return { state: 'ready', items: [] };
-    return { state: 'error', message: isApiError(e) ? e.problem.detail : String(e) };
+    return {
+      state: 'error',
+      message: isApiError(e) ? e.problem.detail : 'History could not be loaded. Try again in a moment.',
+    };
   }
 }

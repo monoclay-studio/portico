@@ -100,7 +100,8 @@ export function RecordDrawer({
           }}
           className={cn(
             'fixed inset-y-0 end-0 z-50 flex w-full flex-col border-s border-line bg-surface text-ink shadow-lg data-[state=open]:animate-[pt-slide-in-end_180ms_var(--pt-ease)]',
-            modal ? 'sm:max-w-xl lg:max-w-2xl' : 'sm:max-w-[34rem]',
+            // min(560px, 100vw − 48px), Close always inside the viewport; full-screen sheet on phones (C4.4).
+            'sm:w-[min(560px,calc(100vw_-_48px))]',
           )}
         >
           <div className="flex items-center gap-2 border-b border-line px-4 py-2">

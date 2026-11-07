@@ -29,7 +29,8 @@ describe('ProblemAlert', () => {
     const alert = screen.getByRole('alert');
     expect(alert).toHaveTextContent('An identical request is still being processed');
     expect(alert).toHaveTextContent(conflict.correlationId);
-    expect(alert).toHaveTextContent(/Trying again is safe: this request carries a key/);
+    // No retry boilerplate (C7.5): the button is the guidance.
+    expect(alert).not.toHaveTextContent(/Trying again is safe/);
     await userEvent.click(screen.getByRole('button', { name: 'Try again' }));
     expect(onRetry).toHaveBeenCalledOnce();
     const v = await axeViolations(container);
@@ -81,7 +82,7 @@ describe('ProblemAlert', () => {
     expect(v, formatViolations(v)).toEqual([]);
   });
 
-  it('a read that timed out may be retried, and says why that is safe', () => {
+  it('a read that timed out may be retried', () => {
     renderUi(
       <ProblemAlert
         problem={networkProblem('client-def', 'The server took too long to answer.', {
@@ -93,7 +94,6 @@ describe('ProblemAlert', () => {
       />,
     );
     expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
-    expect(screen.getByRole('alert')).toHaveTextContent('Trying again is safe: it only reloads information.');
   });
 
   it('recognises problem+json bodies', () => {

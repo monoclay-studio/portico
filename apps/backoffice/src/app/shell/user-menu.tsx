@@ -43,7 +43,7 @@ export function UserMenu({ onSignOut }: { onSignOut: () => void }) {
             <p className="text-sm font-semibold">{me.displayName}</p>
             <p className="text-xs text-ink-muted">{me.email}</p>
             <p className="mt-1 text-xs text-ink-muted">
-              {organization.name} · {me.roles.map((r) => r.name).join(', ')}
+              {organization.name} · {[...new Set(me.roles.map((r) => r.name))].join(', ')}
             </p>
           </div>
           <DropdownMenu.Separator className="my-1 h-px bg-line" />

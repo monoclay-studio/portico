@@ -26,6 +26,7 @@ import { HelpContext } from '../../learning/help-context';
 import { HelpPanel } from '../../learning/help-panel';
 import { learning } from '../../learning/progress';
 import { RecordHost } from '../../records/record-host';
+import { useRecordNav } from '../../records/use-record-nav';
 import {
   AppContext,
   type AppContextValue,
@@ -38,7 +39,7 @@ import { ScreenActionsContext, type ScreenActionsRegistry } from '../screen-acti
 import { SHORTCUTS } from '../shortcuts';
 import { helpKeyFor, workspacesFor } from '../workspaces';
 import { GlobalPalette } from './global-palette';
-import { SectionList, useActiveWorkspace, WorkspaceRail } from './navigation';
+import { SectionList, SectionTabs, useActiveWorkspace, WorkspaceRail } from './navigation';
 import { PropertySwitcher } from './property-switcher';
 import { ShortcutsDialog } from './shortcuts-dialog';
 import { UserMenu } from './user-menu';
@@ -229,19 +230,24 @@ function ShellBody(p: {
   const { workspaces, property } = useApp();
   const active = useActiveWorkspace(workspaces);
   const mod = isApplePlatform() ? '⌘' : 'Ctrl';
+  // The side section list only when it earns its width: ≥ 2 sections, wide screens, no record panel open.
+  const recordOpen = useRecordNav().trail.length > 0;
+  const sideList = (active?.items.length ?? 0) > 1 && !recordOpen;
   return (
     <div className="flex min-h-0 flex-1">
-      <aside className="hidden shrink-0 bg-surface-muted md:flex lg:bg-[linear-gradient(to_right,var(--pt-surface-muted)_5.75rem,var(--pt-surface)_5.75rem)]">
+      <aside className="hidden shrink-0 bg-surface-muted md:flex">
         <div className="sticky top-0 flex h-dvh">
           <WorkspaceRail workspaces={workspaces} active={active?.id ?? null} />
-          <div className="hidden w-56 border-e border-line bg-surface lg:block">
-            <SectionList workspace={active} />
-          </div>
+          {sideList && (
+            <div className="hidden w-56 border-e border-line bg-surface 2xl:block">
+              <SectionList workspace={active} />
+            </div>
+          )}
         </div>
       </aside>
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="sticky top-0 z-30 flex min-h-14 items-center gap-2 border-b border-line bg-surface px-3 sm:px-4">
-          <div className="lg:hidden">
+          <div className="md:hidden">
             <IconButton label={t('app.mainNav')} icon={<Menu />} onClick={p.onNav} />
           </div>
           <div className="min-w-0 flex-1 sm:flex-none">
@@ -252,7 +258,7 @@ function ShellBody(p: {
             onClick={p.onPalette}
             aria-keyshortcuts="/"
             data-testid="global-search"
-            className="ms-auto hidden min-h-control w-72 items-center gap-2 rounded-md border border-line-strong bg-surface-muted px-3 text-sm text-ink-muted hover:bg-surface-hover sm:flex lg:w-96"
+            className="ms-auto hidden min-h-control w-56 min-w-0 shrink items-center gap-2 rounded-md border border-line-strong bg-surface-muted px-3 text-sm text-ink-muted hover:bg-surface-hover sm:flex xl:w-96"
           >
             <Search aria-hidden className="size-4" />
             <span className="flex-1 truncate text-start">{t('app.searchPlaceholder')}</span>
@@ -274,7 +280,16 @@ function ShellBody(p: {
             timeZone={property?.timezone ?? 'UTC'}
           />
         </div>
-        <main id="main" tabIndex={-1} className="min-w-0 flex-1 px-3 py-4 outline-none sm:px-6 sm:py-5">
+        <main
+          id="main"
+          tabIndex={-1}
+          className={cn(
+            'min-w-0 flex-1 px-3 py-4 outline-none sm:px-6 sm:py-5',
+            // Split view: the record panel sits beside the list instead of covering it (C4.1).
+            recordOpen && 'xl:pe-[calc(min(560px,100vw_-_48px)_+_1.5rem)]',
+          )}
+        >
+          <SectionTabs workspace={active} className={sideList ? '2xl:hidden' : undefined} />
           <Outlet />
         </main>
       </div>

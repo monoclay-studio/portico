@@ -23,7 +23,7 @@ export function PropertySwitcher({
         <Button
           variant="ghost"
           className="w-full min-w-0 max-w-full justify-start gap-2 overflow-hidden px-2"
-          aria-label={`${t('app.switchProperty')}: ${property?.name ?? ''}`}
+          aria-label={`${property?.name ?? ''} · ${property?.code ?? ''} · ${t('app.businessDate')} ${property?.businessDate ?? ''} — ${t('app.switchProperty')}`}
           data-testid="property-switcher"
         >
           <Hotel aria-hidden className="size-4 shrink-0 text-ink-muted" />

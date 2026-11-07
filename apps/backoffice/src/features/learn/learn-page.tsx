@@ -63,7 +63,7 @@ function PathCard({ path, done, userId }: { path: LearningPath; done: readonly s
               <span className="flex min-w-0 flex-1 flex-col">
                 <span className={cn(isDone && 'text-ink-muted line-through')}>{title}</span>
                 <span className="pt-data text-ink-muted">
-                  {t(`learn.kinds.${l.kind}`)} · {t('learn.minutes', { count: l.minutes })} · {l.helpKey}
+                  {t(`learn.kinds.${l.kind}`)} · {t('learn.minutes', { count: l.minutes })}
                   {!link && ` · ${t('learn.noContentYet')}`}
                 </span>
               </span>

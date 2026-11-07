@@ -152,7 +152,17 @@ export function SignInPage() {
             )}
             {login.isError && (
               <ProblemAlert
-                problem={problemFromUnknown(login.error, 'sign-in')}
+                problem={(() => {
+                  const pr = problemFromUnknown(login.error, 'sign-in');
+                  return pr.status === 401
+                    ? {
+                        ...pr,
+                        title: t('signIn.wrongCredentials'),
+                        detail: t('signIn.wrongCredentialsDetail'),
+                        retryable: false,
+                      }
+                    : pr;
+                })()}
                 onRetry={() => login.mutate(orgId ?? undefined)}
               />
             )}
