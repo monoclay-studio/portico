@@ -41,8 +41,10 @@ available = capacity − out_of_order − sold − held + overbooking_allowance 
   40P01/40001 twice.
 * **Holds** count in `held` until converted, released or expired. Expired holds are released lazily by any command
   that locks their rows (the command first extends its lock set to every cell of such holds) and are already
-  excluded from reads, so an expired hold never blocks a sale (INV-I09). `expireDueHolds(tx)` is the per-organization
-  sweeper (scheduling: see Known gaps).
+  excluded from reads, so an expired hold never blocks a sale (INV-I09). The scheduled job `inventory.expireHolds`
+  (every 60 s, `createInventoryJobs`, registered in `Composition.jobs`) finds organizations with due holds through the
+  reviewed SECURITY DEFINER routing function `inventory.tenants_with_expired_holds` (tenant ids only,
+  `migrations/0002_hold_expiry_routing.sql`) and releases them inside each organization's RLS-scoped transaction.
 * **Authorized overbooking vs inventory conflict.** An allowance is explicit, sensitive
   (`inventory.overbooking.authorize`) and recorded with who and why — standing (`setOverbookingAllowance`) or ad hoc
   for one sale (`consume(..., overbooking: { authorizedBy, reason })`, which adds exactly the shortfall). Selling into
@@ -85,7 +87,7 @@ A composite unit (e.g. *Residence R1 = Beach Pool Villa P201 + P202*) is a unit 
 | R03 (SHOULD) | Effective-dated re-typing of a unit | Not built (unit type is fixed per unit) | R1 |
 | R05–R08 | Composite units, assignment-first sales, consistent composite/component availability, ranking | Done | R3 |
 | R09–R14 | Ledger, `consume` (all-or-nothing, lazy hold release, `onShortfall`), `release`, `changeConsumption`, `transferConsumption`, idempotent re-application | Done | R3 |
-| R15–R17 | Holds: create, convert, release, extend, lazy expiry, `inventory.hold.expired` once per hold | Done (sweeper scheduling open) | R3 |
+| R15–R17 | Holds: create, convert, release, extend, lazy expiry, scheduled sweeper, `inventory.hold.expired` once per hold | Done | R3 |
 | R18–R21 | Assignments with exclusion constraints, upgrade moves consumption, locked assignments + override, not assignable when blocked/house use | Done | R3 |
 | R22 (SHOULD) | `findAssignableUnits` with exclusion reasons, feature match, composite awareness, ranking | Done (adjacency hints limited to composite membership) | R3 |
 | R23 (SHOULD) | Auto-assign service | Not built (reservations' arrival flow will call `findAssignableUnits` + `assignUnit`) | R1 |
@@ -123,9 +125,10 @@ Nothing here is external, so nothing claims beyond R3.
 | `test/composite.test.ts` | Composite model end to end |
 | `test/isolation-permissions.test.ts` | S17 tenant isolation (by id, raw-SQL RLS), property scope, permission per action, connected mode |
 | `test/availability.test.ts` | Catalog, consume/release/change/transfer, holds, overbooking vs conflicts, explanations |
+| `test/hold-expiry-job.test.ts` | INV-R16: scheduled sweeper expires due holds across organizations, once, inside RLS |
 | `apps/api/test/inventory.test.ts` | HTTP: idempotent creates, ETag/If-Match, record contract, grid, explanation, block preview/place/release + history, overbooking, search/summary, isolation over HTTP, demo seed through `DEMO_SEED_STEPS` |
 
-Counts: 30 domain unit tests, 43 module integration tests, 6 API tests (`pnpm --filter @portico/inventory test`,
+Counts: 30 domain unit tests, 44 module integration tests, 6 API tests (`pnpm --filter @portico/inventory test`,
 `pnpm --filter @portico/api test`, with `PORTICO_TEST_DB_PREFIX`).
 
 ## Permissions
@@ -179,7 +182,8 @@ previousUnitIds, nights }` · `inventory.hold.expired` · `inventory.conflict.de
 ## Ports
 
 `PlatformPort` (`getBusinessDate`, `getDataAuthority`, `assertWritable`, `getLimit`) — bound to the real platform
-provider in `apps/api/src/composition.ts`. Inventory needs nothing from other wave-1 modules, so nothing is stubbed.
+provider in `apps/api/src/composition.ts`. The hold-expiry job resolves an organization's environment through the
+whitelisted `platform.tenant_environment()` routing function. Inventory needs nothing from other wave-1 modules, so nothing is stubbed.
 Composition also exports `inventoryService` (bind other modules' inventory ports to it) and `inventoryDemoSeed`
 (register as `{ name: 'inventory', run: inventoryDemoSeed }` in `DEMO_SEED_STEPS`).
 
@@ -232,8 +236,6 @@ return `ETag`; errors are problem+json that say what to do next.
 
 ## Known gaps
 
-* **Hold sweeper scheduling:** `expireDueHolds(tx)` works per organization, but the worker has no cross-tenant
-  routing to call it (see `FOUNDATION_REQUESTS.md`). Correctness does not depend on it (lazy expiry).
 * Effective-dated re-typing (INV-R03), auto-assign (INV-R23), extending/shortening a block in place, multi-unit block
   dialog by location (UI can loop `blockUnit`), localized unit type names, permission-gated hold extension beyond a
   policy maximum (fixed cap: 180 days), approval-based overbooking via identity approvals (`authorizedBy` is recorded

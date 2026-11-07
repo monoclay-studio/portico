@@ -14,6 +14,7 @@ import type { Authenticator, HttpModule } from '@portico/http';
 import { type IdentityPorts, identityAuthenticator, identityHttp, identityManifest } from '@portico/identity';
 import {
   createInventoryDemoSeed,
+  createInventoryJobs,
   createInventoryService,
   type InventoryService,
   inventoryHttp,
@@ -75,7 +76,7 @@ export function compose(database: PorticoDatabase): Composition {
     httpModules: [platformModule, identityModule, inventoryModule, recordsModule],
     subscriptions: [],
     searchProviders,
-    jobs: [...CORE_JOBS],
+    jobs: [...CORE_JOBS, ...createInventoryJobs(inventoryService)],
   };
 }
 

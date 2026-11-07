@@ -2,6 +2,7 @@ export * from './contracts';
 export * as inventoryDomain from './domain/availability';
 export { InventoryUnavailableError, UnitAssignmentConflictError } from './errors';
 export * from './events';
+export { createInventoryJobs } from './jobs';
 export * from './manifest';
 export type { DataAuthorityView, InventoryDataDomain, InventoryPorts, PlatformPort } from './ports';
 export * from './routes';
