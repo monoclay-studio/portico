@@ -181,4 +181,12 @@ Each agent's brief and report are in `agents/`.
     suite 11/11, including an axe scan with zero violations (WCAG 2.2 AA, every screen, drawer and palette open,
     light and dark).
   - All ten wave-1 code branches except identity-plus and the integration step are now on main.
+- **17:24 — Quality steward round 0 done.**
+  - 38 escapes traced (2 P0, 9 P1, 17 P2, 10 P3); L2 steward review is the largest source at 11.
+  - v2 playbooks for 7 checkers; 51 attack patterns and 17 UX traps; a canary catalogue; a checker scorecard.
+  - Top improvement: re-attack every fix before merge. The 14 P0 fixes already on main have never been re-attacked.
+  - Merged; its 8 process edits applied 17:30, including the `apps/*` turbo inputs, verified by canary C-L1-01.
+- **17:24 — Integration-step review: merge after fixes** (P0 0, P1 3, P2 7, P3 9). The P1s: a deposit can land on
+  another property's books, check-in can hold any card for any amount, and late charges over-collect from a folio in
+  credit. The fix round goes back to the integration engineer with the new self-check playbook.
 

@@ -36,19 +36,29 @@ Counts: **P0 0 · P1 3 · P2 7 · P3 9**.
 
 ---
 
-## 1. Command results (scratch copy = `dcddb8b` + `main` @ `b44cd4c`, clean merge)
+## 1. Command results
 
-| Command | Result |
-|---|---|
-| `pnpm install --frozen-lockfile` | ok |
-| `pnpm lint` | **exit 0**: biome checked 585 files, no fixes; "Module boundaries OK (10 modules checked)" |
-| `pnpm turbo run typecheck --force` | **exit 0**: 16 successful, 16 total (forced, not cached) |
-| `PORTICO_TEST_DB_PREFIX=review_intstep pnpm turbo run test --force --concurrency=2` | **exit 0**: 14/14 tasks, 0 cached |
+`main` moved twice during the review, so the gates ran on two merged copies:
+- Run A: `dcddb8b` + `main` @ `b44cd4c`, a clean merge.
+- Run B: `dcddb8b` + `main` @ `1179c98`, after the backoffice merge.
+  - This merge **conflicts in two docs**, `docs/OPEN_QUESTIONS.md` and `docs/orchestration/pending-fixes.md`. Both are
+    append-only and resolved as a union. There is no question-number collision: branch Q146, main Q150–Q155.
+  - The later `main` @ `012652e` changes docs only.
 
-Per-package test results:
+| Command | Run A | Run B |
+|---|---|---|
+| `pnpm install --frozen-lockfile` | ok | ok |
+| `pnpm lint` | **exit 0**: 585 files, "Module boundaries OK (10 modules checked)" | **exit 0**: 751 files, boundaries OK |
+| `pnpm turbo run typecheck --force` | **exit 0**: 16/16 (forced) | **exit 0**: 18/18 (forced) |
+| `PORTICO_TEST_DB_PREFIX=review_intstep pnpm turbo run test --force --concurrency=2` | **exit 0**: 14/14 tasks, 0 cached | **exit 0**: 16/16 tasks, 0 cached |
+
+Per-package test results (Run B):
 - api: 68 passed, 29 todo; 26 files passed, 8 skipped because they contain only todos.
 - reservations 148 · payments 113 · finance 85 · inventory 98 · operations 120 · rates 129 · guests 173 · integration 173.
-- kernel 26 · db 12 · platform 9 · identity 5 · http 3.
+- ui 87 · backoffice 36 · kernel 26 · db 12 · platform 9 · identity 5 · http 3.
+
+Backoffice Playwright e2e was not run; it is not part of `turbo test`. The backoffice reads `frontDeskRow`, and the
+branch only adds an optional `redacted` field to it.
 
 PoC run (the 7 files in `integration-step-poc/`, copied into `apps/api/test/`): 9/9 pass, and `tsc --noEmit` is clean
 on them.

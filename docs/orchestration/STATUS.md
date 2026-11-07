@@ -152,8 +152,11 @@ expected — the readiness register and README state exactly what is and isn't b
 Pending cross-module fixes awaiting the next round for each author: `docs/orchestration/pending-fixes.md`.
 
 
-1. Branch reports done → launch steward review (brief above) → report in `docs/orchestration/reviews/`.
-2. Send P0/P1 (and cheap P2) findings back to the module author (resume the same agent if available, else a new
+1. Branch reports done → launch steward review from `docs/quality/playbooks/steward-reviewer.md` (latest) → report in
+   `docs/orchestration/reviews/`; its PoC and probe files are saved as `reviews/<module>-poc/*.ts.txt` next to it.
+2. Every cross-module note in the review becomes a `pending-fixes.md` entry with an owner before the fix round
+   starts. Every P0 fix needs the builder's re-attack table plus a targeted re-check on the merged copy before merge.
+   Send P0/P1 (and cheap P2) findings back to the module author (resume the same agent if available, else a new
    agent on the same branch with the playbook + findings) → fix → re-run checks.
 3. In the worktree: `git merge --no-edit main`, resolve, `pnpm lint && pnpm typecheck && pnpm test`.
 4. On main: `git merge --no-ff feat/<m>-core`; update `docs/architecture/domain-map.md` with the module's
@@ -161,7 +164,7 @@ Pending cross-module fixes awaiting the next round for each author: `docs/orches
    provider and jobs in `composition.ts`; bind ports provided by already-merged modules; update role templates
    (`modules/identity/src/domain/role-templates.ts`) with the module's permissions; update
    `docs/readiness/readiness-register.md`.
-5. Run full checks on main (`pnpm lint && pnpm turbo run typecheck --force && pnpm test`), push.
+5. Run full checks on main (`pnpm lint && pnpm turbo run typecheck --force && pnpm turbo run test --force --concurrency=2`), push.
 6. Chronicle: append the merge to `docs/chronicle/01-timeline.md`; refresh with `tools/chronicle/extract.py` +
    `snapshot.py` (pass the test log); commit `docs(chronicle): …`.
 7. Quality meta loop: after every steward review / fix round / scenario run / UX round, resume the quality steward
