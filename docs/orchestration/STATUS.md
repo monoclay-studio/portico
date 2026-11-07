@@ -59,6 +59,13 @@
   5. Gap strategist → `docs/strategy/` 10x briefs (input: `docs/research/05-digest.md`).
   6. Resume infra (`TRUSTED_PROXY_CIDRS`, `PORTICO_TERMS_SEAL_KEY`, worker DB role) and parity-ops.
 
+- **2026-11-07 16:20 UTC — RESUMED** (5-hour window reset; seven-day 54%). Postgres restarted (`pnpm db:up`).
+  Running: identity-plus second steward review (→ `reviews/review-identity-plus-2.md`); identity author adapting the
+  13 cross-module tests; integration step on new branch `feat/integration-step` (wt/integration-step: bind all ports,
+  then S01–S20); backoffice fix round (author); UX refining agent on new branch `docs/ux-round-1` (wt/ux-round-1).
+  **Still queued:** gap strategist → `docs/strategy/`; infra + parity-ops resume. UX lab not restarted (only the
+  tester needs it). Seven-day pacing rule added to `usage-guardrail.md`.
+
 ## 1. Owner, product and how to work with the owner
 
 - Owner: founder of **Monoclay LLC** (Delaware, Stripe Atlas), based in the Maldives. Product: **Portico** (final name).
@@ -114,12 +121,12 @@ direction, experience architecture, parity framework, this orchestration folder.
 | `feat/operations-core` | wt/operations | housekeeping, maintenance, tasks, offline sync | **MERGED** to main (9296305) — both P0 + most P1 fixed; P1-5/6/8 deferred with reasons (README) | — |
 | `feat/integration-core` | wt/integration | connector framework, setup, health, webhooks | **MERGED** to main (4d90c6a) — P0 SSRF fixed (`safeFetch`), F2–F9 fixed | bind platform transitions after identity-plus merges (FR-2) |
 | `feat/backoffice-core` | wt/backoffice | packages/ui + apps/backoffice | steward review: **merge after fixes** (P0 cached data leaks to next user on shared tab; 6 P1) — `reviews/review-backoffice.md` | **fix round queued for after usage reset** → verify → merge |
-| `feat/identity-platform-enterprise` | wt/identity-plus | MFA, SSO, SCIM, custom roles, break-glass, trials, activation | fix round **DONE** (pushed): both P0 closed, PoCs → regression tests; identity 105, platform 62 | second steward review + adapt 13 tests in other modules → merge (resume queue item 1) |
+| `feat/identity-platform-enterprise` | wt/identity-plus | MFA, SSO, SCIM, custom roles, break-glass, trials, activation | 2nd review: **do not merge** (R2-P0-1 pre-hijacking + 3 P1) → ADR-0017 Amendment 1 → **fix round 3 running** | short 3rd review → merge |
 | `feat/infra-aws` | wt/infra | Terraform, Dockerfiles, runbooks | **paused** (usage) | resume when usage < 80%; set `TRUSTED_PROXY_CIDRS` (pending-fixes) |
 | `docs/parity-ops` | wt/parity-ops | parity: operations, guests, comms, resort, access, guest-experience, crm, identity, integration, ai | **paused** (usage) | resume when usage < 80% |
 | journey, back-of-house, parity-front, parity-finance, readiness, product, adoption docs | — | docs | **MERGED** to main | spec change requests folded in at integration step |
 | market deep dive | wt/market | owner's research prompt + one-button migration | **MERGED** to main (`docs/research/05-*`; Q140–Q145) | **gap strategist queued for after usage reset** |
-| UX loop round 1 | wt/uxlab | black-box tester (no build context) | **findings done** → `docs/ux/round-1/blackbox-findings.md` (top: nothing can be created; no checkout/money; simulated actions don't change state; 1024px overflow; raw technical text) | **refining agent queued for after usage reset** |
+| UX loop round 1 | wt/ux-round-1 | tester → refiner | **refinements MERGED** (`docs/ux/round-1/`: 83 refinements, C1–C12) → backoffice (22 shell items, next round), integration step (API surface for 44 wiring items), module owners record decisions | round 2 after modules are bound to the UI |
 
 Branch briefs: `docs/orchestration/module-agent-playbook.md` (shared module rules), `workstream-briefs.md`
 (per-workstream scope + every follow-up instruction sent), `steward-review-brief.md`, `parity-researcher-brief.md`.
@@ -142,7 +149,9 @@ Pending cross-module fixes awaiting the next round for each author: `docs/orches
    provider and jobs in `composition.ts`; bind ports provided by already-merged modules; update role templates
    (`modules/identity/src/domain/role-templates.ts`) with the module's permissions; update
    `docs/readiness/readiness-register.md`.
-5. Run full checks on main, push.
+5. Run full checks on main (`pnpm lint && pnpm turbo run typecheck --force && pnpm test`), push.
+6. Chronicle: append the merge to `docs/chronicle/01-timeline.md`; refresh with `tools/chronicle/extract.py` +
+   `snapshot.py` (pass the test log); commit `docs(chronicle): …`.
 **Merge order:** guests, inventory, rates (independent) → operations, integration, finance → payments (needs
 finance ledger port) → reservations (needs all) → identity-platform-enterprise → backoffice → infra → docs branches
 any time (OPEN_QUESTIONS.md always conflicts at the end: keep both sides, sort by number).

@@ -1,0 +1,549 @@
+/**
+ * Second steward review of feat/identity-platform-enterprise (after the ADR-0017 fix round).
+ * Each test PASSES when the attack WORKS. Run in a scratch copy only.
+ */
+import { newId } from '@portico/kernel';
+import { platform } from '@portico/platform';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { identity } from '../src';
+import { base32Decode, totp } from '../src/domain/totp';
+import type { OidcHttpClient } from '../src/ports';
+import { fakeIdp } from './fake-idp';
+import { authenticate, type Harness, harness, org, PASSWORD, signInWithMfa } from './harness';
+
+let h: Harness;
+beforeAll(async () => {
+  h = await harness();
+});
+afterAll(async () => h?.t.drop());
+
+describe('REVIEW-2 PoC N-1: account pre-hijacking — a trial admin pre-creates a global identity and accepts a live org invitation', () => {
+  it('attacker pre-registers gm@resort with a password, then accepts the real resort’s org_admin invitation in-app', async () => {
+    const victimEmail = `gm-${newId().slice(-8)}@resort-victim.mv`;
+    const ATTACKER_PW = 'attacker-chosen-password';
+
+    // 1. Attacker administers a free trial organization (any organization works).
+    const trial = await org(h, { name: 'Attacker trial', environment: 'trial' });
+    const attackerAdmin = await trial.member([{ roleKey: 'org_admin', scopeType: 'organization' }]);
+    const a = await signInWithMfa(h, attackerAdmin.email);
+
+    // 2. Before the resort joins Portico, the attacker "adds a staff member" with the GM's future email and a
+    //    password of their choice. The email is brand new, so createUser sets the GLOBAL password (ADR-0017 §2).
+    const pre = await trial.tx(
+      (tx) =>
+        identity.createUser(tx, {
+          email: victimEmail,
+          displayName: 'GM',
+          initialPassword: ATTACKER_PW,
+          roles: [],
+        }),
+      a.ctx,
+    );
+    expect(pre.status).toBe('active');
+
+    // 3. Later the real (live) resort adds its GM as administrator. The global user already exists, so the
+    //    membership is `invited` and the invitation email goes to the real GM.
+    const live = await org(h, { name: 'Real resort (live)' });
+    const liveAdmin = await live.member([{ roleKey: 'org_admin', scopeType: 'organization' }]);
+    const la = await signInWithMfa(h, liveAdmin.email);
+    const invited = await live.tx(
+      (tx) =>
+        identity.inviteMember(tx, h.ports, {
+          email: victimEmail,
+          displayName: 'General manager',
+          roles: [{ roleKey: 'org_admin', scopeType: 'organization' }],
+        }),
+      la.ctx,
+    );
+    expect(invited.userId).toBe(pre.userId);
+
+    // 4. The attacker signs in to their trial as "the GM", sees the pending invitation and accepts it. No link,
+    //    no email access, no proof beyond the password the attacker chose.
+    const t = await identity.login(h.t.db, {
+      email: victimEmail,
+      password: ATTACKER_PW,
+      organizationId: trial.tenantId,
+    });
+    if (t.status !== 'signed_in') throw new Error(t.status);
+    const trialSelf = await authenticate(h, t.token);
+    if (!trialSelf) throw new Error('no principal');
+    const s = { ctx: trialSelf };
+    const mine = await identity.listMyInvitations(h.t.db, s.ctx.actor);
+    expect(mine.map((i) => i.organizationId)).toContain(live.tenantId);
+    await identity.acceptMembershipAsSelf(h.t.db, s.ctx.actor, live.tenantId);
+
+    // 5. The attacker signs in to the LIVE resort with their own password, enrols their own authenticator
+    //    (proof = the password they chose) and now holds every sensitive administrator permission.
+    const r = await identity.login(h.t.db, {
+      email: victimEmail,
+      password: ATTACKER_PW,
+      organizationId: live.tenantId,
+    });
+    expect(r.status).toBe('signed_in');
+    if (r.status !== 'signed_in') return;
+    const liveCtx = await authenticate(h, r.token);
+    if (!liveCtx) throw new Error('no ctx');
+    const enrol = await live.tx(
+      (tx) => identity.enrolTotp(tx, h.ports, { currentPassword: ATTACKER_PW }),
+      liveCtx,
+    );
+    if (!enrol.ok) throw enrol.error;
+    const secret = base32Decode(enrol.value.secret);
+    await live.tx((tx) => identity.confirmTotp(tx, h.ports, { code: totp(secret, h.clock.now()) }), liveCtx);
+    const admin = await authenticate(h, r.token);
+    expect(admin?.authz.can('identity.role.assign')).toBe(true);
+    expect(admin?.authz.can('identity.user.manage')).toBe(true);
+    expect(admin?.authz.can('platform.dataAuthority.manage')).toBe(true);
+
+    // 6. Persistence: a second, independent administrator the attacker controls (brand-new email ⇒ active).
+    const backdoor = await live.tx(
+      (tx) =>
+        identity.createUser(tx, {
+          email: `ops-${newId().slice(-8)}@attacker.test`,
+          displayName: 'Night auditor',
+          initialPassword: ATTACKER_PW,
+          roles: [{ roleKey: 'org_admin', scopeType: 'organization' }],
+        }),
+      admin as NonNullable<typeof admin>,
+    );
+    expect(backdoor.status).toBe('active');
+
+    // 7. The real GM recovers the password by email (self-service) ... but the attacker's authenticator stays,
+    //    and the resort's own administrator may not reset it (the person "works elsewhere").
+    h.sent.length = 0;
+    await identity.requestPasswordReset(h.t.db, h.ports, { email: victimEmail });
+    const mail = h.sent.find((m) => m.kind === 'staff.passwordReset');
+    const token = decodeURIComponent((mail?.link ?? '').split('token=')[1] ?? '');
+    await identity.completePasswordReset(h.t.db, { token, newPassword: 'the-real-gm-password' });
+    const gm = await identity.login(h.t.db, {
+      email: victimEmail,
+      password: 'the-real-gm-password',
+      organizationId: live.tenantId,
+    });
+    expect(gm.status).toBe('mfa_required'); // the attacker's factor
+    await expect(
+      live.tx((tx) => identity.resetMemberMfa(tx, pre.userId, 'locked out GM', h.ports), la.ctx),
+    ).rejects.toMatchObject({ code: 'person_shared_with_other_organization' });
+  });
+});
+
+// ───────────────────────────── SSO variants ─────────────────────────────
+
+type Idp = Awaited<ReturnType<typeof fakeIdp>>;
+const idps = new Map<string, Idp>();
+const router: OidcHttpClient = {
+  getJson: (url) => {
+    for (const [iss, idp] of idps) if (url.startsWith(iss)) return idp.http.getJson(url);
+    throw new Error(`no idp for ${url}`);
+  },
+  postForm: (url, form, headers) => {
+    for (const [iss, idp] of idps) if (url.startsWith(iss)) return idp.http.postForm(url, form, headers);
+    throw new Error(`no idp for ${url}`);
+  },
+};
+const txt = new Map<string, string[]>();
+async function idpFor(issuer: string) {
+  const idp = await fakeIdp(issuer, 'c', 'secret-secret');
+  idps.set(issuer, idp);
+  h.ports.oidcHttp = router;
+  h.ports.dnsTxt = async (name) => txt.get(name) ?? [];
+  return idp;
+}
+async function ssoSignIn(idp: Idp, organizationId: string, claims: Record<string, unknown>) {
+  const start = await identity.startSsoLogin(h.t.db, h.ports, { organizationId });
+  const { code, state } = idp.authorize(start.authorizationUrl, { email_verified: true, ...claims });
+  return identity.completeSsoLogin(h.t.db, h.ports, { state, code, browserBinding: start.browserBinding });
+}
+
+describe('REVIEW-2 PoC N-1b: pre-registered password survives a verified-domain SSO link (deviation 5)', () => {
+  it('the resort’s own SSO links the pre-hijacked account; the attacker then signs in to the resort with their password', async () => {
+    const domain = `resort${newId().slice(-6)}.mv`;
+    const gmEmail = `gm@${domain}`;
+    const ATTACKER_PW = 'attacker-chosen-password';
+    const trial = await org(h, { name: 'Attacker trial B', environment: 'trial' });
+    const attackerAdmin = await trial.member([{ roleKey: 'org_admin', scopeType: 'organization' }]);
+    const a = await signInWithMfa(h, attackerAdmin.email);
+    await trial.tx(
+      (tx) =>
+        identity.createUser(tx, {
+          email: gmEmail,
+          displayName: 'GM',
+          initialPassword: ATTACKER_PW,
+          roles: [],
+        }),
+      a.ctx,
+    );
+
+    // The real resort: legitimate IdP, DNS-verified domain, admins group → org_admin.
+    const issuer = `https://login.${domain}`;
+    const idp = await idpFor(issuer);
+    const live = await org(h, { name: 'Resort with SSO' });
+    await live.member([{ roleKey: 'org_admin', scopeType: 'organization' }]); // an existing local admin
+    await live.tx((tx) =>
+      identity.configureSso(tx, h.ports, {
+        displayName: 'Resort IdP',
+        issuer,
+        clientId: 'c',
+        clientSecret: 'secret-secret',
+        allowedEmailDomains: [domain],
+      }),
+    );
+    await live.tx((tx) =>
+      identity.setGroupRoleMappings(tx, h.ports, [
+        { group: 'admins', roleKey: 'org_admin', scopeType: 'organization' },
+      ]),
+    );
+    const claim = await live.tx((tx) => identity.addSsoDomain(tx, domain));
+    txt.set(claim.txtRecord.name, [claim.txtRecord.value]);
+    await identity.verifySsoDomain(h.t.db, live.ctx, h.ports, domain);
+
+    // The real GM signs in through the resort's IdP: the existing (pre-hijacked) global user is linked + activated.
+    const gm = await ssoSignIn(idp, live.tenantId, {
+      sub: 'gm-1',
+      email: gmEmail,
+      groups: ['admins'],
+      amr: ['mfa'],
+    });
+    expect(gm.organization.id).toBe(live.tenantId);
+
+    // The attacker signs in to the RESORT with the password they chose in their trial.
+    const r = await identity.login(h.t.db, {
+      email: gmEmail,
+      password: ATTACKER_PW,
+      organizationId: live.tenantId,
+    });
+    expect(r.status).toBe('signed_in');
+    if (r.status !== 'signed_in') return;
+    const ctx = await authenticate(h, r.token);
+    if (!ctx) throw new Error('no ctx');
+    const enrol = await live.tx(
+      (tx) => identity.enrolTotp(tx, h.ports, { currentPassword: ATTACKER_PW }),
+      ctx,
+    );
+    if (!enrol.ok) throw enrol.error;
+    await live.tx(
+      (tx) =>
+        identity.confirmTotp(tx, h.ports, { code: totp(base32Decode(enrol.value.secret), h.clock.now()) }),
+      ctx,
+    );
+    expect((await authenticate(h, r.token))?.authz.can('identity.role.assign')).toBe(true);
+  });
+});
+
+describe('REVIEW-2 PoC N-2: identity.sso.manage alone impersonates the organization administrator', () => {
+  it('an SSO manager repoints the issuer to their own IdP and signs in as the org admin with full ⚑ access', async () => {
+    const o = await org(h, { name: 'Resort N2' });
+    const adminEmail = `owner-${newId().slice(-6)}@lagoon.mv`;
+    const admin = await o.member([{ roleKey: 'org_admin', scopeType: 'organization' }], adminEmail);
+    const ad = await signInWithMfa(h, admin.email);
+    await o.tx(
+      (tx) =>
+        identity.createRole(tx, h.ports, {
+          key: 'sso_admin',
+          name: 'SSO administrator',
+          permissions: ['identity.sso.manage', 'identity.user.read'],
+        }),
+      ad.ctx,
+    );
+    const itStaff = await o.member([{ roleKey: 'sso_admin', scopeType: 'organization' }]);
+    const s = await signInWithMfa(h, itStaff.email);
+    expect(s.ctx.authz.can('identity.role.assign')).toBe(false);
+
+    const rogueIssuer = `https://idp-${newId().slice(-6)}.insider.test`;
+    const rogue = await idpFor(rogueIssuer);
+    await o.tx(
+      (tx) =>
+        identity.configureSso(tx, h.ports, {
+          displayName: 'New IdP',
+          issuer: rogueIssuer,
+          clientId: 'c',
+          clientSecret: 'secret-secret',
+          allowedEmailDomains: ['lagoon.mv'],
+        }),
+      s.ctx,
+    );
+    // The owner is a sole-organization member, so no domain verification is needed to link them.
+    const imp = await ssoSignIn(rogue, o.tenantId, { sub: 'anything', email: adminEmail, amr: ['mfa'] });
+    expect(imp.userId).toBe(admin.userId);
+    const ctx = await authenticate(h, imp.token);
+    expect(ctx?.authz.can('identity.role.assign')).toBe(true);
+    expect(ctx?.authz.can('identity.apiClient.manage')).toBe(true);
+    expect(ctx?.authz.can('platform.dataAuthority.manage')).toBe(true);
+  });
+});
+
+describe('REVIEW-2 PoC N-4: the per-person second-factor limit is a check-then-act race', () => {
+  it('a concurrent burst of wrong codes is evaluated beyond the 5-failure delay (lock read before the counter is taken)', async () => {
+    const o = await org(h, { name: 'Race org' });
+    const m = await o.member([{ roleKey: 'front_desk', scopeType: 'organization' }]);
+    await signInWithMfa(h, m.email);
+    const N = 8; // the test pool has 8 connections; production pools (and several API instances) allow more
+    const challenges: string[] = [];
+    for (let i = 0; i < N; i++) {
+      const r = await identity.login(h.t.db, { email: m.email, password: PASSWORD });
+      if (r.status !== 'mfa_required') throw new Error(r.status);
+      challenges.push(r.challengeToken);
+    }
+    const results = await Promise.allSettled(
+      challenges.map((challengeToken) =>
+        identity.completeMfaChallenge(h.t.db, h.ports, { challengeToken, code: '000000' }),
+      ),
+    );
+    const codes = results.map((r) => (r.status === 'rejected' ? (r.reason as { code?: string }).code : 'ok'));
+    const evaluated = codes.filter((c) => c === 'unauthenticated').length; // wrong code checked
+    const { mfa_failed_attempts } = await h.t.admin.kysely
+      .selectFrom('identity.users')
+      .select('mfa_failed_attempts')
+      .where('id', '=', m.userId)
+      .executeTakeFirstOrThrow();
+    // Sequentially, attempt 6 is refused with second_factor_locked. Concurrently, all N are evaluated.
+    expect(evaluated).toBeGreaterThan(5);
+    console.log(
+      `N-4 evaluated=${evaluated} of ${N}; counter=${mfa_failed_attempts}; codes=${codes.join(',')}`,
+    );
+    expect(mfa_failed_attempts).toBe(evaluated);
+  });
+});
+
+describe('REVIEW-2 PoC N-5: any organization can permanently block a new person from joining another organization', () => {
+  it('a trial invites the email first; the real invitation link and "forgot password" then both dead-end', async () => {
+    const email = `newhire-${newId().slice(-8)}@resort-victim.mv`;
+    const trial = await org(h, { name: 'Griefer trial', environment: 'trial' });
+    const griefer = await trial.member([{ roleKey: 'org_admin', scopeType: 'organization' }]);
+    const g = await signInWithMfa(h, griefer.email);
+    await trial.tx((tx) => identity.inviteMember(tx, h.ports, { email, displayName: 'x', roles: [] }), g.ctx);
+
+    const live = await org(h, { name: 'Real resort N5' });
+    h.sent.length = 0;
+    await live.tx((tx) =>
+      identity.inviteMember(tx, h.ports, {
+        email,
+        displayName: 'New hire',
+        roles: [{ roleKey: 'read_only', scopeType: 'organization' }],
+      }),
+    );
+    const link = h.sent.find((m) => m.kind === 'staff.invitation')?.link ?? '';
+    const token = decodeURIComponent(link.split('token=')[1] ?? '');
+    // The real person follows their own link and chooses a password: refused ("sign in there") — but they have
+    // no sign-in anywhere.
+    await expect(
+      identity.acceptInvitation(h.t.db, h.ports, { token, password: 'a-good-new-password' }),
+    ).rejects.toMatchObject({ code: 'sign_in_to_accept' });
+    // "Forgot password" sends nothing: the person has no ACTIVE membership.
+    h.sent.length = 0;
+    await identity.requestPasswordReset(h.t.db, h.ports, { email });
+    expect(h.sent).toHaveLength(0);
+    // The resort's administrator cannot help either (the person "works elsewhere").
+    const { userId } = (await live.tx((tx) => identity.listUsers(tx))).find((u) => u.email === email) as {
+      userId: string;
+    };
+    await expect(
+      live.tx((tx) => identity.sendPasswordResetForMember(tx, h.ports, userId)),
+    ).rejects.toMatchObject({ code: 'person_shared_with_other_organization' });
+  });
+});
+
+describe('REVIEW-2 PoC N-6: transferMember revokes roles at a property where the actor has no authority', () => {
+  it('a role assigner scoped to property Y strips a manager of property X (revokeAssignment would refuse)', async () => {
+    const o = await org(h, { name: 'Group N6' });
+    const X = await o.property(`X${newId().slice(-4)}`);
+    const Y = await o.property(`Y${newId().slice(-4)}`);
+    const admin = await o.member([{ roleKey: 'org_admin', scopeType: 'organization' }]);
+    const ad = await signInWithMfa(h, admin.email);
+    await o.tx(
+      (tx) =>
+        identity.createRole(tx, h.ports, {
+          key: 'prop_mgr',
+          name: 'Property manager',
+          permissions: ['platform.property.read', 'platform.property.update'],
+        }),
+      ad.ctx,
+    );
+    await o.tx(
+      (tx) =>
+        identity.createRole(tx, h.ports, {
+          key: 'y_admin',
+          name: 'Property Y staff admin',
+          permissions: [
+            'identity.role.assign',
+            'identity.user.read',
+            'platform.property.read',
+            'platform.property.update',
+          ],
+        }),
+      ad.ctx,
+    );
+    const managerX = await o.member([{ roleKey: 'prop_mgr', scopeType: 'property', scopeId: X.id }]);
+    const actor = await o.member([{ roleKey: 'y_admin', scopeType: 'property', scopeId: Y.id }]);
+    const s = await signInWithMfa(h, actor.email);
+    const before = await o.tx((tx) => identity.getMember(tx, managerX.userId));
+    const xAssignment = before.assignments.find((a) => a.scopeId === X.id)?.assignmentId as string;
+    // The direct route is power-ordered and refuses.
+    await expect(
+      o.tx((tx) => identity.revokeAssignment(tx, xAssignment, 'no', h.ports), s.ctx),
+    ).rejects.toMatchObject({ code: 'forbidden' });
+    // The transfer route is not.
+    await o.tx(
+      (tx) =>
+        identity.transferMember(tx, h.ports, {
+          userId: managerX.userId,
+          fromPropertyId: X.id,
+          toPropertyId: Y.id,
+          reason: 'moved',
+        }),
+      s.ctx,
+    );
+    const after = await o.tx((tx) => identity.getMember(tx, managerX.userId));
+    expect(after.assignments.some((a) => a.scopeId === X.id)).toBe(false);
+  });
+});
+
+describe('REVIEW-2 PoC N-7: an SSO link created before the person exists bypasses the verified-domain gate', () => {
+  it('a failed JIT still commits the global user and the (issuer, sub) link; later the attacker IdP signs in as the real person', async () => {
+    const domain = `hotel${newId().slice(-6)}.mv`;
+    const email = `gm@${domain}`;
+    const issuer = `https://idp-${newId().slice(-6)}.attacker.test`;
+    const idp = await idpFor(issuer);
+    const attackerOrg = await org(h, { name: 'Attacker SSO org' });
+    await attackerOrg.tx((tx) =>
+      identity.configureSso(tx, h.ports, {
+        displayName: 'x',
+        issuer,
+        clientId: 'c',
+        clientSecret: 'secret-secret',
+        allowedEmailDomains: [domain], // allow-list only; the attacker never verifies this domain
+      }),
+    );
+    await attackerOrg.tx((tx) =>
+      identity.setGroupRoleMappings(tx, h.ports, [
+        { group: 'staff', roleKey: 'read_only', scopeType: 'organization' },
+      ]),
+    );
+    // 1. Before the GM uses Portico: sign in with an UNMAPPED group. The login "fails" (no_mapped_group) ...
+    await expect(
+      ssoSignIn(idp, attackerOrg.tenantId, { sub: 'pre-link', email, groups: ['none'] }),
+    ).rejects.toMatchObject({
+      code: 'unauthenticated',
+    });
+    // ... but the global user and the attacker's (issuer, sub) link were committed.
+    const ghost = await h.t.admin.kysely
+      .selectFrom('identity.users')
+      .select('id')
+      .where('email', '=', email)
+      .executeTakeFirst();
+    expect(ghost).toBeTruthy();
+
+    // 2. The real GM joins the real hotel through its invitation and chooses a password (works elsewhere: no).
+    const hotel = await org(h, { name: 'Real hotel N7' });
+    h.sent.length = 0;
+    await hotel.tx((tx) =>
+      identity.inviteMember(tx, h.ports, {
+        email,
+        displayName: 'GM',
+        roles: [{ roleKey: 'org_admin', scopeType: 'organization' }],
+      }),
+    );
+    const link = h.sent.find((m) => m.kind === 'staff.invitation')?.link ?? '';
+    await identity.acceptInvitation(h.t.db, h.ports, {
+      token: decodeURIComponent(link.split('token=')[1] ?? ''),
+      password: 'the-real-gm-password',
+    });
+
+    // 3. The attacker's IdP signs in as the same (issuer, sub): the existing link skips the verified-domain check,
+    //    JIT makes the real GM an ACTIVE member of the attacker's organization without consent, with a session.
+    const s = await ssoSignIn(idp, attackerOrg.tenantId, { sub: 'pre-link', email, groups: ['staff'] });
+    expect(s.userId).toBe(ghost?.id);
+    const ctx = await authenticate(h, s.token);
+    if (!ctx) throw new Error('no ctx');
+    // The session is the GM's global identity: it sees (and could accept) the GM's pending invitations elsewhere.
+    expect(ctx.actor.kind === 'user' && ctx.actor.userId).toBe(ghost?.id);
+  });
+});
+
+describe('REVIEW-2 PoC N-8: SSO group reconciliation removes the last administrator', () => {
+  it('a sign-in without the admin group revokes the only org-wide administrator role (no last-admin guard)', async () => {
+    const domain = `solo${newId().slice(-6)}.mv`;
+    const issuer = `https://login.${domain}`;
+    const idp = await idpFor(issuer);
+    const o = await org(h, { name: 'SSO-only org' });
+    await o.tx((tx) =>
+      identity.configureSso(tx, h.ports, {
+        displayName: 'x',
+        issuer,
+        clientId: 'c',
+        clientSecret: 'secret-secret',
+        allowedEmailDomains: [domain],
+      }),
+    );
+    await o.tx((tx) =>
+      identity.setGroupRoleMappings(tx, h.ports, [
+        { group: 'admins', roleKey: 'org_admin', scopeType: 'organization' },
+        { group: 'staff', roleKey: 'read_only', scopeType: 'organization' },
+      ]),
+    );
+    const first = await ssoSignIn(idp, o.tenantId, {
+      sub: 'boss',
+      email: `boss@${domain}`,
+      groups: ['admins'],
+      amr: ['mfa'],
+    });
+    expect((await authenticate(h, first.token))?.authz.can('identity.role.assign')).toBe(true);
+    // The IdP (or whoever controls the connection) drops the group; the only administrator disappears.
+    const second = await ssoSignIn(idp, o.tenantId, {
+      sub: 'boss',
+      email: `boss@${domain}`,
+      groups: ['staff'],
+      amr: ['mfa'],
+    });
+    expect((await authenticate(h, second.token))?.authz.can('identity.role.assign')).toBe(false);
+    const admins = await h.t.admin.kysely
+      .selectFrom('identity.role_assignments as a')
+      .innerJoin('identity.roles as r', 'r.id', 'a.role_id')
+      .select('a.id')
+      .where('a.tenant_id', '=', o.tenantId)
+      .where('r.key', '=', 'org_admin')
+      .where('a.revoked_at', 'is', null)
+      .execute();
+    expect(admins).toHaveLength(0);
+  });
+});
+
+describe('REVIEW-2 PoC N-9: one administrator satisfies separation of duties with an account they created', () => {
+  it('createUser(initialPassword) gives the admin a second identity whose password and authenticator they control', async () => {
+    const o = await org(h, { name: 'SoD org' });
+    const p = await o.property(`S${newId().slice(-5)}`);
+    const admin = await o.member([{ roleKey: 'org_admin', scopeType: 'organization' }]);
+    const a = await signInWithMfa(h, admin.email);
+    const req = await o.tx(
+      (tx) =>
+        platform.requestStatusChange(tx, {}, p.id, {
+          toStatus: 'pilot',
+          reason: 'pilot',
+          scope: {
+            effects: [{ effect: 'integration.read' }],
+            workflows: ['operations.housekeepingBoard'],
+            modules: ['operations'],
+            startsOn: '2026-11-01',
+            endsOn: '2027-01-31',
+            successCriteria: 'x',
+            rollbackPlan: 'y',
+          },
+        }),
+      a.ctx,
+    );
+    const puppetEmail = `second-${newId().slice(-6)}@lagoon.mv`;
+    await o.tx(
+      (tx) =>
+        identity.createUser(tx, {
+          email: puppetEmail,
+          displayName: 'Deputy',
+          initialPassword: PASSWORD,
+          roles: [{ roleKey: 'org_admin', scopeType: 'organization' }],
+        }),
+      a.ctx,
+    );
+    const puppet = await signInWithMfa(h, puppetEmail); // the admin knows the password and enrols the factor
+    const approved = await o.tx((tx) => platform.approveActivationRequest(tx, {}, req.id), puppet.ctx);
+    expect(approved.status).toBe('approved');
+  });
+});
