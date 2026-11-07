@@ -2,14 +2,18 @@
 
 ## Checkpoint
 
-- **Done:** everything listed under *Capabilities* below with status R3, tests (domain, integration, scenarios
-  S04/S09/S10/S18/S19, API end-to-end), composition wiring, and direct-binding adapters for the payments
-  `LedgerPort` and the reservations `FinancePort`.
+- **Done:** everything under *Capabilities* (R3), the steward review fix round (`docs/orchestration/reviews/
+  review-finance.md`: F-01…F-11, the payments-review items, ADR-0015 scope, ADR-0016 §1–§5) with regression tests,
+  composition wiring (incl. the payer directory bound to guests), and direct-binding adapters for payments'
+  `LedgerPort` and reservations' `FinancePort`, type-checked against verbatim copies of those ports
+  (`test/compat/`). Main merged (rates, payments, operations).
 - **In progress:** nothing.
-- **Next steps (orchestrator, at merge):** in `apps/api/src/composition.ts` bind `rates` → `TaxPort`,
-  `payments` → `PaymentsPort.requestCollection`; give payments `ledger: financeLedgerForPayments(finance)` and
-  reservations `finance: financeForReservations(finance)`; register `financeDemoSeed` in `DEMO_SEED_STEPS`.
-- **Known failing tests:** none (`@portico/finance`: 15 files / 64 tests; `@portico/api`: 13 tests incl. finance e2e).
+- **Next steps (orchestrator, at merge):** in `apps/api/src/composition.ts` bind `tax` to rates
+  (`computeTaxesDetailed`, `getRulePackStatus`), payments' `ledger: financeLedgerForPayments(finance)`, finance's
+  `payments.requestCollection`, reservations' `finance: financeForReservations(finance)`. The first two are proven to
+  compile in `apps/api/test/finance.test.ts` (`bindFinanceTax`, `bindPaymentsLedger`); `apps/api/test/payments.test.ts`
+  and the finance API test assume the stubs and change with the binding. Then F-10 receipts (below).
+- **Known failing tests:** none (`@portico/finance`: 17 files / 85 tests; `@portico/api`: 10 files / 40 tests).
 
 ## Purpose
 
@@ -54,7 +58,7 @@ real `rates` rule pack.
 | R12 | Charge codes (group immutable, revenue account mapping, tax group, allowance tags, restricted codes) | R3 — mapping is "current at posting" (journal lines keep the account used); effective-dated mapping table not built | |
 | R13–R14 | Billing rules: selector (codes/groups, dates, weekdays), caps (per night / per stay / percent), **specificity**, conflicts rejected at save | R3 | `routing.test.ts`, S04, cap concurrency test |
 | R15 | "Who pays for what" preview (saved or proposed rules, cap usage) | R3 | S04 (preview equals posting) |
-| R16 | Retroactive re-application of rules | **Not built** (manual transfers available) | — |
+| R16 | Re-applying a stay's billing instructions | R3 — a **merge** (ADR-0016 §2): limit usage and staff rules kept, preview of kept/superseded/added/deactivated; retroactive re-posting not built | `review-regressions.test.ts` (F-04) |
 | R17 | Company/agency default rule templates | Not built (rule `source` field exists) | — |
 | R18–R20 | Allowances: grant to allowance clearing, consumption (auto/explicit, covers taxes or not, overuse payable), close with forfeit (breakage) / carry forward / credit back | R3 | S19, reversal test, `domain.test.ts` |
 | R21 | Package grouping on folio display | Data present (parent links); grouping is a UI concern | — |
@@ -63,21 +67,22 @@ real `rates` rule pack.
 | R26 | Settlement: payments, transfer to folio, direct bill to receivables, settle at zero | R3 — write-off **not built** | S04 |
 | R27–R29 | Receivables accounts, direct-bill transfer (auto-invoices), payments, allocations, aging as of a date, credit limit block (override permission) / warn | R3 | `receivables-cashier-fx.test.ts` |
 | R30–R31 | Write-offs, agency commissions | **Not built** | — |
-| R32–R34 | Invoices/credit notes: gapless per series under a row lock, idempotent, immutable snapshot, hash chain per legal entity, postings locked to invoices, credit note `cancel` (re-invoice) and `adjust` (linked corrections) | R3 | `fiscal.test.ts` |
+| R32–R34 | Invoices/credit notes (**receipts not built**, see Known gaps): gapless per series under a row lock, idempotent, immutable snapshot, hash chain per legal entity, postings locked to invoices, credit note `cancel` (re-invoice) and `adjust` (linked corrections) | R3 | `fiscal.test.ts` |
 | R35 | Live issuance blocked while tax rules unverified; mandatory particulars enforced in live; non-live documents marked *sample* | R3 | `fiscal.test.ts` |
 | R36 | Country fiscal adapters (signatures, QR, submission) | LATER — none | — |
 | R37–R39 | Cashier sessions (one open per user/property, floats per currency, blind close, variance to over/short, per-method summary), paid-outs | R3 | S19, cashier test |
-| R40–R41 | FX rates (operational + MMA reference per date), explicit conversion of charges and payments, currency-position bridging, realized gain/loss on settlement | R3 — revaluation of open balances not built | FX test, S19 |
+| R40–R41 | FX rates (operational + MMA reference per date; a manual rate needs a reason), explicit conversion of charges and payments, currency-position bridging, realized gain/loss on settlement; **a missing rate for the business date blocks** (no fallback, ADR-0016 §3) | R3 — revaluation of open balances not built | FX test, S19, `review-regressions.test.ts` |
 | R42 | Trial balance, daily revenue by charge code with taxes and restatements, Green Tax monthly projection | R3 — guest/deposits ledger drill-down lists, cashier report beyond session summary: partial | S19 |
 | R43 | Period close / restatement register | **Not built** (domain map now places GL period close in the wave-3 `accounting` module); restatements are flagged per entry | — |
 | R44–R45 | `getUnbalancedItems` (Day Close) + integrity report (TB balanced, guest ledger = folios, deposits = bookings, city ledger = accounts, allowance clearing = open allowances) | R3 | every scenario test calls `assertLedgerIntegrity` |
-| — | Opening-balance import of deposits with reconciliation report (S18 groundwork) | R3 | S18 |
-| — | Payouts (never revenue), refunds linked to the original payment, idempotent LedgerPort functions, recorded-payment corrections, dispute movements, verification state | R3 | `receivables-cashier-fx.test.ts`, `payments-ledger-port.test.ts` |
+| — | Opening-balance import of deposits with reconciliation report and the tax the previous system already declared (no double TGST, F-09) | R3 | S18 |
+| — | Payouts (never revenue), refunds linked to the original payment, idempotent LedgerPort functions with property/legal-entity scope, per-acquirer clearing, recorded-payment corrections, dispute movements, Route D verification, settlement fees | R3 | `receivables-cashier-fx.test.ts`, `payments-ledger-port.test.ts` |
 | — | Retention (`retain_until` = tax-year end + 5 years; legal holds) | R3 — nothing is ever purged in this wave | legal-hold test |
 
 ## Maldives rules applied (docs/readiness/maldives-tax-rules.md — not legal advice, Q20)
 
-- **Time of supply:** deposits declare TGST when received (via the tax engine with `chargeGroup: 'deposit'`);
+- **Time of supply:** deposits declare TGST when received (the tax engine computes the deposit with
+  `taxPointDate` = receipt date, ADR-0016 §4; migrated deposits carry the tax the previous system declared);
   applying a deposit releases that declared tax against the tax the stay's charges carry; if the rule changed
   since receipt, the difference is credited to the folio so the prepaid part keeps the earlier rate. Forfeited
   deposits keep the declared tax due; refunds release it. Invoices list `depositTaxCredits`.
@@ -101,10 +106,10 @@ other, and then the smaller (more specific) rule wins; identical or partially ov
 save time with the colliding rule named. Cap overflow and unmatched charges go to the default folio. No legal
 conclusion is drawn; counsel should review before any ranked model is considered (OPEN_QUESTIONS Q40).
 
-**Spec reconciliation:** the spec's Q40 default (FIN-R14, FIN-I13) rejects *every* overlap; the orchestrator
-asked for specificity-based resolution. Implemented: specificity, with ties and partial overlaps rejected. Nested
-rules are the only difference from the spec default. A one-line switch in `findConflicts` could reject nested
-overlaps too if the owner prefers the stricter rule.
+**Spec reconciliation:** ADR-0016 §1 adopts specificity with nesting (amending the spec's Q40 default, which
+rejected every overlap): ties and partial overlaps are rejected, nested rules allowed. Charges are compared against
+every charge code's group at posting (F-03), so a code-level rule nested inside a group rule resolves the same way
+in preview and posting.
 
 ## Invariants and the tests that prove them
 
@@ -126,6 +131,9 @@ overlaps too if the owner prefers the stricter rule.
 | FIN-I14 control accounts = sub-ledgers | `integrityReport` | every scenario test |
 | Caps never double-used under concurrency | capped rule rows locked `FOR UPDATE` | cap concurrency test |
 | Tenant isolation | RLS on every table + app permission checks | `security-and-corrections.test.ts`, API test |
+| Concurrent corrections/credit notes never over-correct (F-01, F-02) | folio/invoice locked **before** remaining amounts are computed; idempotency re-checked after the lock | `review-regressions.test.ts` |
+| Provider calls stay inside the caller's property / legal entity (ADR-0015) | property-scoped delegation + `scope_mismatch` checks | `payments-ledger-port.test.ts`, `reservations-port.test.ts` |
+| Adapters satisfy their consumers' ports | verbatim port copies type-checked | `test/compat/port-compat.test.ts`, `apps/api/test/finance.test.ts` (rates/payments bindings) |
 
 ## Scenarios
 
@@ -150,16 +158,18 @@ overlaps too if the owner prefers the stricter rule.
 Naming vs task brief: `finance.ar.manage` → `finance.receivables.manage` (glossary term), invoice issuance keeps
 `finance.invoice.issue`; spec's `finance.document.issue` → `finance.invoice.issue`.
 
-**Provider calls from other modules.** Finance services check finance permissions for the actor in `tx`.
-Other modules call finance inside their own, already-authorized commands; `financeProvider(service, caller)`
-grants the finance permissions that caller's command implies (`PROVIDER_DELEGATION`: reservations, payments,
-dayClose, resort). Corrections, credit notes and write-offs are never delegated. The real actor is audited.
+**Provider calls from other modules (ADR-0015).** Finance services check finance permissions for the actor in
+`tx`. Other modules call finance inside their own, already-authorized commands and pass the property they
+authorized; the adapters grant the finance permissions that command implies (`PROVIDER_DELEGATION`: reservations,
+payments, dayClose, resort) **at that property only**, so a folio, deposit or rule of another property is refused
+(payments additionally gets an explicit `scope_mismatch` check including the legal entity). Corrections, credit
+notes and write-offs are never delegated. The real actor is audited.
 
 ## Universal record contract
 
 | Record (`recordTypes`) | `status` families | `allowedActions` | `issues` | `links` |
 |---|---|---|---|---|
-| `folio` | folio, balance, invoicing | postCharge, collectPayment, transferPostings, correctPosting, issueInvoice, settle, transferToReceivables, close, void (reasons when disabled) | open finance exceptions (late charge…), departed with balance, settled with balance, reopened | owner record, payer, supplementary-of, documents |
+| `folio` | folio, balance, invoicing | postCharge, collectPayment, transferPostings, correctPosting, issueInvoice, settle, transferToReceivables, close, void (reasons when disabled) | open finance exceptions (late charge, cash without session…), departed with balance, settled with balance, payments awaiting verification, payer name missing, reopened | owner record, payer, supplementary-of, documents |
 | `fiscal_document` | document | downloadPdf, issueCreditNote | sample, unverified tax rules, particulars warnings | folio, credited invoice, credit notes |
 | `receivables_account` | account, credit | recordPayment, allocatePayment, putOnHold/reactivate, close | over credit limit, > 90 days overdue, on hold | company/agency |
 | `cashier_session` | session, count | close, paidOut | open across business dates, over/short | — (owner = cashier) |
@@ -177,7 +187,8 @@ Emitted: `finance.posting.created`, `finance.posting.adjusted`, `finance.posting
 `finance.folio.opened|settled|reopened`, `finance.invoice.issued`, `finance.creditNote.issued`,
 `finance.deposit.recorded|applied|refunded|forfeited`, `finance.billingRule.changed`,
 `finance.allowance.breakagePosted`, `finance.receivables.transferred|paymentRecorded`,
-`finance.cashierSession.closed`, `finance.payout.recorded`.
+`finance.cashierSession.closed`, `finance.payout.recorded`, `finance.dispute.recorded`.
+Folio, billing-rule and cashier-session events carry `aggregateVersion` (the row version after the change).
 Consumed: `reservations.stay.checkedOut` (consumer `finance.stay-departure`: records the departure, closes the
 stay's allowance periods). Payload read defensively: `stayId`, `propertyId`, `businessDate | departureDate`.
 
@@ -185,53 +196,63 @@ stay's allowance periods). Payload read defensively: `stayId`, `propertyId`, `bu
 
 | Port | Needs | Binding in `composition.ts` |
 |---|---|---|
-| `PlatformPort` | getProperty (routing metadata; called with a system authorizer), getBusinessDate, getLegalEntity, assertWritable | **real** platform |
-| `TaxPort` (`rates.computeTaxes`, rule-pack status) | taxes for charges and prepayments | **stub** (`unavailableFinancePorts`): taxable postings fail with 503 `module_unavailable`; rule pack reported unverified (live invoices blocked). Bind to rates at merge. |
-| `PaymentsPort.requestCollection` | late-charge collection follow-up (DB only) | **stub**: returns `unavailable`; the exception tells staff to collect manually. Bind to payments at merge. |
+| `PlatformPort` | getProperty (routing metadata; system authorizer), getBusinessDate, getLegalEntity, assertWritable | **real** platform |
+| `TaxPort` — rates' canonical contract (`computeTaxesDetailed`, `getRulePackStatus`; `taxCategory`, `taxInclusion`, `taxPointDate`, `agreedRuleVersionIds`) | taxes for charges and prepayments; live-invoice gate | **stub** (`unavailableFinancePorts`): taxable postings fail with 503 `module_not_available`; rule pack unverified (live invoices blocked). Binding to rates compiles (`bindFinanceTax`). |
+| `PaymentsPort.requestCollection` | late-charge collection follow-up (DB only), called inside a savepoint | **stub**: returns `unavailable`; the exception tells staff to collect manually |
+| `PayerDirectoryPort.describePayer` | payer names for folios and tax invoices when a caller gives only an id | **real**: guest profiles (`guestsService.getProfile`, system scope); companies/agencies → null until that module exists |
 
-**Providers for other modules (bind directly):**
+Tax mapping (ADR-0016, F-08): rates' `category`/`basis` → finance's invoice treatment (quantity-based → levy outside
+the GST base, value-based `fee` → service charge inside it, else tax); `ledgerMappingKey` `tax.tgst` → account
+`tax:tgst` (seeded 2200/2210/2220 accounts are used; the Green Tax report reads `tax:green_tax`).
 
-- `financeLedgerForPayments(finance)` implements payments' `LedgerPort` exactly
-  (`modules/payments/src/ports.ts`): `recordPayment` (method incl. `payment_link`/`external_terminal`,
-  `verification` stored and shown as "awaiting verification"), `recordDeposit`, `recordRefund` (folio, held
-  deposit, or the folio that received an applied deposit), `recordPayout` → `{ journalEntryId }`,
-  `recordPaymentAdjustment` (signed, linked correction on folio or deposit), `recordDisputeMovement` (card
-  clearing ↔ disputed funds; the bill is untouched). Cash recorded by payments without an open cashier session is
-  posted and raised as a `cash_without_session` exception instead of being refused. Deposits have no folio posting:
-  their `postingId` carries the journal entry id. Proven in `test/payments-ledger-port.test.ts`.
-  **Binding note:** payments' `recordDeposit` does not pass `propertyId`; finance resolves it from an existing
-  deposit account or a booking-owned folio and otherwise refuses with `property_required`. Recommended one-line
-  change in payments: pass `propertyId: p.property_id` (the adapter accepts it).
-- `financeForReservations(finance)` implements reservations' `FinancePort` (`openFolio` with payer refs,
-  `postCharge`, `recordDeposit`, `applyDeposits`, `getFolioBalance`, `listFolios`, `setBillingRules` (whole set
-  replaced and validated), `getDepositBalance`) plus `markOwnerDeparted`, `grantAllowance`, `closeAllowances`.
-  Reservations passes payer refs without names; folios are labelled with the given name/label or a neutral default
-  until a name is supplied. Proven in `test/reservations-port.test.ts`.
-- `financeProvider(finance, caller)` — generic delegated surface for day-close and resort.
+**Providers for other modules (bind directly).** Every adapter grants finance permissions **at the property the
+caller authorized only** (ADR-0015: `delegated(tx, perms, propertyId)`); finance still enforces data authority,
+invariants, idempotency and audit with the real actor.
+
+- `financeLedgerForPayments(finance)` = payments' `LedgerPort` (`modules/payments/src/ports.ts`): every call carries
+  `LedgerScope { propertyId, legalEntityId }` and is refused with `scope_mismatch` when the folio/booking deposit
+  belongs elsewhere (`describeTarget` lets payments check first; a booking's first deposit binds it to the
+  property). `clearing { provider, accountId }` keeps one clearing account per acquirer account
+  (`card_clearing:stripe_connect_acct_1`). `recordPayment` / `recordDeposit` (method, verification),
+  `recordRefund` (folio, held deposit, or the folio that received an applied deposit; ceiling counts refunds **and**
+  negative adjustments, under a lock), `recordPayout`, `recordPaymentAdjustment`, `recordDisputeMovement`,
+  `markPaymentVerified` (Route D: a separate append-only fact; the folio leaves "awaiting verification", the
+  posting shows `recorded_verified`, the Day Close item clears), `recordSettlementFees` (acquirer fees → expense).
+  Proven in `test/payments-ledger-port.test.ts`.
+- `financeForReservations(finance)` = reservations' `FinancePort`: payers by id (`profile` → guest) named through
+  the payer directory, otherwise a flagged placeholder (`payer_name_missing` issue; a live tax invoice asks for the
+  buyer's name, `buyer_name_required`); `postCharge` narrows `target` (stay/booking/group, else
+  `invalid_charge_target`), maps reservations' `TaxLine`, and opens a booking folio for booking-level fees;
+  `listFolios` returns reservations' `PayerRef` and `open|settled` (voided folios omitted); `setBillingRules`
+  validates charge groups and **merges** (ADR-0016 §2); `getDepositBalance`. Proven with reservations' real inputs
+  (CXL, MISC, `['room','package']`, payers without names) in `test/reservations-port.test.ts`.
+- `financeProvider(finance, caller)` — generic surface (day-close, resort): every function takes the caller's
+  `ProviderScope { propertyId, legalEntityId? }` first.
 
 ## Contract changes (vs `docs/architecture/domain-map.md` § finance)
 
-1. `postCharge` input adds `priceMode`, `revenueDate`, `reason`, `occupancy`; returns
+1. `postCharge` input adds `priceMode`, `revenueDate`, `reason`, `occupancy`, `agreedRuleVersionIds`; returns
    `{ entryId, postingIds, folioId, folioIds, allowanceUsage, replayed }` (spec proposal 2).
-2. `recordPayment` adds `provider?`, `cashierSessionId?`, `reference?`; amount may be in another currency (explicit
-   conversion) — spec proposal 9. Returns `{ entryId, postingId, postingIds, replayed }`.
-3. `recordDeposit` adds `propertyId?` (resolved from the booking's folio when omitted), `method?`, `provider?`,
-   `taxGroup?`. `applyDeposits` adds `amountMinor?`, `idempotencyKey?`.
+2. `recordPayment` adds `provider?`, `cashierSessionId?`, `reference?`, `verification?`; amount may be in another
+   currency (explicit conversion) — spec proposal 9. Returns `{ entryId, postingId, postingIds, replayed }`.
+3. `recordDeposit` adds `propertyId?` (payments always passes it via `LedgerScope`), `method?`, `provider?`,
+   `verification?`. `applyDeposits` adds `amountMinor?`, `idempotencyKey?`; refuses a deposit of another property.
 4. `recordPayout`: `gross`, `fees`, `net` are `Money`; adds `provider?`, `businessDate?`, `destination?`.
-5. New providers: `markOwnerDeparted`, `grantAllowance`, `closeAllowances`, `createBillingRule`, `previewRouting`,
-   `transferPostings`, `adjustPosting`, `reverseEntry`, `issueInvoice`, `issueCreditNote`, `transferToReceivables`,
-   `refundDeposit`, `forfeitDeposit`, `recordFxSettlement`, `importOpeningDeposits`, `getUnbalancedItems` items shape
-   `{ code, severity: 'blocking'|'warning', ref, message, details }`.
-6. `TaxPort` shape (finance side of `rates.computeTaxes`): lines with `priceMode`; result per line `{ net, taxes[] }`
-   where each tax has `kind` (`tax|fee|service_charge`), `accountKey`, `ruleVersionId`, optional `units`,
-   `exemptUnits`, `rateCategory`. Prepayments use `chargeGroup: 'deposit'`.
-7. Dependency arrow `finance ─► rates` (tax engine) — spec proposal 1.
-8. Payments alignment (payments README § Contract changes): `recordPayment`/`recordDeposit` accept `method`
-   (adds `payment_link`, `external_terminal`) and `verification`; `recordRefund` accepts `folioId: null` +
-   `bookingId`; new `recordPaymentAdjustment` and `recordDisputeMovement`; `recordPayout` returns
-   `{ journalEntryId }` through the adapter.
-9. Reservations alignment: `setBillingRules(owner, rules)` replaces an owner's rule set atomically
-   (`replaceBillingRules`); `getDepositBalance(bookingId)`.
+5. New providers: `markOwnerDeparted`, `grantAllowance` (`taxTreatment`), `closeAllowances`, `createBillingRule`,
+   `mergeBillingRules` (with preview), `previewRouting`, `transferPostings`, `adjustPosting`, `reverseEntry`,
+   `issueInvoice` (`payerDetails.name`), `issueCreditNote`, `transferToReceivables`, `refundDeposit`,
+   `forfeitDeposit`, `recordFxSettlement`, `importOpeningDeposits` (`declaredTaxes` per row, F-09),
+   `getUnbalancedItems` items `{ code, severity, ref, message, details }`.
+6. `TaxPort` = rates' canonical provider contract (rates README § Provider contract); finance sends `taxPointDate`
+   for deposits (ADR-0016 §4: one model — no `chargeGroup: 'deposit'`).
+7. Dependency arrows `finance ─► rates` (tax engine), `finance ─► guests` (payer names, `PayerDirectoryPort`).
+8. Payments `LedgerPort` (payments README § Contract changes): `LedgerScope` on every call, `clearing`,
+   `describeTarget`, `markPaymentVerified`, `recordSettlementFees`, `recorded_verified`.
+9. Reservations `FinancePort`: `setBillingRules` is a merge; payers by id. **Requested:** reservations passes
+   `propertyId` on `recordDeposit`, `applyDeposits`, `listFolios`, `setBillingRules`, `getFolioBalance`,
+   `getDepositBalance` (the adapter accepts it and then scopes the delegation; without it those calls rely on RLS
+   and finance's invariants only).
+10. `fxRateInput.reason` (required for any non-MMA rate, ADR-0016 §3).
 
 ## Adoption modes and data authority
 
@@ -244,12 +265,21 @@ stay's allowance periods). Payload read defensively: `stayId`, `propertyId`, `bu
 
 ## Known gaps
 
-Threshold approvals for adjustments; write-offs; agency commissions; rule re-application and company/agency rule
-templates; transfer previews; period close and restatement register (now `accounting`, wave 3); journal exports;
-forwarding charges to an external PMS; FX revaluation of open foreign balances; cashier float/drop entries (floats
-are memo amounts; only variances are posted); effective-dated charge-code mapping; supplementary folio limited to
-one open per original; legal-entity-level entries use the UTC date of the transaction as business date when no
-property applies; tax on forfeited deposits follows the declared-at-receipt treatment pending adviser (Q20.2).
+- **Receipts (FIN-R32, F-10): not built.** MIRA requires a tax invoice *or receipt* within 3 days of the time of
+  supply; for deposits that is the payment. Finance declares the tax at receipt but issues no receipt document.
+  Plan: a `receipt` fiscal kind with its own series and chain, issued idempotently per payment/deposit ref (booking
+  reference instead of a folio). Parity rows PAR-FIN-132/133 must read `building` until then (parity worktree).
+- Threshold approvals for adjustments; write-offs; agency commissions; company/agency rule templates; retroactive
+  re-posting after a rule change (re-application is a merge for future postings); transfer previews; period close
+  and restatement register (`accounting`, wave 3); journal exports; forwarding charges to an external PMS; FX
+  revaluation of open balances; cashier float/drop entries (memo amounts); effective-dated charge-code mapping;
+  one open supplementary folio per original.
+- Business date is read without a lock (P2-01: needs a platform `lockBusinessDate`); legal-entity-level entries
+  (payouts, settlement fees, disputes) use the UTC date when no property applies.
+- Future service dates are refused for every charge; reservations posts penalties with the business date.
+- Receivables events carry no `aggregateVersion` (the account row is not versioned by those flows).
+- Tax on forfeited deposits follows the declared-at-receipt treatment pending the adviser (Q20.2); allowance
+  taxation per ADR-0016 §5 is configurable per grant (`taxed_at_grant` default for taxable codes) pending Q48.
 
 ## Open questions for the owner
 

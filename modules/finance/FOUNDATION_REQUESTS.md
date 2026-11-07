@@ -1,29 +1,18 @@
 # Foundation requests from finance (wave 1)
 
-## 1. `packages/testing`: teardown race when dropping a test database
+## 1. `packages/testing`: teardown race when dropping a test database — RESOLVED on main
 
-**Problem.** `TestDatabase.drop()` calls `db.close()` (→ `kysely.destroy()` → `pg.Pool.end()`) and then
-`drop database … with (force)`. `pg-pool`'s `end()` resolves once clients are removed from the pool, not once their
-sockets are closed. The forced drop then terminates connections that are still closing; the orphaned client emits
-`error` (`57P01 terminating connection due to administrator command`) with no listener, which Vitest reports as an
-unhandled error. It shows up intermittently in suites that run many concurrent transactions (finance S09, the
-billing-rule limit concurrency test).
-
-**Workaround (local, finance tests only).** `modules/finance/test/helpers.ts` wraps `close()` of both test pools to
-wait 300 ms after `pool.end()` before the drop, and attaches a no-op `error` listener to every client. (The listener
-alone was not enough; the delay removed the error in repeated full runs.)
-
-**Proposed diff** (`packages/testing/src/database.ts`):
-
-```ts
-// in createTestDatabase(), after creating `db` and `adminDb`:
-for (const pool of [db.pool, adminDb.pool]) pool.on('connect', (client) => client.on('error', () => {}));
-```
-
-or, in `drop()`, wait for the pools' clients to emit `end` before issuing the forced drop.
+Fixed in `packages/testing`; finance's local workaround was removed.
 
 ## 2. `packages/kernel` money formatting (nice to have)
 
 Problem messages currently quote amounts as "12345 USD (minor units)". A shared, locale-aware
 `formatMoney`-for-messages helper used by every module would make problem details read naturally ("USD 123.45").
-No change made; finance keeps minor units in messages for precision.
+No change made; finance keeps minor units in messages for precision. (Main now has a kernel money formatter; finance
+messages can adopt it in a later pass.)
+
+## 3. `platform`: `lockBusinessDate(tx, propertyId)` (review P2-01)
+
+Finance reads the business date without a lock; a Day Close committing D+1 in the middle of a posting command can
+leave a posting stamped D after D closed. Requested: a platform provider that takes `select … for share` on the
+property's business-date row, called at the start of every posting command.
