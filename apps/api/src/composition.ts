@@ -21,7 +21,16 @@ import {
 } from '@portico/guests';
 import type { Authenticator, HttpModule } from '@portico/http';
 import { type IdentityPorts, identityAuthenticator, identityHttp, identityManifest } from '@portico/identity';
-import { DomainError, fieldCryptoFromEnv, type ModuleManifest, systemAuthorizer } from '@portico/kernel';
+import {
+  createInventoryDemoSeed,
+  createInventoryJobs,
+  createInventoryService,
+  type InventoryService,
+  inventoryHttp,
+  inventoryManifest,
+  inventorySearch,
+} from '@portico/inventory';
+import { fieldCryptoFromEnv, type ModuleManifest, systemAuthorizer } from '@portico/kernel';
 import {
   createOperationsDemoSeed,
   createOperationsService,
@@ -40,19 +49,27 @@ import type { DemoSeedStep } from './seed/demo';
 export const MANIFESTS: readonly ModuleManifest[] = [
   platformManifest,
   identityManifest,
+  inventoryManifest,
   guestsManifest,
   operationsManifest,
   // wave-1 modules register here
 ];
 
-/** Port binding for a wave-1 provider that is not merged yet: fails loudly with an explanation. */
-function unavailable(module: string): never {
-  throw new DomainError(
-    'module_unavailable',
-    `The ${module} module is not available in this build yet, so this action cannot run. Nothing was changed.`,
-    { status: 503, retryable: true, details: { module } },
-  );
-}
+// ── inventory ── bound once; inventory's only port is platform (exists on main), so nothing is stubbed.
+// Other modules (reservations, operations, groups, distribution, day-close) bind their inventory ports to this.
+export const inventoryService: InventoryService = createInventoryService({
+  platform: {
+    getBusinessDate: platform.getBusinessDate,
+    getDataAuthority: platform.getDataAuthority,
+    assertWritable: platform.assertWritable,
+    getLimit: platform.getLimit,
+    resolvePolicy: platform.resolvePolicy,
+  },
+});
+/** DemoSeedStep `run` for inventory (registered in `Composition.demoSeedSteps`). */
+export const inventoryDemoSeed = createInventoryDemoSeed(inventoryService, {
+  businessDate: platform.getBusinessDate,
+});
 
 export interface Composition {
   authenticator: Authenticator;
@@ -62,7 +79,7 @@ export interface Composition {
   /** Periodic background jobs run by apps/worker (each module contributes its own). */
   jobs: ScheduledJob[];
   /** Provider services other modules' ports bind to (domain map). */
-  services: { guests: GuestsService; operations: OperationsService };
+  services: { guests: GuestsService; inventory: InventoryService; operations: OperationsService };
   /** Demo data contributed by each module, run in order inside each demo organization (apps/api/src/seed). */
   demoSeedSteps: DemoSeedStep[];
 }
@@ -99,6 +116,9 @@ export function compose(database: PorticoDatabase): Composition {
   });
   const guestsModule = guestsHttp({ database, service: guestsService });
 
+  // ── inventory ──
+  const inventoryModule = inventoryHttp({ database, inventory: inventoryService });
+
   // ── operations (housekeeping, tasks, maintenance, lost & found, offline sync) ──
   const operationsPorts: OperationsPorts = {
     platform: {
@@ -132,11 +152,15 @@ export function compose(database: PorticoDatabase): Composition {
           kind: d.kind,
         })),
     },
-    // TODO(orchestrator): bind to @portico/inventory (blockUnit, releaseBlock, listUnits) when it merges.
+    // ADR-0015: operations authorizes the user's intent (operations.maintenance.setInventoryImpact at the
+    // property); inventory enforces integrity and its data authority. Refusals are kept on the work order.
+    // Until inventory drops its own permission re-check on port calls (pending-fixes: ADR-0015), the adapter calls
+    // it with system scope AFTER operations authorized the intent; inventory still enforces integrity and the
+    // availability/maintenance authority of the property.
     inventory: {
-      blockUnit: () => unavailable('inventory'),
-      releaseBlock: () => unavailable('inventory'),
-      listUnits: () => unavailable('inventory'),
+      blockUnit: (tx, input) => inventoryService.blockUnit(asSystem(tx), input),
+      releaseBlock: (tx, input) => inventoryService.releaseBlock(asSystem(tx), input),
+      listUnits: (tx, propertyId, filter) => inventoryService.listUnits(asSystem(tx), propertyId, filter),
     },
   };
   const operationsService = createOperationsService(operationsPorts);
@@ -145,6 +169,7 @@ export function compose(database: PorticoDatabase): Composition {
   // ── cross-module experience: global search, summaries, record history ──
   const searchProviders: SearchProvider[] = [
     platformSearch,
+    inventorySearch,
     guestsSearchProvider(guestsService),
     operationsSearch,
   ];
@@ -152,11 +177,19 @@ export function compose(database: PorticoDatabase): Composition {
 
   return {
     authenticator: identityAuthenticator(database, identityPorts),
-    httpModules: [platformModule, identityModule, guestsModule, operationsModule, recordsModule],
+    httpModules: [
+      platformModule,
+      identityModule,
+      inventoryModule,
+      guestsModule,
+      operationsModule,
+      recordsModule,
+    ],
     subscriptions: [...operationsSubscriptions(operationsPorts)],
     searchProviders,
     jobs: [
       ...CORE_JOBS,
+      ...createInventoryJobs(inventoryService),
       ...guestsJobs(guestsService),
       ...operationsJobs(operationsPorts, {
         onError: (job, propertyId, err) =>
@@ -171,8 +204,12 @@ export function compose(database: PorticoDatabase): Composition {
           ),
       }),
     ],
-    services: { guests: guestsService, operations: operationsService },
-    demoSeedSteps: [createGuestsDemoSeed(guestsService), createOperationsDemoSeed(operationsService)],
+    services: { guests: guestsService, inventory: inventoryService, operations: operationsService },
+    demoSeedSteps: [
+      { name: 'inventory', run: inventoryDemoSeed },
+      createGuestsDemoSeed(guestsService),
+      createOperationsDemoSeed(operationsService),
+    ],
   };
 }
 

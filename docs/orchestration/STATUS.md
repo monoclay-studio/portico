@@ -5,6 +5,11 @@
 
 ## 0. Resume log
 
+> **Usage guardrail:** `docs/orchestration/usage-guardrail.md` — ≥80% start nothing new; ≥92% stop agents,
+> `tools/checkpoint.sh`, update this log, schedule resume at reset. Continuous UX loop heartbeat: scheduled task
+> "Portico continuous UX loop heartbeat" (every 3 h).
+
+
 - 2026-11-07 ~08:30 UTC checkpoint (usage limit). All branches pushed.
 - 2026-11-07 11:12 UTC resumed: Postgres restarted; all branches re-pushed; resumed module builders (reservations,
   finance, operations, integration, backoffice, identity-plus), steward reviews (guests, inventory, rates) and
@@ -17,6 +22,13 @@
   **Next after it finishes:** launch the gap strategist (reads 05-digest + all research + parity + specs + every
   module's actual code on main/branches) → `docs/strategy/gap-plan.md` + `docs/strategy/modules/<module>.md` 10x briefs;
   then hand each module agent its brief.
+
+- 2026-11-07 ~13:30 UTC: guests + inventory MERGED to main (steward-reviewed, fixes verified). UX refinement loop
+  started (`docs/ux/README.md`): UX lab worktree `wt/uxlab` (branch ux/lab = main + feat/backoffice-core; API :4300,
+  UI :5380, DB portico_ux, demo seeded via `pnpm --filter @portico/backoffice seed:dev`); black-box tester round 1
+  writes to the session scratchpad `ux-round1/`. **Next:** copy findings to `docs/ux/round-1/`, launch refining agent
+  (reads findings + code + vision/design/experience docs + specs + parity + market digest) → per-module refinements →
+  module agents decide/implement.
 
 ## 1. Owner, product and how to work with the owner
 
