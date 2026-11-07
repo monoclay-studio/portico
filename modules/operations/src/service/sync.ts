@@ -1,5 +1,13 @@
-import { type PorticoDatabase, sql, type TxContext, withTenantTx } from '@portico/db';
-import { canonicalJson, DomainError, type RequestContext, sha256Hex, ValidationError } from '@portico/kernel';
+import { type PorticoDatabase, sql, type TxContext, withSavepoint, withTenantTx } from '@portico/db';
+import {
+  canonicalJson,
+  DomainError,
+  NotFoundError,
+  type RequestContext,
+  requirePermission,
+  sha256Hex,
+  ValidationError,
+} from '@portico/kernel';
 import type {
   Changes,
   SyncBatchInput,
@@ -32,7 +40,7 @@ import {
   UNIT_READ_PERMISSIONS,
 } from './internal';
 import { recordLostFound } from './lost-found';
-import { commentTask, loadTask, taskView, transitionTask } from './tasks';
+import { commentTask, insertTask, loadTask, taskView, transitionTask } from './tasks';
 import {
   loadUnit,
   reportOccupancy,
@@ -110,6 +118,8 @@ export async function applySyncBatch(
         baseVersion: baseOf(m),
         resultVersion: null,
         conflict: null,
+        // Transient failures (deadlock, timeout, outage) may be retried with the same mutation id; refusals not.
+        retryable: err instanceof DomainError ? err.retryable : true,
       };
     }
     if (result.entity?.type === 'task' && result.entity.id) touchedTasks.add(result.entity.id);
@@ -143,7 +153,9 @@ export async function applySyncBatch(
         .selectAll()
         .where('id', '=', id)
         .executeTakeFirst();
-      if (row && row.property_id === input.propertyId) units.push(await unitView(d, tx, row));
+      // Return only what the caller may read (deny by default).
+      if (row && row.property_id === input.propertyId && canReadUnits(tx, row.property_id))
+        units.push(await unitView(d, tx, row));
     }
     const tasks: TaskView[] = [];
     for (const id of touchedTasks) {
@@ -152,7 +164,8 @@ export async function applySyncBatch(
         .selectAll()
         .where('id', '=', id)
         .executeTakeFirst();
-      if (row && row.property_id === input.propertyId) tasks.push(await taskView(tx, row));
+      if (row && row.property_id === input.propertyId && canReadTask(tx, row))
+        tasks.push(await taskView(tx, row));
     }
     return { results, units, tasks, serverTime: tx.now.toISOString() };
   });
@@ -182,6 +195,9 @@ async function processMutation(
     conflict: null,
     ...r,
   });
+
+  // 0. Authorize the operation at the batch's property BEFORE reading any state (deny by default).
+  authorizeMutation(tx, input.propertyId, m);
 
   // 1. Already processed? Return the stored outcome; never re-apply.
   const existing = await db(tx)
@@ -264,16 +280,16 @@ async function processMutation(
       : null;
   const before = await unitVersion();
   let sideEffects: SideEffect[] = [];
-  await sql`savepoint sync_mutation`.execute(tx.db);
   try {
-    result = await evaluateAndApply(d, tx, input.propertyId, m, effectiveBase, clientAt, reply);
+    result = await withSavepoint(tx, 'sync_mutation', () =>
+      evaluateAndApply(d, tx, input.propertyId, m, effectiveBase, clientAt, reply),
+    );
     const after = await unitVersion();
     if (unitOfTask && before !== null && after !== null && after !== before && result.status === 'applied') {
       sideEffects = [{ unitId: unitOfTask, before, after }];
     }
   } catch (err) {
     if (!(err instanceof DomainError)) throw err;
-    await sql`rollback to savepoint sync_mutation`.execute(tx.db);
     result = reply({
       status: err.status === 409 ? 'conflict' : 'rejected',
       code: err.code,
@@ -428,16 +444,7 @@ async function evaluateAndApply(
   // Version check with an explanation of what changed (stale mutations are never applied).
   if ('unitId' in m) {
     const unit = await loadUnit(tx, m.unitId, { forUpdate: true });
-    if (unit.property_id !== propertyId)
-      throw new ValidationError('property_mismatch', 'This unit belongs to another property.');
-    if (noChange(m, unit)) {
-      return reply({
-        status: 'applied',
-        noChange: true,
-        resultVersion: unit.version,
-        message: 'Already in the requested state.',
-      });
-    }
+    if (unit.property_id !== propertyId) throw new NotFoundError('unit', m.unitId);
     if (base !== null && unit.version !== base) {
       const changes = await unitChangesSince(tx, unit.id, base);
       const blockActive = !!unit.block_kind;
@@ -456,19 +463,19 @@ async function evaluateAndApply(
         conflict: { currentVersion: unit.version, changesSinceYourVersion: why.changesSinceYourVersion },
       });
     }
-  }
-  if ('taskId' in m && m.op === 'task.transition') {
-    const task = await loadTask(tx, m.taskId, { forUpdate: true });
-    if (task.property_id !== propertyId)
-      throw new ValidationError('property_mismatch', 'This task belongs to another property.');
-    if (task.status === m.to) {
+    // Only a mutation built on the CURRENT version may be a harmless no-op; a stale one was rejected above.
+    if (noChange(m, unit)) {
       return reply({
         status: 'applied',
         noChange: true,
-        resultVersion: task.version,
+        resultVersion: unit.version,
         message: 'Already in the requested state.',
       });
     }
+  }
+  if ('taskId' in m && m.op === 'task.transition') {
+    const task = await loadTask(tx, m.taskId, { forUpdate: true });
+    if (task.property_id !== propertyId) throw new NotFoundError('task', m.taskId);
     if (base !== null && task.version !== base) {
       const changes = await taskChangesSince(tx, task.id, base);
       const why = explainTaskConflict({
@@ -488,6 +495,14 @@ async function evaluateAndApply(
         conflict: { currentVersion: task.version, changesSinceYourVersion: why.changesSinceYourVersion },
       });
     }
+    if (task.status === m.to) {
+      return reply({
+        status: 'applied',
+        noChange: true,
+        resultVersion: task.version,
+        message: 'Already in the requested state.',
+      });
+    }
   }
   const meta = {
     expectedVersion: base ?? undefined,
@@ -496,6 +511,9 @@ async function evaluateAndApply(
   };
   switch (m.op) {
     case 'unit.setCondition': {
+      // OPS-R22(c): a guest checked in after the device's change was made. The cleaning still happened, so the
+      // change applies — but the front office must check the unit (it may have been occupied while cleaned).
+      const occupiedSince = await occupiedAfter(tx, m.unitId, clientAt);
       const r = await setCondition(
         d,
         tx,
@@ -503,6 +521,27 @@ async function evaluateAndApply(
         { condition: m.condition, ...(m.reason ? { reason: m.reason } : {}) },
         metaFor(meta),
       );
+      if (occupiedSince && (m.condition === 'clean' || m.condition === 'cleaning')) {
+        await insertTask(d, tx, {
+          propertyId,
+          kind: 'general',
+          departmentKind: 'front_office',
+          title: `Check unit: reported ${m.condition} offline, guest checked in meanwhile · ${r.unit.unitNumber}`,
+          description: `Housekeeping reported "${m.condition}" at ${clientAt.toISOString()} (offline); a guest was checked in at ${occupiedSince.toISOString()}. Confirm the guest found the unit ready.`,
+          priority: 'high',
+          unitId: m.unitId,
+          stayId: r.unit.occupancyStayId,
+          source: 'mobile_sync',
+          dedupeKey: `offline_after_checkin:${m.clientMutationId}`,
+        });
+        return reply({
+          status: r.pending ? 'pending' : 'applied',
+          resultVersion: r.unit.version,
+          code: 'applied_unit_now_occupied',
+          message:
+            'Applied, but a guest was checked in after your change; the front office was asked to check the unit.',
+        });
+      }
       return reply({ status: r.pending ? 'pending' : 'applied', resultVersion: r.unit.version });
     }
     case 'unit.setDnd': {
@@ -535,8 +574,7 @@ async function evaluateAndApply(
     }
     case 'task.comment': {
       const task = await loadTask(tx, m.taskId);
-      if (task.property_id !== propertyId)
-        throw new ValidationError('property_mismatch', 'This task belongs to another property.');
+      if (task.property_id !== propertyId) throw new NotFoundError('task', m.taskId);
       const t = await commentTask(
         d,
         tx,
@@ -726,7 +764,10 @@ export async function pullChanges(
         workOrder: workOrderInfo.get(r.block_work_order_id ?? '') ?? null,
       }),
     ),
-    tasks: t.map((r) => toTaskView(r, tx, r.unit_id ? (unitNumbers.get(r.unit_id) ?? null) : null)),
+    // Tasks the reader may see only (front-office, management and guest-request work stays private).
+    tasks: t
+      .filter((r) => canReadTask(tx, r))
+      .map((r) => toTaskView(r, tx, r.unit_id ? (unitNumbers.get(r.unit_id) ?? null) : null)),
     workOrders: w.map((r) => ({
       id: r.id,
       number: r.number,
@@ -777,4 +818,68 @@ export async function listSyncConflicts(
       processedAt: new Date(r.processed_at).toISOString(),
     };
   });
+}
+
+// ───────────────────────────── Authorization helpers ─────────────────────────────
+
+/** Permission each offline operation needs at the batch's property (checked before any state is read). */
+function authorizeMutation(tx: TxContext, propertyId: string, m: SyncMutation): void {
+  switch (m.op) {
+    case 'unit.setCondition':
+    case 'unit.setDnd':
+    case 'unit.reportOccupancy':
+    case 'unit.setTurndown':
+      requirePermission(tx, 'operations.housekeeping.update', { propertyId });
+      return;
+    case 'task.transition':
+    case 'task.comment':
+      requireAny(tx, ['operations.task.update', 'operations.task.manage'], propertyId);
+      return;
+    case 'inspection.record':
+      requirePermission(tx, 'operations.housekeeping.inspect', { propertyId });
+      return;
+    case 'lostFound.record':
+      requireAny(tx, ['operations.housekeeping.update', 'operations.lostFound.manage'], propertyId);
+      return;
+  }
+}
+
+function canReadUnits(tx: TxContext, propertyId: string): boolean {
+  return UNIT_READ_PERMISSIONS.some((p) => tx.authz.can(p, { propertyId }));
+}
+
+/** Tasks are readable with a task-read permission, by their assignee, or (housekeeping work) by the housekeeping team. */
+function canReadTask(
+  tx: TxContext,
+  t: { property_id: string; assignee_user_id: string | null; kind: string; department_kind: string },
+): boolean {
+  const scope = { propertyId: t.property_id };
+  if (tx.authz.can('operations.task.read', scope) || tx.authz.can('operations.task.manage', scope))
+    return true;
+  if (t.assignee_user_id && t.assignee_user_id === actorUserId(tx)) return true;
+  // Housekeeping work is visible to the housekeeping team (the board already shows it to them); other
+  // departments' tasks (front office, management, guest requests) are not.
+  return (
+    t.department_kind === 'housekeeping' &&
+    (tx.authz.can('operations.task.update', scope) || tx.authz.can('operations.housekeeping.update', scope))
+  );
+}
+
+/** When the unit became occupied after the device's change was made (null if it did not). */
+async function occupiedAfter(tx: TxContext, unitId: string, clientAt: Date): Promise<Date | null> {
+  const unit = await db(tx)
+    .selectFrom('operations.unit_status')
+    .select('occupancy')
+    .where('id', '=', unitId)
+    .executeTakeFirst();
+  if (unit?.occupancy !== 'occupied') return null;
+  const last = await db(tx)
+    .selectFrom('operations.unit_status_log')
+    .select('occurred_at')
+    .where('unit_id', '=', unitId)
+    .where('field', '=', 'occupancy')
+    .where('to_value', '=', 'occupied')
+    .orderBy('occurred_at', 'desc')
+    .executeTakeFirst();
+  return last && new Date(last.occurred_at) > clientAt ? new Date(last.occurred_at) : null;
 }

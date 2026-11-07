@@ -4,9 +4,9 @@ import { z } from 'zod';
 import { dedupeKeyFor } from './domain/day-plan';
 import type { OperationsPorts } from './ports';
 import { type Deps, db, feedMark, logTask, propertyFacts } from './service/internal';
-import { clearUnitBlock, mirrorUnitBlock, recordResolutionItems } from './service/maintenance';
+import { mirrorUnitBlock, noteBlockReleased, recordResolutionItems } from './service/maintenance';
 import { housekeepingPriorityFor, insertTask, rescoreUnitTasks, transitionTask } from './service/tasks';
-import { loadUnit, systemConditionChange, upsertStayProjection, writeRoomStatus } from './service/units';
+import { loadUnit, projectStay, systemConditionChange, writeRoomStatus } from './service/units';
 
 /** Events emitted by operations (`<module>.<aggregate>.<pastTenseVerb>`). Payloads are documented in README. */
 export const OPERATIONS_EVENTS = {
@@ -111,6 +111,24 @@ function propertyOf(event: DomainEvent): string {
   return event.propertyId;
 }
 
+/** aggregateVersion of a stay event (ordering guard), when the producer versions the stay aggregate. */
+function stayVersion(event: DomainEvent): number | null {
+  return event.aggregate.type === 'stay' ? event.aggregateVersion : null;
+}
+
+async function cancelStayService(d: Deps, tx: TxContext, stayId: string, reason: string) {
+  const open = await db(tx)
+    .selectFrom('operations.tasks')
+    .select('id')
+    .where('stay_id', '=', stayId)
+    .where('kind', 'in', ['stayover', 'turndown', 'departure_clean'])
+    .where('status', 'in', ['open', 'blocked'])
+    .execute();
+  for (const t of open) {
+    await transitionTask(d, tx, t.id, { to: 'cancelled', reason }, { internal: true, source: 'system' });
+  }
+}
+
 async function projection(tx: TxContext, stayId: string) {
   return db(tx)
     .selectFrom('operations.stay_projection')
@@ -134,14 +152,15 @@ async function onBookingConfirmed(d: Deps, tx: TxContext, event: DomainEvent) {
   const facts = await propertyFacts(d, tx, propertyId);
   for (const s of p.stays) {
     if (s.status === 'waitlisted') continue;
-    const prev = await upsertStayProjection(d, tx, {
+    const prev = await projectStay(d, tx, {
       stayId: s.stayId,
       propertyId,
       bookingId: p.bookingId,
       ...(s.unitId !== undefined ? { unitId: s.unitId ?? null } : {}),
       arrival: s.arrival,
       departure: s.departure,
-      status: (s.status ?? 'expected') as 'expected',
+      // A modification without a status never resets the stay (in-house stays stay in-house).
+      ...(s.status ? { status: s.status as 'expected' } : {}),
       guestProfileId: s.guestProfileId ?? null,
       guestLabel: s.guestLabel ?? null,
       ...(s.vip !== undefined ? { vip: s.vip } : {}),
@@ -172,13 +191,14 @@ async function onBookingCancelled(d: Deps, tx: TxContext, event: DomainEvent) {
   for (const id of ids) {
     const prev = await projection(tx, id);
     if (!prev) continue;
-    await upsertStayProjection(d, tx, {
+    const r = await projectStay(d, tx, {
       stayId: id,
       propertyId,
       arrival: prev.arrival,
       departure: prev.departure,
       status: 'cancelled',
     });
+    if (r.applied) await cancelStayService(d, tx, id, 'Booking cancelled');
     if (prev.unit_id && (await unitKnown(tx, prev.unit_id)))
       await rescoreUnitTasks(d, tx, propertyId, prev.unit_id);
   }
@@ -191,13 +211,14 @@ async function onCheckedIn(d: Deps, tx: TxContext, event: DomainEvent) {
   const facts = await propertyFacts(d, tx, propertyId);
   const arrival = p.arrival ?? prev?.arrival ?? facts.businessDate;
   const departure = p.departure ?? prev?.departure ?? addDays(arrival, 1);
-  await upsertStayProjection(d, tx, {
+  await projectStay(d, tx, {
     stayId: p.stayId,
     propertyId,
     ...(p.unitId !== undefined ? { unitId: p.unitId ?? null } : {}),
     arrival,
     departure,
     status: 'in_house',
+    stayEventVersion: stayVersion(event),
   });
 }
 
@@ -208,17 +229,34 @@ async function onCheckedOut(d: Deps, tx: TxContext, event: DomainEvent) {
   const prev = await projection(tx, p.stayId);
   const facts = await propertyFacts(d, tx, propertyId);
   const unitId = p.unitId ?? prev?.unit_id ?? null;
-  await upsertStayProjection(d, tx, {
+  const projected = await projectStay(d, tx, {
     stayId: p.stayId,
     propertyId,
     ...(unitId ? { unitId } : {}),
     arrival: p.arrival ?? prev?.arrival ?? facts.businessDate,
     departure: p.departure ?? prev?.departure ?? facts.businessDate,
     status: 'departed',
+    stayEventVersion: stayVersion(event),
   });
+  if (!projected.applied) return; // an older event than one already applied: nothing to do
   if (!unitId || !(await unitKnown(tx, unitId))) return;
   let unit = await loadUnit(tx, unitId, { forUpdate: true });
   unit = await systemConditionChange(d, tx, unit, 'dirty', 'Guest checked out');
+  // The next guest must not inherit do-not-disturb (and a vacant unit needs no welfare check).
+  if (unit.dnd && unit.occupancy === 'vacant') {
+    const authority = await d.ports.platform.getDataAuthority(tx, propertyId, 'roomStatus');
+    if (authority.authority === 'portico') {
+      unit = (
+        await writeRoomStatus(
+          d,
+          tx,
+          unit,
+          { dnd: false },
+          { source: 'event', authorityChecked: true, reason: 'Guest checked out' },
+        )
+      ).row;
+    }
+  }
   if (unit.turndown !== 'not_required' && unit.turndown !== 'done') {
     const authority = await d.ports.platform.getDataAuthority(tx, propertyId, 'roomStatus');
     if (authority.authority === 'portico') {
@@ -277,14 +315,15 @@ async function onMoved(d: Deps, tx: TxContext, event: DomainEvent) {
   const facts = await propertyFacts(d, tx, propertyId);
   const fromUnitId = p.fromUnitId ?? prev?.unit_id ?? null;
   const wasInHouse = prev?.status === 'in_house';
-  await upsertStayProjection(d, tx, {
+  const projected = await projectStay(d, tx, {
     stayId: p.stayId,
     propertyId,
     unitId: p.toUnitId,
     arrival: prev?.arrival ?? p.effectiveDate ?? facts.businessDate,
     departure: prev?.departure ?? addDays(p.effectiveDate ?? facts.businessDate, 1),
-    status: (prev?.status ?? 'expected') as 'expected',
+    stayEventVersion: stayVersion(event),
   });
+  if (!projected.applied) return;
   if (fromUnitId && fromUnitId !== p.toUnitId && (await unitKnown(tx, fromUnitId))) {
     if (wasInHouse) {
       const unit = await systemConditionChange(
@@ -348,13 +387,15 @@ async function onNoShow(d: Deps, tx: TxContext, event: DomainEvent) {
   const p = stayEventPayload.parse(event.payload);
   const prev = await projection(tx, p.stayId);
   if (!prev) return;
-  await upsertStayProjection(d, tx, {
+  const projected = await projectStay(d, tx, {
     stayId: p.stayId,
     propertyId,
     arrival: prev.arrival,
     departure: prev.departure,
     status: 'no_show',
+    stayEventVersion: stayVersion(event),
   });
+  if (projected.applied) await cancelStayService(d, tx, p.stayId, 'Guest did not arrive (no-show)');
   if (prev.unit_id && (await unitKnown(tx, prev.unit_id)))
     await rescoreUnitTasks(d, tx, propertyId, prev.unit_id);
 }
@@ -366,13 +407,14 @@ async function onDatesChanged(d: Deps, tx: TxContext, event: DomainEvent) {
   const prev = await projection(tx, p.stayId);
   if (!prev) return;
   const departure = p.to?.departure ?? p.departure ?? prev.departure;
-  await upsertStayProjection(d, tx, {
+  const projected = await projectStay(d, tx, {
     stayId: p.stayId,
     propertyId,
     arrival: p.to?.arrival ?? p.arrival ?? prev.arrival,
     departure,
-    status: prev.status as 'in_house',
+    stayEventVersion: stayVersion(event),
   });
+  if (!projected.applied) return;
   // A departure clean planned for the old departure date of a stay that is still in house is no longer due.
   if (prev.unit_id && departure !== prev.departure && prev.status === 'in_house') {
     const planned = await db(tx)
@@ -406,19 +448,20 @@ async function onAssignmentChanged(d: Deps, tx: TxContext, event: DomainEvent) {
   const p = assignmentPayload.parse(event.payload);
   if (p.ref.type !== 'stay') return;
   const prev = await projection(tx, p.ref.id);
+  // Units operations does not mirror (e.g. a composite "combined villa") never replace the physical unit.
+  if (p.unitId && !(await unitKnown(tx, p.unitId))) return;
   const unassigned = p.change === 'unassigned' || !p.unitId;
   const unitId = unassigned
     ? prev?.unit_id && (p.previousUnitIds ?? []).includes(prev.unit_id)
       ? null
       : (prev?.unit_id ?? null)
     : (p.unitId ?? null);
-  await upsertStayProjection(d, tx, {
+  await projectStay(d, tx, {
     stayId: p.ref.id,
     propertyId,
     unitId,
     arrival: prev?.arrival ?? p.nights.from,
     departure: prev?.departure ?? p.nights.to,
-    status: (prev?.status ?? 'expected') as 'expected',
   });
   for (const u of new Set([unitId, prev?.unit_id].filter((x): x is string => !!x))) {
     if (await unitKnown(tx, u)) await rescoreUnitTasks(d, tx, propertyId, u);
@@ -455,7 +498,7 @@ async function onUnitBlocked(d: Deps, tx: TxContext, event: DomainEvent) {
 async function onUnitUnblocked(d: Deps, tx: TxContext, event: DomainEvent) {
   const p = unblockedPayload.parse(event.payload);
   if (!(await unitKnown(tx, p.unitId))) return;
-  await clearUnitBlock(d, tx, p.unitId, p.blockId, 'Block released in inventory');
+  await noteBlockReleased(d, tx, p.unitId, p.blockId);
 }
 
 /** Event subscriptions for the composition root (worker). Handlers run inside the delivery transaction. */

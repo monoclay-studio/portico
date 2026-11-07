@@ -6,8 +6,10 @@
 import { drainOutbox, sourcesFromManifests, type TxContext, withTenantTx } from '@portico/db';
 import {
   type Actor,
+  BusinessRuleError,
   type Clock,
   type DateRange,
+  type DomainError,
   type EmitEventInput,
   fixedClock,
   newId,
@@ -19,6 +21,7 @@ import { createTestDatabase, type TestDatabase, testContext } from '@portico/tes
 import {
   createOperationsService,
   type InventoryPort,
+  type InventoryUnit,
   type OperationsPorts,
   type OperationsService,
   operationsManifest,
@@ -66,12 +69,16 @@ export function platformPort(): PlatformPort {
   };
 }
 
-/** In-memory inventory: assignments per unit, blocks; records calls. */
+/**
+ * In-memory inventory with the real provider's shapes and refusals (inventory branch: `unit_already_blocked` for
+ * overlapping blocks; `refuseNext` simulates other refusals such as `forwarding_not_available`).
+ */
 export class FakeInventory implements InventoryPort {
   readonly assignments = new Map<string, Array<{ ref: { type: string; id: string }; nights: DateRange }>>();
   readonly blocks = new Map<string, { unitId: string; nights: DateRange; kind: string; released: boolean }>();
   readonly calls: string[] = [];
-  units: Array<{ id: string; number: string; unitTypeId: string | null; unitTypeCode: string | null }> = [];
+  refuseNext: DomainError | null = null;
+  units: InventoryUnit[] = [];
 
   assign(unitId: string, stayId: string, nights: DateRange) {
     const list = this.assignments.get(unitId) ?? [];
@@ -84,6 +91,23 @@ export class FakeInventory implements InventoryPort {
     input: { unitId: string; nights: DateRange; kind: 'out_of_order' | 'out_of_service'; reason: string },
   ) {
     this.calls.push(`blockUnit:${input.unitId}:${input.kind}`);
+    if (this.refuseNext) {
+      const err = this.refuseNext;
+      this.refuseNext = null;
+      throw err;
+    }
+    const overlapping = [...this.blocks.values()].some(
+      (b) =>
+        !b.released &&
+        b.unitId === input.unitId &&
+        b.nights.from < input.nights.to &&
+        input.nights.from < b.nights.to,
+    );
+    if (overlapping)
+      throw new BusinessRuleError(
+        'unit_already_blocked',
+        'The unit already has a block on some of these nights.',
+      );
     const blockId = newId();
     this.blocks.set(blockId, {
       unitId: input.unitId,
@@ -97,14 +121,15 @@ export class FakeInventory implements InventoryPort {
     return { blockId, affectedAssignments: affected };
   }
 
-  async releaseBlock(_tx: TxContext, input: { blockId: string }) {
+  async releaseBlock(_tx: TxContext, input: { blockId: string; reason?: string }) {
     this.calls.push(`releaseBlock:${input.blockId}`);
     const b = this.blocks.get(input.blockId);
     if (b) b.released = true;
+    return b;
   }
 
   async listUnits() {
-    return this.units.map((u) => ({ ...u, locationPath: null, features: [], active: true }));
+    return this.units;
   }
 }
 

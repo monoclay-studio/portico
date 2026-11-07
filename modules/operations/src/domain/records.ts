@@ -348,6 +348,8 @@ export interface WorkOrderFacts {
   returnToService: string;
   authorityState: string;
   openResolutionItems: number;
+  refusal: { message: string; nextStep: string } | null;
+  releasedExternally: boolean;
   unitId: string | null;
   assetId: string | null;
   taskId: string;
@@ -373,7 +375,7 @@ export function workOrderFacets(w: WorkOrderFacts, task: RecordFacets, can: Can)
     act(
       'takeOutOfOrder',
       'Take unit out of order',
-      impact && w.hasUnit && open && (w.blockStatus === 'none' || w.blockStatus === 'released'),
+      impact && w.hasUnit && open && ['none', 'released', 'refused'].includes(w.blockStatus),
       !impact
         ? noPermission
         : !w.hasUnit
@@ -406,6 +408,25 @@ export function workOrderFacets(w: WorkOrderFacts, task: RecordFacets, can: Can)
       severity: 'blocking',
       message: `${w.openResolutionItems} affected stay${w.openResolutionItems === 1 ? '' : 's'} need front-office resolution.`,
       owner: { kind: 'department', id: 'front_office', name: 'front office' },
+    });
+  if (w.blockStatus === 'refused' && w.refusal)
+    issues.push({
+      code: 'block_refused',
+      severity: 'blocking',
+      message: `Out-of-order request refused: ${w.refusal.message} Next step: ${w.refusal.nextStep}`,
+    });
+  if (w.releasedExternally)
+    issues.push({
+      code: 'released_outside_return_to_service',
+      severity: 'blocking',
+      message:
+        'The block was released in inventory before return to service: the repair and inspection were not confirmed. Check the unit now.',
+    });
+  if (w.authorityState === 'rejected')
+    issues.push({
+      code: 'rejected_by_system_of_record',
+      severity: 'warning',
+      message: 'The external maintenance system rejected this work order.',
     });
   if (w.returnToService === 'awaiting_inspection')
     issues.push({

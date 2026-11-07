@@ -9,6 +9,8 @@ import type { EntityRef } from './domain/model';
  */
 
 export type OperationsDataDomain = 'roomStatus' | 'maintenance';
+/** Domains operations reads the authority of (it writes only roomStatus and maintenance). */
+export type ReadableDataDomain = OperationsDataDomain | 'availability';
 
 export interface PlatformPort {
   /** Property facts needed for business-date and time-of-day logic. Read with system scope by the adapter. */
@@ -25,7 +27,7 @@ export interface PlatformPort {
   getDataAuthority(
     tx: TxContext,
     propertyId: string,
-    domain: OperationsDataDomain,
+    domain: ReadableDataDomain,
   ): Promise<{
     authority: 'portico' | 'external';
     connectionId: string | null;
@@ -38,18 +40,25 @@ export interface PlatformPort {
   listDepartments(tx: TxContext, propertyId: string): Promise<Array<{ id: string; kind: string }>>;
 }
 
-export interface InventoryUnitSummary {
+/** Shape of inventory's `Unit` that operations reads (inventory branch `contracts.ts` → `unit`). */
+export interface InventoryUnit {
   id: string;
   number: string;
   unitTypeId: string | null;
-  unitTypeCode: string | null;
-  locationPath: string | null;
+  location: { building: string | null; floor: string | null; zone: string | null } | null;
   features: string[];
-  active: boolean;
+  status: 'active' | 'inactive' | 'retired' | (string & {});
+  /** Composite ("combined") units are not mirrored: housekeeping works on the physical component units. */
+  isComposite?: boolean;
 }
 
+/**
+ * Inventory provider functions as published by the inventory module (`createInventoryService`). Per ADR-0015 the
+ * provider does not re-check its own permission keys on port calls; operations authorizes the user's intent
+ * (`operations.maintenance.setInventoryImpact` at the property) before calling.
+ */
 export interface InventoryPort {
-  /** inventory.blockUnit — never fails for sold-out nights; returns the stays assigned to the unit on those nights. */
+  /** Never fails for sold-out nights; refuses (DomainError) e.g. `unit_already_blocked`, `forwarding_not_available`. */
   blockUnit(
     tx: TxContext,
     input: {
@@ -60,9 +69,13 @@ export interface InventoryPort {
       sourceRef?: EntityRef;
     },
   ): Promise<{ blockId: string; affectedAssignments: Array<{ ref: EntityRef; nights: DateRange }> }>;
-  releaseBlock(tx: TxContext, input: { blockId: string }): Promise<void>;
-  /** Unit catalog (inventory.listUnits) used to mirror units into operations. */
-  listUnits(tx: TxContext, input: { propertyId: string }): Promise<InventoryUnitSummary[]>;
+  /** Returns the released block (unused by operations). */
+  releaseBlock(tx: TxContext, input: { blockId: string; reason?: string }): Promise<unknown>;
+  listUnits(
+    tx: TxContext,
+    propertyId: string,
+    filter?: { status?: 'active' | 'inactive' | 'retired' | 'all' },
+  ): Promise<InventoryUnit[]>;
 }
 
 export interface OperationsPorts {

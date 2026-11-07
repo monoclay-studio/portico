@@ -710,12 +710,16 @@ export const workOrder = z.object({
   resolutionNote: z.string().nullable(),
   completedAt: isoDateTime.nullable(),
   block: z.object({
-    status: z.enum(['none', 'pending_forward', 'active', 'released']),
+    status: z.enum(['none', 'pending_forward', 'active', 'released', 'refused']),
     kind: blockKind.nullable(),
     from: localDate.nullable(),
     to: localDate.nullable(),
     reason: z.string().nullable(),
     blockId: uuid.nullable(),
+    /** Why inventory / the system of record refused the block, and what to do next. */
+    refusal: z.object({ code: z.string(), message: z.string(), nextStep: z.string() }).nullable(),
+    /** Released directly in inventory, bypassing return to service (shown as a blocking issue). */
+    releasedExternallyAt: isoDateTime.nullable(),
   }),
   returnToService: z.enum([
     'not_applicable',
@@ -727,7 +731,7 @@ export const workOrder = z.object({
   returnedToServiceAt: isoDateTime.nullable(),
   preventiveScheduleId: uuid.nullable(),
   preventiveDueOn: localDate.nullable(),
-  authorityState: z.enum(['effective', 'pending_forward']),
+  authorityState: z.enum(['effective', 'pending_forward', 'rejected']),
   reportedVia: z.string(),
   task,
   resolutionItems: z.array(resolutionItem),
@@ -952,6 +956,8 @@ export const syncMutationResult = z.object({
   baseVersion: z.number().int().nullable(),
   resultVersion: z.number().int().nullable(),
   noChange: z.boolean().optional(),
+  /** True when the failure was transient: the device should resend the same mutation (same id) later. */
+  retryable: z.boolean().optional(),
   conflict: z
     .object({
       currentVersion: z.number().int(),

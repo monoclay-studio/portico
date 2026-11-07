@@ -11,6 +11,7 @@ import {
   ATTENDANT_GRANTS,
   eventsOf,
   type Harness,
+  publish,
   SUPERVISOR_GRANTS,
   seedUnits,
   setupOrg,
@@ -180,6 +181,20 @@ describe('service requests and SLA escalation (fixed clock)', () => {
     if (!villa) throw new Error('unit');
     const attendant = org.as(SUPERVISOR_GRANTS);
     h.clock.set('2026-11-07T04:00:00.000Z');
+    const stayId = newId();
+    await publish(h, org, {
+      type: 'reservations.booking.confirmed',
+      aggregate: { type: 'booking', id: newId() },
+      payload: {
+        bookingId: newId(),
+        stays: [{ stayId, unitId: villa, arrival: '2026-11-05', departure: '2026-11-12' }],
+      },
+    });
+    await publish(h, org, {
+      type: 'reservations.stay.checkedIn',
+      aggregate: { type: 'stay', id: stayId },
+      payload: { stayId },
+    });
     const unit = await org.tx(attendant, (tx) => h.ops.getUnit(tx, villa));
     await org.tx(attendant, (tx) =>
       h.ops.setDnd(tx, villa, { dnd: true }, { expectedVersion: unit.version }),

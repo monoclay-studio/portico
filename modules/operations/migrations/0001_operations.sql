@@ -126,6 +126,7 @@ create table operations.stay_projection (
   early_check_in    boolean not null default false,
   eta               timestamptz,
   guest_waiting_since timestamptz,                  -- guest arrived and is waiting for the unit (front desk)
+  last_stay_event_version int,                      -- aggregateVersion of the last applied stay event (ordering guard)
   source            text not null default 'event' check (source in ('event', 'external', 'manual')),
   updated_at        timestamptz not null default now(),
   check (departure > arrival)
@@ -189,6 +190,8 @@ create table operations.tasks (
   verified_by          text,
   cancelled_at         timestamptz,
   escalation_path      jsonb not null default '[]',
+  -- acknowledgement clock start: max(created_at, start of the service date in property time)
+  escalation_anchor_at timestamptz,
   escalation_level     int not null default 0,
   next_escalation_at   timestamptz,
   last_escalated_at    timestamptz,
@@ -381,13 +384,15 @@ create table operations.work_orders (
   block_to                  date,
   block_reason              text,
   block_id                  uuid,
-  block_status              text not null default 'none' check (block_status in ('none', 'pending_forward', 'active', 'released')),
+  block_status              text not null default 'none' check (block_status in ('none', 'pending_forward', 'active', 'released', 'refused')),
+  block_refusal             jsonb,                     -- { code, message, nextStep } when inventory / the system of record refused
+  block_released_externally_at timestamptz,            -- released in inventory without return to service (blocking issue)
   return_to_service_status  text not null default 'not_applicable'
                               check (return_to_service_status in ('not_applicable', 'awaiting_completion', 'awaiting_inspection', 'ready', 'returned')),
   returned_to_service_at    timestamptz,
   preventive_schedule_id    uuid references operations.preventive_schedules(id),
   preventive_due_on         date,
-  authority_state           text not null default 'effective' check (authority_state in ('effective', 'pending_forward')),
+  authority_state           text not null default 'effective' check (authority_state in ('effective', 'pending_forward', 'rejected')),
   reported_by               text not null,
   reported_via              text not null default 'staff' check (reported_via in ('staff', 'mobile_sync', 'preventive', 'guest', 'inspection')),
   created_at                timestamptz not null,
@@ -423,6 +428,25 @@ create table operations.resolution_items (
 );
 select core.enable_tenant_isolation('operations.resolution_items');
 create index resolution_items_open_idx on operations.resolution_items (tenant_id, property_id, status);
+
+-- Mirror of inventory blocks by block id, so late or reordered `inventory.unit.blocked|unblocked` deliveries can
+-- never re-apply a block that was already released.
+create table operations.unit_blocks (
+  id            uuid primary key,                  -- inventory block id (or forward id for externally confirmed blocks)
+  tenant_id     uuid not null,
+  property_id   uuid not null,
+  unit_id       uuid not null,
+  kind          text not null check (kind in ('out_of_order', 'out_of_service', 'house_use')),
+  block_from    date not null,
+  block_to      date not null,
+  reason        text,
+  work_order_id uuid,
+  status        text not null check (status in ('active', 'released')),
+  released_at   timestamptz,
+  created_at    timestamptz not null default now()
+);
+select core.enable_tenant_isolation('operations.unit_blocks');
+create index unit_blocks_unit_idx on operations.unit_blocks (tenant_id, unit_id, status);
 
 ---------------------------------------------------------------------------------------------------------
 -- Lost & found

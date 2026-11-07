@@ -1,6 +1,13 @@
-import { explainVersionMiss, type Selectable, type TxContext } from '@portico/db';
+import {
+  explainVersionMiss,
+  type Selectable,
+  type TxContext,
+  type Updateable,
+  withSavepoint,
+} from '@portico/db';
 import {
   BusinessRuleError,
+  DomainError,
   type LocalDate,
   NotFoundError,
   newId,
@@ -339,6 +346,8 @@ export async function workOrderView(tx: TxContext, row: Selectable<WorkOrdersTab
       to: row.block_to,
       reason: row.block_reason,
       blockId: row.block_id,
+      refusal: (row.block_refusal ?? null) as WorkOrderView['block']['refusal'],
+      releasedExternallyAt: iso(row.block_released_externally_at),
     },
     returnToService: row.return_to_service_status as WorkOrderView['returnToService'],
     returnedToServiceAt: iso(row.returned_to_service_at),
@@ -359,6 +368,9 @@ export async function workOrderView(tx: TxContext, row: Selectable<WorkOrdersTab
         returnToService: row.return_to_service_status,
         authorityState: row.authority_state,
         openResolutionItems: items.filter((i) => i.status === 'open').length,
+        refusal: (row.block_refusal ?? null) as { message: string; nextStep: string } | null,
+        releasedExternally:
+          row.block_released_externally_at !== null && row.return_to_service_status !== 'returned',
         unitId: row.unit_id,
         assetId: row.asset_id,
         taskId: row.task_id,
@@ -617,6 +629,53 @@ function assertWoVersion(row: Selectable<WorkOrdersTable>, expected: number | un
     throw new VersionConflictError('work_order', row.id, expected, row.version);
 }
 
+function nextStepForRefusal(code: string): string {
+  switch (code) {
+    case 'unit_already_blocked':
+      return 'The unit is already blocked in inventory for these nights: keep this work order for the repair and release or extend the existing block, then request again.';
+    case 'block_in_past':
+      return 'Choose dates from the current business date onwards and request the block again.';
+    case 'external_system_of_record':
+    case 'forwarding_not_available':
+      return 'Sellable inventory is managed in another system: set the unit out of order there.';
+    case 'module_unavailable':
+      return 'Inventory is not reachable right now: request the block again shortly.';
+    default:
+      return 'Fix the problem described and request the block again.';
+  }
+}
+
+async function recordBlockRefusal(
+  tx: TxContext,
+  wo: Selectable<WorkOrdersTable>,
+  input: BlockRequestInput,
+  refusal: { code: string; message: string; nextStep: string },
+): Promise<WorkOrderView> {
+  const row = await db(tx)
+    .updateTable('operations.work_orders')
+    .set({
+      block_kind: input.kind,
+      block_from: input.from,
+      block_to: input.to,
+      block_reason: input.reason,
+      block_status: 'refused',
+      block_refusal: JSON.stringify(refusal),
+      feed_xid: feedMark(),
+      version: wo.version + 1,
+    })
+    .where('id', '=', wo.id)
+    .returningAll()
+    .executeTakeFirstOrThrow();
+  await tx.audit({
+    action: 'operations.workOrder.blockRefused',
+    target: { type: 'work_order', id: wo.id },
+    propertyId: wo.property_id,
+    reason: refusal.message,
+    after: { ...input, refusal },
+  });
+  return workOrderView(tx, row);
+}
+
 /**
  * Take the work order's unit out of order / out of service through inventory. Inventory never refuses a broken
  * unit because nights are sold; it returns the stays assigned to the unit, which become front-office
@@ -649,7 +708,17 @@ export async function requestUnitBlock(
       `The block must end after it starts (${input.from} → ${input.to}).`,
     );
   const mode = await d.ports.platform.assertWritable(tx, wo.property_id, 'maintenance');
-  if (mode === 'forward') {
+  // Sellable inventory may itself be managed elsewhere (availability authority external): then the out-of-order
+  // request goes to that system too (forward), or — read-only — is refused with the next step, never lost.
+  const availability = await d.ports.platform.getDataAuthority(tx, wo.property_id, 'availability');
+  if (availability.authority === 'external' && availability.writeMode !== 'forward' && mode !== 'forward') {
+    return recordBlockRefusal(tx, wo, input, {
+      code: 'external_system_of_record',
+      message: `${availability.systemName ?? 'Another system'} manages sellable inventory at this property, so Portico cannot take the unit out of order.`,
+      nextStep: `Set the unit out of order in ${availability.systemName ?? 'that system'}; Portico mirrors it when the connection reports it.`,
+    });
+  }
+  if (mode === 'forward' || availability.authority === 'external') {
     await recordForward(d, tx, wo.property_id, wo.id, {
       action: 'block',
       unitId: wo.unit_id,
@@ -657,6 +726,7 @@ export async function requestUnitBlock(
       from: input.from,
       to: input.to,
       reason: input.reason,
+      system: mode === 'forward' ? 'maintenance' : 'availability',
     });
     const row = await db(tx)
       .updateTable('operations.work_orders')
@@ -681,13 +751,28 @@ export async function requestUnitBlock(
     });
     return workOrderView(tx, row);
   }
-  const res = await d.ports.inventory.blockUnit(tx, {
-    unitId: wo.unit_id,
-    nights: { from: input.from, to: input.to },
-    kind: input.kind,
-    reason: input.reason,
-    sourceRef: { type: 'work_order', id: wo.id },
-  });
+  // ADR-0015 §6: a refusal by inventory (already blocked, in the past, external system of record…) must not lose the
+  // work order — it is kept with the refusal reason and the next step.
+  let res: Awaited<ReturnType<typeof d.ports.inventory.blockUnit>>;
+  const unitId = wo.unit_id;
+  try {
+    res = await withSavepoint(tx, 'operations_block_unit', () =>
+      d.ports.inventory.blockUnit(tx, {
+        unitId,
+        nights: { from: input.from, to: input.to },
+        kind: input.kind,
+        reason: input.reason,
+        sourceRef: { type: 'work_order', id: wo.id },
+      }),
+    );
+  } catch (err) {
+    if (!(err instanceof DomainError)) throw err;
+    return recordBlockRefusal(tx, wo, input, {
+      code: err.code,
+      message: err.message,
+      nextStep: nextStepForRefusal(err.code),
+    });
+  }
   const row = await db(tx)
     .updateTable('operations.work_orders')
     .set({
@@ -765,6 +850,32 @@ export async function mirrorUnitBlock(
     .forUpdate()
     .executeTakeFirst();
   if (!unit) return;
+  // Block mirror keyed by block id: a late `blocked` delivery for a block already released is ignored.
+  const known = await db(tx)
+    .selectFrom('operations.unit_blocks')
+    .select(['status'])
+    .where('id', '=', b.blockId)
+    .executeTakeFirst();
+  if (known?.status === 'released') return;
+  if (!known) {
+    await db(tx)
+      .insertInto('operations.unit_blocks')
+      .values({
+        id: b.blockId,
+        tenant_id: tx.tenantId,
+        property_id: unit.property_id,
+        unit_id: unit.id,
+        kind: b.kind,
+        block_from: b.from,
+        block_to: b.to,
+        reason: b.reason,
+        work_order_id: b.workOrderId,
+        status: 'active',
+        released_at: null,
+      })
+      .onConflict((oc) => oc.column('id').doNothing())
+      .execute();
+  }
   if (unit.block_id === b.blockId) return;
   const updated = await db(tx)
     .updateTable('operations.unit_status')
@@ -807,7 +918,27 @@ export async function clearUnitBlock(
     .where('id', '=', unitId)
     .forUpdate()
     .executeTakeFirst();
-  if (!unit || unit.block_id !== blockId) return;
+  if (!unit) return;
+  // Remember the release even if the `blocked` event has not been seen yet (reordered delivery).
+  const facts = await propertyFacts(d, tx, unit.property_id);
+  await db(tx)
+    .insertInto('operations.unit_blocks')
+    .values({
+      id: blockId,
+      tenant_id: tx.tenantId,
+      property_id: unit.property_id,
+      unit_id: unit.id,
+      kind: unit.block_id === blockId && unit.block_kind ? unit.block_kind : 'out_of_order',
+      block_from: unit.block_id === blockId && unit.block_from ? unit.block_from : facts.businessDate,
+      block_to: unit.block_id === blockId && unit.block_to ? unit.block_to : facts.businessDate,
+      reason: null,
+      work_order_id: unit.block_id === blockId ? unit.block_work_order_id : null,
+      status: 'released',
+      released_at: tx.now,
+    })
+    .onConflict((oc) => oc.column('id').doUpdateSet({ status: 'released', released_at: tx.now }))
+    .execute();
+  if (unit.block_id !== blockId) return;
   const updated = await db(tx)
     .updateTable('operations.unit_status')
     .set({
@@ -834,6 +965,48 @@ export async function clearUnitBlock(
     metadata: { blockId },
   });
   await refreshReadiness(d, tx, unit.id);
+}
+
+/**
+ * Inventory reports a block released. If operations did not release it (return to service), the unit went back
+ * to sale without the repair/inspection gate: the work order shows a blocking issue (OPS-I02 visibility).
+ */
+export async function noteBlockReleased(d: Deps, tx: TxContext, unitId: string, blockId: string) {
+  const wo = await db(tx)
+    .selectFrom('operations.work_orders')
+    .selectAll()
+    .where('block_id', '=', blockId)
+    .where('block_status', '=', 'active')
+    .forUpdate()
+    .executeTakeFirst();
+  if (wo) {
+    await db(tx)
+      .updateTable('operations.work_orders')
+      .set({
+        block_status: 'released',
+        block_released_externally_at: tx.now,
+        version: wo.version + 1,
+        feed_xid: feedMark(),
+      })
+      .where('id', '=', wo.id)
+      .execute();
+    await tx.audit({
+      action: 'operations.workOrder.blockReleasedExternally',
+      target: { type: 'work_order', id: wo.id },
+      propertyId: wo.property_id,
+      reason: 'Released in inventory without return to service',
+      before: { blockStatus: 'active', returnToService: wo.return_to_service_status },
+      after: { blockStatus: 'released' },
+    });
+    await tx.emit({
+      type: 'operations.workOrder.blockReleasedExternally',
+      propertyId: wo.property_id,
+      aggregate: { type: 'work_order', id: wo.id },
+      aggregateVersion: wo.version + 1,
+      payload: { workOrderId: wo.id, unitId, blockId, returnToService: wo.return_to_service_status },
+    });
+  }
+  await clearUnitBlock(d, tx, unitId, blockId, 'Block released in inventory');
 }
 
 export async function recordResolutionItems(
@@ -1155,7 +1328,10 @@ export async function returnToService(
       { missing: check.missing },
     );
   }
-  const mode = await d.ports.platform.assertWritable(tx, wo.property_id, 'maintenance');
+  const maintenanceMode = await d.ports.platform.assertWritable(tx, wo.property_id, 'maintenance');
+  // A block that was forwarded to an external system is released there too (forward), never locally.
+  const externalBlock = (wo.block_id && (await isForwardedBlock(tx, wo.block_id))) === true;
+  const mode = maintenanceMode === 'forward' || externalBlock ? 'forward' : 'portico';
   if (mode === 'forward') {
     await recordForward(d, tx, wo.property_id, wo.id, {
       action: 'release',
@@ -1163,7 +1339,10 @@ export async function returnToService(
       unitId: wo.unit_id,
     });
   } else if (wo.block_id) {
-    await d.ports.inventory.releaseBlock(tx, { blockId: wo.block_id });
+    await d.ports.inventory.releaseBlock(tx, {
+      blockId: wo.block_id,
+      reason: `Returned to service (${wo.number})`,
+    });
   }
   const row = await db(tx)
     .updateTable('operations.work_orders')
@@ -1379,4 +1558,90 @@ export async function runPreventiveSchedules(d: Deps, tx: TxContext, propertyId:
     after: { asOf: day, created: created.length, alreadyGenerated: already, skipped },
   });
   return { asOf: day, created, alreadyGenerated: already, skippedOccurrences: skipped };
+}
+
+async function isForwardedBlock(tx: TxContext, blockId: string): Promise<boolean> {
+  const f = await db(tx)
+    .selectFrom('operations.status_forwards')
+    .select('id')
+    .where('id', '=', blockId)
+    .executeTakeFirst();
+  return !!f;
+}
+
+/**
+ * The external system of record (maintenance CMMS / PMS for availability) acknowledged or rejected a forwarded
+ * work-order change. Called from `acknowledgeForward`. Only now does the change become effective in Portico.
+ */
+export async function applyWorkOrderForward(
+  d: Deps,
+  tx: TxContext,
+  forward: { id: string; target_id: string; change: unknown },
+  outcome: 'acknowledged' | 'rejected',
+  reason: string | null,
+): Promise<void> {
+  const wo = await loadWorkOrder(tx, forward.target_id, { forUpdate: true });
+  const change = (forward.change ?? {}) as {
+    action?: string;
+    kind?: 'out_of_order' | 'out_of_service';
+    from?: string;
+    to?: string;
+    reason?: string;
+  };
+  const settings = await loadSettings(d, tx, wo.property_id);
+  const set: Updateable<WorkOrdersTable> = {};
+  switch (change.action) {
+    case 'create':
+      set.authority_state = outcome === 'acknowledged' ? 'effective' : 'rejected';
+      break;
+    case 'block':
+      if (outcome === 'acknowledged' && wo.unit_id && change.kind && change.from && change.to) {
+        set.block_status = 'active';
+        set.block_id = forward.id; // the confirmed external block is identified by its forward
+        set.return_to_service_status = wo.completed_at
+          ? settings.returnToService.requireInspection
+            ? 'awaiting_inspection'
+            : 'ready'
+          : 'awaiting_completion';
+        await mirrorUnitBlock(d, tx, {
+          unitId: wo.unit_id,
+          blockId: forward.id,
+          kind: change.kind,
+          from: change.from,
+          to: change.to,
+          reason: change.reason ?? null,
+          workOrderId: wo.id,
+        });
+      } else if (outcome === 'rejected') {
+        set.block_status = 'refused';
+        set.block_refusal = JSON.stringify({
+          code: 'rejected_by_system_of_record',
+          message: reason ?? 'The external system refused the out-of-order request.',
+          nextStep: 'Check the unit in the external system and request the block again if still needed.',
+        });
+      }
+      break;
+    case 'release':
+      if (outcome === 'acknowledged') {
+        set.block_status = 'released';
+        set.return_to_service_status = 'returned';
+        set.returned_to_service_at = tx.now;
+        if (wo.unit_id && wo.block_id)
+          await clearUnitBlock(d, tx, wo.unit_id, wo.block_id, `Returned to service (${wo.number})`);
+      } else {
+        set.block_status = 'active';
+        set.block_refusal = JSON.stringify({
+          code: 'release_rejected',
+          message: reason ?? 'The external system refused the return to service.',
+          nextStep: 'Resolve it in the external system, then return the unit to service again.',
+        });
+      }
+      break;
+  }
+  if (!Object.keys(set).length) return;
+  await db(tx)
+    .updateTable('operations.work_orders')
+    .set({ ...set, version: wo.version + 1, feed_xid: feedMark() })
+    .where('id', '=', wo.id)
+    .execute();
 }

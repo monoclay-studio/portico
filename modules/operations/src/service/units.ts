@@ -1,6 +1,7 @@
 import { explainVersionMiss, type TxContext } from '@portico/db';
 import {
   BusinessRuleError,
+  isNewerThan,
   type LocalDate,
   NotFoundError,
   newId,
@@ -35,6 +36,7 @@ import {
   type TurndownStatus,
   type UnitCondition,
 } from '../domain/model';
+import { nextStayStatus, type ProjectedStayStatus } from '../domain/stays';
 import { PRIORITY_RANK } from '../domain/tasks';
 import {
   actorKey,
@@ -51,6 +53,7 @@ import {
   UNIT_READ_PERMISSIONS,
   type UnitRow,
 } from './internal';
+import { applyWorkOrderForward } from './maintenance';
 import { insertTask, setDndOnServiceTasks } from './tasks';
 
 const P = {
@@ -257,17 +260,21 @@ export async function upsertUnits(
 
 export async function syncUnitsFromInventory(d: Deps, tx: TxContext, propertyId: string) {
   requirePermission(tx, P.configure, { propertyId });
-  const units = await d.ports.inventory.listUnits(tx, { propertyId });
+  const units = (await d.ports.inventory.listUnits(tx, propertyId, { status: 'all' })).filter(
+    (u) => !u.isComposite,
+  );
   if (!units.length) return { created: 0, updated: 0 };
   return upsertUnits(d, tx, propertyId, {
     units: units.map((u) => ({
       unitId: u.id,
       number: u.number,
       unitTypeId: u.unitTypeId,
-      unitTypeCode: u.unitTypeCode,
-      locationPath: u.locationPath,
+      unitTypeCode: null,
+      floor: u.location?.floor ?? null,
+      locationPath:
+        [u.location?.zone, u.location?.building, u.location?.floor].filter(Boolean).join(' / ') || null,
       features: u.features,
-      active: u.active,
+      active: u.status === 'active',
     })),
   });
 }
@@ -1086,7 +1093,10 @@ export interface StayProjectionInput {
   unitId?: string | null;
   arrival: LocalDate;
   departure: LocalDate;
-  status: 'expected' | 'in_house' | 'departed' | 'cancelled' | 'no_show';
+  /** Omitted = keep the current status (booking modifications never reset a stay's status). */
+  status?: 'expected' | 'in_house' | 'departed' | 'cancelled' | 'no_show';
+  /** aggregateVersion of the stay event being applied (ordering guard); null/undefined for unversioned sources. */
+  stayEventVersion?: number | null;
   guestProfileId?: string | null;
   guestLabel?: string | null;
   vip?: boolean;
@@ -1095,12 +1105,28 @@ export interface StayProjectionInput {
   source?: 'event' | 'external' | 'manual';
 }
 
-/** Upsert operations' read model of a stay and recompute physical occupancy of the units involved. */
+/**
+ * Public entry for mirroring stays from an external PMS connector (connected mode). Requires
+ * `operations.external.sync`; reservations events use the internal `projectStay`.
+ */
 export async function upsertStayProjection(
   d: Deps,
   tx: TxContext,
   input: StayProjectionInput,
-): Promise<{ previousUnitId: string | null; previousStatus: string | null }> {
+): Promise<{ previousUnitId: string | null; previousStatus: string | null; applied: boolean }> {
+  requirePermission(tx, P.external, { propertyId: input.propertyId });
+  return projectStay(d, tx, { ...input, source: input.source ?? 'external' });
+}
+
+/**
+ * Upsert operations' read model of a stay and recompute physical occupancy of the units involved. Order-tolerant:
+ * a stay event older than the last applied one is ignored, and without versions the status only moves forward.
+ */
+export async function projectStay(
+  d: Deps,
+  tx: TxContext,
+  input: StayProjectionInput,
+): Promise<{ previousUnitId: string | null; previousStatus: string | null; applied: boolean }> {
   const prev = await db(tx)
     .selectFrom('operations.stay_projection')
     .select([
@@ -1112,17 +1138,33 @@ export async function upsertStayProjection(
       'guest_label',
       'guest_profile_id',
       'booking_id',
+      'last_stay_event_version',
     ])
     .where('id', '=', input.stayId)
     .forUpdate()
     .executeTakeFirst();
+  const versioned = input.stayEventVersion !== undefined && input.stayEventVersion !== null;
+  if (
+    versioned &&
+    !isNewerThan({ aggregateVersion: input.stayEventVersion ?? null }, prev?.last_stay_event_version)
+  ) {
+    return { previousUnitId: prev?.unit_id ?? null, previousStatus: prev?.status ?? null, applied: false };
+  }
+  const status = nextStayStatus(
+    (prev?.status as ProjectedStayStatus | undefined) ?? null,
+    input.status,
+    versioned,
+  );
   const values = {
     property_id: input.propertyId,
     booking_id: input.bookingId ?? prev?.booking_id ?? null,
     unit_id: input.unitId === undefined ? (prev?.unit_id ?? null) : input.unitId,
     arrival: input.arrival,
     departure: input.departure,
-    status: input.status,
+    status,
+    last_stay_event_version: versioned
+      ? (input.stayEventVersion ?? null)
+      : (prev?.last_stay_event_version ?? null),
     guest_profile_id: input.guestProfileId ?? prev?.guest_profile_id ?? null,
     guest_label: input.guestLabel ?? prev?.guest_label ?? null,
     vip: input.vip ?? prev?.vip ?? false,
@@ -1140,7 +1182,7 @@ export async function upsertStayProjection(
   if (prev?.unit_id) units.add(prev.unit_id);
   if (values.unit_id) units.add(values.unit_id);
   for (const u of units) await recomputeOccupancy(d, tx, u);
-  return { previousUnitId: prev?.unit_id ?? null, previousStatus: prev?.status ?? null };
+  return { previousUnitId: prev?.unit_id ?? null, previousStatus: prev?.status ?? null, applied: true };
 }
 
 /** Physical occupancy = an in-house stay is assigned to the unit. Derived; does not bump the unit version. */
@@ -1277,6 +1319,9 @@ export async function acknowledgeForward(
     .where('id', '=', forwardId)
     .returningAll()
     .executeTakeFirstOrThrow();
+  if (f.target_type === 'work_order') {
+    await applyWorkOrderForward(d, tx, f, input.outcome, input.reason ?? null);
+  }
   if (f.target_type === 'unit') {
     const row = await loadUnit(tx, f.target_id, { forUpdate: true });
     const isCurrent = row.pending_forward_id === f.id;

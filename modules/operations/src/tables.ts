@@ -94,6 +94,7 @@ export interface StayProjectionTable {
   early_check_in: Generated<boolean>;
   eta: Date | null;
   guest_waiting_since: Generated<Date | null>;
+  last_stay_event_version: Generated<number | null>;
   source: Generated<string>;
   updated_at: Generated<Date>;
 }
@@ -143,6 +144,7 @@ export interface TasksTable {
   verified_by: string | null;
   cancelled_at: Date | null;
   escalation_path: Generated<unknown>;
+  escalation_anchor_at: Generated<Date | null>;
   escalation_level: Generated<number>;
   next_escalation_at: Date | null;
   last_escalated_at: Date | null;
@@ -292,6 +294,8 @@ export interface WorkOrdersTable {
   block_reason: string | null;
   block_id: string | null;
   block_status: Generated<string>;
+  block_refusal: Generated<unknown>;
+  block_released_externally_at: Generated<Date | null>;
   return_to_service_status: Generated<string>;
   returned_to_service_at: Date | null;
   preventive_schedule_id: string | null;
@@ -321,6 +325,21 @@ export interface ResolutionItemsTable {
   resolved_at: Date | null;
   created_at: Date;
   version: Generated<number>;
+}
+
+export interface UnitBlocksTable {
+  id: string;
+  tenant_id: string;
+  property_id: string;
+  unit_id: string;
+  kind: string;
+  block_from: string;
+  block_to: string;
+  reason: string | null;
+  work_order_id: string | null;
+  status: string;
+  released_at: Date | null;
+  created_at: Generated<Date>;
 }
 
 export interface LostFoundItemsTable {
@@ -407,6 +426,7 @@ export interface OperationsDB {
   'operations.preventive_schedules': PreventiveSchedulesTable;
   'operations.work_orders': WorkOrdersTable;
   'operations.resolution_items': ResolutionItemsTable;
+  'operations.unit_blocks': UnitBlocksTable;
   'operations.lost_found_items': LostFoundItemsTable;
   'operations.status_forwards': StatusForwardsTable;
   'operations.sync_mutations': SyncMutationsTable;

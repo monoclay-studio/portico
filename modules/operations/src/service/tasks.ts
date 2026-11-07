@@ -1046,6 +1046,7 @@ export async function runEscalations(d: Deps, tx: TxContext, propertyId: string)
     .select(['id', 'unit_number', 'dnd_since', 'occupancy_stay_id'])
     .where('property_id', '=', propertyId)
     .where('dnd', '=', true)
+    .where('occupancy', '=', 'occupied') // a vacant unit has no guest to check on
     .where('dnd_since', '<=', limit)
     .execute();
   const welfareChecks: string[] = [];
