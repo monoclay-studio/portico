@@ -1,0 +1,149 @@
+/**
+ * ARI cell values (pure). Distribution never computes availability or prices: it receives them from inventory
+ * (`sellable`) and rates (price + effective restrictions) and only decides WHAT TO PUBLISH (stop-sell closures)
+ * and HOW TO PACK it (runs of equal values become one range).
+ */
+import { addDays, canonicalJson, type DateRange, type LocalDate } from '@portico/kernel';
+
+export type AriKind = 'availability' | 'restrictions';
+export const ARI_KINDS: readonly AriKind[] = ['availability', 'restrictions'];
+
+export interface AvailabilityValue {
+  availability: number;
+}
+
+export interface RestrictionValue {
+  /** Price for the rate plan's base occupancy, in minor units; null when rates has no price for the night. */
+  rateMinor: number | null;
+  currency: string | null;
+  stopSell: boolean;
+  closedToArrival: boolean;
+  closedToDeparture: boolean;
+  minStayArrival: number | null;
+  minStayThrough: number | null;
+  maxStay: number | null;
+}
+
+export type CellValue = AvailabilityValue | RestrictionValue;
+
+/** Why a published value differs from Portico's own figure. */
+export type PublishReason = 'stop_sell' | 'protection' | 'no_price';
+
+export interface AriCell {
+  unitTypeId: string;
+  ratePlanId: string | null;
+  date: LocalDate;
+  value: CellValue;
+  reason?: PublishReason;
+}
+
+/** Effective restrictions as rates reports them (kinds distribution can publish; others are listed as not sent). */
+export interface EffectiveRestrictionInput {
+  closed?: boolean | null;
+  closedToArrival?: boolean | null;
+  closedToDeparture?: boolean | null;
+  minLos?: number | null;
+  minLosThrough?: number | null;
+  maxLos?: number | null;
+  minAdvanceDays?: number | null;
+  maxAdvanceDays?: number | null;
+  salesLimit?: number | null;
+}
+
+/** Restriction kinds Portico has but a hub restriction value cannot carry (shown to staff, never dropped silently). */
+export const UNPUBLISHED_RESTRICTIONS = ['minAdvanceDays', 'maxAdvanceDays', 'salesLimit'] as const;
+
+/**
+ * The value to publish for a rate plan × unit type night. A night without a price is published CLOSED (stop-sell)
+ * with no rate: Portico never invents a price.
+ */
+export function restrictionValueFrom(
+  price: { amountMinor: number; currency: string } | null,
+  r: EffectiveRestrictionInput,
+): { value: RestrictionValue; reason?: PublishReason } {
+  const value: RestrictionValue = {
+    rateMinor: price ? price.amountMinor : null,
+    currency: price ? price.currency : null,
+    stopSell: r.closed === true || price === null,
+    closedToArrival: r.closedToArrival === true,
+    closedToDeparture: r.closedToDeparture === true,
+    minStayArrival: r.minLos ?? null,
+    minStayThrough: r.minLosThrough ?? null,
+    maxStay: r.maxLos ?? null,
+  };
+  return price === null ? { value, reason: 'no_price' } : { value };
+}
+
+export interface ClosureState {
+  /** A manual stop-sell covers this unit type and night. */
+  manual: boolean;
+  /** Stop-sell protection is active on the connection with this threshold. */
+  protectionThreshold: number | null;
+}
+
+/** Availability to publish: a manual stop-sell closes; protection closes the last `threshold` units; never < 0. */
+export function publishedAvailability(
+  sellable: number,
+  closure: ClosureState,
+): { value: AvailabilityValue; reason?: PublishReason } {
+  const safe = Math.max(0, Math.floor(sellable));
+  if (closure.manual) return { value: { availability: 0 }, reason: 'stop_sell' };
+  if (closure.protectionThreshold !== null && safe > 0 && safe <= closure.protectionThreshold) {
+    return { value: { availability: 0 }, reason: 'protection' };
+  }
+  return { value: { availability: safe } };
+}
+
+export function sameValue(a: CellValue | null | undefined, b: CellValue | null | undefined): boolean {
+  if (!a || !b) return a === b;
+  return canonicalJson(a) === canonicalJson(b);
+}
+
+export interface Run<V> {
+  from: LocalDate;
+  /** Exclusive. */
+  to: LocalDate;
+  value: V;
+}
+
+/** Pack consecutive nights with identical values into ranges (one hub value per run). Input order is irrelevant. */
+export function compressRuns<V extends CellValue>(
+  cells: ReadonlyArray<{ date: LocalDate; value: V }>,
+): Run<V>[] {
+  const sorted = [...cells].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+  const runs: Run<V>[] = [];
+  for (const c of sorted) {
+    const last = runs[runs.length - 1];
+    if (last && last.to === c.date && sameValue(last.value, c.value)) {
+      last.to = addDays(c.date, 1);
+    } else {
+      runs.push({ from: c.date, to: addDays(c.date, 1), value: c.value });
+    }
+  }
+  return runs;
+}
+
+export type CellSyncState = 'in_sync' | 'pending' | 'never_sent' | 'differs' | 'not_accepted';
+
+/**
+ * Compare what Portico would publish now with what the channel last acknowledged (DST-R06).
+ *  - pending: a change is queued or in flight for this cell;
+ *  - not_accepted: the hub refused the last value sent for this cell (payload error);
+ *  - differs: no pending work explains the difference — a discrepancy once older than the freshness target.
+ */
+export function compareCell(input: {
+  expected: CellValue | null;
+  acked: CellValue | null;
+  pending: boolean;
+  rejected: boolean;
+}): CellSyncState {
+  if (input.pending) return 'pending';
+  if (input.rejected) return 'not_accepted';
+  if (input.acked === null) return input.expected === null ? 'in_sync' : 'never_sent';
+  return sameValue(input.expected, input.acked) ? 'in_sync' : 'differs';
+}
+
+/** The publication window: from the business date for `horizonDays` nights. */
+export function publicationWindow(businessDate: LocalDate, horizonDays: number): DateRange {
+  return { from: businessDate, to: addDays(businessDate, horizonDays) };
+}
