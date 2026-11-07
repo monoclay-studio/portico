@@ -4,6 +4,7 @@
  */
 import { sql } from '@portico/db';
 import { newId } from '@portico/kernel';
+import { paymentsCollectionsForFinance } from '@portico/payments';
 import { platform } from '@portico/platform';
 import type { Booking } from '@portico/reservations';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -352,6 +353,24 @@ describe('reservations → guests, payments, finance, operations (check-in and c
         ports.finance.getFolioBalance(tx, folioId, { propertyId: h.id }),
       ),
     ).rejects.toMatchObject({ status: 403 });
+    // finance → payments: a collection request for a folio of another property is refused before any intent is
+    // recorded and reported as not possible (finance then lists the late charge for manual collection).
+    const collection = await org.run(desk, (tx) =>
+      paymentsCollectionsForFinance(s.c.services.payments).requestCollection(tx, {
+        propertyId: h.id,
+        folioId,
+        amount: { amountMinor: 6_400, currency: 'USD' },
+        reason: 'late_charge',
+        ref: { type: 'journal_entry', id: newId() },
+        idempotencyKey: `late:${newId()}`,
+      }),
+    );
+    expect(collection).toMatchObject({ status: 'not_possible' });
+    const none = await sql<{ n: number }>`
+      select count(*)::int as n from payments.payment_requests where ref_id = ${folioId}`.execute(
+      s.t.admin.kysely,
+    );
+    expect(none.rows[0]?.n).toBe(0);
     // The task is accepted for the right property without operations' own key (reservations agent has none).
     const agent = org.staff('reservations_agent', 'Aishath', [k.id]);
     const task = await org.run(agent, (tx) =>
