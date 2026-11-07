@@ -358,7 +358,7 @@ export async function signIn(s: Scenario, org: ScenarioOrg): Promise<Record<stri
 /**
  * The global consistency checks every scenario ends with: INV-I02 (ledger = Σ consumption + holds), INV-I03 (no
  * oversold cell without an open conflict), RES-I02 (active stays consume exactly their nights; cancelled stays
- * hold nothing), FIN-I02/FIN-I14 (trial balance zero; control accounts = Σ sub-ledgers), no duplicate idempotency
+ * hold nothing), every deposit belongs to a booking of its property, FIN-I02/FIN-I14 (trial balance zero; control accounts = Σ sub-ledgers), no duplicate idempotency
  * effects, and an audit row for every consequential command named in `auditActions`.
  */
 export async function assertGlobalConsistency(
@@ -401,6 +401,13 @@ export async function assertGlobalConsistency(
      where st.tenant_id = ${tenant} and st.status = 'cancelled'
        and exists (select 1 from inventory.consumptions c where c.ref_type = 'stay' and c.ref_id = st.id)`);
   expect(leaked).toEqual([]);
+  // Cross-module (review §7): every booking deposit finance holds belongs to a reservations booking of the SAME
+  // property — a deposit at another property's legal entity, or for a booking that exists nowhere, is a defect.
+  const strayDeposits = await q(sql<{ booking_id: string }>`
+    select d.booking_id from finance.deposit_accounts d
+      left join reservations.bookings b on b.id = d.booking_id
+     where d.tenant_id = ${tenant} and (b.id is null or b.property_id <> d.property_id)`);
+  expect(strayDeposits).toEqual([]);
   // FIN-I02 / FIN-I14 per legal entity.
   const entities = await q(
     sql<{ id: string }>`select id from platform.legal_entities where tenant_id = ${tenant}`,

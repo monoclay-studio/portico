@@ -301,6 +301,25 @@ Types live in `@portico/kernel` (`records.ts`). Each module also:
   re-check `operations.task.manage`; `operationsForReservations(service)` adapts views to reservations' port.
 - **Payer types:** glossary § Payer (`guest | company | agency | house | other`).
 
+### Integration-step fix round (steward review)
+
+- **reservations (provider):** `describeBooking(tx, id) → { propertyId, status } | null` and
+  `describeReference(tx, ref) → { propertyId } | null | undefined` (booking or stay owner; routing metadata, no permission
+  check, RLS). Bound as finance's `BookingDirectoryPort` and payments' `ReferenceDirectoryPort`.
+- **finance:** a booking deposit is refused for an unknown booking (`ledger_target_unknown`) or a booking of another
+  property (`scope_mismatch`); never bound to the first property that pays. `financeForReservations` requires `propertyId`
+  everywhere; `delegated()` has no organization-wide mode. `CollectionRequest.payer` added; late-charge collection
+  requests only what the folio owes.
+- **payments (provider):** `describeMethod(tx, methodId, { propertyId }) → { id, owner } | null`; holds and recorded
+  authorizations for a stay/booking of another property or nowhere are refused (`reference_other_property`,
+  `reference_unknown`).
+- **reservations:** another guarantee card or amount at check-in needs `payments.payment.collect`; the card must belong to
+  the booking's guest, booker, occupant or payer (also when a booking records its card); amount capped by policy
+  `reservations.checkIn.guaranteeCapPercent` (150). Booking/stay `totals` are nullable (`moneyRedacted`) for roles without
+  money permissions. Money steps of check-in are attested when charges/payments are external.
+- **rates:** `ratesProvider(service)` port surface (rates.quote.read granted at the property; overrides stay explicit);
+  `ChargeLine.valueOnly` and `levyOnly` are mutually exclusive. The reservations adapter verifies the seal before use.
+
 ## Rules for changing a contract
 
 1. Update this file in the same commit as the provider change.
