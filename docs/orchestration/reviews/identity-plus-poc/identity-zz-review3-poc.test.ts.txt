@@ -1,0 +1,362 @@
+/**
+ * Third steward review of feat/identity-platform-enterprise (ADR-0017 amendment 1, rules 12-15).
+ * NEW attacks. Each test PASSES when the attack WORKS. Run in a scratch copy only.
+ */
+import { sql } from '@portico/db';
+import { newId } from '@portico/kernel';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { identity } from '../src';
+import { base32Decode, totp } from '../src/domain/totp';
+import type { OidcHttpClient } from '../src/ports';
+import { fakeIdp } from './fake-idp';
+import { authenticate, type Harness, harness, invitationToken, org, signInWithMfa } from './harness';
+
+let h: Harness;
+beforeAll(async () => {
+  h = await harness();
+});
+afterAll(async () => h?.t.drop());
+
+type Idp = Awaited<ReturnType<typeof fakeIdp>>;
+const idps = new Map<string, Idp>();
+const router: OidcHttpClient = {
+  getJson: (url) => {
+    for (const [iss, idp] of idps) if (url.startsWith(iss)) return idp.http.getJson(url);
+    throw new Error(`no idp for ${url}`);
+  },
+  postForm: (url, form, headers) => {
+    for (const [iss, idp] of idps) if (url.startsWith(iss)) return idp.http.postForm(url, form, headers);
+    throw new Error(`no idp for ${url}`);
+  },
+};
+const txt = new Map<string, string[]>();
+async function idpFor(issuer: string) {
+  const idp = await fakeIdp(issuer, 'c', 'secret-secret');
+  idps.set(issuer, idp);
+  h.ports.oidcHttp = router;
+  h.ports.dnsTxt = async (name) => txt.get(name) ?? [];
+  return idp;
+}
+async function ssoSignIn(idp: Idp, organizationId: string, claims: Record<string, unknown>) {
+  const start = await identity.startSsoLogin(h.t.db, h.ports, { organizationId });
+  const { code, state } = idp.authorize(start.authorizationUrl, { email_verified: true, ...claims });
+  return identity.completeSsoLogin(h.t.db, h.ports, { state, code, browserBinding: start.browserBinding });
+}
+/** An organization with SSO (allow-list only) and JIT; `admins` → org_admin, `staff` → read_only. */
+async function ssoOrg(name: string, domain: string) {
+  const issuer = `https://idp-${newId().slice(-8)}.${domain}`;
+  const idp = await idpFor(issuer);
+  const o = await org(h, { name });
+  await o.tx((tx) =>
+    identity.configureSso(tx, h.ports, {
+      displayName: name,
+      issuer,
+      clientId: 'c',
+      clientSecret: 'secret-secret',
+      allowedEmailDomains: [domain],
+    }),
+  );
+  await o.tx((tx) =>
+    identity.setGroupRoleMappings(tx, h.ports, [
+      { group: 'admins', roleKey: 'org_admin', scopeType: 'organization' },
+      { group: 'staff', roleKey: 'read_only', scopeType: 'organization' },
+    ]),
+  );
+  return { o, idp, issuer };
+}
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+describe('REVIEW-3 PoC W-1: a factor confirmation in flight survives the first-verification wipe (rule 12 race)', () => {
+  it('the attacker’s authenticator becomes the real GM’s active factor after the GM verifies; the GM is locked out', async () => {
+    const domain = `resort${newId().slice(-6)}.mv`;
+    const gmEmail = `gm@${domain}`;
+    // 1. Attacker org (any customer with SSO; allow-list only, never verified) mints the GM's identity via JIT.
+    const { o: x, idp } = await ssoOrg('Attacker org', domain);
+    const ghost = await ssoSignIn(idp, x.tenantId, { sub: 'ghost', email: gmEmail, groups: ['staff'] });
+    const g = await authenticate(h, ghost.token);
+    if (!g) throw new Error('no ctx');
+    // 2. Sole-organization, no credentials yet: the attacker enrols factor A without proof, then keeps a fresh
+    //    pending factor P (proof = a recovery code of A). Both are "credentials before verification".
+    const a = await x.tx((tx) => identity.enrolTotp(tx, h.ports, {}), g);
+    if (!a.ok) throw a.error;
+    const ca = await x.tx(
+      (tx) => identity.confirmTotp(tx, h.ports, { code: totp(base32Decode(a.value.secret), h.clock.now()) }),
+      g,
+    );
+    if (!ca.ok) throw ca.error;
+    const p = await x.tx(
+      (tx) => identity.enrolTotp(tx, h.ports, { recoveryCode: ca.value.recoveryCodes[0] as string }),
+      g,
+    );
+    if (!p.ok) throw p.error;
+    const pSecret = base32Decode(p.value.secret);
+
+    // 3. The real hotel (live) invites its GM as administrator; the link goes to the real GM.
+    const hotel = await org(h, { name: 'Real hotel (live)' });
+    const hotelAdmin = await hotel.member([{ roleKey: 'org_admin', scopeType: 'organization' }]);
+    const ha = await signInWithMfa(h, hotelAdmin.email);
+    await hotel.tx(
+      (tx) =>
+        identity.inviteMember(tx, h.ports, {
+          email: gmEmail,
+          displayName: 'General manager',
+          roles: [{ roleKey: 'org_admin', scopeType: 'organization' }],
+        }),
+      ha.ctx,
+    );
+    const token = invitationToken(h, gmEmail);
+
+    // 4. Widen the real window (argon2 hashing + the wipe's statements, ~50-100 ms in production) to 1.5 s so the
+    //    interleaving is deterministic. TEST-ONLY trigger; it changes no logic, only timing.
+    await sql`create or replace function identity.zz_slow_verify() returns trigger language plpgsql as $$
+      begin
+        if old.email_verified_at is null and new.email_verified_at is not null then perform pg_sleep(1.5); end if;
+        return new;
+      end $$`.execute(h.t.admin.kysely);
+    await sql`create trigger zz_slow_verify after update on identity.users
+      for each row execute function identity.zz_slow_verify()`.execute(h.t.admin.kysely);
+    try {
+      // 5. The GM follows the link and chooses a password: first verification starts (users row locked).
+      const gmAccept = identity.acceptInvitation(h.t.db, h.ports, { token, password: 'the-real-gm-password' });
+      await sleep(400);
+      // 6. Meanwhile the attacker's request authenticates (the wipe has not committed) and confirms P.
+      const g2 = await authenticate(h, ghost.token);
+      expect(g2).not.toBeNull();
+      const confirm = x.tx(
+        (tx) => identity.confirmTotp(tx, h.ports, { code: totp(pSecret, h.clock.now()) }),
+        g2 as NonNullable<typeof g2>,
+      );
+      const [accepted, confirmed] = await Promise.all([gmAccept, confirm]);
+      expect(accepted.organizationId).toBe(hotel.tenantId);
+      expect(confirmed.ok).toBe(true); // P activated AFTER the wipe committed
+    } finally {
+      await sql`drop trigger zz_slow_verify on identity.users`.execute(h.t.admin.kysely);
+    }
+
+    // 7. The GM's identity is verified, has the GM's password … and the attacker's authenticator.
+    const factors = await h.t.admin.kysely
+      .selectFrom('identity.mfa_factors as f')
+      .innerJoin('identity.users as u', 'u.id', 'f.user_id')
+      .select(['f.status', 'u.email_verified_at'])
+      .where('u.email', '=', gmEmail)
+      .where('f.status', '=', 'active')
+      .execute();
+    expect(factors).toHaveLength(1);
+    expect(factors[0]?.email_verified_at).not.toBeNull();
+    const gm = await identity.login(h.t.db, {
+      email: gmEmail,
+      password: 'the-real-gm-password',
+      organizationId: hotel.tenantId,
+    });
+    expect(gm.status).toBe('mfa_required'); // the GM never had this factor: locked out at onboarding
+    // 8. The hotel's administrator cannot help: the person "works elsewhere" (the attacker's JIT membership).
+    await expect(
+      hotel.tx((tx) => identity.resetMemberMfa(tx, ghost.userId, 'GM locked out', h.ports), ha.ctx),
+    ).rejects.toMatchObject({ code: 'person_shared_with_other_organization' });
+  }, 30_000);
+});
+
+describe('REVIEW-3 PoC W-2: identity.sso.manage changes the groups claim (not a root change) and becomes org_admin', () => {
+  it('an SSO manager who cannot map themselves to org_admin re-points groupsClaim to a claim they control', async () => {
+    const domain = `lagoon${newId().slice(-6)}.mv`;
+    const { o, idp, issuer } = await ssoOrg('Resort W2', domain);
+    const root = await o.member([{ roleKey: 'org_admin', scopeType: 'organization' }], `owner@${domain}`);
+    const r = await signInWithMfa(h, root.email);
+    await o.tx(
+      (tx) =>
+        identity.createRole(tx, h.ports, {
+          key: 'sso_admin',
+          name: 'SSO administrator',
+          permissions: ['identity.sso.manage', 'identity.user.read'],
+        }),
+      r.ctx,
+    );
+    const itEmail = `it-${newId().slice(-6)}@${domain}`;
+    await o.member([{ roleKey: 'sso_admin', scopeType: 'organization' }], itEmail);
+    const s = await signInWithMfa(h, itEmail);
+    expect(s.ctx.authz.can('identity.role.assign')).toBe(false);
+    // The guardrail: IT cannot map any group to org_admin …
+    await expect(
+      o.tx(
+        (tx) =>
+          identity.setGroupRoleMappings(tx, h.ports, [
+            { group: 'it', roleKey: 'org_admin', scopeType: 'organization' },
+          ]),
+        s.ctx,
+      ),
+    ).rejects.toMatchObject({ code: 'forbidden' });
+    // … but may change which claim carries the groups: not a root change (issuer, domains, trust unchanged).
+    const conn = await o.tx((tx) => identity.getSsoConnection(tx), s.ctx);
+    await o.tx(
+      (tx) =>
+        identity.configureSso(
+          tx,
+          h.ports,
+          {
+            displayName: 'Resort W2',
+            issuer,
+            clientId: 'c',
+            allowedEmailDomains: [domain],
+            groupsClaim: 'nickname', // a profile claim people edit themselves in many IdPs
+          },
+          conn?.version,
+        ),
+      s.ctx,
+    );
+    // IT links their own IdP account (proof: password session + fresh TOTP) with nickname "admins".
+    const start = await identity.startSsoLink(h.t.db, h.ports, s.ctx);
+    const { code, state } = idp.authorize(start.authorizationUrl, {
+      sub: 'it-1',
+      email: itEmail,
+      email_verified: true,
+      nickname: 'admins',
+      amr: ['mfa'],
+    });
+    const it = await identity.completeSsoLogin(h.t.db, h.ports, {
+      state,
+      code,
+      browserBinding: start.browserBinding,
+    });
+    const ctx = await authenticate(h, it.token);
+    expect(ctx?.authz.can('identity.role.assign')).toBe(true);
+    expect(ctx?.authz.can('platform.dataAuthority.manage')).toBe(true);
+  });
+});
+
+describe('REVIEW-3 PoC W-3: identity.sso.manage deletes a mapping it could never have created', () => {
+  it('replacing the mappings strips SSO administrators of org_admin at their next sign-in (no power ordering)', async () => {
+    const domain = `reef${newId().slice(-6)}.mv`;
+    const { o, idp } = await ssoOrg('Resort W3', domain);
+    const root = await o.member([{ roleKey: 'org_admin', scopeType: 'organization' }]);
+    const r = await signInWithMfa(h, root.email);
+    await o.tx(
+      (tx) =>
+        identity.createRole(tx, h.ports, {
+          key: 'sso_admin',
+          name: 'SSO administrator',
+          permissions: ['identity.sso.manage', 'identity.user.read'],
+        }),
+      r.ctx,
+    );
+    const boss = await ssoSignIn(idp, o.tenantId, {
+      sub: 'boss',
+      email: `boss@${domain}`,
+      groups: ['admins'],
+      amr: ['mfa'],
+    });
+    expect((await authenticate(h, boss.token))?.authz.can('identity.role.assign')).toBe(true);
+    const itMember = await o.member([{ roleKey: 'sso_admin', scopeType: 'organization' }]);
+    const s = await signInWithMfa(h, itMember.email);
+    // IT holds none of the mapped roles' permissions, yet may delete every mapping (only NEW mappings are checked).
+    await o.tx((tx) => identity.setGroupRoleMappings(tx, h.ports, []), s.ctx);
+    const again = await ssoSignIn(idp, o.tenantId, {
+      sub: 'boss',
+      email: `boss@${domain}`,
+      groups: ['admins'],
+      amr: ['mfa'],
+    });
+    expect((await authenticate(h, again.token))?.authz.can('identity.role.assign')).toBe(false);
+  });
+});
+
+describe('REVIEW-3 PoC W-4: a domain verification that is never re-checked lets another org consent for a person', () => {
+  it('an org that once verified the domain JIT-verifies a newly invited person, accepts the hotel’s invitation for them and blocks rule 14', async () => {
+    const domain = `atoll${newId().slice(-6)}.mv`;
+    const { o: x, idp } = await ssoOrg('Former management company', domain);
+    const claim = await x.tx((tx) => identity.addSsoDomain(tx, domain));
+    txt.set(claim.txtRecord.name, [claim.txtRecord.value]);
+    await identity.verifySsoDomain(h.t.db, x.ctx, h.ports, domain);
+    txt.delete(claim.txtRecord.name); // DNS control lost (contract ended); nothing ever re-checks
+
+    const hotel = await org(h, { name: 'Hotel (live)' });
+    const email = `newhire-${newId().slice(-6)}@${domain}`;
+    await hotel.tx((tx) =>
+      identity.inviteMember(tx, h.ports, {
+        email,
+        displayName: 'New finance manager',
+        roles: [{ roleKey: 'org_admin', scopeType: 'organization' }],
+      }),
+    );
+    const realToken = invitationToken(h, email);
+    // X's IdP asserts the person: JIT in X, and the sign-in counts as global email verification (rule 12).
+    const s = await ssoSignIn(idp, x.tenantId, { sub: 'nh', email, groups: ['staff'] });
+    const ctx = await authenticate(h, s.token);
+    if (!ctx) throw new Error('no ctx');
+    const mine = await identity.listMyInvitations(h.t.db, ctx.actor);
+    expect(mine.map((i) => i.organizationId)).toContain(hotel.tenantId);
+    await identity.acceptMembershipAsSelf(h.t.db, ctx.actor, hotel.tenantId); // consent forged by X
+    const m = await hotel.tx((tx) => identity.getMember(tx, s.userId));
+    expect(m.status).toBe('active');
+    // The real person's own link is now dead …
+    await expect(
+      identity.acceptInvitation(h.t.db, h.ports, { token: realToken, password: 'my-own-password-1' }),
+    ).rejects.toMatchObject({ code: 'unauthenticated' });
+    // … and rule 14 is bypassed: a third org's invitation link no longer lets them choose a first password.
+    const k = await org(h, { name: 'Another hotel' });
+    await k.tx((tx) => identity.inviteMember(tx, h.ports, { email, displayName: 'x', roles: [] }));
+    await expect(
+      identity.acceptInvitation(h.t.db, h.ports, {
+        token: invitationToken(h, email),
+        password: 'my-own-password-1',
+      }),
+    ).rejects.toMatchObject({ code: 'sign_in_to_accept' });
+  });
+});
+
+describe('REVIEW-3 PoC W-5: first verification elsewhere locks an SSO-only member out of an SSO-required org', () => {
+  it('the wipe removes the link; SSO then needs proof, password sign-in is refused, domain verification does not help', async () => {
+    const domain = `isle${newId().slice(-6)}.mv`;
+    const { o: a, idp } = await ssoOrg('Org A (SSO required)', domain);
+    const p = await ssoSignIn(idp, a.tenantId, { sub: 'p', email: `pat@${domain}`, groups: ['staff'] });
+    // Setup only: A requires SSO (the enforcement flow itself is not under test here).
+    await sql`update identity.sso_connections set sso_required = true where tenant_id = ${a.tenantId}::uuid`.execute(
+      h.t.admin.kysely,
+    );
+    // Pat joins another organization through its emailed invitation (or simply resets a password).
+    const b = await org(h, { name: 'Org B' });
+    await b.tx((tx) => identity.inviteMember(tx, h.ports, { email: `pat@${domain}`, displayName: 'Pat', roles: [] }));
+    await identity.acceptInvitation(h.t.db, h.ports, {
+      token: invitationToken(h, `pat@${domain}`),
+      password: 'pats-own-password',
+    });
+    expect(await authenticate(h, p.token)).toBeNull();
+    await expect(
+      ssoSignIn(idp, a.tenantId, { sub: 'p', email: `pat@${domain}`, groups: ['staff'] }),
+    ).rejects.toMatchObject({ code: 'unauthenticated' }); // existing_credentials_require_proof
+    await expect(
+      identity.login(h.t.db, { email: `pat@${domain}`, password: 'pats-own-password', organizationId: a.tenantId }),
+    ).rejects.toMatchObject({ code: 'sso_required' }); // so no password session in A for /me/sso/link
+    // README says A can re-link "after domain verification": it cannot.
+    const claim = await a.tx((tx) => identity.addSsoDomain(tx, domain));
+    txt.set(claim.txtRecord.name, [claim.txtRecord.value]);
+    await identity.verifySsoDomain(h.t.db, a.ctx, h.ports, domain);
+    await expect(
+      ssoSignIn(idp, a.tenantId, { sub: 'p', email: `pat@${domain}`, groups: ['staff'] }),
+    ).rejects.toMatchObject({ code: 'unauthenticated' });
+  });
+});
+
+describe('REVIEW-3 PoC W-6: the orphan-link purge relies on RLS alone (superuser owner = cross-tenant check)', () => {
+  it('as the test/migration superuser, a link in X survives because the person has a membership in ANOTHER tenant', async () => {
+    const domain = `cay${newId().slice(-6)}.mv`;
+    const { o: x, idp } = await ssoOrg('Org X', domain);
+    const s = await ssoSignIn(idp, x.tenantId, { sub: 'z', email: `zoe@${domain}`, groups: ['staff'] });
+    const y = await org(h, { name: 'Org Y' });
+    await y.tx((tx) => identity.inviteMember(tx, h.ports, { email: `zoe@${domain}`, displayName: 'Zoe', roles: [] }));
+    // Make X's link an orphan the way an out-of-band membership deletion would (removeMember now deletes links).
+    await sql`delete from identity.role_assignments where tenant_id = ${x.tenantId}::uuid and user_id = ${s.userId}::uuid`.execute(
+      h.t.admin.kysely,
+    );
+    await sql`delete from identity.memberships where tenant_id = ${x.tenantId}::uuid and user_id = ${s.userId}::uuid`.execute(
+      h.t.admin.kysely,
+    );
+    await sql`select identity.purge_orphan_sso_links()`.execute(h.t.db.kysely);
+    const left = await h.t.admin.kysely
+      .selectFrom('identity.sso_identities')
+      .select('id')
+      .where('tenant_id', '=', x.tenantId)
+      .where('user_id', '=', s.userId)
+      .execute();
+    expect(left).toHaveLength(1); // not purged: the NOT EXISTS saw Y's membership
+  });
+});

@@ -69,7 +69,7 @@ regression test made from the reviewer's attack.
 
 - **The orchestrator commits only explicit paths.** Two commits (`1179c98`, `012652e`) used broad `git add docs/…`
   paths and swept a running reviewer's unfinished report and PoC files into main. From 17:30, commits name exact
-  files; reviewers' in-progress files are committed only after they report.
+  files. A running reviewer's files are committed only as explicitly labelled WIP, and again when it reports.
 - **The first canary ran at 17:30 (C-L1-01).** A planted signature change in `apps/api` was caught by the worker's
   typecheck once `apps/*` joined the turbo inputs, closing escape E-038.
 
