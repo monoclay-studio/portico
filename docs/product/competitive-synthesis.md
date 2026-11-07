@@ -149,7 +149,7 @@ evidence described in `docs/scenarios/README.md` and the usability targets in `u
   connected only after go-live (R03 §7.4–7.6).
 - **Portico takes and improves:** type-agnostic units and composites (INV-R01–R07), availability explanations
   (INV-R28), payment schedule templates (RAT-R20) executed by collection plans, guided setup with profile defaults
-  (PLT-R35, `editions.md` §6), connections set up and validated **before** go-live (INT-R06).
+  (PLT-R41, `editions.md` §6), connections set up and validated **before** go-live (INT-R06).
 
 ### RoomRaccoon
 - **Real advantage:** easy all-in-one for small independents with auto-pricing and upsell built in; fixed 28-day

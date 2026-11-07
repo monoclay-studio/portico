@@ -207,6 +207,11 @@ delay_seconds, queue_depth, error_rate)` · `agent(id, connection_id, version, l
 `webhook_subscription`, `webhook_delivery` · wave 2: `import_job`, `import_record`, `reconciliation_report`,
 `archive_item`, `export_job`.
 
+**Glossary "Integration status" mapping:** `supported` = a connector definition exists for the workflow; `configured` =
+setup journey completed through step 5 for a property; `tested` = step 6 validation passed (sandbox or no-effect
+calls); `live` = connection `active` in a `live` organization exchanging production data. These are never collapsed and
+are reported alongside the R1–R9 readiness level.
+
 **Connection:** `draft → authorizing → mapping → validating → ready → active` (setup steps 1–8) ·
 `active ⇄ paused` (with impact preview) · `active → degraded → active` (automatic by health) ·
 `active|paused → credentials_invalid → authorizing` (re-authorize) · `active|paused → disconnecting → disconnected`

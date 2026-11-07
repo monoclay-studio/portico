@@ -73,7 +73,7 @@ invoice series (`finance`); unit types and units (`inventory`); owner statements
   date, check-in/out times, unit noun defaults, languages, address (atoll/island for the Maldives), version.
 - **PLT-R12** [MUST] **Property profile** ∈ `guesthouse`, `boutique_hotel`, `hotel` (full-service hotel),
   `resort`, `serviced_apartments`, `hostel`. The profile supplies policy and feature-visibility defaults
-  (`docs/product/editions.md` §5); it never grants entitlements; changing it is previewed and deletes nothing.
+  (`docs/product/editions.md` §6); it never grants entitlements; changing it is previewed and deletes nothing.
 - **PLT-R13** [MUST] **Classification** is the tax-relevant attribute (e.g. `mv.establishmentType`,
   `mv.inhabitedIsland`, `mv.roomCount`); tax rules reference classification, never profile. Changes are
   effective-dated (proposed: history table) so historical tax computations stay reproducible.
@@ -170,6 +170,15 @@ invoice series (`finance`); unit types and units (`inventory`); owner statements
 - **PLT-R40** [MUST] `isFeatureVisible(propertyId, featureKey)` = entitlement **and** visibility policy
   `ui.features.<key>.visible` (profile defaults) **and** the module is usable under the property's data authority
   (e.g. folios hidden when `charges` is external).
+
+### 3.11 Guided setup
+
+- **PLT-R41** [SHOULD] Property setup wizard by profile: minimal path for a guesthouse (≈ 8 steps: property,
+  legal entity, units, rates and meal plans, taxes, payments, channels, staff), guided sections for a resort; every
+  step saves and is resumable; ends in a valid `setup` property with a go-live checklist (adoption brief §11
+  "useful defaults, guided setup").
+- **PLT-R42** [SHOULD] Configuration export/import as versioned JSON (used by clone, templates, trial carry-forward and
+  migration tooling).
 
 ## 4. Entities and states
 

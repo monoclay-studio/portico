@@ -8,7 +8,7 @@ Aligned with the foundation on `main` (`modules/identity`, ADR-0012).
 Decide, for every request, **who** is acting and **whether** they may do this here. Staff users, API clients,
 AI agents acting for a user, and Monoclay support staff all pass through the same authorization path. Hotel
 staff change jobs, properties and shifts constantly; the module must make onboarding, transfers and
-membership removals fast and safe, and must make every privileged action attributable.
+offboarding fast and safe, and must make every privileged action attributable.
 
 ## 2. Scope and non-goals
 
@@ -159,7 +159,7 @@ Every module registers permissions through its `ModuleManifest`.
 
 Emitted: `identity.membership.invited|activated|suspended|removed`, `identity.roleAssignment.changed`,
 `identity.elevation.started|ended`, `identity.supportSession.started|ended`, `identity.apiClient.created|revoked`.
-Consumed: `platform.property.lifecycleChanged` (archived properties drop from accessible lists).
+Consumed: `platform.property.statusChanged` (proposed; `inactive` properties drop from operational lists).
 
 ## 8. Permissions
 

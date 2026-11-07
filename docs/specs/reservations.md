@@ -225,7 +225,7 @@ expires_at)` (short TTL).
 | in_house | ✓ reverse check-in (same business date, no room/package postings yet) | | ✓ check-out | | | |
 | departed | | ✓ reinstate (before Day Close of departure business date) | | | | |
 | cancelled | ✓ reinstate (booking reinstated, availability) | | | | | |
-| no_show | ✓ reinstate (before ledger close of the arrival business date; availability for remaining nights) | | | | | |
+| no_show | ✓ reinstate (before the finance period containing the arrival business date is closed; availability for remaining nights) | | | | | |
 
 Derived (never stored): *arriving today*, *departing today*, *early departure*, *overstay* (in_house and business
 date ≥ departure), *late arrival* (ETA passed), *waiting* (checked-in-pending unit readiness flag on arrival).
