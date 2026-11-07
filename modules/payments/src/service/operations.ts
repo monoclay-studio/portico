@@ -125,12 +125,8 @@ export async function assertBreakerAllows(
 }
 
 async function updateBreaker(tx: TxContext, account: AccountRow, outcome: ProviderOutcome): Promise<void> {
-  if (
-    outcome.kind === 'failed' &&
-    (outcome.code === 'provider_not_configured' || outcome.code === 'expired_before_sending')
-  ) {
-    return;
-  }
+  // Failures decided before anything reached the provider say nothing about the provider's health.
+  if (outcome.kind === 'failed' && LOCAL_FAILURE_CODES.has(outcome.code)) return;
   const before = await loadBreaker(tx, account.id);
   const failure = outcome.kind === 'unavailable' || outcome.kind === 'unknown';
   const after = failure ? recordFailure(before, tx.now, outcome.reason) : recordSuccess(before, tx.now);
@@ -437,12 +433,17 @@ async function send(
   }
 }
 
-const NEVER_SENT_CODES = new Set([
+const NEVER_SENT_CODES: ReadonlySet<string> = new Set([
   'effect_blocked_in_environment',
   'recorded_only_account',
   'simulator_in_live',
   'stripe_key_mode_mismatch',
   'stripe_account_missing',
+]);
+const LOCAL_FAILURE_CODES: ReadonlySet<string> = new Set([
+  ...NEVER_SENT_CODES,
+  'provider_not_configured',
+  'expired_before_sending',
 ]);
 
 /**

@@ -164,4 +164,30 @@ describe('scenario s05: payment succeeds at the provider but the response times 
     expect((await svc.view.payment(org.ctx, p.id)).status.payment).toBe('succeeded');
     expect(await postings(h, org, 'payment')).toHaveLength(1);
   });
+
+  it('if finance refuses the posting, the confirmed payment stays true and is posted once on retry', async () => {
+    const org = await setupOrg(h);
+    const svc = h.module.service;
+    const methodId = await addMethod(h, org);
+    h.ledger.failWith = 'Folio is closed for posting';
+    const p = await svc.chargeNow(org.ctx, {
+      propertyId: org.propertyId,
+      methodId,
+      amount: { amountMinor: 4_200, currency: 'USD' },
+      ref: { type: 'folio', id: newId() },
+      initiator: 'customer',
+      businessKey: newId(),
+    });
+    expect(p.status).toMatchObject({ payment: 'succeeded', ledger: 'failed' });
+    expect(p.issues.find((i) => i.code === 'ledger_not_posted')).toMatchObject({ severity: 'blocking' });
+    const open = await org.tx((tx) => svc.tx.listExceptions(tx, { status: 'open' }));
+    expect(open.find((e) => e.kind === 'ledger_posting_failed')).toMatchObject({ ownerRole: 'finance' });
+    h.ledger.failWith = null;
+    await svc.runReconciliation(org.ctx, { propertyId: org.propertyId });
+    await svc.runReconciliation(org.ctx, { propertyId: org.propertyId });
+    expect((await svc.view.payment(org.ctx, p.id)).status.ledger).toBe('posted');
+    expect(await postings(h, org, 'payment')).toHaveLength(1);
+    const after = await org.tx((tx) => svc.tx.listExceptions(tx, { status: 'open' }));
+    expect(after.map((e) => e.kind)).not.toContain('ledger_posting_failed');
+  });
 });
