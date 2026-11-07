@@ -72,6 +72,7 @@ export async function folioRecord(
     currency: string;
     owner: { type: string; id: string };
     payer: { type: string; id?: string; name: string };
+    payerNameUnresolved: boolean;
     supplementaryOf: string | null;
     postDeparture: boolean;
     reopenedReason: string | null;
@@ -236,6 +237,13 @@ export async function folioRecord(
       code: 'payments_awaiting_verification',
       severity: 'info',
       message: `${unverified.length} recorded payment(s) on this folio are awaiting verification against the bank or acquirer statement.`,
+    });
+  }
+  if (f.payerNameUnresolved && f.status !== 'voided') {
+    issues.push({
+      code: 'payer_name_missing',
+      severity: 'warning',
+      message: `The payer's name is not known yet ("${f.payer.name}" is a placeholder). Add the buyer's name before issuing a tax invoice.`,
     });
   }
   if (f.reopenedReason)

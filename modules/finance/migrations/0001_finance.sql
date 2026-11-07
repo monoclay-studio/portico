@@ -86,6 +86,9 @@ create table finance.folios (
   payer_type       text not null check (payer_type in ('guest', 'company', 'agency', 'house')),
   payer_id         uuid,
   payer_name       text not null,
+  -- The caller referenced the payer without a name and no directory could resolve it: the name shown is a
+  -- placeholder, and a live tax invoice is refused until the buyer's name is supplied.
+  payer_name_unresolved boolean not null default false,
   label            text,
   currency         char(3) not null,
   is_default       boolean not null default false,

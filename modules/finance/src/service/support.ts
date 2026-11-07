@@ -39,13 +39,25 @@ export function isUniqueViolation(err: unknown): boolean {
   return pgCode(err) === '23505';
 }
 
-/** A TxContext whose authorizer additionally grants the given finance permissions (provider delegation). */
-export function delegated(tx: TxContext, permissions: readonly string[]): TxContext {
+/**
+ * A TxContext whose authorizer additionally grants the given finance permissions (provider delegation, ADR-0015).
+ * `propertyId` scopes the grant: a string grants only at that property (and checks that name no property, such as
+ * legal-entity ledger operations); `null` grants only checks without a property; omitted grants everywhere — used
+ * only by finance itself after it has checked the actor's own permission for the command.
+ */
+export function delegated(tx: TxContext, permissions: readonly string[], propertyId?: string | null): TxContext {
   const base: Authorizer = tx.authz;
+  const covers = (scope?: { propertyId?: string | null }) =>
+    propertyId === undefined || !scope?.propertyId || scope.propertyId === propertyId;
   const authz: Authorizer = {
-    can: (permission, scope) => permissions.includes(permission) || base.can(permission, scope),
-    propertyScope: (permission) =>
-      permissions.includes(permission) ? 'all' : base.propertyScope(permission),
+    can: (permission, scope) => (permissions.includes(permission) && covers(scope)) || base.can(permission, scope),
+    propertyScope: (permission) => {
+      if (!permissions.includes(permission)) return base.propertyScope(permission);
+      if (propertyId === undefined) return 'all';
+      const own = base.propertyScope(permission);
+      if (own === 'all') return 'all';
+      return propertyId === null || own.includes(propertyId) ? own : [...own, propertyId];
+    },
   };
   return { ...tx, authz };
 }

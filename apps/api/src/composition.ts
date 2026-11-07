@@ -40,7 +40,7 @@ import {
   inventoryManifest,
   inventorySearch,
 } from '@portico/inventory';
-import { fieldCryptoFromEnv, type ModuleManifest, systemAuthorizer } from '@portico/kernel';
+import { fieldCryptoFromEnv, type ModuleManifest, NotFoundError, systemAuthorizer } from '@portico/kernel';
 import { platform, platformHttp, platformManifest, platformSearch } from '@portico/platform';
 import { recordsHttp } from './records-routes';
 import type { DemoSeedStep } from './seed/demo';
@@ -130,6 +130,19 @@ export function compose(database: PorticoDatabase): Composition {
       assertWritable: platform.assertWritable,
     },
     ...unavailableFinancePorts(),
+    // Payer names for folios and tax invoices: guest profiles by id (companies/agencies when that module exists).
+    payers: {
+      async describePayer(tx, input) {
+        if (input.type !== 'guest') return null;
+        try {
+          const p = await guestsService.getProfile(asSystem(tx), input.id, { propertyId: input.propertyId });
+          return { name: p.displayName };
+        } catch (err) {
+          if (err instanceof NotFoundError) return null;
+          throw err;
+        }
+      },
+    },
   };
   const finance = createFinance(financePorts);
   const financeModule = financeHttp({ database, finance });

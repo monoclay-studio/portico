@@ -477,7 +477,7 @@ async function usdConversion(
 export interface IssueInvoiceInput {
   folioId: string;
   seriesId?: string;
-  payerDetails?: { address?: string; taxId?: string; email?: string };
+  payerDetails?: { name?: string; address?: string; taxId?: string; email?: string };
   idempotencyKey: string;
 }
 
@@ -519,11 +519,32 @@ export async function issueInvoice(
       { note: pack.note ?? null },
     );
   }
+  // Buyer name: the folio's, unless it is a placeholder — then the name given now, or the payer directory's.
+  let buyerName = folio.payer_name_unresolved ? null : folio.payer_name;
+  let named: { name: string; taxId?: string; address?: string } | null = null;
+  if (input.payerDetails?.name?.trim()) named = { name: input.payerDetails.name.trim() };
+  else if (!buyerName && folio.payer_id && folio.payer_type !== 'house') {
+    named = await deps.ports.payers.describePayer(tx, {
+      type: folio.payer_type as 'guest' | 'company' | 'agency',
+      id: folio.payer_id,
+      propertyId: folio.property_id,
+    });
+  }
+  if (named) buyerName = named.name;
+  if (!buyerName && live) {
+    throw new BusinessRuleError(
+      'buyer_name_required',
+      `The payer of this folio is only known as "${folio.payer_name}". Enter the buyer's name (and tax number for a business) to issue the tax invoice.`,
+      { folioId: folio.id },
+    );
+  }
+  const taxId = input.payerDetails?.taxId ?? named?.taxId;
+  const address = input.payerDetails?.address ?? named?.address;
   const buyer = {
-    name: folio.payer_name,
+    name: buyerName ?? folio.payer_name,
     type: folio.payer_type,
-    ...(input.payerDetails?.taxId ? { taxId: input.payerDetails.taxId } : {}),
-    ...(input.payerDetails?.address ? { address: input.payerDetails.address } : {}),
+    ...(taxId ? { taxId } : {}),
+    ...(address ? { address } : {}),
   };
   const check = particulars(le, buyer);
   if (live && check.missing.length) {
@@ -656,6 +677,21 @@ export async function issueInvoice(
     propertyId: folio.property_id,
     after: { documentNumber: result.document_number, total: totals.totalMinor },
   });
+  if (folio.payer_name_unresolved && named) {
+    // The buyer named for the invoice becomes the folio's payer name (it was a placeholder).
+    await db(tx)
+      .updateTable('finance.folios')
+      .set({ payer_name: named.name, payer_name_unresolved: false, updated_at: tx.now, version: sql`version + 1` })
+      .where('id', '=', folio.id)
+      .execute();
+    await tx.audit({
+      action: 'finance.folio.payerNamed',
+      target: { type: 'folio', id: folio.id },
+      propertyId: folio.property_id,
+      before: { payerName: folio.payer_name },
+      after: { payerName: named.name },
+    });
+  }
   await tx.emit({
     type: 'finance.invoice.issued',
     propertyId: folio.property_id,

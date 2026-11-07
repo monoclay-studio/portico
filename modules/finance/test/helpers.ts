@@ -19,6 +19,8 @@ export interface Harness {
   ports: FinancePorts;
   collections: CollectionRequest[];
   tax: FakeTax;
+  /** Fake payer directory (guests): payer id → name. */
+  payerNames: Map<string, string>;
 }
 
 /**
@@ -117,6 +119,7 @@ export class FakeTax {
 export async function startHarness(): Promise<Harness> {
   const t = await createTestDatabase(sourcesFromManifests([platformManifest, financeManifest]));
   const collections: CollectionRequest[] = [];
+  const payerNames = new Map<string, string>();
   const tax = new FakeTax();
   const asSystem = (tx: TxContext): TxContext => ({ ...tx, authz: systemAuthorizer });
   const ports: FinancePorts = {
@@ -160,8 +163,14 @@ export async function startHarness(): Promise<Harness> {
         return { status: 'requested' };
       },
     },
+    payers: {
+      async describePayer(_tx, input) {
+        const name = payerNames.get(input.id);
+        return name ? { name } : null;
+      },
+    },
   };
-  return { t, finance: createFinance(ports), ports, collections, tax };
+  return { t, finance: createFinance(ports), ports, collections, tax, payerNames };
 }
 
 export interface Org {

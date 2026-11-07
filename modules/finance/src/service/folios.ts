@@ -57,15 +57,43 @@ async function folioView(tx: TxContext, r: FolioRow, balanceMinor: number): Prom
   return toFolio(r, balanceMinor, invoicingState(inv.invoiced, inv.uninvoicedCharges));
 }
 
+/** Provider form of `openFolio`: another module may reference the payer by id only (the name is then resolved). */
+export type OpenFolioCommand = Omit<OpenFolioInput, 'payer'> & {
+  payer: { type: OpenFolioInput['payer']['type']; id?: string; name?: string };
+};
+
+const PLACEHOLDER_PAYER: Record<OpenFolioInput['payer']['type'], string> = {
+  guest: 'Guest',
+  company: 'Company account',
+  agency: 'Travel agency',
+  house: 'House account',
+};
+
 /** Open a folio for a payer. The first folio of an owner becomes its default folio. */
 export async function openFolio(
   tx: TxContext,
   deps: Deps,
-  input: OpenFolioInput,
+  command: OpenFolioCommand,
 ): Promise<{ folioId: string }> {
-  requirePermission(tx, 'finance.folio.manage', { propertyId: input.propertyId });
-  await deps.ports.platform.assertWritable(tx, input.propertyId, 'charges');
-  const property = await deps.ports.platform.getProperty(tx, input.propertyId);
+  requirePermission(tx, 'finance.folio.manage', { propertyId: command.propertyId });
+  await deps.ports.platform.assertWritable(tx, command.propertyId, 'charges');
+  const property = await deps.ports.platform.getProperty(tx, command.propertyId);
+  // A payer referenced by id only is named from the directory (guests); otherwise a placeholder is kept and
+  // flagged, and a live tax invoice asks for the buyer's name before it is issued.
+  let payerName = command.payer.name?.trim() || null;
+  if (!payerName && command.payer.id && command.payer.type !== 'house') {
+    const found = await deps.ports.payers.describePayer(tx, {
+      type: command.payer.type,
+      id: command.payer.id,
+      propertyId: command.propertyId,
+    });
+    payerName = found?.name.trim() || null;
+  }
+  const unresolved = !payerName && command.payer.type !== 'house';
+  const input: OpenFolioInput = {
+    ...command,
+    payer: { ...command.payer, name: payerName ?? PLACEHOLDER_PAYER[command.payer.type] },
+  };
   // Serialize folio creation per owner so "first folio is default" holds under concurrency.
   await sql`select pg_advisory_xact_lock(hashtext(${`finance.folio-owner:${input.owner.type}:${input.owner.id}`}))`.execute(
     tx.db,
@@ -105,6 +133,7 @@ export async function openFolio(
       payer_type: input.payer.type,
       payer_id: input.payer.id ?? null,
       payer_name: input.payer.name,
+      payer_name_unresolved: unresolved,
       label: input.label ?? null,
       currency,
       is_default: isDefault,
@@ -118,7 +147,7 @@ export async function openFolio(
     action: 'finance.folio.open',
     target: { type: 'folio', id },
     propertyId: input.propertyId,
-    after: { ...input, currency, isDefault },
+    after: { ...input, currency, isDefault, payerNameUnresolved: unresolved },
   });
   await tx.emit({
     type: 'finance.folio.opened',
@@ -203,6 +232,7 @@ export async function getFolio(tx: TxContext, folioId: string): Promise<FolioDet
     currency: f.currency,
     owner: view.attachedTo,
     payer: view.payer,
+    payerNameUnresolved: f.payer_name_unresolved,
     supplementaryOf: f.supplementary_of,
     postDeparture: f.post_departure,
     reopenedReason: f.reopened_reason,

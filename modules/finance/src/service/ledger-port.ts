@@ -195,6 +195,8 @@ export async function recordDisputeMovement(
     disputeRef: EntityRef;
     amount: Money;
     kind: 'debit' | 'reversal';
+    /** Clearing provider key when the original payment is not in the ledger (per-acquirer clearing account). */
+    provider?: string;
     idempotencyKey: string;
   },
 ): Promise<{ journalEntryId: string; replayed: boolean }> {
@@ -207,8 +209,8 @@ export async function recordDisputeMovement(
   if (prior) return { journalEntryId: prior, replayed: true };
   await deps.ports.platform.getLegalEntity(tx, input.legalEntityId);
   const original = await findOriginalPayment(tx, input.paymentRef).catch(() => null);
-  const { method, provider } = decodeMethod(original?.paymentMethod ?? 'card');
-  const clearing = clearingSide(method, provider, null).accountKey;
+  const decoded = decodeMethod(original?.paymentMethod ?? 'card');
+  const clearing = clearingSide(decoded.method, decoded.provider ?? input.provider ?? null, null).accountKey;
   const businessDate = tx.now.toISOString().slice(0, 10);
   const claim = await claimEntry(tx, {
     legalEntityId: input.legalEntityId,
@@ -338,7 +340,6 @@ export async function markPaymentVerified(
     scope?: { propertyId: string; legalEntityId: string };
   },
 ): Promise<{ verified: boolean; replayed: boolean }> {
-  requirePermission(tx, 'finance.posting.create');
   const exists = await db(tx).selectFrom('finance.payment_verifications').select('id').where('idempotency_key', '=', input.idempotencyKey).executeTakeFirst();
   if (exists) return { verified: true, replayed: true };
   const posting = await db(tx)
@@ -361,6 +362,7 @@ export async function markPaymentVerified(
   if (!owner) {
     throw new BusinessRuleError('payment_not_found', 'The payment to verify is not recorded in the ledger.', { paymentRef: input.paymentRef });
   }
+  requirePermission(tx, 'finance.posting.create', { propertyId: owner.property_id });
   if (input.scope && (owner.property_id !== input.scope.propertyId || owner.legal_entity_id !== input.scope.legalEntityId)) {
     throw new BusinessRuleError(
       'scope_mismatch',

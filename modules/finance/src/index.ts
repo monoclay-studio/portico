@@ -12,7 +12,9 @@ export {
   financeLedgerForPayments,
   financeProvider,
   financeSubscriptions,
+  fromReservationsTaxLine,
   PROVIDER_DELEGATION,
+  type ProviderScope,
 } from './service';
 export { DEFAULT_CHARGE_CODES } from './service/setup';
 export type { FinanceDB } from './tables';

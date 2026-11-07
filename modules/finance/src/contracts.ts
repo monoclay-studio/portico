@@ -477,6 +477,8 @@ export const issueInvoiceInput = z.object({
   seriesId: uuid.optional(),
   payerDetails: z
     .object({
+      /** Buyer name for the invoice when the folio's payer name is a placeholder (also stored on the folio). */
+      name: z.string().min(1).max(200).optional(),
       address: z.string().max(500).optional(),
       taxId: z.string().max(100).optional(),
       email: z.email().optional(),

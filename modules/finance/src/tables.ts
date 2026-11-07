@@ -57,6 +57,7 @@ export interface FoliosTable {
   payer_type: string;
   payer_id: string | null;
   payer_name: string;
+  payer_name_unresolved: Generated<boolean>;
   label: string | null;
   currency: string;
   is_default: boolean;

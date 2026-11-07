@@ -117,8 +117,18 @@ export interface PaymentsPort {
   ): Promise<{ status: 'requested' | 'not_possible' | 'unavailable'; detail?: string }>;
 }
 
+/** Payer particulars for folios and tax invoices (guests for people; companies/agencies when that module exists). */
+export interface PayerDirectoryPort {
+  /** Name and invoice particulars of a payer referenced by id, or null when unknown. Must not throw for unknown ids. */
+  describePayer(
+    tx: TxContext,
+    input: { type: 'guest' | 'company' | 'agency'; id: string; propertyId: string },
+  ): Promise<{ name: string; taxId?: string; address?: string } | null>;
+}
+
 export interface FinancePorts {
   platform: PlatformPort;
   tax: TaxPort;
   payments: PaymentsPort;
+  payers: PayerDirectoryPort;
 }
