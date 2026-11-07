@@ -78,9 +78,7 @@
   (late-charge auto card). Renumber integration-step's question to the next free number (≥ Q156) when merging.
 
 - **2026-11-07 17:32 UTC — quality-driven queue additions** (`docs/quality/retros/2026-11-07-day1.md`):
-  - (1) **P0 re-attack sweep**: one review agent from `playbooks/steward-reviewer.md` re-attacks the 14 P0 fixes
-    already on main (none were re-attacked after fixing). Launch after the identity third review and the
-    integration-step fix round.
+  - (1) **P0/P1 fix re-attack sweep**: LAUNCHED 17:59 from steward playbook v2.1 → `reviews/review-fix-sweep.md`.
   - (2) Resume the quality steward after that batch: integration-step review, backoffice merge, identity review 3.
   - (3) Canaries C-L1-02 and C-L1-03 at the next merge batch (CPU only).
 

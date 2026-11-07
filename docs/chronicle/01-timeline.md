@@ -200,4 +200,12 @@ Each agent's brief and report are in `agents/`.
 - **17:38 — Resumed** after the owner's re-login (5-hour 41%, seven-day 64%). The four agents were resumed by message
   with their transcripts intact: integration-step fixes, identity fix round 4, parity-ops, and quality steward
   round 1.
+- **17:57 — Quality steward round 1 done:** 24 new escapes, 62 cumulative. Half of round 1's escapes came from
+  *fixes*: residuals of fixes already on main, defects fix rounds introduced, and reviewers' own recommendations.
+  - New: an orchestrator playbook (the orchestrator is now a measured loop, L-orch, with 8 escapes attributed),
+    steward v2.1, builder self-check v3, and the first scripted canaries (5/7 held).
+  - It caught a wrong pending-fix (`skip` is a call-site bug, not a vocabulary gap) and two orchestrator timestamps
+    still estimated. Both were corrected.
+- **17:59 — Fix re-attack sweep launched** over every merged P0 and money/security P1 fix, strictly from steward
+  playbook v2.1. It is the first run that measures v2.
 
