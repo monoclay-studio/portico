@@ -78,8 +78,27 @@ variable "repository_arn" {
 }
 
 variable "image_tag" {
-  type    = string
-  default = "latest-drill"
+  description = "The repository's mutable release tag, moved by every release (same commit as the application)."
+  type        = string
+  default     = "release"
+}
+
+variable "freshness_schedule_expression" {
+  description = "Daily freshness check (age of the newest passed evidence; orphan sweep)."
+  type        = string
+  default     = "cron(0 9 * * ? *)"
+}
+
+variable "max_evidence_age_days" {
+  description = "Page when the newest PASSED drill evidence is older than this."
+  type        = number
+  default     = 35
+}
+
+variable "assign_public_ip" {
+  description = "true only when the cell runs tasks in public subnets (opt-in); default private subnets behind NAT."
+  type        = bool
+  default     = false
 }
 
 variable "cpu_architecture" {

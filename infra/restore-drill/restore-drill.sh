@@ -13,8 +13,46 @@
 #   EVIDENCE_BUCKET METRIC_NAMESPACE   optional: DB_NAME (portico) INSTANCE_CLASS AWS_REGION
 set -euo pipefail
 
-: "${ENGINE:?}" "${SOURCE_ID:?}" "${DRILL_PREFIX:?}" "${DB_SUBNET_GROUP:?}" "${DRILL_SECURITY_GROUP_ID:?}"
-: "${KMS_KEY_ID:?}" "${EVIDENCE_BUCKET:?}" "${METRIC_NAMESPACE:?}"
+: "${ENGINE:?}" "${SOURCE_ID:?}" "${DRILL_PREFIX:?}" "${EVIDENCE_BUCKET:?}" "${METRIC_NAMESPACE:?}"
+MODE="${MODE:-drill}"
+MAX_AGE_DAYS="${MAX_EVIDENCE_AGE_DAYS:-35}"
+
+log() { echo "$(date -u +%FT%TZ) drill[$MODE]: $*"; }
+metric() { aws cloudwatch put-metric-data --namespace "$METRIC_NAMESPACE" --metric-name "$1" --value "$2" --unit "${3:-None}" || true; }
+
+# Copies left by a killed run (ECS stop, crash) cost money and keep production data: delete any drill copy older
+# than 6 hours. Runs daily (freshness mode) and before every drill.
+sweep_orphans() {
+  local cutoff n=0 id
+  cutoff="$(date -u -d '6 hours ago' +%FT%TZ)"
+  for id in $(aws rds describe-db-instances --query "DBInstances[?starts_with(DBInstanceIdentifier, '${DRILL_PREFIX}-drill-') && InstanceCreateTime < '${cutoff}'].DBInstanceIdentifier" --output text); do
+    log "orphaned drill instance $id: deleting"; n=$((n + 1))
+    aws rds delete-db-instance --db-instance-identifier "$id" --skip-final-snapshot --delete-automated-backups >/dev/null 2>&1 || true
+  done
+  for id in $(aws rds describe-db-clusters --query "DBClusters[?starts_with(DBClusterIdentifier, '${DRILL_PREFIX}-drill-') && ClusterCreateTime < '${cutoff}'].DBClusterIdentifier" --output text); do
+    log "orphaned drill cluster $id: deleting"; n=$((n + 1))
+    aws rds delete-db-cluster --db-cluster-identifier "$id" --skip-final-snapshot >/dev/null 2>&1 || true
+  done
+  metric RestoreDrillOrphansDeleted "$n" Count
+}
+
+# Freshness: publish the age (days) of the newest PASSED evidence. No evidence at all → a large age. If this task
+# cannot run (image missing, task failing) no datapoint is published and the alarm treats missing data as breaching.
+if [ "$MODE" = freshness ]; then
+  sweep_orphans
+  newest="$(aws s3api list-objects-v2 --bucket "$EVIDENCE_BUCKET" --prefix "restore-drills/${SOURCE_ID}/" \
+    --query "sort_by(Contents[?ends_with(Key, '-passed.json')], &LastModified)[-1].LastModified" --output text 2>/dev/null || echo None)"
+  if [ -z "$newest" ] || [ "$newest" = "None" ]; then
+    age=9999
+  else
+    age=$(( ($(date -u +%s) - $(date -u -d "$newest" +%s)) / 86400 ))
+  fi
+  metric RestoreDrillEvidenceAgeDays "$age" Count
+  log "newest passed evidence: ${newest:-none} (age ${age} days; alarm above ${MAX_AGE_DAYS})"
+  exit 0
+fi
+
+: "${DB_SUBNET_GROUP:?}" "${DRILL_SECURITY_GROUP_ID:?}" "${KMS_KEY_ID:?}"
 DB_NAME="${DB_NAME:-portico}"
 INSTANCE_CLASS="${INSTANCE_CLASS:-db.t4g.medium}"
 STAMP="$(date -u +%Y%m%d-%H%M)"
@@ -23,9 +61,6 @@ WORK="$(mktemp -d)"
 STARTED="$(date -u +%s)"
 STATUS="failed"
 PW="$(openssl rand -hex 24)"
-
-log() { echo "$(date -u +%FT%TZ) drill: $*"; }
-metric() { aws cloudwatch put-metric-data --namespace "$METRIC_NAMESPACE" --metric-name "$1" --value "$2" --unit "${3:-None}" || true; }
 
 cleanup() {
   local rc=$?
@@ -60,6 +95,9 @@ write_evidence() {
 
 touch "$WORK/checks.txt"
 trap cleanup EXIT
+# ECS stops a task with SIGTERM (forwarded by the init process): exit, so the EXIT trap deletes the restored copy.
+trap 'log "SIGTERM: stopping, cleaning up"; exit 143' TERM
+sweep_orphans
 
 wait_cluster_settled() {
   for _ in $(seq 1 120); do
@@ -121,6 +159,12 @@ log "restored in ${RESTORE_SECONDS}s; running verification"
 metric RestoreDurationSeconds "$RESTORE_SECONDS" Seconds
 PGPASSWORD="$PW" psql "host=$HOST port=5432 dbname=$DB_NAME user=$MASTER sslmode=verify-full sslrootcert=/etc/ssl/certs/rds-global-bundle.pem" \
   -v ON_ERROR_STOP=1 -X -f /drill/verify.sql > "$WORK/checks.txt" 2>&1
+# A skipped check is not a passed check (review P3-3): the drill is "incomplete" and pages like a failure.
+if grep -q "SKIPPED" "$WORK/checks.txt"; then
+  STATUS="incomplete"
+  log "drill INCOMPLETE: $(grep -m1 SKIPPED "$WORK/checks.txt")"
+  exit 1
+fi
 STATUS="passed"
 metric RestoreDrillSuccess 1
 log "drill passed"

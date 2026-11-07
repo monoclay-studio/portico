@@ -4,8 +4,11 @@
 #   monthly  1st of the month, kept `monthly_retention_days`, copied to the DR region
 #
 # Covers the primary database and the documents bucket (S3 backups need versioning — enabled by the storage
-# module). The vault can be locked (governance mode) so a compromised admin credential cannot shorten retention
-# or delete recovery points silently. Copies to the DR region make the "full region loss" TARGET possible
+# module). The vault can be locked in GOVERNANCE mode: an ordinary credential cannot shorten retention or delete
+# recovery points, but an administrator with the bypass permission CAN — governance mode stops accidents, not a
+# compromised admin. What makes such a deletion non-silent are the account-security alarms (envs/bootstrap:
+# DeleteBackupVaultLockConfiguration, DeleteRecoveryPoint …). COMPLIANCE mode would stop the admin too but can never
+# be undone — an owner decision for production (README D17). Copies to the DR region make the "full region loss" TARGET possible
 # (docs/runbooks/disaster-recovery.md); they cost cross-region transfer ($0.086/GB from ap-south-1, AWS price
 # list 2026-11-05) plus storage in the DR region.
 #
@@ -123,6 +126,12 @@ data "aws_iam_policy_document" "assume" {
       type        = "Service"
       identifiers = ["backup.amazonaws.com"]
     }
+    # Confused-deputy guard (review P3-4): only this account's use of the service may assume the role.
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceAccount"
+      values   = [data.aws_caller_identity.current.account_id]
+    }
   }
 }
 
@@ -155,4 +164,26 @@ resource "aws_backup_vault_notifications" "primary" {
   backup_vault_name   = aws_backup_vault.primary.name
   sns_topic_arn       = var.notification_topic_arn
   backup_vault_events = ["BACKUP_JOB_FAILED", "COPY_JOB_FAILED", "RESTORE_JOB_FAILED"]
+}
+
+# ── "A backup or copy that did not happen pages someone" (v6 / AP-61) ──────────────────────────────────────────
+# Job-state notifications only fire for jobs that exist; a plan that never starts (deleted selection, broken role,
+# disabled schedule) is silent. These alarms page when no backup job and no DR copy job COMPLETED in two days;
+# missing data counts as breaching. Metric dimensions as documented for AWS/Backup [unverified until first apply].
+resource "aws_cloudwatch_metric_alarm" "missing" {
+  for_each            = { backup = "NumberOfBackupJobsCompleted", copy = "NumberOfCopyJobsCompleted" }
+  alarm_name          = "${var.name_prefix}-backup-${each.key}-missing"
+  alarm_description   = "No completed AWS Backup ${each.key} job in 2 days (daily schedule): cross-region recovery points are going stale. Runbook: docs/runbooks/backup-restore-verification.md"
+  namespace           = "AWS/Backup"
+  metric_name         = each.value
+  dimensions          = { BackupVaultName = aws_backup_vault.primary.name }
+  statistic           = "Sum"
+  period              = 86400
+  evaluation_periods  = 2
+  datapoints_to_alarm = 2
+  comparison_operator = "LessThanThreshold"
+  threshold           = 1
+  treat_missing_data  = "breaching"
+  alarm_actions       = [var.notification_topic_arn]
+  ok_actions          = [var.notification_topic_arn]
 }
