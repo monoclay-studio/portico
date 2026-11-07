@@ -1513,7 +1513,7 @@ findings whose class was not in the builder's checklist, so they are **not** cou
 ### L8 — the meta loop itself
 
 #### E-115 · P3 · Pr · Three timeline entries are dated when they were written, not when the event happened
-- **Defect.** O3-1 held: every entry since 18:58 carries a source token, and all 7 agent and commit tokens match their
+- **Defect.** O3-1 held: every entry since 18:58 carries a source token, and all 10 agent and commit tokens (through 22:08) match their
   source exactly. But three entries use `now`, the time of writing, for an earlier event:
 
   | Entry | Written | Event (source) |
