@@ -55,3 +55,6 @@
 - guests (R2-P2-3, P2): erasure redaction must not scan every stored response per value — tag idempotency records with subject ids and index the tags (current design times out around 340k stored responses / 30 days)
 - finance, payments, reservations (R2-P2-4, P2): consume `guests.profile.anonymized` and erase their copies (finance folio payer names, payments card-holder name and payer details, reservations occupant names); adopt idempotency replay plans for responses that embed guest PII
 - guests (R2-P3s): request hash lets the original user confirm a guess after erasure; cross-module in-flight request can commit after erasure; duplicate-suggestion replay served from the stored copy; removed contacts not searched; reason scrubbing misses two-letter surnames
+- foundation (quality round 2): extend the duplicated-enum lint with platform `contracts.ts` lines 12, 111, 123, 157, 426, 428, 444 (environment, data-authority domains, effect modes, provenance copies); replace the 3 duplicated payer-type mappings with one kernel `payerRef` codec; kernel exports runtime constant lists for its vocabularies (types alone can't be imported by Zod)
+- flaky tests are tracked defects with an owner, never a silent rerun (orchestrator v3): backoffice 409-toast strict-mode flake (smoke.spec.ts:209) — owner backoffice
+

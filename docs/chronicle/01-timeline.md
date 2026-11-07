@@ -253,4 +253,19 @@ Each agent's brief and report are in `agents/`.
     tasks only once the UI uses real data. Re-testing simulated screens would waste a round.
   - Quality steward meta-loop round 2 starts on the fix sweep, the integration re-review, the identity merge, the
     parity-ops merge and the orchestrator's escapes.
+- **18:52 — Guests erasure fix re-review: merge after fixes** <!-- t: agent-ab5e454c050d97666 @ 2026-11-07T18:52:45.371Z (Focused re-review: guests erasure fix) -->. P0 0, P1 0, P2 4, P3 5. The redaction net
+  matched too broadly: erasing a guest with the address "Maldives" broke an unrelated stored response that contained
+  the time zone "Indian/Maldives". Exact-identifier matching is required before merge; the race, scale and
+  other-module copies are tracked.
+- **18:57 — Quality steward round 2 done** <!-- t: agent-ae7e0c581d1429f84 @ 2026-11-07T18:57:16.308Z (Quality steward (meta loop) round 0) -->.
+  - 23 new escapes; 74% are fix-related (7/38 → 12/24 → 17/23).
+  - Steward v2.1 works: every re-review P1 came from a named v2.1 step.
+  - The missing builder technique is **invariant closure**: state each fix as an invariant over stored data, then
+    test every writer of its inputs, repeats and inverses, its own records, and its exemptions (builder self-check
+    v4).
+  - Recall was measured for the first time: payments about 0.94, guests about 0.80.
+  - Orchestrator v3: times are derived by `tools/chronicle/when.py`; `verify-times.py` refuses typed times at commit.
+  - A focused UX round 2a is due on the merged UI changes.
+  - Merged 18:57 <!-- t: commit:e46c024 @ 2026-11-07T18:57:28Z -->.
+- Correction (18:57): the first integration-step review reported at 17:26:51, not 17:27 <!-- t: agent-aef8923307daf19e5 @ 2026-11-07T17:26:51.854Z (Steward review: integration step) -->.
 

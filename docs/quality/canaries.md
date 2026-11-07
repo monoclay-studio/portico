@@ -119,6 +119,8 @@ Severity is the steward-scale severity of the planted defect. **Expected detecti
 | C-L2-15 | AP-43 event schema drift | P1 | Rename a field in a producer's event payload, without changing the consumer or its schema test | Parsing producer events with the consumer's schema |
 | C-L2-16 | AP-53 delegation widens authority (added round 1) | P1 | In one ADR-0015 delegated call, take a choice-carrying parameter (card, amount, account) from the request without binding it to the record | Hostile-parameter probe |
 | C-L2-17 | AP-56 one-time transition race (added round 1) | P1 | Move a credential writer's row lock below its state read, beside a one-time wipe or rotation | A concurrent writer during the transition, with a test-only delay |
+| C-L2-18 | AP-57 premise writer (added round 2) | P1 | Keep a correct guard on the main path, and add a second writer (an import or patch route) of the fact the guard trusts, without the guard's rule | A writer enumeration of the trusted fact; attack through the unguarded writer |
+| C-L2-19 | AP-58 lifecycle closure (added round 2) | P1 | A derived amount (a request, a cap, a counter) correct after one operation but not recomputed on a second operation or on reversal | Repetition ×3 plus the inverse operation; check the fix's own records |
 
 Combine them into **sets** so that each run covers one theme:
 
@@ -200,6 +202,7 @@ metrics the round exists to measure (`docs/ux/scorecard.md`). Keep L4 canaries i
 | — | — | Round 0: no runs (usage constrained) | — | — | — | — | — | — | — | — |
 | c-l1-01-orch | 2026-11-07 17:30 | L1 gate (turbo inputs after edit 6) | C-L1-01 (`apps/api` edit only) | 1 | 1 | 1.00 | 0 | minutes | 0 (CPU) | — (run by the orchestrator; the worker typecheck had a cache miss and failed, as required) |
 | r1-l1 | 2026-11-07 17:40–17:47 | L1 gates and tools, as on `main` @ `af73991` | C-L1-02 a/b, C-L1-03 a/b/b2/c/d | 7 conditions | 5 | 0.71 | 1 (C-L1-03c: a comment counted as a permission check) | ≈ 7 min | 0 (CPU) | **C-L1-03b2** (`sql.raw` not detected, E-059); **C-L1-03c** (known false positive E-013, still open). C-L1-02b passed only through payments' copy (E-058) |
+| r2-l3 | 2026-11-07 ≈18:52–18:56 | L3 global consistency checks, as on `feat/integration-step` @ `9bbb6a4` | C-L3-03(a): a deposit account at Hiyani for Kandu's booking, via `importOpeningDeposits` (the R2-F path) | 1 | 1 | 1.00 | 0 | ≈ 5 min | 0 (CPU + local Postgres) | none. C-L3-03(b) (open request > folio debt) has **no check** in the harness (code-read; not run) |
 
 <!-- Append one row per canary run. After scoring, append the answer key under "### <run-id> key". -->
 
@@ -217,3 +220,13 @@ worktree was removed afterwards, and `git worktree list` shows no canary.
 | C-L1-03c | `zz-canary-d.ts`: the key appears in a `//` comment only | same | pass | **fail**, "inventory.commented.key" ✗ (false positive E-013 still open) |
 | C-L1-02b | `packages/kernel/src/context.ts`: `'planted'` added to `Provenance` | `pnpm turbo run typecheck --force --continue` | fail | **fail** (exit 1), but only through `modules/payments/src/service/shared.ts` (TS2322 ×5, seen from payments, api, backoffice and worker). The reservations, guests and operations copies were not detected (E-058). Counted as ✓ with weak coverage |
 | C-L1-03d | `zz-canary-e.ts`: `export function planted(x: any)`, then `tools/commit-checked.sh` | — | "NOT COMMITTED", HEAD unchanged | **"NOT COMMITTED"**, HEAD unchanged ✓ |
+
+### r2-l3 key (scored 2026-11-07)
+
+Detached worktree `<scratchpad>/canary-l3-r2` at `feat/integration-step` `9bbb6a4`, installed offline.
+`PORTICO_TEST_DB_PREFIX=canary_r2l3`. Afterwards no `canary_%` database is left, and the worktree is removed.
+
+| Canary | Plant | Want | Got |
+|---|---|---|---|
+| C-L3-03(a) | `apps/api/test/zz-canary-l3.test.ts`: the review PoC R2-F (a Hiyani finance user imports an opening deposit for Kandu's booking), then `assertGlobalConsistency(s, org)` | The consistency check fails | **Caught.** The stray-deposit query returns 1 row, and `assertGlobalConsistency` throws ("expected [ Array(1) ] to deeply equal []"). The builder's new cross-module check works once a scenario exercises the writer. No scenario exercises the import path today: S18 is still todo |
+| C-L3-03(b) | An open balance request larger than the folio's debt | Fails | **No such check exists** (harness code-read). Expected miss, not run. Scenario tests v3 (ST3-1) adds it |

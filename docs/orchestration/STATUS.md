@@ -106,6 +106,15 @@
   Agents can be resumed by message if the session keeps their transcripts; otherwise start new agents on the same
   branches from these briefs. Restart Postgres first if needed (`pnpm db:up`), and recreate the usage-check chain.
 
+- **2026-11-07 18:58 UTC — quality round 2 queue** (`docs/quality/retros/2026-11-07-round2.md`):
+  - (1) **UX round 2a (focused)**: the 8 refinements marked "Done", the new sign-in code step, and the C8/C11 language
+    and permission-honesty rules. 3 personas + a new hire, from the latest blackbox-tester playbook. Launch when the
+    5-hour usage is < 60% (or right after the reset). The full 34-task re-measure still waits for real-data wiring.
+  - (2) **Parity evidence re-run** for `docs/parity/inventory.md` and `reservations.md` (still 1% tested on main):
+    about 50k tokens, from parity playbook v2.
+  - (3) Every fix-round brief names its invariants and requires the builder self-check v4 § 5 (invariant closure)
+    table.
+
 ## 1. Owner, product and how to work with the owner
 
 - Owner: founder of **Monoclay LLC** (Delaware, Stripe Atlas), based in the Maldives. Product: **Portico** (final name).
@@ -203,6 +212,7 @@ Pending cross-module fixes awaiting the next round for each author: `docs/orches
    `snapshot.py` (pass the test log); commit `docs(chronicle): …`.
 7. Quality meta loop: after every steward review / fix round / scenario run / UX round, resume the quality steward
    (retro, scorecard, escapes, playbook versions); launch future checkers from `docs/quality/playbooks/` (latest).
+8. After any merge batch that contains fixes for 3 or more modules, run a fix re-attack sweep from steward v2.1.
 **Merge order:** guests, inventory, rates (independent) → operations, integration, finance → payments (needs
 finance ledger port) → reservations (needs all) → identity-platform-enterprise → backoffice → infra → docs branches
 any time (OPEN_QUESTIONS.md always conflicts at the end: keep both sides, sort by number).
@@ -230,6 +240,10 @@ any time (OPEN_QUESTIONS.md always conflicts at the end: keep both sides, sort b
 - Domain map: fold in contract changes from guests, inventory, rates READMEs at merge.
 
 ## 8. Resume procedure
+
+**History safety:** never force-push. Reconcile a diverged branch with a normal merge, or `git merge -s ours` when the
+remote-only commit is a superseded checkpoint.
+
 
 1. `cd /home/user/portico && git fetch origin && git pull` (or clone fresh). If worktrees are gone, recreate:
    `git worktree add /home/user/wt/<name> <branch>` for each branch in §4 (fetch them from origin first).
