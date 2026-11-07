@@ -25,6 +25,7 @@ import {
   type PlatformPort,
   type RatesPort,
   reservationsHttp,
+  reservationsJobs,
   reservationsManifest,
   reservationsService,
   unavailablePort,
@@ -101,7 +102,7 @@ export function compose(database: PorticoDatabase): Composition {
     httpModules: [platformModule, identityModule, reservationsModule, recordsModule],
     subscriptions: [...reservations.subscriptions()],
     searchProviders,
-    jobs: [...CORE_JOBS],
+    jobs: [...CORE_JOBS, ...reservationsJobs(reservations)],
   };
 }
 

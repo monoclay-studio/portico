@@ -31,9 +31,6 @@ export async function startDb(opts: { clock?: Clock } = {}): Promise<TestDatabas
     ],
     opts.clock ? { clock: opts.clock } : {},
   );
-  // pg-pool resolves end() before its clients have closed; `drop database … with (force)` then terminates them and
-  // the termination surfaces as an unhandled pool 'error'. Swallow it here (see FOUNDATION_REQUESTS.md).
-  for (const pool of [t.db.pool, t.admin.pool]) pool.on('error', () => {});
   return t;
 }
 

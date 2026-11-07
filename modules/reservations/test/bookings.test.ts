@@ -2,6 +2,7 @@ import { sql, withTenantTx } from '@portico/db';
 import type { TestDatabase } from '@portico/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Booking } from '../src/contracts';
+import { reservationsJobs } from '../src/jobs';
 import { BUSINESS_DATE, created, setupOrg, startDb } from './helpers';
 
 let t: TestDatabase;
@@ -75,6 +76,48 @@ describe('booking lifecycle', () => {
       }),
     );
     expect(after[0]).toMatchObject({ held: 0, sold: 1 });
+  });
+
+  it('the expiry job expires lapsed holds (inventory released) and flags tentative option dates', async () => {
+    const org = await setupOrg(t);
+    const held = created<Booking>(
+      await org.run((tx) => org.svc.createBooking(tx, org.booking({ intent: 'hold' }))),
+    );
+    const tentative = created<Booking>(
+      await org.run((tx) =>
+        org.svc.createBooking(
+          tx,
+          org.booking(
+            { intent: 'tentative', optionDate: '2026-12-10' },
+            { arrival: '2026-12-20', departure: '2026-12-22' },
+          ),
+        ),
+      ),
+    );
+    await org.run((tx) =>
+      sql`update reservations.bookings set hold_expires_at = now() - interval '1 minute' where id = ${held.id}`.execute(
+        tx.db,
+      ),
+    );
+    const [job] = reservationsJobs(org.svc);
+    await job?.run(t.db, new Date());
+    expect((await org.run((tx) => org.svc.getBooking(tx, held.id))).status.booking).toBe('expired');
+    expect(
+      await org.run((tx) =>
+        org.fakes.inventory.consumptionOf(tx, { type: 'stay', id: held.stays[0]?.id ?? '' }),
+      ),
+    ).toEqual([]);
+    const avail = await org.run((tx) =>
+      org.fakes.inventory.getAvailability(tx, {
+        propertyId: org.propertyId,
+        unitTypeIds: [org.types.beach],
+        range: { from: BUSINESS_DATE, to: '2026-12-11' },
+      }),
+    );
+    expect(avail[0]?.held).toBe(0);
+    const t2 = await org.run((tx) => org.svc.getBooking(tx, tentative.id));
+    expect(t2.status.booking).toBe('tentative');
+    expect(t2.issues.map((i) => i.code)).toContain('option_date_reached');
   });
 
   it('refuses invalid transitions and tentative bookings without an option date', async () => {

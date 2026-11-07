@@ -1,6 +1,7 @@
 export * from './contracts';
 export * from './errors';
 export * from './events';
+export * from './jobs';
 export * from './manifest';
 export * from './ports';
 export * from './routes';

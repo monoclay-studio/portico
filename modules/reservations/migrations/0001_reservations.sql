@@ -361,4 +361,18 @@ create table reservations.forwarded_changes (
 create index forwarded_changes_pending_idx on reservations.forwarded_changes (tenant_id, property_id, status);
 select core.enable_tenant_isolation('reservations.forwarded_changes');
 
+---------------------------------------------------------------------------------------------------------
+-- Routing metadata for the booking-expiry job (reviewed SECURITY DEFINER; returns ids only, no business data):
+-- properties with held bookings whose hold expired, or tentative bookings at/after their option date (the job
+-- re-checks against each property's business date inside the tenant transaction).
+---------------------------------------------------------------------------------------------------------
+create or replace function reservations.due_booking_expiries(p_now timestamptz)
+  returns table (tenant_id uuid, property_id uuid)
+  language sql stable security definer set search_path = reservations, pg_temp as $$
+    select distinct b.tenant_id, b.property_id from reservations.bookings b
+     where (b.status = 'held' and b.hold_expires_at <= p_now)
+        or (b.status = 'tentative' and b.option_date is not null and b.option_date <= (p_now at time zone 'UTC')::date + 1)
+$$;
+revoke execute on function reservations.due_booking_expiries(timestamptz) from public;
+
 select core.apply_standard_grants('reservations');

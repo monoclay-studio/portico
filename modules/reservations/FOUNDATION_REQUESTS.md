@@ -1,6 +1,6 @@
 # Foundation requests from reservations
 
-## 1. Test databases: unhandled pool errors on `drop()`
+## 1. Test databases: unhandled pool errors on `drop()` — RESOLVED on main (b484de3); local workaround removed
 
 **Problem.** `pg-pool`'s `end()` resolves before its clients have closed their sockets. `TestDatabase.drop()` then
 runs `drop database … with (force)`, Postgres terminates the still-closing connections, and the termination
