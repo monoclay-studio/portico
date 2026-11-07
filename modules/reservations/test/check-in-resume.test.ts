@@ -207,6 +207,18 @@ describe('check-in as a resumable workflow', () => {
         org.svc.createBooking(tx, org.booking({ guarantee: { kind: 'card', paymentMethodId: stranger } })),
       ),
     ).rejects.toMatchObject({ code: 'guarantee_method_not_allowed' });
+    // ...nor be patched onto an existing booking (sibling path, refused inside the transaction).
+    const current = await org.run((tx) => org.svc.getBooking(tx, b.id));
+    await expect(
+      org.run((tx) =>
+        org.svc.patchBooking(tx, {
+          bookingId: b.id,
+          expectedVersion: current.version,
+          patch: { guarantee: { kind: 'card', paymentMethodId: stranger } },
+        }),
+      ),
+    ).rejects.toMatchObject({ code: 'guarantee_method_not_allowed' });
+    expect((await org.run((tx) => org.svc.getBooking(tx, b.id))).version).toBe(current.version);
     // The guest's own card on the booking is authorized for the agreed amount by the desk.
     const own = org.fakes.payments.addMethod(org.propertyId, { type: 'guest_profile', id: guest });
     const ok = await org.svc.performWorkflow(t.db, org.ctx, {
