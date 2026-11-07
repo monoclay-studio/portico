@@ -132,3 +132,19 @@ Each agent's brief and report are in `agents/`.
 - **16:45 — Gap strategist launches** on branch `docs/strategy`: 10x briefs per module and a platform gap plan.
   Usage: 5-hour 12%, seven-day 57%. The seven-day allowance is now the binding constraint, at about 6–7 points per
   hour with 6 agents running.
+- **16:52 — Second identity review complete: do not merge.** P0 1 · P1 3 · P2 6 · P3 9 new.
+  - All 11 original attacks are refused.
+  - The new P0 is account pre-hijacking: any org could create a global identity with its own password for someone
+    else's email, then accept that person's later invitation to a real hotel, and even become the only admin of a
+    newly provisioned live organization.
+  - **17:00 — ADR-0017 Amendment 1:** email-verified identities, no organization ever sets a password, first
+    verification wipes earlier credentials, onboarding cannot be blocked, SSO configuration is a root change. Fix
+    round 3 is sent to the identity engineer.
+- **16:58 — UX refining agent, round 1, delivered 83 refinements:** 44 wiring, 6 missing capability, 33 design;
+  23 blockers.
+  - Also delivered: cross-module consistency rules C1–C12 and new-user metrics with baselines. The tester completed
+    5 of 34 tasks; the right action was found for 0 of 17 action words.
+  - The agent's summary file was refused by a harness policy on report files. The orchestrator committed it verbatim.
+    Merged to main at 17:02.
+- **17:00 — Build-cache root cause fixed:** `turbo.json` now hashes every workspace package's sources.
+
