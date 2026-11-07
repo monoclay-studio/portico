@@ -352,6 +352,24 @@ export function operationsHttp(deps: { database: PorticoDatabase; service: Opera
         (req) => tx(req, (t) => ops.runEscalations(t, req.params.propertyId)),
       );
 
+      app.post(
+        '/operations/stays/:id/guest-waiting',
+        {
+          schema: {
+            tags: T.hk,
+            params: c.idParams,
+            body: z.object({ waiting: z.boolean() }),
+            response: {
+              200: z.object({
+                stayId: z.uuid(),
+                unitId: z.uuid().nullable(),
+                waitingSince: z.string().nullable(),
+              }),
+            },
+          },
+        },
+        (req) => tx(req, (t) => ops.setGuestWaiting(t, { stayId: req.params.id, waiting: req.body.waiting })),
+      );
       app.get(
         '/operations/my-work',
         { schema: { tags: T.tasks, querystring: c.myWorkQuery, response: { 200: items(c.workItem) } } },

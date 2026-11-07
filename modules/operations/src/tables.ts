@@ -93,6 +93,7 @@ export interface StayProjectionTable {
   vip: Generated<boolean>;
   early_check_in: Generated<boolean>;
   eta: Date | null;
+  guest_waiting_since: Generated<Date | null>;
   source: Generated<string>;
   updated_at: Generated<Date>;
 }

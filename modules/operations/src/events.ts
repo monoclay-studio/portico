@@ -39,6 +39,8 @@ export const CONSUMED_EVENTS = [
   'reservations.stay.checkedOut',
   'reservations.stay.moved',
   'reservations.stay.noShow',
+  'reservations.stay.extended',
+  'reservations.stay.shortened',
   'inventory.unit.blocked',
   'inventory.unit.unblocked',
 ] as const;
@@ -347,6 +349,43 @@ async function onNoShow(d: Deps, tx: TxContext, event: DomainEvent) {
     await rescoreUnitTasks(d, tx, propertyId, prev.unit_id);
 }
 
+/** Extension / shortening: the departure date moves, so the departure clean and stayovers are re-planned. */
+async function onDatesChanged(d: Deps, tx: TxContext, event: DomainEvent) {
+  const propertyId = propertyOf(event);
+  const p = stayEventPayload.parse(event.payload);
+  const prev = await projection(tx, p.stayId);
+  if (!prev) return;
+  await upsertStayProjection(d, tx, {
+    stayId: p.stayId,
+    propertyId,
+    arrival: p.arrival ?? prev.arrival,
+    departure: p.departure ?? prev.departure,
+    status: prev.status as 'in_house',
+  });
+  // A departure clean planned for the old departure date of a stay that is still in house is no longer due.
+  if (prev.unit_id && (p.departure ?? prev.departure) !== prev.departure && prev.status === 'in_house') {
+    const planned = await db(tx)
+      .selectFrom('operations.tasks')
+      .select('id')
+      .where('stay_id', '=', p.stayId)
+      .where('kind', '=', 'departure_clean')
+      .where('status', '=', 'open')
+      .where('service_date', '=', prev.departure)
+      .execute();
+    for (const t of planned) {
+      await transitionTask(
+        d,
+        tx,
+        t.id,
+        { to: 'cancelled', reason: 'Stay dates changed' },
+        { internal: true, source: 'system' },
+      );
+    }
+  }
+  if (prev.unit_id && (await unitKnown(tx, prev.unit_id)))
+    await rescoreUnitTasks(d, tx, propertyId, prev.unit_id);
+}
+
 /** A block placed in inventory (by operations or directly there): mirror it and list affected stays. */
 async function onUnitBlocked(d: Deps, tx: TxContext, event: DomainEvent) {
   const propertyId = propertyOf(event);
@@ -391,6 +430,8 @@ export function operationsSubscriptions(ports: OperationsPorts): TxEventSubscrip
     'reservations.stay.checkedOut': (tx, e) => onCheckedOut(d, tx, e),
     'reservations.stay.moved': (tx, e) => onMoved(d, tx, e),
     'reservations.stay.noShow': (tx, e) => onNoShow(d, tx, e),
+    'reservations.stay.extended': (tx, e) => onDatesChanged(d, tx, e),
+    'reservations.stay.shortened': (tx, e) => onDatesChanged(d, tx, e),
   };
   const inventoryHandlers: Record<string, (tx: TxContext, e: DomainEvent) => Promise<void>> = {
     'inventory.unit.blocked': (tx, e) => onUnitBlocked(d, tx, e),

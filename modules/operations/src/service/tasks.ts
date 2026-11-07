@@ -255,7 +255,13 @@ export async function arrivalContext(
     ? new Date(stay.eta)
     : localTimeToInstant(facts.businessDate, facts.checkInTime, facts.timezone);
   return {
-    ctx: { expectedAt, vip: stay.vip, earlyCheckIn: stay.early_check_in, today: true },
+    ctx: {
+      expectedAt,
+      vip: stay.vip,
+      earlyCheckIn: stay.early_check_in,
+      today: true,
+      guestWaiting: stay.guest_waiting_since !== null,
+    },
     stayId: stay.id,
     eta: stay.eta ? new Date(stay.eta) : null,
   };
@@ -1260,4 +1266,45 @@ export async function listMyWork(
       links: v.links,
     };
   });
+}
+
+// ───────────────────────────── Waiting guest ─────────────────────────────
+
+/**
+ * Provider for reservations / front desk: the arriving guest is here and waiting for the unit (or no longer
+ * waiting). Re-prioritises the unit's cleaning/inspection to the top and tells housekeeping.
+ */
+export async function setGuestWaiting(
+  d: Deps,
+  tx: TxContext,
+  input: { stayId: string; waiting: boolean },
+): Promise<{ stayId: string; unitId: string | null; waitingSince: string | null }> {
+  const stay = await db(tx)
+    .selectFrom('operations.stay_projection')
+    .selectAll()
+    .where('id', '=', input.stayId)
+    .forUpdate()
+    .executeTakeFirst();
+  if (!stay) throw new NotFoundError('stay', input.stayId);
+  requireAny(tx, ['operations.task.manage', 'operations.housekeeping.assign'], stay.property_id);
+  const since = input.waiting ? (stay.guest_waiting_since ?? tx.now) : null;
+  await db(tx)
+    .updateTable('operations.stay_projection')
+    .set({ guest_waiting_since: since, updated_at: tx.now })
+    .where('id', '=', stay.id)
+    .execute();
+  if (stay.unit_id) await rescoreUnitTasks(d, tx, stay.property_id, stay.unit_id);
+  await tx.audit({
+    action: input.waiting ? 'operations.arrival.guestWaiting' : 'operations.arrival.guestNoLongerWaiting',
+    target: { type: 'unit', id: stay.unit_id ?? stay.id },
+    propertyId: stay.property_id,
+    after: { stayId: stay.id, waiting: input.waiting },
+  });
+  await tx.emit({
+    type: 'operations.arrival.guestWaiting',
+    propertyId: stay.property_id,
+    aggregate: { type: 'stay', id: stay.id },
+    payload: { stayId: stay.id, unitId: stay.unit_id, waiting: input.waiting, since: iso(since) },
+  });
+  return { stayId: stay.id, unitId: stay.unit_id, waitingSince: iso(since) };
 }

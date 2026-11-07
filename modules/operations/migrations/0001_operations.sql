@@ -125,6 +125,7 @@ create table operations.stay_projection (
   vip               boolean not null default false,
   early_check_in    boolean not null default false,
   eta               timestamptz,
+  guest_waiting_since timestamptz,                  -- guest arrived and is waiting for the unit (front desk)
   source            text not null default 'event' check (source in ('event', 'external', 'manual')),
   updated_at        timestamptz not null default now(),
   check (departure > arrival)

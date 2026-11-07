@@ -30,7 +30,7 @@ operations.
 | OPS-R03 | DND (blocks in-room service tasks, releases them); welfare check after N h (policy) | R3 (no "service later at HH:MM") | `housekeeping.test.ts`, `escalation.test.ts` |
 | OPS-R04 | Readiness for arrival + **estimated** ready time with explanation | R3 | s07, `conditions.test.ts` |
 | OPS-R05 | Day plan: departure clean, stayover, turndown (resort/hotel default), vacant clean, arrival inspection; credits per kind/unit type | R3 (no "every n days" stayover policy, no sampled inspections, no forward plan for tomorrow beyond `date` param) | `housekeeping.test.ts`, `planning.test.ts` |
-| OPS-R06 | Priority: guest waiting, arrival due soon (ETA), early check-in, VIP, same-day arrival; re-scored on booking events | R3 | `workload.test.ts`, s07 |
+| OPS-R06 | Priority: guest waiting (`setGuestWaiting` provider / `POST /operations/stays/:id/guest-waiting`), arrival due soon (ETA), early check-in, VIP, same-day arrival; re-scored on booking events without bumping versions | R3 | `workload.test.ts`, s07 |
 | OPS-R07 | Assignment suggestions balancing credits by section/island zone with explanations; supervisor apply/reassign | R3 (no device push notification) | `workload.test.ts`, `housekeeping.test.ts` |
 | OPS-R08 | Attendant mobile flow (API side): start/finish/block/comment/photos/DND/discrepancy/lost & found | R3 API; UI R1 | s13 |
 | OPS-R09 | Inspection pass/fail with checklist reasons & photo refs; urgent re-clean to the same attendant; `operations.inspection.failed` with the affected arrival + ETA | R3 | s07 |
@@ -90,10 +90,10 @@ is enough for attendants to log lost & found.
 Emitted: `operations.unit.conditionChanged`, `operations.unit.discrepancyReported`, `operations.inspection.passed|failed`,
 `operations.task.created|statusChanged|assigned|escalated`, `operations.serviceRequest.created|completed`,
 `operations.workOrder.created|unitBlocked|completed|returnedToService`, `operations.resolution.required`,
-`operations.statusForward.requested|acknowledged|rejected`, `operations.sync.conflict`.
+`operations.statusForward.requested|acknowledged|rejected`, `operations.sync.conflict`, `operations.arrival.guestWaiting`.
 
 Consumed (`operations.stays`, `operations.unitBlocks` consumers): `reservations.booking.confirmed|modified|cancelled`,
-`reservations.stay.checkedIn|checkedOut|moved|noShow`, `inventory.unit.blocked|unblocked`. Expected payload
+`reservations.stay.checkedIn|checkedOut|moved|noShow|extended|shortened`, `inventory.unit.blocked|unblocked`. Expected payload
 fields (tolerant Zod, unknown fields ignored): booking events `{ bookingId, stays: [{ stayId, unitId?, arrival,
 departure, status?, vip?, earlyCheckIn?, eta?, guestProfileId?, guestLabel? }] }`; stay events `{ stayId, unitId?,
 arrival?, departure? }`; moved `{ stayId, fromUnitId?, toUnitId, effectiveDate? }`; blocked `{ unitId, blockId, kind,
@@ -107,6 +107,7 @@ nights, reason?, affectedAssignments[], sourceRef? }`. **Reservations/inventory 
 | `InventoryPort` | `blockUnit`, `releaseBlock`, `listUnits` | **`unavailable('inventory')` — orchestrator binds at merge** |
 
 Provider functions (domain map): `getUnitCondition(tx, unitId)`, `listUnitConditions(tx, { propertyId })`,
+`setGuestWaiting(tx, { stayId, waiting })` (new, for reservations' waiting-guest flow),
 `createTask(tx, { propertyId, departmentId?, departmentKind?, kind, title, ref?, dueAt?, priority, dedupeKey? })` on
 `createOperationsService(ports)`. Also `listMyWork` (cross-module inbox), `operationsSearch`, `operationsJobs`,
 `createOperationsDemoSeed(service)` (DemoSeedStep-compatible).
@@ -128,11 +129,24 @@ Data authority: `roomStatus` external + `forward` ⇒ changes pending until ackn
 system name; Portico-originated system changes (checkout → dirty) are not written when room status is external.
 `maintenance` external + `forward` ⇒ work orders and OOO requests forwarded, inventory not touched.
 
+## Parity rows evidenced by tests (for `docs/parity/operations.md`, maintained by the parity workstream)
+
+PAR-OPS-001, 003 (`readinessCondition` policy), 004, 007, 009 (welfare check; no "service later"), 010, 016 (deep
+clean manual/preventive only), 020, 024, 026, 030, 031, 044, 047 (API), 048, 052, 053, 055, 056, 060 (provider),
+063 (`/operations/my-work`), 064, 066, 067, 076, 084 (settings policy), 085, 086, 093 (check-out, move, extension,
+shortening, cancellation). EC-OPS-001 (s07), 002 (If-Match 409), 003/005 (s13), 012/013 (discrepancy test),
+015 (DND welfare), 017 (room move), 019/020 (s08), 021 (HTTP test: inventory failure ⇒ nothing created), 022 (s08),
+026 (rejected forward), 031 (manual dirty with history), 032 (`escalation.test.ts`), 034 (domain test: downtime ⇒
+all overdue steps fire once). Not covered: EC-OPS-004, 008, 009, 028, 045; PAR-OPS-011 (business-date driven
+stayover once per night is via the day plan, no Day Close hook), 017, 022, 027 (device push), 036/042 (UI), 040
+(photo routing UI), 061 (handover is reservations'), 092 (Day Close `listExceptions` not built), 098.
+
 ## Known gaps / open questions
 
 - Spec work-order states `reported/triaged/scheduled/on_hold` map onto task states (`open`/`blocked`); urgency
   `P1..P4` ↔ `emergency/high/normal/low`. Lost-item `returned|shipped` ↔ `released` + `releaseMethod`.
 - OPS-R22(c) (clean reported for a unit that became occupied ⇒ apply + discrepancy) not implemented.
-- Minibar posting (SHOULD), "service later at HH:MM", forward plan for tomorrow, sampled inspections: not built.
+- Minibar posting (SHOULD), "service later at HH:MM", forward plan for tomorrow, sampled inspections,
+  stayover frequency policy, `listExceptions` for Day Close/handover: not built.
 - Monthly preventive schedules drift to the clamped day after a short month (no anchor day stored).
 - Housekeeping-sample attendants in the seed have generated user ids (no sign-in).

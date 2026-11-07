@@ -278,3 +278,43 @@ describe('demo seed step', () => {
     expect(small.rows[0]?.unit.readiness).toMatchObject({ requiredCondition: 'clean', ready: true });
   });
 });
+
+describe('stay date changes', () => {
+  it('an extension cancels the departure clean planned for the old departure date', async () => {
+    const org = await setupOrg(h);
+    const seeded = await org.tx(org.admin, (tx) =>
+      seedResortOperations(tx, h.ops, {
+        propertyId: org.propertyId,
+        villasPerSection: 1,
+        initialCondition: 'inspected',
+      }),
+    );
+    const unit = seeded.units[0];
+    if (!unit) throw new Error('seed');
+    const stayId = newId();
+    await publish(h, org, {
+      type: 'reservations.booking.confirmed',
+      aggregate: { type: 'booking', id: newId() },
+      payload: {
+        bookingId: newId(),
+        stays: [{ stayId, unitId: unit.unitId, arrival: '2026-11-04', departure: BUSINESS_DATE }],
+      },
+    });
+    await publish(h, org, {
+      type: 'reservations.stay.checkedIn',
+      aggregate: { type: 'stay', id: stayId },
+      payload: { stayId },
+    });
+    const plan = await org.tx(org.admin, (tx) => h.ops.generateDayPlan(tx, org.propertyId, {}));
+    const departure = plan.created.find((t) => t.kind === 'departure_clean' && t.stayId === stayId);
+    expect(departure).toBeDefined();
+    await publish(h, org, {
+      type: 'reservations.stay.extended',
+      aggregate: { type: 'stay', id: stayId },
+      payload: { stayId, departure: '2026-11-09' },
+    });
+    const after = await org.tx(org.admin, (tx) => h.ops.getTask(tx, departure?.id ?? ''));
+    expect(after).toMatchObject({ status: { task: 'cancelled' }, cancelledReason: 'Stay dates changed' });
+    expect((await org.tx(org.admin, (tx) => h.ops.getUnit(tx, unit.unitId))).occupancy).toBe('occupied');
+  });
+});

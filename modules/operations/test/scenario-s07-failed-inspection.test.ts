@@ -198,6 +198,18 @@ describe('scenario 7: a villa fails inspection just before its arriving guest re
     expect(item?.readiness?.expectedReadyAt).toBe('2026-11-07T05:15:00.000Z');
     expect(item?.readiness?.estimateBasis.join(' ')).toContain('Aminath');
 
+    // The guest reaches reception early and waits: the desk flags it and the re-clean jumps to the top.
+    const waiting = await org.tx(frontDesk, (tx) =>
+      h.ops.setGuestWaiting(tx, { stayId: arrivingStay, waiting: true }),
+    );
+    expect(waiting.unitId).toBe(w101);
+    const rescored = await org.tx(supervisor, (tx) => h.ops.getTask(tx, result.recleanTask?.id ?? ''));
+    expect(rescored).toMatchObject({
+      priority: 'urgent',
+      priorityReasons: expect.arrayContaining(['guest_waiting']),
+    });
+    expect(rescored.version).toBe(result.recleanTask?.version); // derived priority: no version bump
+
     // Aminath re-cleans; supervisor re-inspects and passes → ready for the guest.
     const reclean = result.recleanTask;
     if (!reclean) throw new Error('reclean');

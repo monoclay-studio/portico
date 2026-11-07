@@ -68,6 +68,7 @@ export function createOperationsService(ports: OperationsPorts) {
       'getServiceRequest',
       'listServiceRequests',
       'listMyWork',
+      'setGuestWaiting',
     ] as const),
     createGenericTask: (tx: TxContext, input: Parameters<typeof tasks.createTask>[2]) =>
       tasks.createTask(d, tx, input),
