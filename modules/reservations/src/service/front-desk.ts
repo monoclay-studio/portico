@@ -192,6 +192,18 @@ export async function listArrivals(
         registrationComplete: Boolean(primary?.name),
         openRequests: requests.filter((r) => r.status === 'open').length,
       });
+      if (!seesMoney(tx, input.propertyId) && row.readiness) {
+        const r = row.readiness;
+        row.readiness = {
+          ...r,
+          checks: r.checks.map((c) => (c.key === 'payment_secured' ? { ...c, message: NOT_SHOWN } : c)),
+          blockingReason:
+            r.blockingReason?.key === 'payment_secured'
+              ? { ...r.blockingReason, message: NOT_SHOWN }
+              : r.blockingReason,
+        };
+        row.redacted = true;
+      }
     }
     out.push(row);
   }
@@ -202,6 +214,13 @@ export async function listArrivals(
     counts: { total: out.length, ready: out.filter((r) => r.readiness?.ready).length },
   };
 }
+
+/** UX FD-15: money detail on the boards only for roles that handle money (the server decides, not the menu). */
+const MONEY_READ = ['finance.folio.read', 'payments.payment.read', 'payments.payment.collect'] as const;
+function seesMoney(tx: TxContext, propertyId: string): boolean {
+  return MONEY_READ.some((p) => tx.authz.can(p, { propertyId }));
+}
+const NOT_SHOWN = 'Payment detail is not shown for your role.';
 
 async function staysBalance(
   deps: Deps,
@@ -239,7 +258,8 @@ export async function listDepartures(
       .select(['currency'])
       .where('id', '=', stay.row.booking_id)
       .executeTakeFirstOrThrow();
-    row.balance = await staysBalance(deps, tx, stay, b.currency);
+    if (seesMoney(tx, input.propertyId)) row.balance = await staysBalance(deps, tx, stay, b.currency);
+    else row.redacted = true;
     out.push(row);
   }
   return {

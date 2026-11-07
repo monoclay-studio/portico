@@ -1,10 +1,13 @@
 import { type PorticoDatabase, runIdempotent, withTenantTx } from '@portico/db';
 import { type HttpModule, idParams, requireIdempotencyKey, requireIfMatch, setVersion } from '@portico/http';
+import { requirePermission } from '@portico/kernel';
 import { z } from 'zod';
 import {
+  dataAuthority,
   legalEntity,
   legalEntityInput,
   organization,
+  policyValue,
   property,
   propertyInput,
   propertyUpdate,
@@ -83,6 +86,64 @@ export function platformHttp(deps: { database: PorticoDatabase }): HttpModule {
           setVersion(reply, p.version);
           return p;
         },
+      );
+
+      // UX round 1 INT-03 / SET-05 (read side): who is the system of record per domain, the resolved value of a
+      // policy with its source, and a preview of a policy change across properties. Writes (authority transitions,
+      // policy changes) follow the identity-plus approval rules and are not exposed here yet.
+      app.get(
+        '/properties/:id/data-authority',
+        {
+          schema: {
+            tags: ['Properties'],
+            params: idParams,
+            response: { 200: z.object({ items: z.array(dataAuthority) }) },
+          },
+        },
+        async (req) => ({
+          items: await withTenantTx(database, req.ctx, async (tx) => {
+            await svc.getProperty(tx, req.params.id); // 404 for a property this organization does not have
+            return svc.listDataAuthority(tx, req.params.id);
+          }),
+        }),
+      );
+
+      app.get(
+        '/properties/:id/policies/:key',
+        {
+          schema: {
+            tags: ['Policies'],
+            params: z.object({ id: z.uuid(), key: z.string().regex(/^[a-zA-Z0-9_.-]{1,120}$/) }),
+            response: { 200: policyValue },
+          },
+        },
+        (req) =>
+          withTenantTx(database, req.ctx, async (tx) => {
+            requirePermission(tx, 'platform.property.read', { propertyId: req.params.id });
+            await svc.getProperty(tx, req.params.id); // 404 for a property this organization does not have
+            const r = await svc.resolvePolicy<unknown>(tx, req.params.id, req.params.key, null);
+            return { key: r.key, value: r.value, source: r.source, isLocalOverride: r.isLocalOverride };
+          }),
+      );
+
+      app.post(
+        '/policies/preview',
+        {
+          schema: {
+            tags: ['Policies'],
+            body: z.object({
+              key: z.string().regex(/^[a-zA-Z0-9_.-]{1,120}$/),
+              scopeType: z.enum(['organization', 'brand', 'region', 'property']),
+              scopeId: z.uuid(),
+              value: z.unknown(),
+              defaultValue: z.unknown().optional(),
+            }),
+          },
+        },
+        (req) =>
+          withTenantTx(database, req.ctx, (tx) =>
+            svc.previewPolicyChange(tx, { ...req.body, defaultValue: req.body.defaultValue ?? null }),
+          ),
       );
 
       app.patch(

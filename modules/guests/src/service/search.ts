@@ -23,6 +23,8 @@ export function detectQueryKind(q: string): Kind {
   if (/^[A-Z]{2,5}-[0-9A-Z]{4,10}$/i.test(q.trim())) return 'booking';
   const digits = q.replace(/\D/g, '');
   if (/^[+\d][\d\s().-]{5,}$/.test(q) && digits.length >= 6) return 'phone';
+  // UX NAV-03: the desk searches by a phone fragment ("7712", "+960"): 3+ digits and nothing else.
+  if (/^\+?[\d\s().-]+$/.test(q.trim()) && digits.length >= 3) return 'phone';
   return 'name';
 }
 
@@ -59,13 +61,18 @@ export async function searchProfiles(
     // Exact E.164 first; otherwise match the trailing national number (last 7–9 digits) so "8 916 123-45-67"
     // (Russian trunk prefix) or a number typed without its country code still finds the guest.
     const tail = n.digits.slice(-Math.min(9, n.digits.length));
+    // A short fragment (3–6 digits, e.g. "7712" or the country code "+960") matches anywhere in the number, ranked
+    // below exact and trailing-number matches (UX NAV-03).
+    const fragment = query.q.replace(/\D/g, '');
     hits = (
       await sql<Hit>`
       select distinct p.id, 'phone' as matched_on,
-             (case when c.normalized = ${n.e164} then 1.0 else 0.7 end)::float8 as score
+             (case when c.normalized = ${n.e164} then 1.0
+                   when length(${tail}) >= 7 and c.normalized like ${`%${tail}`} then 0.7 else 0.5 end)::float8 as score
       from guests.profiles p join guests.contact_points c on c.profile_id = p.id
       where p.status = 'active' and c.kind in ('phone', 'whatsapp')
-        and (c.normalized = ${n.e164} or (length(${tail}) >= 7 and c.normalized like ${`%${tail}`}))
+        and (c.normalized = ${n.e164} or (length(${tail}) >= 7 and c.normalized like ${`%${tail}`})
+             or (length(${fragment}) between 3 and 6 and c.normalized like ${`%${fragment}%`}))
         and ${visible}
       order by score desc limit ${limit}`.execute(tx.db)
     ).rows;

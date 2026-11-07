@@ -126,3 +126,29 @@ describe('permissions', () => {
     );
   });
 });
+
+describe('money only for roles that handle money (UX FD-15)', () => {
+  it('housekeeping reads arrivals without payment detail and departures without balances', async () => {
+    const org = await setupOrg(t);
+    await org.run((tx) => org.svc.createBooking(tx, org.booking()));
+    const scope = [org.propertyId];
+    const housekeeping = org.user('Housekeeping supervisor', [
+      { permission: 'reservations.booking.read', propertyIds: scope },
+    ]);
+    const desk = org.user('Front desk', [
+      { permission: 'reservations.booking.read', propertyIds: scope },
+      { permission: 'payments.payment.collect', propertyIds: scope },
+      { permission: 'finance.folio.read', propertyIds: scope },
+    ]);
+    const hk = await org.run((tx) => org.svc.listArrivals(tx, { propertyId: org.propertyId }), housekeeping);
+    const row = hk.items[0];
+    expect(row?.redacted).toBe(true);
+    const pay = row?.readiness?.checks.find((c) => c.key === 'payment_secured');
+    expect(pay?.message).toBe('Payment detail is not shown for your role.');
+    const seen = await org.run((tx) => org.svc.listArrivals(tx, { propertyId: org.propertyId }), desk);
+    expect(seen.items[0]?.redacted).toBeUndefined();
+    expect(seen.items[0]?.readiness?.checks.find((c) => c.key === 'payment_secured')?.message).not.toBe(
+      'Payment detail is not shown for your role.',
+    );
+  });
+});

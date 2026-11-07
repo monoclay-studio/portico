@@ -627,6 +627,11 @@ export const frontDeskRow = z.object({
   readiness: readinessView.nullable(),
   balance: money.nullable(),
   checkInRun: z.object({ status: z.string(), remaining: z.array(z.string()) }).nullable(),
+  /**
+   * UX FD-15: true when money detail (balance, payment readiness detail) was withheld because the caller holds no
+   * money-read permission (finance.folio.read, payments.payment.read or payments.payment.collect) at the property.
+   */
+  redacted: z.boolean().optional(),
 });
 export type FrontDeskRow = z.infer<typeof frontDeskRow>;
 
