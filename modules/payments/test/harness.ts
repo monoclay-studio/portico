@@ -181,6 +181,10 @@ export interface Harness {
 export async function startHarness(): Promise<Harness> {
   const clock = fixedClock(T0);
   const t = await createTestDatabase(sourcesFromManifests([platformManifest, paymentsManifest]), { clock });
+  // Teardown race in @portico/testing drop() (FOUNDATION_REQUESTS.md §1): an idle client still closing can be
+  // terminated by `drop database … with (force)`. Swallow idle-client errors on the test pools only.
+  t.db.pool.on('error', () => {});
+  t.admin.pool.on('error', () => {});
   await sql`create schema test_ledger;
     create table test_ledger.postings (
       id uuid primary key, tenant_id uuid not null, kind text not null, idempotency_key text not null,

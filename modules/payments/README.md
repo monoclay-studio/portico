@@ -13,10 +13,11 @@ domain map § payments.
   import, services, routes, record contract, search, jobs, demo seed), composition wiring, API e2e tests, README,
   `PARITY.md` (gate passes in a scratch copy), `FOUNDATION_REQUESTS.md`. All payments (96) and API tests passed on
   the last full run; `pnpm lint` / `pnpm typecheck` green.
-- **In progress:** final verification run (lint, typecheck, payments + api tests) after the last test addition.
+- **In progress:** nothing — final verification passed (lint, typecheck, 96 payments tests ×4 runs, 17 API tests).
 - **Next steps:** none required; orchestrator binds `LedgerPort` to finance at merge, moves `PARITY.md` to
   `docs/parity/payments.md`, applies the domain-map contract changes listed below.
-- **Known failing tests:** none (rare teardown race in `@portico/testing`, see `FOUNDATION_REQUESTS.md` §1).
+- **Known failing tests:** none. The rare teardown race in `@portico/testing` (`FOUNDATION_REQUESTS.md` §1) is
+  guarded in this module's harness.
 
 ## What is built (wave 1)
 
