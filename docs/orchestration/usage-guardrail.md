@@ -31,3 +31,12 @@ Same session: resume each stopped agent with "the usage limit has reset — cont
 (plus any follow-ups queued in `pending-fixes.md`). New session: follow STATUS.md §8 (recreate worktrees from origin,
 relaunch agents from `workstream-briefs.md` + their README "Checkpoint" sections). Resume in priority order and keep
 total concurrency moderate so the next window lasts.
+
+## Seven-day window (added 2026-11-07 16:20 UTC)
+
+The account also has a **seven-day** limit (`unifiedWindows.seven_day`). Running out of it would stall all work for
+days, so pace against it as well:
+- Read `seven_day.utilization` at every check. Healthy pace: utilization ≤ elapsed share of the week + 15 points.
+- **≥ 80% seven-day:** run only the merge/integration critical path (steward reviews, fix rounds, integration step),
+  at most 3 agents at once; the UX heartbeat and research pause until the window resets.
+- **≥ 92% seven-day:** PAUSE + CHECKPOINT as for the 5-hour window and schedule the resume at the seven-day reset.

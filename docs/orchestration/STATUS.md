@@ -59,6 +59,13 @@
   5. Gap strategist → `docs/strategy/` 10x briefs (input: `docs/research/05-digest.md`).
   6. Resume infra (`TRUSTED_PROXY_CIDRS`, `PORTICO_TERMS_SEAL_KEY`, worker DB role) and parity-ops.
 
+- **2026-11-07 16:20 UTC — RESUMED** (5-hour window reset; seven-day 54%). Postgres restarted (`pnpm db:up`).
+  Running: identity-plus second steward review (→ `reviews/review-identity-plus-2.md`); identity author adapting the
+  13 cross-module tests; integration step on new branch `feat/integration-step` (wt/integration-step: bind all ports,
+  then S01–S20); backoffice fix round (author); UX refining agent on new branch `docs/ux-round-1` (wt/ux-round-1).
+  **Still queued:** gap strategist → `docs/strategy/`; infra + parity-ops resume. UX lab not restarted (only the
+  tester needs it). Seven-day pacing rule added to `usage-guardrail.md`.
+
 ## 1. Owner, product and how to work with the owner
 
 - Owner: founder of **Monoclay LLC** (Delaware, Stripe Atlas), based in the Maldives. Product: **Portico** (final name).
