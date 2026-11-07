@@ -14,7 +14,7 @@ import {
 } from '../domain/documents';
 import { type GuestsPorts, keyIdOf } from '../ports';
 import { detectDuplicates } from './duplicates';
-import { actorKey, db, requireVisibleProfile, requireWritableProfile, today } from './internal';
+import { actorKey, db, requireVisibleProfile, requireWritableProfile, scrubReason, today } from './internal';
 
 export const DOCUMENT_RETENTION_POLICY_KEY = 'guests.retention.identityDocumentDays';
 export const DOCUMENT_RETENTION_DEFAULT_DAYS = 365; // Q44 placeholder default
@@ -136,6 +136,7 @@ export async function revealDocument(tx: TxContext, ports: GuestsPorts, document
     throw new NotFoundError('identity_document', documentId);
   });
   requirePermission(tx, 'guests.document.read', { propertyId: row.property_id });
+  const why = await scrubReason(tx, reason, [row.profile_id]);
   const payload = JSON.parse(
     ports.crypto.cipher.decrypt(row.enc_payload, aadFor(tx.tenantId, row.id)),
   ) as DocumentPayload;
@@ -143,7 +144,7 @@ export async function revealDocument(tx: TxContext, ports: GuestsPorts, document
     action: 'guests.document.read',
     target: { type: 'identity_document', id: row.id },
     propertyId: row.property_id,
-    reason,
+    reason: why,
     metadata: { profileId: row.profile_id, type: row.doc_type, fields: Object.keys(payload) },
   });
   return {
@@ -166,12 +167,13 @@ export async function deleteDocument(tx: TxContext, ports: GuestsPorts, document
     throw new NotFoundError('identity_document', documentId);
   });
   requirePermission(tx, 'guests.document.manage', { propertyId: row.property_id });
+  const why = await scrubReason(tx, reason, [row.profile_id]);
   await db(tx).deleteFrom('guests.identity_documents').where('id', '=', documentId).execute();
   await tx.audit({
     action: 'guests.document.delete',
     target: { type: 'identity_document', id: documentId },
     propertyId: row.property_id,
-    reason,
+    reason: why,
     metadata: { profileId: row.profile_id, type: row.doc_type },
   });
 }

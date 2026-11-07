@@ -1,7 +1,7 @@
 # Agent run: Quality steward (meta loop) round 0
 
-- Started: 2026-11-07T16:54:09.351Z · last activity: 2026-11-07T17:31:31.370Z
-- Turns: 241 · tool uses: 143 · output tokens: 579,945
+- Started: 2026-11-07T16:54:09.351Z · last activity: 2026-11-07T18:43:52.918Z
+- Turns: 364 · tool uses: 210 · output tokens: 833,568
 - Type: general-purpose
 
 ## Brief (2026-11-07T16:54:09.351Z)
@@ -102,6 +102,50 @@ Address this before completing your current task.
 [Request interrupted by user]
 ````
 
+## Follow-up message (2026-11-07T17:38:53.563Z)
+
+````text
+The coordinator sent a message while you were working:
+Resume after the owner's checkpoint. Your tree on docs/quality was clean. Run meta-loop round 1 exactly as briefed in my last message:
+- the integration-step review;
+- identity review 3;
+- the backoffice merge verification;
+- my orchestrator process escapes;
+- the new playbooks/orchestrator.md.
+
+Then reply with the improvements, the escape counts and the exact edits.
+
+Address this before completing your current task.
+````
+
+## Follow-up message (2026-11-07T18:43:52.918Z)
+
+````text
+The coordinator sent a message while you were working:
+The heartbeat is starting meta-loop round 2. Merge main first: identity-plus, parity-ops and your round-1 edits are all on main.
+
+Checking rounds completed since round 1:
+1. **Fix re-attack sweep** (reviews/review-fix-sweep.md): the first run measured on steward playbook v2.1.
+   - 48 of 56 attacks refused.
+   - 4 residual P1s: payments ×3, guests ×1. Three of them guarded only the reviewer's exact path.
+2. **Integration-step focused re-review** (reviews/review-integration-step-2.md): 9 of 9 original PoCs refused, but 3 new P1s, each "one step beyond" its fix. The builder had filled the re-attack table, but its own siblings and step-beyond attacks missed these, which is evidence about self-check v3.
+3. **Identity merge.** My spot-check confirmed the W-1..W-3 regression tests assert refusal and all gates passed. Playwright on non-default ports went 11/12: a flaky 409-toast test that passed twice on rerun.
+4. **Parity-ops merge.** The first run on the parity playbook v2: 179 tested rows quoted, 17 downgraded.
+5. **The guests erasure fix.** The builder's report included self-check tables. A focused re-review is running now; fold it in when it lands, or next round.
+6. **My orchestrator escapes:**
+   - three more estimated chronicle times (18:13 → 18:15, 18:30 → 18:29, plus the earlier ones), each corrected from agent records;
+   - one force-push attempt on a branch whose WIP checkpoint commit the agent had rewritten. The safety policy declined it; I resolved it with an `-s ours` merge and added a rule to the builder playbook.
+
+Questions this round should answer:
+- (a) Did v2.1's "attack the fix" and the builder's self-check §3 work, or do the "one step beyond" P1s show a missing technique? If so, propose it.
+- (b) What concrete mechanism would stop my estimated timestamps for good? I'm considering a helper that prints an agent's report time from the chronicle extract.
+- (c) Is UX round 2 correctly deferred until the UI uses real data?
+
+Write retros/2026-11-07-round2.md, update escapes, the scorecard and patterns, and give me the exact edits to apply. Same rules: write only under docs/quality, commit, don't push, and run CPU-only canaries at most.
+
+Address this before completing your current task.
+````
+
 ## Report (2026-11-07T17:26:39.508Z)
 
 ````text
@@ -182,5 +226,125 @@ d42a78d docs(quality): attack, test and UX-trap pattern library; canary catalogu
 cb19fee docs(quality): escape register round 0 — 38 late-found defects traced to the loop that should have caught them
 bfb5cb2 docs(quality): v1 playbooks extracted from the briefs actually used (steward, black-box tester, refiner, scenario tests, parity, gap strategist, builder self-check)
 ```
+````
+
+## Report (2026-11-07T17:57:27.726Z)
+
+````text
+## Quality steward, round 1: report
+
+Round 1 is done on `docs/quality`. I merged `main` first, wrote only under `docs/quality/`, committed six times locally and pushed nothing. I ran no paid canaries.
+
+Read the numbers with one thing in mind: **no round-1 run used a v2 playbook.** Both reviews launched at 17:04 and 17:09 with "read the playbook if it exists" briefs, and v2 was published at 17:20. So round 1 measures v1, and the two fix rounds running now are the first real test of v2.
+
+**Half of all round-1 escapes come from fixes** (12 of 24):
+- **Residuals of fixes already on main**, all surfaced by binding the real ports:
+  - payments/finance P0-1 exempted booking deposits (E-039);
+  - finance left an optional scope that widens to every property (E-045);
+  - the rates seal check wasn't applied to the sibling functions (E-046).
+- **Introduced or left by fix rounds:** the identity wipe race (E-047), mapping deletion without a power check (E-049), the e2e port fix that missed `fixtures.ts` (E-053), and integration's local `module_unavailable` error class (E-062).
+- **Caused by review 2's own recommendations:** three of review 3's five P1/P2 findings (E-048, E-050, E-051).
+
+**Two things I found that change your queue:**
+- **The `skip` fix in pending-fixes is wrong.** `housekeeping-page.tsx` passes the discrepancy value with `vocabulary="occupancy"`. The UI's discrepancy vocabulary already contains `skip`, so the bug is the call site. Adding `skip` to occupancy would hide it and merge two status families.
+- **Provenance enums are still drifting.** Five modules hold six literal copies, and four of them differ from the kernel's. Reservations' copy lacks `sandbox`.
+
+**Scripted gate canaries (run `r1-l1`):** 5 of 7 checks held.
+- Missed: `sql.raw('… operations.units')` passes the boundary checker (E-059).
+- Missed: the catalogue test still counts a permission named only in a comment.
+- Weak: a planted kernel enum value was caught only through payments' copy.
+
+### Top improvements
+1. **Run the queued re-attack sweep now, over merged P0 and P1 fixes**, including an audit of every exemption a fix leaves (early `return`s, "first X is accepted" comments). Estimated at 200–300k output tokens.
+2. **Every fix round fills in the re-attack table, and every spot-check attacks the fix itself.** Identity fix round 4 needs this in its brief.
+3. **Reviewers state fixes as principles and re-check weaknesses their fix depends on** (steward v2.1).
+4. **Stop contract drift at the gate:** build the duplicated-enum lint rule with the measured drift list, fix the `skip` call site rather than the vocabulary (builder self-check v3).
+5. **Make tests run like production:** migrations as a role without RLS bypass, e2e on non-default ports at merge, and `sql.raw` covered by the boundary checker.
+6. **Scenario tests must assert what they claim** (assertion map) and check cross-module money invariants. S04 overclaimed (the first L3 escape), and a binding test over-collected without asserting the amount.
+7. **Orchestrator v2, exact hand-offs:** exact commit paths, claims quoted verbatim, measured times, parity coverage refreshed at merge.
+8. **Launch every checker strictly from its playbook**, so v2 can actually be measured.
+9. **Next canaries target the classes that dominate now:** fix residuals and delegated card/amount choices (L2 set A plus C-L2-16), plus scripted C-L1-04 and C-L1-05.
+10. **ADR wording:** ADR-0015 §5 names which key is checked and covers card and amount choice; ADR-0017 rule 15 becomes a principle.
+
+### Escape counts
+**Round 1 adds 24 (E-039 to E-062):** P0 0, P1 5, P2 14, P3 5.
+
+| Earliest loop | Round 0 (reclassified) | Round 1 | Cumulative |
+|---|---|---|---|
+| L1 gates | 8 | 2 | 10 |
+| L1 builder self-check | 7 | 13 | 20 |
+| L2 steward review | 10 | 3 | 13 |
+| L3 scenario tests | 0 | 1 | 1 |
+| L4 UX loop | 3 | 0 | 3 |
+| L5 parity and research | 5 | 1 | 6 |
+| L-orch (you) | 5 | 3 | 8 |
+| L8 (me) | 0 | 1 | 1 |
+| **Total** | **38** | **24** | **62** |
+
+- **Your new loop:** your three this round are estimated timestamps (E-055), broad `git add` sweeping a running reviewer's files (E-057), and stale parity statuses and `COVERAGE.md` after merges (E-060). I also moved five round-0 escapes to L-orch: E-010, E-019, E-027, E-032, E-036. Your "three lint failures" are E-010, not a new escape.
+- **One to check:** the timeline logs the integration-step verdict at 17:24, but the reviewer finished at 17:26:52. Either the time is an estimate, or the verdict was taken from the unfinished report swept into main at 17:24.
+- **My own escape (E-056):** round 0 copied estimated timeline times and cut-off costs. Corrections are appended with dates.
+
+### Edits for you to apply
+1. **`docs/orchestration/STATUS.md` § 5:**
+   - a. Step 2: the re-attack table and targeted re-check apply to P0 **and P1** fixes, including an audit of every exemption the fix leaves. Queue the sweep of round-0 fixes on main now, launched from steward v2.1.
+   - b. Step 4: regenerate `docs/parity/COVERAGE.md` and queue the parity owner to update the merged module's rows.
+   - c. Step 5: for UI branches, run Playwright on the merged copy with non-default `WEB_PORT`/`API_PORT`; it is not part of `turbo test`.
+   - d. Step 1: launch strictly from the playbook's launch brief, quote builder claims verbatim, and commit by exact paths.
+2. **`docs/orchestration/pending-fixes.md`, backoffice entry:** replace "add `skip` to the occupancy vocabulary" with "`housekeeping-page.tsx` (occupancy column) passes `r.discrepancy` with `vocabulary="occupancy"`; use `vocabulary="discrepancy"`. Do not add `skip` to occupancy (C3.2)."
+3. **`docs/orchestration/pending-fixes.md`, foundation:**
+   - a. Extend the duplicated-enum lint entry with the drift list:
+     - reservations `contracts.ts:200` and `:525`;
+     - guests `:13`;
+     - operations `:48`;
+     - inventory `:21`;
+     - payments `:236`;
+     - integration `ports.ts:153-161` (local `module_unavailable`).
+
+     The boundary checker must also flag `sql.raw` and raw strings.
+   - b. Keep the "catalogue test ignores comments" item; it is still open.
+   - c. In `packages/testing`, run migrations and tests as a role without RLS bypass (identity R3-P3-1).
+4. **STATUS resume item 2 (identity fix round 4):**
+   - Require the self-check § 3 re-attack table for every R3 finding.
+   - The siblings to check are all credential writers: `confirmTotp`, `enrolTotp`, SSO link and session, password session, API key, `acceptInvitation`, `completePasswordReset`.
+   - Your spot-check runs W-1 against the epoch design, with a writer that read state before the wipe and commits after it.
+5. **`docs/orchestration/operating-model.md`:** add "The orchestrator runs from `docs/quality/playbooks/orchestrator.md` and is measured in `docs/quality/scorecard.md` § 9."
+6. **ADRs:**
+   - ADR-0015 §5: explicit capabilities name the module whose key is checked; choosing the payment method, amount or account is explicit unless bound to the agreed guarantee.
+   - ADR-0017 rule 15: "a root change is anything that decides who can sign in or which roles a sign-in grants".
+
+### Playbook versions published
+- **Orchestrator:** new. v1 is reconstructed from your procedures; v2's theme is exact hand-offs and records.
+- **Steward reviewer v2.1:** a clarification inside the v2 theme (fixes as principles, load-bearing check).
+- **Builder self-check v3:** contract integrity. Its metrics are separate from v2's, so both can still be measured.
+- **Scenario tests and parity:** queue entries updated only; no new versions.
+
+Files are in /home/user/wt/quality/docs/quality:
+- escapes.md
+- patterns.md (adds AP-53 to AP-56, UX-03b and 12 extensions)
+- canaries.md
+- scorecard.md
+- retros/2026-11-07-round1.md
+- retros/2026-11-07-day1.md (dated corrections appended)
+- README.md
+- playbooks/orchestrator.md
+- playbooks/steward-reviewer.md
+- playbooks/module-builder-self-check.md
+- playbooks/scenario-tests.md
+- playbooks/parity-researcher.md
+- playbooks/README.md
+- playbooks/archive/orchestrator-v1.md
+- playbooks/archive/module-builder-self-check-v2.md
+
+### git log --oneline (round 1)
+```
+3a1595e docs(quality): round-1 retrospective — fixes are the main defect source; top improvements; 6 edits for the orchestrator
+184d2d0 docs(quality): dated time corrections to the day-1 retro (E-056)
+5cbf840 docs(quality): scorecard round 1 — R1 trend column, runs 12-13, L3 result, gap strategist, orchestrator counters, corrections
+c7b1b81 docs(quality): steward v2.1 (fixes as principles, load-bearing check), builder self-check v3 (contract integrity), E-062, queue updates
+29195a5 docs(quality): round 1 patterns (AP-53..56, UX-03b, 12 extensions) and first canary results (C-L1-01 caught; r1-l1 5/7)
+a5d5137 docs(quality): round 1 — 23 new escapes (E-039..E-061), L-orch loop with reclassification, orchestrator playbook v1/v2
+```
+The a5d5137 message says 23 escapes; E-062 was added in c7b1b81, bringing round 1 to 24.
 ````
 

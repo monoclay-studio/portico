@@ -106,6 +106,27 @@
   Agents can be resumed by message if the session keeps their transcripts; otherwise start new agents on the same
   branches from these briefs. Restart Postgres first if needed (`pnpm db:up`), and recreate the usage-check chain.
 
+- **2026-11-07 18:58 UTC — quality round 2 queue** (`docs/quality/retros/2026-11-07-round2.md`):
+  - (1) **UX round 2a (focused)**: the 8 refinements marked "Done", the new sign-in code step, and the C8/C11 language
+    and permission-honesty rules. 3 personas + a new hire, from the latest blackbox-tester playbook. Launch when the
+    5-hour usage is < 60% (or right after the reset). The full 34-task re-measure still waits for real-data wiring.
+  - (2) **Parity evidence re-run** for `docs/parity/inventory.md` and `reservations.md` (still 1% tested on main):
+    about 50k tokens, from parity playbook v2.
+  - (3) Every fix-round brief names its invariants and requires the builder self-check v4 § 5 (invariant closure)
+    table.
+
+- **2026-11-07 19:09 UTC — owner: make Portico Channex-ready.** TOP of the next window, after the reset at 21:10:
+  build the `distribution` module (spec `docs/specs/distribution.md` §3.2–3.3) with a **Channex adapter**:
+  - an event-driven ARI engine with coalescing (no polling);
+  - an outbox queue with a per-connection token bucket (20 ARI/min, configurable);
+  - a webhook endpoint for booking revisions with a durable revision log, ordered per property, plus a recovery pull;
+  - ack only after `reservations.ingestChannelBooking` commits;
+  - mappings, last-acknowledged state, discrepancies and health.
+
+  Build and test against an exact simulator of Channex's API (R3). Then run Channex **staging** tests (R4); this needs a
+  free staging account and API key from the owner, requested via `request_credential` for the Channex staging host.
+  Channex certification (R5–R6) is an external step. Production activation needs owner authorization (platform fee).
+
 ## 1. Owner, product and how to work with the owner
 
 - Owner: founder of **Monoclay LLC** (Delaware, Stripe Atlas), based in the Maldives. Product: **Portico** (final name).
@@ -161,7 +182,7 @@ direction, experience architecture, parity framework, this orchestration folder.
 | `feat/operations-core` | wt/operations | housekeeping, maintenance, tasks, offline sync | **MERGED** to main (9296305) — both P0 + most P1 fixed; P1-5/6/8 deferred with reasons (README) | — |
 | `feat/integration-core` | wt/integration | connector framework, setup, health, webhooks | **MERGED** to main (4d90c6a) — P0 SSRF fixed (`safeFetch`), F2–F9 fixed | bind platform transitions after identity-plus merges (FR-2) |
 | `feat/backoffice-core` | wt/backoffice | packages/ui + apps/backoffice | **MERGED** to main (40a832c) — P0 cache leak + all P1 fixed; Playwright 11/11 incl. axe (WCAG 2.2 AA, light+dark); UX round-1 decisions recorded | next round: wire to real APIs (after integration-step merges) + UX shell items (NAV-01/02/09, phone bottom bar) |
-| `feat/identity-platform-enterprise` | wt/identity-plus | MFA, SSO, SCIM, custom roles, break-glass, trials, activation | 3rd review: **merge after fixes** (R3-P1-1 wipe race, R3-P1-2 groups-claim root change) → **fix round 4 running** | orchestrator spot-checks W-1..W-3 regression tests → merge |
+| `feat/identity-platform-enterprise` | wt/identity-plus | MFA, SSO, SCIM, custom roles, break-glass, trials, activation | **MERGED** to main (18:36 UTC, e5d07c6) after 3 reviews + 4 fix rounds + spot-check | follow-ups: users page offers 'Initial password' (refused now); no in-app step-up/security settings page; SSO callback route in staff app; UX lab needs demo authenticator secret |
 | `feat/infra-aws` | wt/infra | Terraform, Dockerfiles, runbooks | **paused** — resume when 5-hour usage < 60% (owner: checks use the 5-hour window only) | `TRUSTED_PROXY_CIDRS`, `PORTICO_TERMS_SEAL_KEY`, worker DB role |
 | `feat/integration-step` | wt/integration-step | bind every port for real; ADR-0015 delegation; S01–S20 scenarios | **done** (pushed): all ports bound; 12/20 scenarios pass; 5 contract bugs fixed | **steward review running** → merge → tell identity-plus/backoffice to merge main |
 | `docs/parity-ops` | wt/parity-ops | parity: 10 ops-cluster modules | **MERGED** to main (03ec772) — all matrices done; every `tested` row quotes its asserting test; no module passes the gate yet (open P0 rows) | decisions recorded (Q157, pending-fixes); foundation P0 items queued |
@@ -203,6 +224,7 @@ Pending cross-module fixes awaiting the next round for each author: `docs/orches
    `snapshot.py` (pass the test log); commit `docs(chronicle): …`.
 7. Quality meta loop: after every steward review / fix round / scenario run / UX round, resume the quality steward
    (retro, scorecard, escapes, playbook versions); launch future checkers from `docs/quality/playbooks/` (latest).
+8. After any merge batch that contains fixes for 3 or more modules, run a fix re-attack sweep from steward v2.1.
 **Merge order:** guests, inventory, rates (independent) → operations, integration, finance → payments (needs
 finance ledger port) → reservations (needs all) → identity-platform-enterprise → backoffice → infra → docs branches
 any time (OPEN_QUESTIONS.md always conflicts at the end: keep both sides, sort by number).
@@ -230,6 +252,10 @@ any time (OPEN_QUESTIONS.md always conflicts at the end: keep both sides, sort b
 - Domain map: fold in contract changes from guests, inventory, rates READMEs at merge.
 
 ## 8. Resume procedure
+
+**History safety:** never force-push. Reconcile a diverged branch with a normal merge, or `git merge -s ours` when the
+remote-only commit is a superseded checkpoint.
+
 
 1. `cd /home/user/portico && git fetch origin && git pull` (or clone fresh). If worktrees are gone, recreate:
    `git worktree add /home/user/wt/<name> <branch>` for each branch in §4 (fetch them from origin first).

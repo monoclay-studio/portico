@@ -6,6 +6,7 @@ import { type Selectable, sql, type TxContext, typed } from '@portico/db';
 import {
   actorId,
   BusinessRuleError,
+  ConflictError,
   ForbiddenError,
   NotFoundError,
   requirePermission,
@@ -210,17 +211,42 @@ export async function requireWritableProfile(
   propertyId?: string | null,
 ): Promise<VisibleProfile & { actingPropertyId: string }> {
   const vp = await requireVisibleProfile(tx, ports, id);
-  if (vp.row.status === 'anonymized') {
-    throw new BusinessRuleError(
-      'profile_anonymized',
-      'This guest profile was anonymized on request and can no longer be changed. Create a new profile if the guest returns.',
-      { profileId: vp.row.id },
-    );
-  }
+  // Lock, then decide (R2-P2-2): an erasure (FOR UPDATE on the profile) and this write serialize, so a write that
+  // passed its checks can never commit after the erasure and leave personal data behind.
+  await lockProfileForWrite(tx, vp.row.id);
   // Writing never links the profile to the acting property (that would silently widen visibility there, and
   // survive sharing being switched off). Properties become "known" only through resolve, stays or mirroring.
   const acting = actingProperty(tx, permission, vp.row, vp.links, propertyId);
   return { ...vp, actingPropertyId: acting };
+}
+
+/**
+ * Take the profile row lock for a write to the person's data and re-read the status under it. Erasure locks the
+ * same row FOR UPDATE: a writer that locked first is then erased with everything else; a writer that arrives after
+ * the erasure is refused (profile_anonymized).
+ */
+export async function lockProfileForWrite(tx: TxContext, profileId: string): Promise<void> {
+  const row = await db(tx)
+    .selectFrom('guests.profiles')
+    .select(['id', 'status'])
+    .where('id', '=', profileId)
+    .forNoKeyUpdate()
+    .executeTakeFirst();
+  if (!row) throw new NotFoundError('guest_profile', profileId);
+  if (row.status === 'anonymized') {
+    throw new BusinessRuleError(
+      'profile_anonymized',
+      'This guest profile was anonymized on request and can no longer be changed. Create a new profile if the guest returns.',
+      { profileId },
+    );
+  }
+  if (row.status === 'merged') {
+    throw new ConflictError(
+      'profile_changed',
+      'This profile was merged into another one while you were working. Open the surviving profile and try again.',
+      { profileId },
+    );
+  }
 }
 
 export async function linkProperty(
@@ -327,4 +353,70 @@ export function visibilitySql(access: AccessScope, alias = 'p') {
     ? sql`and exists (select 1 from guests.consents c2 where c2.profile_id = ${p} and c2.purpose = 'cross_property_sharing' and c2.state = 'granted')`
     : sql``;
   return sql<boolean>`(${own} or (${notWithdrawn} ${granted}))`;
+}
+
+/**
+ * Staff-typed reasons end up in the append-only audit log, which erasure cannot change (SW-GUE-1). Before a reason
+ * is stored anywhere, the subject's own identifiers — name parts in every script, contact values, date of birth —
+ * are replaced by "[guest]". The record itself is identified by the audit target, so nothing is lost.
+ * Residual (FOUNDATION_REQUESTS FR-8): a misspelled name or a differently formatted number is not recognised.
+ */
+export async function scrubReason<T extends string | null | undefined>(
+  tx: TxContext,
+  reason: T,
+  profileIds: readonly string[],
+): Promise<T> {
+  if (!reason || profileIds.length === 0) return reason;
+  const ids = [...profileIds];
+  const profiles = await db(tx)
+    .selectFrom('guests.profiles')
+    .select([
+      'given_name',
+      'middle_name',
+      'family_name',
+      'preferred_name',
+      'native_given_name',
+      'native_family_name',
+      'date_of_birth',
+    ])
+    .where('id', 'in', ids)
+    .execute();
+  const contacts = await db(tx)
+    .selectFrom('guests.contact_points')
+    .select(['value', 'normalized'])
+    .where('profile_id', 'in', ids)
+    .execute();
+  const tokens = new Set<string>();
+  const add = (v: string | null | undefined, split: boolean) => {
+    if (!v) return;
+    const t = v.trim();
+    if (t.length >= 2) tokens.add(t);
+    // Two-letter surnames (Li, Wu, Ng, Do) count — they are matched as whole words only (R2-P3-5).
+    if (split) for (const part of t.split(/[\s\-'’.]+/u)) if (part.length >= 2) tokens.add(part);
+  };
+  for (const p of profiles) {
+    add(p.given_name, true);
+    add(p.middle_name, true);
+    add(p.family_name, true);
+    add(p.preferred_name, true);
+    add(p.native_given_name, true);
+    add(p.native_family_name, true);
+    if (p.native_family_name && p.native_given_name)
+      add(`${p.native_family_name}${p.native_given_name}`, false);
+    add(p.date_of_birth, false);
+  }
+  for (const c of contacts) {
+    add(c.value, false);
+    add(c.normalized, false);
+  }
+  const cjk = /^[\p{Script=Han}\p{Script=Hangul}\p{Script=Hiragana}\p{Script=Katakana}]+$/u;
+  let out: string = reason;
+  for (const t of [...tokens].sort((a, b) => b.length - a.length)) {
+    const escaped = t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    // Whole words only ("Ann" never turns "Annual" into "[guest]ual"); scripts written without spaces (Han,
+    // Hangul, Kana) cannot use word boundaries, so their names are matched as written.
+    const pattern = cjk.test(t) ? escaped : `(?<![\\p{L}\\p{N}])${escaped}(?![\\p{L}\\p{N}])`;
+    out = out.replace(new RegExp(pattern, 'giu'), '[guest]');
+  }
+  return out as T;
 }

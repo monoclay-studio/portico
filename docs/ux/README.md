@@ -9,7 +9,9 @@ missing anything and without weakening any module's power**.
 The loop runs **continuously** — refined over and over until the application is in its best form, with the best
 experience for a **completely new user** adapting with the least friction.
 
-- **Triggers:** (a) any merge to `main` that touches UI or a module with UI → a round focused on what changed;
+- **Triggers:** (a) any merge to `main` that touches UI or a module with UI → a round focused on what changed (a UI
+  merge triggers a focused round on the changed surfaces even while other screens are simulated; only the full 34-task
+  re-measure waits for real data);
   (b) a scheduled heartbeat every 3 hours starts the next round if none is running (owner-visible scheduled task);
   (c) every 3rd round is a full sweep of all personas and modules.
 - **One round at a time:** tester → refiner → module owners → re-measure. The lab is rebuilt from the latest code

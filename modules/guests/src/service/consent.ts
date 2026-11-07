@@ -20,6 +20,7 @@ import {
   actorKey,
   db,
   iso,
+  lockProfileForWrite,
   requireVisibleProfile,
   resolveSurvivor,
   SHARING_POLICY_DEFAULT,
@@ -54,6 +55,7 @@ export async function recordConsent(
   if (row.status !== 'active') {
     throw new ValidationError('profile_not_active', 'Consent can only be recorded on an active profile.');
   }
+  await lockProfileForWrite(tx, row.id); // lock, then decide: never lands on a profile erased meanwhile
   let propertyForCheck: string | null = input.propertyId ?? null;
   if (!isSelf) {
     const links = (

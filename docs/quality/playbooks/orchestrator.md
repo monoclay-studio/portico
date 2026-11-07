@@ -2,9 +2,9 @@
 
 | | |
 |---|---|
-| **Current version** | **v2** (2026-11-07, meta-loop round 1) |
-| **Theme of v2** | Exact hand-offs and records: what the orchestrator passes on (briefs, claims, files, commits) or records (times, generated artifacts, notes) is exact, complete and checked |
-| **Previous** | `archive/orchestrator-v1.md` (reconstructed from the procedures the orchestrator followed on day 1) |
+| **Current version** | **v3** (2026-11-07, meta-loop round 2) |
+| **Theme of v3** | Mechanisms over memory: the two process escapes that recurred under a v2 rule are replaced by tools and guards (derived and verified times; safe history). v2 (exact hand-offs and records) stays in force. **v2 theme:** Exact hand-offs and records: what the orchestrator passes on (briefs, claims, files, commits) or records (times, generated artifacts, notes) is exact, complete and checked |
+| **Previous** | `archive/orchestrator-v2.md` (v2); `archive/orchestrator-v1.md` (reconstructed from the procedures the orchestrator followed on day 1) |
 | **Launch** | The main session reads this file at each resume and before every launch, hand-off, commit to `main` or merge. The quality steward measures it like any other checker (`../scorecard.md` § Orchestrator) |
 | **Measured by** | Escapes whose earliest loop is the orchestrator (`../escapes.md`, loop `L-orch`), plus the process counters in § 2 of this file |
 
@@ -38,6 +38,9 @@ It also contributed to three more:
 | v2 | 2026-11-07 | **O2-2** | **Exact commits.** Stage only named files (`git add -- <paths>`), never a directory while any agent writes under it. Commit a running agent's files only as `wip(<agent>): … (in progress)`, and again when it reports. Commit to `main` through `tools/commit-checked.sh` | Commits `1179c98` and `012652e` swept the integration-step reviewer's PoC files and its unfinished 400-line report into `main` 2–4 minutes before it finished. Lint failures reached `main` through piped output | E-057, E-010 | Commits containing another agent's unfinished files (round 1: 2); lint fix-up commits (round 0: 3–4) |
 | v2 | 2026-11-07 | **O2-3** | **Exact file hand-offs.** When copying a checker's evidence into the repository, copy every file in its manifest, then run the cited-file and duplicate checks (`blackbox-tester.md` H-1…H-4). Every cross-module note in a review becomes a `pending-fixes.md` entry with an owner | Six screenshots were lost in the round-1 compress step. Contract drift that two reviews had noted broke `main` | E-032, E-011 | Evidence lost at hand-off (round 0: 6 files); untracked notes that later break something (round 0: 2) |
 | v2 | 2026-11-07 | **O2-4** | **Exact records.** Timeline times come from `date -u`, commit times or transcripts, never estimates. Agent costs come from `agents.json` after the chronicle extraction. At every merge, regenerate generated artifacts (`docs/parity/COVERAGE.md`) and queue the update of the merged module's parity rows from its README evidence | Times were 10–60 minutes off, some ahead of the clock (corrected at 17:25), and the quality steward copied them (E-056). Inventory and reservations parity showed 1 % tested while their READMEs proved dozens of rows; `COVERAGE.md` showed rates at 2 % instead of 61 % | E-055, E-060 | Chronicle correction batches (round 1: 1); stale generated artifacts found later (round 1: 1) |
+| v3 | 2026-11-07 | **O3-1** | **Times are derived and verified, never typed.** A helper, `tools/chronicle/when.py` (prototype at `<scratchpad>/canary-scripts/when.py`), prints the time and a source token: `agent "<title>"` reads the subagent transcript's last assistant message **live** (not the lagging chronicle extract); `commit <sha>` reads the committer time; `now` reads `date -u`. Every new timeline bullet carries the source token. A verifier run by `tools/commit-checked.sh`, whenever `docs/chronicle/01-timeline.md` is staged, recomputes each token's time and refuses the commit if HH:MM differs from the floor of the source time | Four more estimated times (E-080) after O2-4 had made it a rule. The error fell from 10–60 to 1–6 minutes but never reached zero: memory is not a mechanism. The prototype printed the right times for the sweep (18:15), the re-review (18:29), the parity merge (18:02) and integration review 1 (17:26) | E-055, E-080 | Timeline time corrections per round (round 2: 4 → target 0); bullets without a source token |
+| v3 | 2026-11-07 | **O3-2** | **Safe history.** Never force-push, for any reason. Reconcile a diverged branch with a merge (`-s ours` for a superseded checkpoint, as on 18:08). After every checkpoint, the resume message names the WIP commit and says: "build on top of it; never amend, reset or rebase it" | A pushed checkpoint commit was rewritten by an agent that had not been told; the orchestrator then attempted a force-push, which the safety policy declined | E-081 | Force-push attempts (round 2: 1 → 0); rewritten checkpoint commits |
+| v3 | 2026-11-07 | **O3-3** | **A flaky test is a tracked defect.** A failure that passes on re-run gets a `pending-fixes.md` line (owner, test, port or seed) before merge. It is never accepted silently | The 409-toast test passed on re-run at the identity merge (11/12) | E-079 | Untracked flakes at merge |
 
 ### Queued for later versions (one theme each)
 
@@ -103,14 +106,27 @@ heading.
 3. Agent costs in any report come from `docs/chronicle/data/agents.json` after `extract.py`. Mark a run that is still
    going as "≥".
 
+## 1b. The playbook additions (v3)
+
+- **O3-1 Recording a time.** Run `tools/chronicle/when.py agent "<title>"`, `commit <sha>` or `now`, and paste its
+  output: the time plus the source token. Never type a time. Until the tool is in `tools/`, use the scratchpad
+  prototype. **Rounding convention:** the floor of the source time to the minute (17:26:51 → 17:26).
+- **O3-2 After a checkpoint or a refused push.** Do not force-push. Use `git merge -s ours <superseded>` or an
+  ordinary merge. The resume message says: "Your work in progress was committed and pushed as `<sha>`. Build on top;
+  never amend, reset or rebase it."
+- **O3-3 Flaky tests.** Any test that fails and then passes on re-run becomes a `pending-fixes.md` entry with an owner
+  before the merge completes.
+
 ## 2. Process counters (the quality steward measures these each round)
 
-| Counter | R0 | R1 |
-|---|---|---|
-| Escapes whose earliest loop is L-orch | 5 (after reclassification) | 3 |
-| Briefs deviating from the playbook, or restating claims more broadly | — | ≥ 2 (both reviews launched with bespoke briefs; one restated a claim more broadly) |
-| Commits containing another agent's unfinished files | — | 2 |
-| Evidence files lost at hand-off | 6 | 0 (restored 17:28) |
-| Chronicle correction batches | — | 1 (10–60 min errors) |
-| Stale generated artifacts found later | — | 1 (`COVERAGE.md`) |
-| Lint fix-up commits on `main` | 3–4 | 0 since `commit-checked.sh` |
+| Counter | R0 | R1 | R2 |
+|---|---|---|---|
+| Escapes whose earliest loop is L-orch | 5 (after reclassification) | 3 | 2 (E-080, E-081) |
+| Briefs deviating from the playbook, or restating claims more broadly | — | ≥ 2 (both reviews launched with bespoke briefs; one restated a claim more broadly) | 0 found (both v2.1 runs launched from the playbook) |
+| Commits containing another agent's unfinished files | — | 2 | 0 (WIP labelled: `0fa21bd`, `d3bd36a`) |
+| Evidence files lost at hand-off | 6 | 0 (restored 17:28) | 0 |
+| Chronicle correction batches | — | 1 (10–60 min errors) | 4 corrections (1–6 min errors) |
+| Stale generated artifacts found later | — | 1 (`COVERAGE.md`) | 0. But parity rows for inventory and reservations are still 1 % `tested` on `main` (E-060 open) |
+| Lint fix-up commits on `main` | 3–4 | 0 since `commit-checked.sh` | 0 |
+| Force-push attempts | — | — | 1 (declined by policy) |
+| Quality edits applied ÷ proposed | — | 8/8 | 6/6 (`722b345`, 1 min after merge) |

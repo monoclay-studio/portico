@@ -111,29 +111,33 @@ describe('tenant isolation (S17) and permissions', () => {
   it('respects data authority: no postings when charges are kept in another system', async () => {
     const org = await setupOrg(h);
     const s = await openStay(h, org);
-    await org.run((tx) =>
-      platform.setDataAuthority(tx, {
-        propertyId: org.propertyId,
-        domain: 'charges',
-        authority: 'external',
-        connectionId: newId(),
-        systemName: 'Legacy PMS',
-        writeMode: 'read_only',
-        reason: 'connect-alongside evaluation',
-      }),
-    );
+    // Charges are a governed domain (CR-10): authority moves through a transition approved by a second person.
+    const moveCharges = async (writeMode: 'read_only' | 'forward', reason: string) => {
+      const plan = await org.run((tx) =>
+        platform.planAuthorityTransition(tx, org.propertyId, {
+          changes: [
+            {
+              domain: 'charges',
+              authority: 'external',
+              connectionId: newId(),
+              systemName: 'Legacy PMS',
+              writeMode,
+            },
+          ],
+          reason,
+          freezeMinutes: 5,
+        }),
+      );
+      await org.run(
+        (tx) => platform.approveAuthorityTransition(tx, plan.id, 'second approver'),
+        org.as(['platform.dataAuthority.manage']),
+      );
+      await org.run((tx) => platform.freezeAuthorityTransition(tx, plan.id));
+      await org.run((tx) => platform.completeAuthorityTransition(tx, {}, plan.id));
+    };
+    await moveCharges('read_only', 'connect-alongside evaluation');
     await expect(charge(org, s.guestFolioId, 'da1')).rejects.toThrow(/Legacy PMS is the system of record/);
-    await org.run((tx) =>
-      platform.setDataAuthority(tx, {
-        propertyId: org.propertyId,
-        domain: 'charges',
-        authority: 'external',
-        connectionId: newId(),
-        systemName: 'Legacy PMS',
-        writeMode: 'forward',
-        reason: 'forwarding',
-      }),
-    );
+    await moveCharges('forward', 'forwarding');
     await expect(charge(org, s.guestFolioId, 'da2')).rejects.toThrow(/Forwarding charges/);
   });
 });

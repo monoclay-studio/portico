@@ -44,6 +44,11 @@ export const ERASURE_PLAN: readonly ErasurePlanItem[] = [
     why: 'Stay and folio references and revenue are needed for fiscal retention; no name remains',
   },
   {
+    category: 'idempotencyResponses',
+    action: 'redact',
+    why: 'Stored API responses that mention the person are replaced by an erased marker (replays answer 410)',
+  },
+  {
     category: 'mergeRecords',
     action: 'redact',
     why: 'Pre-merge snapshots contain personal data; the merge becomes irreversible',

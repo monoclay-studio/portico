@@ -16,6 +16,19 @@
 | v2 | 2026-11-07 | **PR2-1** | **`tested` needs an asserting test on `main`.** Quote the `file:line` of the assertion that proves the row. A test on an unmerged branch caps the status at `built`, with `branch@sha` in the evidence. A test that only exercises the happy path, or runs sequentially where the row is about concurrency, is not `tested` | Reviews found rows marked `tested` for behaviour that was not built or not proven (finance F-12; payments P2-13: PAR-PAY-006, EC-PAY-012, EC-PAY-015 "sequential only", PAR-PAY-009). The v1 mid-run instruction pointed at unmerged branches. An overclaimed P0 row lets the parity gate pass | E-019 | Rows downgraded by later reviews: round 0 had ≥ 8 (finance "several" plus 4 in payments); target 0. Canary C-L5-01 |
 | v2 | 2026-11-07 | **PR2-2** | **Failure-class sweep.** For each module, walk the classes in `docs/quality/patterns.md` groups A–D (isolation, money, events/concurrency, contracts, effective-dated data) and add an edge case for each applicable class with its exact expected behaviour, or record "N/A: reason" in the gap file | 31 % of the rates edge cases and 19 % of the payments edge cases were added *after* review. The inventory review named real P0 rows that were missing. The catalogues came from competitor features, not failure classes | E-020, E-021, E-022, E-023 | Edge-case rows added after the next review, as a share of the catalogue (round 0: rates 31 %, payments 19 %); canary C-L5-02 |
 
+### Round-2 measurement: v2 works (no version change)
+
+Parity-ops (10 modules) ran on v2:
+- **PR2-1:** all 179 `tested` rows quote an asserting line on `main`, and the researcher downgraded 17 over-claimed rows
+  itself.
+- **PR2-2:** a failure-class sweep record for **10 of 10** modules (`docs/parity/gaps-ops.md` § 5), with applied,
+  covered and N/A classes.
+
+No later review has downgraded a parity-ops row yet.
+
+**Still open:** E-060 under-claims in matrices written before v2. Inventory and reservations show 1 % `tested` on
+`main`. Re-run v2's PR2-1 on those matrices (retro, edit 6).
+
 ### Queued for later versions (one theme each)
 
 - **v3, journey cross-check.** Cross-check each matrix against the journey walks in the gap strategist's plan

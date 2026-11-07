@@ -7,4 +7,8 @@ pnpm format >/dev/null 2>&1
 if ! pnpm lint >/tmp/commit-checked-lint.log 2>&1; then
   echo "NOT COMMITTED: lint failed (see /tmp/commit-checked-lint.log)" >&2; exit 1
 fi
-git add -- "$@" && git commit -q -m "$msg" && git log --oneline -1
+git add -- "$@" || exit 1
+if git diff --cached --name-only | grep -qx 'docs/chronicle/01-timeline.md'; then
+  python3 -I tools/chronicle/verify-times.py || { echo "NOT COMMITTED: timeline times not derived (tools/chronicle/when.py)" >&2; exit 1; }
+fi
+git commit -q -m "$msg" && git log --oneline -1
