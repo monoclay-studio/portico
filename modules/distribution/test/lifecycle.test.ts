@@ -243,6 +243,41 @@ describe('resync and the channel calendar', () => {
   });
 });
 
+describe('pause and resume', () => {
+  it('a paused connection publishes nothing (changes queue) and resume re-sends everything, non-destructively', async () => {
+    const org = await setupOrg(h);
+    const c = await connect(org);
+    await runFor(org, 3_000);
+    const deps = h.dist.deps;
+    let v = (await org.run((tx) => svc.getConnection(tx, deps, c.connectionId))).version;
+    const paused = await org.run((tx) =>
+      svc.pauseConnection(tx, deps, c.connectionId, v, 'OTA contract review'),
+    );
+    expect(paused.status).toMatchObject({ connection: 'paused', health: 'paused' });
+    const sent = (await simState(org, c)).log.filter((l) => l.endpoint === 'restrictions').length;
+    await org.run((tx) =>
+      h.rates.applyPriceUpdate(tx, {
+        propertyId: org.propertyId,
+        ratePlanId: org.bar,
+        unitTypeIds: [org.water],
+        ranges: [{ from: d(4), to: d(5) }],
+        set: { baseOccupancy: 2, baseAmountMinor: 66_600 },
+      }),
+    );
+    await h.drain();
+    await runFor(org, 60_000, 10_000);
+    expect((await simState(org, c)).log.filter((l) => l.endpoint === 'restrictions').length).toBe(sent);
+    const banner = (await org.run((tx) => svc.getHealth(tx, deps, c.connectionId))).banner;
+    expect(banner?.message).toMatch(/NOT confirmed/);
+    v = (await org.run((tx) => svc.getConnection(tx, deps, c.connectionId))).version;
+    await org.run((tx) => svc.resumeConnection(tx, deps, c.connectionId, v));
+    await runFor(org, 3_000);
+    const s = await simState(org, c);
+    expect(s.restrictions['RP-WV-BAR']?.[d(4)]?.rate).toBe('666.00');
+    expect(Object.keys(s.restrictions['RP-WV-BAR'] ?? {})).toHaveLength(400);
+  });
+});
+
 describe('disconnect', () => {
   it('is refused while a booking revision is unsettled; afterwards the key is destroyed and nothing is published', async () => {
     const org = await setupOrg(h);

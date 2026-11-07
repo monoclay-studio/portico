@@ -23,7 +23,16 @@ describe('invariants enforced by the database', () => {
     h.reservations.mode = { kind: 'unavailable', times: 1 };
     const rev = await h.dist.deps.simulator.addRevision(org.tenantId, c.externalPropertyId, {
       status: 'new',
-      rooms: [{ roomTypeId: 'RT-WV', ratePlanId: 'RP-WV-BAR', checkin: addDays(BUSINESS_DATE, 9), checkout: addDays(BUSINESS_DATE, 10), adults: 1, nightly: { [addDays(BUSINESS_DATE, 9)]: '500.00' } }],
+      rooms: [
+        {
+          roomTypeId: 'RT-WV',
+          ratePlanId: 'RP-WV-BAR',
+          checkin: addDays(BUSINESS_DATE, 9),
+          checkout: addDays(BUSINESS_DATE, 10),
+          adults: 1,
+          nightly: { [addDays(BUSINESS_DATE, 9)]: '500.00' },
+        },
+      ],
     });
     await h.dist.deps.simulator.deliver(org.tenantId, c.externalPropertyId, [rev.id]);
     await svc.processInbound(h.t.db, h.dist.deps, sys(org), c.connectionId);
@@ -32,7 +41,9 @@ describe('invariants enforced by the database', () => {
     for (const state of ['received', 'failed', 'parked']) {
       await expect(
         withTenantTx(h.t.db, sys(org), (tx) =>
-          sql`update distribution.revision_processing set state = ${state}, ack_state = 'pending' where revision_row_id = ${r?.id}::uuid`.execute(tx.db),
+          sql`update distribution.revision_processing set state = ${state}, ack_state = 'pending' where revision_row_id = ${r?.id}::uuid`.execute(
+            tx.db,
+          ),
         ),
       ).rejects.toMatchObject({ code: '23514' });
     }
@@ -45,10 +56,29 @@ describe('invariants enforced by the database', () => {
     const date = addDays(BUSINESS_DATE, 2);
     const cell = (availability: number) => ({ u: org.water, r: null, d: date, v: { availability }, i: 0 });
     await withTenantTx(h.t.db, sys(org), async (tx) => {
-      await svc.upsertChannelState(tx, c.connectionId, 'availability', { id: '01a1b4a0-0000-7000-8000-00000000ff02', seq: 1_000_002 }, [cell(7)]);
-      await svc.upsertChannelState(tx, c.connectionId, 'availability', { id: '01a1b4a0-0000-7000-8000-00000000ff01', seq: 1_000_001 }, [cell(5)]);
+      await svc.upsertChannelState(
+        tx,
+        c.connectionId,
+        'availability',
+        { id: '01a1b4a0-0000-7000-8000-00000000ff02', seq: 1_000_002 },
+        [cell(7)],
+      );
+      await svc.upsertChannelState(
+        tx,
+        c.connectionId,
+        'availability',
+        { id: '01a1b4a0-0000-7000-8000-00000000ff01', seq: 1_000_001 },
+        [cell(5)],
+      );
     });
-    const cal = await org.run((tx) => svc.getChannelCalendar(tx, h.dist.deps, c.connectionId, { from: date, to: addDays(date, 1), kind: 'availability', unitTypeId: org.water }));
+    const cal = await org.run((tx) =>
+      svc.getChannelCalendar(tx, h.dist.deps, c.connectionId, {
+        from: date,
+        to: addDays(date, 1),
+        kind: 'availability',
+        unitTypeId: org.water,
+      }),
+    );
     expect(cal[0]?.acked).toEqual({ availability: 7 });
   });
 });
