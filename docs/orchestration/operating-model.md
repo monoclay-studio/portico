@@ -48,3 +48,18 @@ Checkers launch from their latest playbook. The orchestrator applies playbook ch
 Details: `docs/quality/README.md`.
 
 The orchestrator runs from `docs/quality/playbooks/orchestrator.md` (latest) and is measured in `docs/quality/scorecard.md` § 9.
+
+## Capability scouting: keep adding what makes Portico stronger (owner D14, 2026-11-07)
+
+After every wave, the gap strategist re-scans the market (research digest, competitor releases, parity gaps,
+black-box findings) and proposes additions to `docs/strategy/gap-plan.md`. The orchestrator adopts an addition only if
+it passes the **vision-fit test**:
+- (1) it serves a named persona's real hotel task, with a measurable outcome;
+- (2) it strengthens truthful operations, depth without weight, the adoption ramp or honest readiness, and never
+  trades them away;
+- (3) it isn't already covered by a move or a module;
+- (4) it isn't overkill for where Portico is going: no enterprise-only machinery before the segment needs it;
+  progressive disclosure keeps a guesthouse simple.
+
+Adopted additions get a brief, parity rows and a place in the sequencing. Rejected ones are logged with the reason.
+

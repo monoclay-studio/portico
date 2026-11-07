@@ -52,3 +52,20 @@ Any other use of a saved card, or a different amount, is an explicit capability:
 sweep SW-PAY-3). Whether the guest is present or the merchant initiates a charge is derived from server facts, never
 from a client field (SW-PAY-4).
 
+## Amendment 2 — staff permission never exceeds cardholder consent (2026-11-07, integration-step re-review #3)
+
+Amendment 1 said "any other use of a saved card, or a different amount, is an explicit capability", which mixed
+**staff permission** with **cardholder consent**. They are separate, and both are required:
+- **Cardholder consent** (the mandate, or the card supplied for this booking) defines *what may be charged*: purposes,
+  amount cap, the bookings or folios covered, and validity. It is enforced on **every** money movement: charge,
+  authorize, increase a hold, capture beyond the authorized amount, and payment-request amounts drawn on that card.
+- **Staff permission** (`payments.payment.collect` at the card's property and legal entity) defines *who may initiate*
+  within that consent.
+- Anything beyond the consent, such as a higher amount, another purpose or another booking, needs **new cardholder
+  consent**, for example a payment link or the terminal. No staff permission can stand in for it.
+
+**Payment requests are externally visible and have external writers.** A request (link) can be paid at the provider
+until the provider confirms it is deactivated. Replacing, amending or cancelling a request therefore deactivates it at
+the provider first. Until that is confirmed, the old link counts as possibly payable, and any resulting
+over-collection is detected and resolved as an urgent refund exception, never left as routine.
+

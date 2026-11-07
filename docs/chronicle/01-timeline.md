@@ -274,4 +274,32 @@ Each agent's brief and report are in `agents/`.
 - **19:09 — Guests erasure fix merged** <!-- t: commit:096a038 @ 2026-11-07T19:09:03Z -->. Exact-identifier redaction; every writer of a guest's data locks the
   profile first. The builder proved its tests with 14 mutations: each fix removed one at a time turns its test red.
   This is the first full use of invariant closure (self-check v4 § 5).
+- **19:22 — Infrastructure-as-code done, nothing deployed** <!-- t: agent-a5fe5dfcc8ccf4f59 @ 2026-11-07T19:22:32.044Z (Infra-as-code (resume)) -->.
+  - Results: 17/17 terraform tests with a mocked AWS provider; 38/38 database-role checks on SCRAM Postgres in the
+    production runtime layout; 27/27 deploy-script tests against fake AWS.
+  - Bugs caught before any deployment: an RDS master-user name that would have broken bootstrap; lean-tier egress that
+    would have blocked Stripe, identity providers and webhooks; trusted proxies that needed CloudFront's ranges.
+  - Costs from AWS list prices: lean ≈ $121/month, resilient ≈ $407–538/month.
+  - Owner choices are recorded as Q158. A steward security review is queued before merge.
+- **19:28 — Integration-step fix round 2 done** <!-- t: agent-a29fdf2e9c7d0e9dc @ 2026-11-07T19:28:21.798Z (Integration step: bind module ports) -->. Covers the 3 re-review P1s and the payments residuals from the
+  sweep.
+  - Invariants (a)–(f) were closed with every writer tested. The builder ran its new tests against the pre-fix
+    commit: api 15/15, payments 22/24, finance 3/3 and reservations 4/5 failed there; every test that passed pre-fix
+    covered a guard that already existed.
+  - One invariant is declared not yet closed: "card owned by the payer" on payments' own routes, which needs a payer
+    directory.
+  - The focused re-review (re-check #3) is queued for the next window, because the 5-hour window is ≥ 80%.
+- **19:29 — Window closing** <!-- t: now @ 2026-11-07T19:29:00Z -->. 5-hour usage is 85% and no agents are running; everything is pushed. The resume is
+  scheduled for 21:13 UTC with the Channex/distribution build first.
+- **19:35 — Owner decision D14** <!-- t: now @ 2026-11-07T19:35:24Z -->: "i don't care how long the whole project takes, as long as the final product
+  is in its most powerful form". Yes to the partner platform and open API after Channex (gap-plan M15), and keep adding
+  capabilities that aren't overkill. Standing capability scouting with a vision-fit test was added. M16 (legacy device
+  interface) is gated on counsel (Q159).
+- **21:16 — Resumed after the reset** <!-- t: now @ 2026-11-07T21:16:35Z --> (5-hour 1%; Postgres restarted after a machine restart). Launched together:
+  - the **distribution module + Channex adapter** (owner direction);
+  - the integration-step focused re-review #3;
+  - the infra security review;
+  - the parity evidence re-run for inventory and reservations;
+  - **UX round 2a**, a focused black-box run from tester playbook v2 with stable finding IDs, on a lab rebuilt from
+    main. A demo authenticator command (`tools/demo-authenticator.mjs`) stands in for the tester's phone app.
 

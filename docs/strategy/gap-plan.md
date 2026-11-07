@@ -279,10 +279,39 @@ Each move names the evidence for the gap, the modules involved, its 10x measure 
 
 ---
 
+### M15 — Open API and partner platform: an ecosystem, not a list (owner D14)
+*Added by the orchestrator after the owner's direction.* Mews's 1,000+ integrations are mostly **built by partners** on
+its open API. Portico earns the same effect with a partner platform that is easier than anyone else's:
+- **A public, versioned API**: generated OpenAPI docs for every module (already contract-first); a changelog;
+  deprecation policy and dates; published rate limits.
+- **An event subscription catalogue** with signed webhooks, replay, and per-partner delivery health.
+- **A developer portal**: self-serve partner sign-up, sandbox organizations with Maldives sample data, test keys, and a
+  "first successful call in 15 minutes" target.
+- **Apps a hotel installs with scoped consent** (identity IDN-R17 consent apps): least-privilege scopes, per-property
+  install, revocable, audited, with data-authority aware writes.
+- **A certification kit**: automated conformance tests a partner runs against the sandbox; certified partners get a
+  marketplace badge.
+- **A marketplace**: listings, categories (POS, locks, accounting, CRM, revenue management, guest messaging),
+  install flow, reviews.
+- **Generated SDKs** (TypeScript, Python) and an **MCP server** so AI agents can act through the same commands
+  (shares M12).
+- **A trust centre**: status page, uptime history, security overview, data-processing terms.
+
+Targets (TARGETS): a partner's first successful sandbox call in 15 minutes or less; a partner app certified in 1 day or
+less of the partner's effort; zero breaking changes without a published deprecation window.
+Modules: integration, identity (OAuth apps and scopes), platform, every module's contracts. Readiness: R1 → R3
+(sandbox), no external claims until partners are live.
+
+### M16 — Speak the hotel industry's existing interfaces (legal check first)
+Thousands of door-lock, phone (PBX), minibar, TV and POS devices in hotels already speak a legacy PMS interface
+protocol. A compatibility layer would let them connect without one integration each. This needs counsel's review of
+the protocol's ownership and licensing before any work (Q159). Until then: HTNG/OpenTravel-aligned APIs where
+standards are open.
+
 ## 4. Sequencing
 
 ```
-Phase A — "Make it real" (now)                 Phase B — Guesthouse pilot-ready          Phase C — Resort pilot-ready         Phase D — Scale
+Phase A — "Make it real" (now; then M15 after Channex — owner D14)                 Phase B — Guesthouse pilot-ready          Phase C — Resort pilot-ready         Phase D — Scale
 M1 compose ─┬─► M3 truth contract              M5 money (Route D, receipts, plans)        M8 OPERA migration (Q140/Q141)        M12 agents (MCP, proposals)
 M2 record/  │                                  M6 Day Close                               M11 connected resort + POS            M13 change calendar
  command/   ├─► M4 copy, errors, workspaces    M8 CSV/SMB migration (same day)            M9 Channex live (Q23) + booking engine M14 USALI, warehouse
