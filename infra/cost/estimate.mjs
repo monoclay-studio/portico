@@ -22,7 +22,17 @@ const OFFICE_HOURS = (12 * 6 * 52) / 12; // 08:00–20:00 Mon–Sat (cell defaul
 /** Usage assumptions for ONE pilot hotel (stated in the README). */
 const USAGE = {
   demo: { cfGb: 5, cfMillionReq: 0.5, logsGb: 1, ecrGb: 2, dnsMillion: 1 },
-  pilot: { cfGb: 20, cfMillionReq: 2, logsGb: 3, ecrGb: 3, s3Gb: 10, lcu: 1, dbGb: 20, emails: 1000 },
+  pilot: {
+    cfGb: 20,
+    cfMillionReq: 2,
+    logsGb: 3,
+    ecrGb: 3,
+    s3Gb: 10,
+    lcu: 1,
+    dbGb: 20,
+    emails: 1000,
+    natGb: 20,
+  },
   resilient: {
     logsGb: 8,
     s3Gb: 20,
@@ -91,19 +101,21 @@ function lean() {
   const u = USAGE.pilot;
   return [
     ['Fargate ARM: api 0.5 vCPU/1 GB + worker 0.25 vCPU/0.5 GB', fargate(0.5, 1, 1) + fargate(0.25, 0.5, 1)],
-    ['Task public IPv4 × 2 (egress without NAT)', 2 * HOURS * p('public_ipv4_hour')],
+    ['NAT gateway × 1 (private tasks; Q158 default)', HOURS * p('nat_gateway_hour')],
+    ['NAT Elastic IP', HOURS * p('public_ipv4_hour')],
+    [`NAT data processing ${u.natGb} GB`, u.natGb * p('nat_gateway_gb')],
     ['RDS PostgreSQL db.t4g.small Single-AZ', HOURS * p('rds_pg_t4g_small_hour')],
     [
       `RDS gp3 ${u.dbGb} GB (backups + 14-day PITR within the free allocation)`,
       u.dbGb * p('rds_gp3_gb_month'),
     ],
-    ['Monthly restore drill (1 h restore + Fargate minutes)', p('rds_pg_t4g_small_hour') + 0.1],
+    ['Monthly restore drill (1 h restore) + daily freshness task', p('rds_pg_t4g_small_hour') + 0.2],
     ...managedCommon(u, {
       albAzs: 2,
-      waf: { level: 'basic', rules: 3 },
+      waf: { level: 'basic', rules: 4 },
       kms: 5,
-      alarms: 17,
-      secrets: 15,
+      alarms: 19,
+      secrets: 19,
       logsGb: u.logsGb,
       s3Gb: u.s3Gb,
     }),
@@ -146,13 +158,16 @@ function resilient(acuPerInstance) {
       r.backupGb * r.backupCopies * p('backup_xregion_aurora_gb') +
         r.backupGb * 35 * p('aurora_backup_gb_month'),
     ],
-    ['Monthly restore drill (Aurora db.t4g.medium 1 h + Fargate minutes)', p('aurora_t4g_medium_hour') + 0.2],
+    [
+      'Monthly restore drill (Aurora db.t4g.medium 1 h) + daily freshness task',
+      p('aurora_t4g_medium_hour') + 0.3,
+    ],
     ...managedCommon(u, {
       albAzs: 3,
       waf: { level: 'full', rules: 6 },
       kms: 7,
-      alarms: 19,
-      secrets: 18,
+      alarms: 23,
+      secrets: 19,
       logsGb: r.logsGb,
       s3Gb: r.s3Gb,
     }),
@@ -173,11 +188,10 @@ function staging(mode) {
     ];
   // Always on, Fargate scaled to zero outside office hours; database, ALB, WAF, secrets run all month.
   const fargateFull = full.find(([n]) => n.startsWith('Fargate'))[1];
-  const ipv4 = full.find(([n]) => n.startsWith('Task public IPv4'))[1];
   return [
     [
       'Lean cell always on, tasks scaled to zero outside office hours',
-      monthly - fargateFull - ipv4 + ((fargateFull + ipv4) * OFFICE_HOURS) / HOURS,
+      monthly - fargateFull + (fargateFull * OFFICE_HOURS) / HOURS,
     ],
     ['ECR', ecr],
   ];
@@ -196,6 +210,18 @@ function table(title, rows) {
   return lines.join('\n');
 }
 
+function account() {
+  return [
+    ['CloudTrail multi-region trail (first copy of management events: no CloudTrail charge)', 0],
+    ['CloudTrail log bucket (≈ 2 GB)', 2 * p('s3_gb_month')],
+    [
+      'GuardDuty — usage-based, NOT in the downloaded price files (30-day trial, then a few $/month for a small account) [unpriced]',
+      0,
+    ],
+    ['Security EventBridge rules + 2 SNS topics (email)', 0],
+  ];
+}
+
 const out = [
   table('T1 demo — office hours (Mon–Sat 08:00–20:00 Malé)', demo(OFFICE_HOURS)),
   table('T1 demo — always on', demo(HOURS)),
@@ -205,6 +231,7 @@ const out = [
   table('T2/T3 staging — always on with office-hours scaling', staging('office')),
   table('T3 resilient — production, quiet (Aurora at its 0.5 ACU floor)', resilient(0.5)),
   table('T3 resilient — production, busy (Aurora averaging 1 ACU per instance)', resilient(1)),
+  table('Per AWS account (envs/bootstrap): detective controls', account()),
   table(
     'T3 variant — resilient with RDS Multi-AZ instead of Aurora (overrides: db_engine = "rds", db_multi_az = true)',
     resilient('rds-multi-az'),

@@ -121,6 +121,14 @@ run "lean_tier_plans" {
     condition     = output.app_key_replica_region == "ap-south-2" && length(output.protected_keys) == 3
     error_message = "production (any tier): the three irreplaceable keys are protected and replicated to the DR region."
   }
+  assert {
+    condition     = jsonencode([for st in output.key_policy.Statement : st.Sid]) == jsonencode(["OnlyExecutionRolesAndBreakGlassRead", "NoForcedOrShortWindowDeletion", "NoShortRecoveryWindow", "OnlyBreakGlassReplacesOrDestroys"])
+    error_message = "protected keys: read restriction, no forced or short-window deletion, replacement/destruction by break-glass only."
+  }
+  assert {
+    condition     = alltrue([for a in ["secretsmanager:PutSecretValue", "secretsmanager:DeleteSecret", "secretsmanager:RemoveRegionsFromReplication", "secretsmanager:UpdateSecretVersionStage", "secretsmanager:PutResourcePolicy"] : contains(output.key_policy.Statement[3].Action, a)])
+    error_message = "replacing, re-staging, deleting, de-replicating or re-policing a protected key is denied to all but break-glass."
+  }
 }
 
 run "lean_public_task_ips_is_an_explicit_opt_in" {

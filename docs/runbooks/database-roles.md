@@ -12,12 +12,12 @@ Related: ADR-0002 (RLS), ADR-0004 (outbox worker), `infra/db/bootstrap-roles.mjs
 | Role | Login | Used by | Can | Cannot |
 |---|---|---|---|---|
 | RDS master (`dbmaster`; never a `portico_*` name, which the privilege checks reserve for unprivileged roles) | yes (RDS-managed secret) | `db-bootstrap` task only | create roles, extensions | is never used by the application or migrations |
-| `portico_owner` | yes | migration task, `grants` step | own and change every schema, table, function | superuser, CREATEROLE, CREATEDB, BYPASSRLS; it is not used at runtime |
+| `portico_owner` | yes | the `migrate` and `grants` init containers at every api task start (Terraform-defined), and the human `migrate` task | own and change every schema, table, function | superuser, CREATEROLE, CREATEDB, BYPASSRLS; the api and worker processes never receive its URL (asserted: cell `runtime_contract_lean_production`) |
 | `portico_app` | **no** (group) | — | the table/function privileges every migration grants; **RLS applies** | log in; execute job-routing functions (revoked) |
 | `portico_app_blue` / `portico_app_green` | yes | API tasks (one active, one standby) | everything `portico_app` can; `statement_timeout 60s` | anything else |
 | `portico_worker` | **no** (group, member of `portico_app`) | — | everything `portico_app` can **plus** the job-routing `SECURITY DEFINER` functions | bypass RLS; read the non-RLS directory tables |
 | `portico_worker_blue` / `portico_worker_green` | yes | worker tasks | as `portico_worker`; `statement_timeout 300s` | — |
-| `portico_ops_readonly` | IAM auth only (resilient) | humans, audited read-only investigation | read, with `default_transaction_read_only` | write; RLS still applies |
+| `portico_ops_readonly` | IAM auth only (resilient) | humans, operational checks | read `core.schema_migrations` and `core.job_runs` only | read any tenant table or cross-tenant directory (mailbox, login attempts, memberships); write |
 
 Why a separate worker role: the routing functions (`payments.tenants_for_jobs`, `integration.claim_due_tenants`,
 `inventory.tenants_with_*`, `operations.job_properties`, `guests.tenants_with_*`, `reservations.due_booking_expiries`,
@@ -34,14 +34,17 @@ directly (requests filed in `infra/README.md` § Requests to other modules).
 
 | Phase | Command | Runs as | When |
 |---|---|---|---|
-| roles | `node /app/ops/bootstrap-roles.mjs` | RDS master | first deploy; after every credential rotation (`--bootstrap-roles`) |
-| grants | `node /app/ops/bootstrap-roles.mjs grants` | `portico_owner` | after **every** migration run (the pipeline does it) |
+| roles | `node /app/ops/bootstrap-roles.mjs` (the `db-bootstrap` task) | RDS master | **a person** (break-glass): before the first release; after every credential rotation. No CI principal can pass this task's execution role |
+| grants | `node /app/ops/bootstrap-roles.mjs grants` | `portico_owner` | after **every** migration run: the `grants` init container of every api task, after the `migrate` init container |
 
 Both are idempotent and take an advisory lock. The roles phase ends by refusing to continue if any `portico_*` role is
 privileged. The grants phase verifies with the server's own `has_function_privilege` and fails the deploy if the
-worker cannot execute a routing function or the app still can; it also warns about any **unreviewed** `SECURITY
-DEFINER` function the app can execute — review it (sign-in/tenant lookups → `APP_DEFINER_FUNCTIONS`; job routing →
-`ROUTING_FUNCTIONS.workerOnly`) before the next release. `verify.sql` check 7 enforces the same list in the drill.
+worker cannot execute a routing function or the app still can. Any **unreviewed** `SECURITY DEFINER` function that
+`portico_app` **or** `portico_worker` can execute is **revoked** from both and the step exits non-zero, so the new api
+never starts and the release rolls back (`verify-roles.sh` step 8). Review the function (sign-in/tenant lookups →
+`APP_DEFINER_FUNCTIONS`; job routing → `ROUTING_FUNCTIONS.workerOnly`, both in `infra/db/definer-registry.mjs`), copy
+the generated lines into `verify.sql` (`node infra/db/definer-lists.test.mjs --print`), release again. `verify.sql`
+check 7 enforces the same lists in the drill; `definer-lists.test.mjs` fails when they differ.
 
 ## Secrets
 
@@ -67,7 +70,7 @@ aws secretsmanager get-secret-value --secret-id "$S" --query SecretString --outp
 unset NEW
 ```
 
-Then run the deploy workflow with `bootstrap_roles = true` (or run the `db-bootstrap` task alone, then force a new
+Then, as a person, run the `db-bootstrap` task (`aws ecs run-task --task-definition <prefix>-db-bootstrap …`), then force a new
 deployment of the service). Check the API/worker logs for authentication errors; the previous login stays valid until
 the next rotation, so rolling back is: swap the fields back and redeploy.
 
@@ -84,7 +87,9 @@ are **not rotated** by any procedure here (key-rotation support with key ids is 
 
 ## Investigating as a human
 
-Resilient tier: connect with IAM authentication as `portico_ops_readonly` (read-only, RLS applies — set
-`app.tenant_id` to look at one tenant). Every session is an audit event; record the reason in the incident.
-Never use the master or owner credentials for investigation. ECS Exec is off in production
-(`enable_execute_command = false`); turning it on is an incident decision.
+There is **no standing human read access to tenant data** (security-privacy-readiness §5). `portico_ops_readonly`
+(resilient tier, IAM authentication) sees only migration and job status (`verify-roles.sh` step 9). Per-ticket,
+time-boxed, audited access to tenant data is not built (D16); until it is, reading tenant data is a break-glass
+incident decision, recorded in the incident with its reason. Database sessions are not audited by pgaudit today
+(planned). ECS Exec is off (`enable_execute_command = false`); when an incident turns it on, every session is logged to
+the api log group, encrypted (`aws_ecs_cluster` `execute_command_configuration`).

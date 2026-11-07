@@ -48,15 +48,17 @@ One person may hold several roles; the commander role is never left implicit.
 | Alarms | CloudWatch → Alarms, prefix `<cell prefix>-` (5xx rate, no healthy targets, latency, DB CPU/connections/storage/replica lag, outbox backlog/dead deliveries, worker errors, restore drill, external health check in `us-east-1`) |
 | API / worker / migration logs | log groups `/portico/<prefix>/api`, `/worker`, `/migrate`, `/db-bootstrap`, `/restore-drill` (demo: `/host`) — JSON lines; PII is redacted by the application logger |
 | Deploy history | ECS → service → Deployments; GitHub Actions run of the deploy workflow |
-| Database | Performance Insights (resilient); RDS events; read-only investigation via `portico_ops_readonly` ([database roles](database-roles.md)) |
+| Database | Performance Insights (resilient); RDS events; migration/job status via `portico_ops_readonly` (no tenant data; [database roles](database-roles.md)) |
 | Edge | CloudFront metrics, WAF sampled requests and logs (`aws-waf-logs-<prefix>`) |
 | AWS itself | AWS Health Dashboard for ap-south-1; the external health check (Route 53, three regions) |
+| Account security | the `portico-security` topic (primary region and us-east-1): key deletion, DB/secret/backup deletion, trail tampering, IAM changes, root activity, GuardDuty high findings; CloudTrail (multi-region trail `portico-account`, log-file validation) for the history |
 | Providers | Stripe / Channex status pages; the integration health panel in Portico |
 
 ## Security incidents (suspected data exposure, compromised credentials)
 
 1. SEV1. The commander decides containment; the technical lead **preserves evidence first** (do not delete logs,
-   tasks or users that are evidence; export the relevant log streams and CloudTrail events).
+   tasks or users that are evidence; export the relevant log streams and the CloudTrail events from the
+   `portico-account` trail — validate them with `aws cloudtrail validate-logs`).
 2. Contain: revoke sessions/API keys of the affected identities (identity module), rotate the database logins
    ([database roles](database-roles.md) § Rotation), rotate provider secrets in Secrets Manager, disable the deploy
    role's trust (GitHub Environment) if CI may be involved.

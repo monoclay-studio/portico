@@ -5,8 +5,11 @@
 
 **Status:** the automated drill (`infra/terraform/modules/restore-drill`, `infra/restore-drill/`) is written and its
 verification SQL is tested on PostgreSQL 16 (`infra/db/verify-roles.sh` step 7: passes on a correct database and
-catches a re-granted routing function and an unbalanced journal entry; earlier negative tests for isolation, roles
-and audit grants). **No restore of an AWS backup has ever run** — there is no AWS account yet. Every number below is
+catches one planted defect per check — a re-granted routing function, an unbalanced journal entry, a `USING (true)`
+or `… OR true` tenant policy, an extra permissive policy, an unreviewed policy on a new table, worker DELETE on the
+audit log, worker access to a directory table, an unreviewed worker-only definer function). The alarm wiring is
+asserted by `modules/restore-drill/tests/fails-loudly.tftest.hcl` and the stop pattern by
+`infra/restore-drill/test/event-pattern.test.mjs`. **No restore of an AWS backup has ever run** — there is no AWS account yet. Every number below is
 a TARGET (support-recovery-plan §1).
 
 ## What is backed up
@@ -23,10 +26,28 @@ a TARGET (support-recovery-plan §1).
 **Keys are part of the backup.** A restored database whose identity documents were encrypted with a key we no longer
 have is not a recovery. The drill below checks the database; the key replica is checked by the cross-region drill.
 
-## Automated monthly drill (lean and resilient)
+## Automated drill (lean and resilient)
 
-EventBridge Scheduler → Fargate task (`infra/restore-drill/restore-drill.sh`), 1st of the month 10:00 Malé time (in
-business hours so a failure is seen; `schedule_expression` changes it):
+### State machine — "a drill that did not run always pages someone"
+
+| State | Reached by | Exit | Pages? |
+|---|---|---|---|
+| scheduled | EventBridge Scheduler, 1st of the month 10:00 Malé (drill) and daily 09:00 (freshness) | started, or failed to start | — |
+| failed to start | image missing/unpullable, no capacity, IAM | — | **yes, immediately**: stop rule (`TaskFailedToStart` / no exit code) |
+| started | task running | passed, failed, incomplete, killed | — |
+| passed | all checks passed, evidence `…-passed.json` | — | no; resets the freshness age |
+| failed | restore or check failed | — | **yes**: `restore-drill-failed` + stop rule (non-zero exit) |
+| incomplete | a check printed `SKIPPED` | — | **yes**, like failed |
+| killed (ECS stop) | SIGTERM | restored copy deleted by the TERM trap; a copy left by a crash is swept after 6 h by the daily run | yes: stop rule (non-zero exit) |
+| never ran / schedule deleted / freshness task broken | — | — | **yes**: `restore-drill-stale` — newest passed evidence older than 35 days, **or no freshness datapoint for two days (missing data = breaching)** |
+
+The drill image is `restore-drill:release`, moved by every release, so `verify.sql` always matches the deployed
+schema and definer lists.
+
+### What a drill run does
+
+EventBridge Scheduler → Fargate task (`infra/restore-drill/restore-drill.sh`, `MODE=drill`), in the cell's task
+subnets (private behind NAT unless public task IPs were opted into):
 
 1. Restores the primary database to its **latest restorable time** into a new instance/cluster in the
    `drill_database` security group (Postgres only from ops tasks — the application can never connect to it).
@@ -35,18 +56,28 @@ business hours so a failure is seen; `schedule_expression` changes it):
    1. migrations present;
    2. every tenant-owned table has RLS enabled and forced (reviewed exceptions: `core.outbox`,
       `core.event_deliveries`, `integration.tenant_schedule` — owner-run dispatchers; RLS still applies to the app);
-   3. tables without RLS are not readable by `portico_app`;
+      2b. each carries exactly the standard `tenant_isolation` policy (exact expression comparison);
+      2c. policies on tables without `tenant_id` are the reviewed identity ones, exactly;
+   3. tables without RLS are not reachable by `portico_app` or `portico_worker`;
    4. no Portico role is superuser / BYPASSRLS / CREATEROLE / CREATEDB;
-   5. the audit log is append-only for the app;
+   5. the audit log is append-only for the app and the worker;
    6. every journal entry balances per currency and in functional currency (until finance ships
       `finance.verify_trial_balance()`, which will also prove folio balances = ledger projection);
-   7. `portico_app` can execute only the reviewed `SECURITY DEFINER` functions (job routing is worker-only);
+   7. `portico_app` and `portico_worker` can execute only the reviewed `SECURITY DEFINER` functions (job routing
+      is worker-only); the lists are generated from `infra/db/definer-registry.mjs`;
    then prints evidence: latest committed activity (compare with the restore time → **measured RPO**) and row counts.
 4. Writes an evidence JSON to the backups bucket and publishes `RestoreDrillSuccess` / `RestoreDrillFailure` /
    duration (→ **measured RTO input**).
 5. Always deletes the restored copy (trap), also on failure.
 
-Alarm `<prefix>-restore-drill-failed` pages on-call. Cost: about one hour of a restore-sized instance per month.
+Cost: about one hour of a restore-sized instance per month, plus a minute of Fargate a day for the freshness check.
+
+### AWS Backup jobs (resilient tier)
+
+Alarms `<prefix>-backup-backup-missing` and `<prefix>-backup-copy-missing` page when no backup job / no DR copy job
+**completed** in two days (missing data = breaching), so a plan that silently stops scheduling is caught. Job
+failures also reach on-call through the vault notifications (the topic now accepts AWS Backup). Metric dimensions are
+as documented by AWS and unverified until the first apply.
 
 ### When the drill fails
 

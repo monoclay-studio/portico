@@ -2,36 +2,26 @@
 
 ## Checkpoint
 
-**Status (2026-11-07, second session): code written and tested offline, NOTHING deployed.** No AWS credentials exist
-and the owner has not authorized spend (OPEN_QUESTIONS Q4/Q22). No `terraform apply`, no AWS API call that changes
-state, no image build has ever happened. Readiness: **R2–R3 for the code, R1 for anything running in AWS.**
+**Status (2026-11-07, security fix round after the steward review `docs/orchestration/reviews/review-infra.md`):
+code written and tested offline, NOTHING deployed.** No AWS credentials exist and the owner has not authorized spend
+(OPEN_QUESTIONS Q4/Q22). No `terraform apply`, no AWS call that changes state, no image build has ever happened.
+Readiness: **R3 for the code (implemented and tested internally, offline), R1 for anything running in AWS.**
 
-**Done**
-- Terraform (toolchain floor **1.11**, tested with 1.16.7; AWS provider 6.72.0): 16 modules + 4 env roots, all pass
-  `terraform validate`; `terraform test` with a mocked AWS provider plans every tier — **17 runs pass** (15 in
-  `modules/cell`, 2 in `modules/database`).
-- One `tier` variable: `demo` (T1), `lean` (T2), `resilient` (T3) — § Tiers.
-- Runtime contract of the merged modules wired for api **and** worker (§ Runtime contract): field-encryption,
-  blind-index and terms-seal keys and the payment-simulator secret generated into Secrets Manager **without ever
-  entering Terraform state** (write-only attributes); `TRUSTED_PROXY_CIDRS`; `PORTICO_APP_BASE_URL`; SES settings;
-  Stripe Connect TEST/LIVE placeholders with guard rails; operator token refused in production.
-- `portico_worker` DB role (group + blue/green logins) for apps/worker; the 18 job-routing `SECURITY DEFINER` functions
-  are granted to it only, plus `payments.route_webhook` which stays on the API role until request 1 (§ Requests)
-  (`bootstrap-roles.mjs grants`, run after every migration, self-verifying). Its drift check
-  caught the 19 new `SECURITY DEFINER` functions identity-plus brought when it merged mid-session; each was reviewed
-  and classified (3 worker-only jobs, 16 API).
-- `infra/db/verify-roles.sh`: **38/38** checks on a SCRAM-auth PostgreSQL 16, using the production runtime layout
-  (`pnpm deploy --prod` + pinned tsx, read-only files, no writable TMPDIR).
-- `infra/ci/deploy.yml.example` + `infra/ci/deploy-cell.sh` (tested offline: **27/27**, fake AWS CLI).
-- Cost per tier from the downloaded AWS Price List (§ Cost per tier); reproducible with `node infra/cost/estimate.mjs`.
-- Runbooks in `docs/runbooks/`: deploy, rollback, backup-restore-verification, incident-response, database-roles,
-  disaster-recovery. Owner decisions: § Owner decisions.
+**Done in the fix round** (review P1-1…P1-3, P2-1…P2-11, cheap P3s; § Review fixes maps finding → commit → test)
+- The CI deploy role can no longer read secrets, pass roles, register task definitions or run tasks; Terraform owns
+  every task definition; migrations and routing grants run as init containers; the role bootstrap is human-only;
+  the OIDC trust matches an exact subject (immutable repository and owner ids, environment, `main`, the deploy
+  workflow), and `envs/github` codifies the GitHub side.
+- Lean tier defaults to private tasks behind one NAT gateway (Q158); public task IPs are an explicit opt-in.
+- The restore drill runs the release's image; a missing drill, a task that fails to start and a stale backup copy
+  all page (missing data = breaching).
+- Start-up guard refuses live Stripe keys by value outside production; key protection, read restrictions and DR
+  replicas for the irreplaceable keys; CloudTrail, GuardDuty and destructive-call alarms per account; no PII in
+  Postgres logs; grants step fails closed; drill checks every policy and both login groups.
 
 **Not done / next** (none blocks local development)
-- Everything that needs AWS: plan/apply, image builds, the first restore drill, measured RPO/RTO.
-- Requests to other modules (§ Requests) — mainly the payments webhook route on a worker pool and a
-  finance-owned trial-balance check.
-- Cross-region DR cell creation is a written procedure, not automated (`docs/runbooks/disaster-recovery.md`).
+- Everything that needs AWS: plan/apply, image builds, the first drill, measured RPO/RTO (§ Not verified).
+- Requests to other modules (§ Requests).
 
 ---
 
@@ -41,160 +31,117 @@ state, no image build has ever happened. Readiness: **R2–R3 for the code, R1 f
                        viewers (staff browsers, later guests)
                                         │ HTTPS
                      ┌──────────────────▼──────────────────┐
-                     │ CloudFront  ── AWS WAF (lean: basic, │   static SPA from a private S3 bucket (OAC)
-                     │             resilient: full)        │   /v1/* and /health/* → origin, uncached,
-                     └──────────────────┬──────────────────┘   + secret X-Origin-Verify header
-          demo tier                     │ HTTPS (lean/resilient)                       
-   ┌────────────────────┐   ┌───────────▼────────────┐  ALB SG: 443 from CloudFront origin-facing ranges only;
-   │ EC2 t4g.small      │   │ ALB (public subnets)   │  listener forwards only with X-Origin-Verify
+                     │ CloudFront ── AWS WAF (lean: basic,  │  static SPA from a private S3 bucket (OAC)
+                     │            resilient: full)          │  /v1/* and /health/* → origin, uncached,
+                     └──────────────────┬──────────────────┘  + secret X-Origin-Verify header
+          demo tier                     │ HTTPS (lean/resilient)
+   ┌────────────────────┐   ┌───────────▼────────────┐  ALB SG: 443 from CloudFront origin-facing ranges only
+   │ EC2 t4g.small      │   │ ALB (public subnets)   │
    │ api + worker +     │   └───────────┬────────────┘
    │ Postgres (Docker)  │               │ :4000 from the ALB SG only
-   │ :4000 from         │   ┌───────────▼────────────┐   ┌──────────────────────┐
-   │ CloudFront only    │   │ ECS Fargate (ARM64)    │   │ worker (Fargate)     │  outbox, jobs, webhooks
-   │ office-hours stop  │   │ api  (portico_app_*)   │   │ (portico_worker_*)   │
-   │ DNS Firewall for   │   └───────────┬────────────┘   └──────────┬───────────┘
-   │ provider domains   │               │ 5432 (SG→SG)              │
-   └────────────────────┘   ┌───────────▼───────────────────────────▼───────────┐
-                            │ data subnets (no route out): RDS PostgreSQL 16    │  KMS-encrypted, TLS forced,
-                            │ (lean, single-AZ) / Aurora PG 16 (resilient, 2 AZ)│  PITR, deletion protection
-                            └───────────────────────────────────────────────────┘
-  egress: lean → tasks' public IPs (no inbound rule); resilient → NAT per AZ; S3 gateway endpoint (free) everywhere
-  around it: Secrets Manager (+KMS), S3 documents/exports/backups/logs, ECR, CloudWatch logs + alarms → SNS on-call,
-  Route 53 external health check, AWS Budgets, monthly restore drill (EventBridge Scheduler → Fargate), AWS Backup
-  with cross-region copies (resilient), SES (when a sending domain is set), GitHub OIDC deploy role
+   │ CloudFront → :4000 │   ┌───────────▼─────────────────────────┐  ┌────────────────────────┐
+   │ deploy: SSM doc    │   │ api task (private subnets, Fargate)  │  │ worker task            │
+   │ with validated     │   │  init: migrate → grants (owner)      │  │ (portico_worker_*)     │
+   │ parameters         │   │  then api (portico_app_*)            │  └───────────┬────────────┘
+   └────────────────────┘   └───────────┬─────────────────────────┘              │
+                            ┌───────────▼──────────────────────────────────────────▼──┐
+                            │ data subnets (no route out): RDS PostgreSQL 16 (lean) /   │
+                            │ Aurora PostgreSQL 16 (resilient)                          │
+                            └───────────────────────────────────────────────────────────┘
+  egress: NAT gateway (lean: one; resilient: per AZ); public task IPs only by explicit opt-in; S3 gateway endpoint
+  per account (envs/bootstrap): state bucket, GitHub OIDC provider, CloudTrail, GuardDuty, security alarms
 ```
-
-Naming is cell-ready: `portico-<env>-<region code>-<cell>` (e.g. `portico-prod-aps1-c01`); state key
-`portico/<env>/<cell>/terraform.tfstate`; secrets under `portico/<env>/<region>-<cell>/…`. More cells (other regions
-for data residency, a dedicated cell for a group) are more instances of `modules/cell` with their own CIDR.
 
 ## Tiers (`modules/cell` variable `tier`; cost-model §4a)
 
 | | demo (T1) | lean (T2) | resilient (T3) |
 |---|---|---|---|
 | Use | hosted demo, sample data only | small guesthouse pilot | resort / group pilot |
-| Compute | 1 × EC2 t4g.small, api + worker + Postgres in Docker | Fargate ARM: 1 api (0.5 vCPU/1 GB) + 1 worker | 2–6 api + 2–4 worker across 3 AZs |
-| Database | Postgres container on the host | RDS PostgreSQL db.t4g.small, single-AZ, PITR 14 days | Aurora PostgreSQL Serverless v2, writer + reader, PITR 35 days |
-| Egress | host public IP | **task public IPs** (inbound only from the ALB) | NAT gateway per AZ, private tasks |
-| WAF | none (Shield Standard only) | basic: IP reputation, core rules, per-IP rate | full: + known bad inputs, SQLi, login rate limit |
-| Backups | none (reseed) | automated + PITR + monthly restore drill | + AWS Backup daily/monthly, cross-region copies, vault lock, key replicas |
-| Schedule | office hours (Mon–Sat 08–20 Malé), budget stop action | production never stops | production never stops |
-| Planned resources (mock plan) | ≈ 107 | ≈ 237 | ≈ 267 |
+| Compute | 1 × EC2 t4g.small, api + worker + Postgres in Docker | Fargate ARM: 1 api + 1 worker | 2–6 api + 2–4 worker, 3 AZs |
+| Database | Postgres container on the host | RDS PostgreSQL db.t4g.small, single-AZ, PITR 14 days | Aurora Serverless v2, writer + reader, PITR 35 days |
+| Egress | host public IP | **one NAT gateway, private tasks** (Q158); `public_task_ips = true` opt-in | NAT per AZ, private tasks |
+| WAF | none | basic: IP reputation, core rules, per-IP + login rate limits | full: + known bad inputs, SQLi |
+| Backups | none (reseed) | automated + PITR + drill (monthly) + freshness (daily) | + AWS Backup daily/monthly, DR copies, vault lock |
+| Keys | on the host | Secrets Manager; production: protected + DR replica | same |
 
-Environments: `envs/demo` (demo tier), `envs/staging` (lean shape, **off by default**: `active = false` keeps only
-the VPC, ECR and the budget), `envs/production` (lean or resilient — **no default, owner decision**). Every value can be
-overridden per cell (`overrides`, see `modules/cell/locals.tf`), e.g. `{ db_multi_az = true }` on lean or
-`{ db_engine = "rds", db_multi_az = true }` on resilient.
+## Release model (P1-1, P2-8)
 
-**Egress decision (lean).** The first draft used VPC interface endpoints instead of NAT. Endpoints reach AWS APIs
-only, but the application must reach Stripe Connect, customers' OIDC identity providers, outbound webhook targets and
-Channex — so payments, SSO and webhooks would have failed. Lean tasks now run in public subnets with a public IP and
-**no inbound rule except the API port from the ALB's security group** (≈ $3.65/month per task, vs ≈ $38 for four
-endpoints or ≈ $45 for a NAT gateway). Trade-offs: no fixed egress IP (needed only if a provider allow-lists callers →
-`overrides = { nat_mode = "single" }`), and AWS Security Hub control ECS.2 flags public task IPs. The resilient tier
-keeps private tasks behind NAT per AZ and no longer adds interface endpoints by default (they duplicated NAT for
-≈ $114/month).
+```
+CI (main only, protected env) ── push SHA images (index digest kept) ── move `release` tag ── force new deployment
+                                                                                       │
+Terraform-owned api task definition:  migrate (init, owner) → grants (init, owner) → api ─┘   then the worker
+```
 
-DNS: the Amazon-provided resolver answers public names without NAT and security groups never filter it, so identity's
-SSO domain re-check job (DNS TXT) works on every tier; the demo's DNS Firewall blocks only payment, channel,
-messaging and paid-AI provider domains.
+- Every ECR tag is immutable except `release` (`IMMUTABLE_WITH_EXCLUSION`). Task definitions reference
+  `<repo>:release`; ECS resolves it to a digest once per deployment.
+- The deploy role: ECR push to the cell's repositories, `ecs:UpdateService`/`DescribeServices` on the cell's services,
+  the deploy-config parameter, the web bucket and the distribution, logs of `/portico/<prefix>/*`. Nothing else
+  (`modules/ci-deploy-role/tests/least-privilege.tftest.hcl`). It is still as powerful as the code it deploys: that
+  code runs with the application's secrets. Only reviewed code on `main`, in a protected environment, reaches it.
+- `db-bootstrap` (RDS master) and the standalone `migrate` task are for humans (break-glass, rotation).
 
 ## Runtime contract (what the containers get)
 
-Both api and worker run the full composition root (`apps/api/src/composition.ts`), so both need the keys.
+| Variable | api | worker | Source |
+|---|---|---|---|
+| `APP_DATABASE_URL` | `portico_app_blue` | `portico_worker_blue` | Secrets Manager `db/app`, `db/worker` |
+| `DATABASE_URL` | init containers only (owner) | — | `db/owner` |
+| `PORTICO_FIELD_KEY`, `PORTICO_BLIND_INDEX_KEY`, `PORTICO_TERMS_SEAL_KEY`, `PAYMENTS_SIMULATOR_SIGNING_SECRET` | ✓ | ✓ | `app/*` (generated, write-only) |
+| `NODE_ENV` | `production` in production; `development` on demo/staging (operator console works) | same | Terraform; init containers always `production` |
+| `PORTICO_DEPLOYMENT` | demo / staging / production | same | Terraform (the guard's source of truth) |
+| `TRUSTED_PROXY_CIDRS` | ALB subnets + CloudFront origin-facing ranges (never shorter than /8) | — | Terraform |
+| `PORTICO_APP_BASE_URL`, SES settings, Stripe Connect keys (when they hold values) | ✓ | ✓ | Terraform / placeholders |
+| `OPERATOR_TOKEN`, `PORTICO_OPERATORS` | demo/staging only, when injected | | refused in production |
 
-| Variable | api | worker | Source | Why |
-|---|---|---|---|---|
-| `APP_DATABASE_URL` | `portico_app_blue` | `portico_worker_blue` | Secrets Manager `db/app`, `db/worker` (`url`) | RLS-bound logins; routing functions worker-only |
-| `PORTICO_FIELD_KEY`, `PORTICO_BLIND_INDEX_KEY` | ✓ | ✓ | `app/field-key`, `app/blind-index-key` (generated, distinct) | kernel `fieldCryptoFromEnv` refuses production without them |
-| `PORTICO_FIELD_KEY_ID` | ✓ | ✓ | `<cell>-field-v1` | key id stored with every ciphertext |
-| `PORTICO_TERMS_SEAL_KEY` | ✓ | ✓ | `app/terms-seal-key` (generated) | rates refuses production without it |
-| `PAYMENTS_SIMULATOR_SIGNING_SECRET` | ✓ | ✓ | `app/payments-simulator-signing-secret` | one value for every task, or simulator signatures fail across tasks |
-| `TRUSTED_PROXY_CIDRS` | ✓ | — | ALB (public) subnet CIDRs + CloudFront origin-facing ranges; demo: CloudFront only | real viewer IP for per-IP limits; never `0.0.0.0/0` (guarded) |
-| `PORTICO_APP_BASE_URL` | ✓ | ✓ | `https://app.<env domain>` (demo without domain: passed at deploy) | links in staff invitations / password resets (identity) |
-| `PORTICO_EMAIL_DOMAIN`, `PORTICO_SES_CONFIGURATION_SET` | ✓ | ✓ | email module, when `email_domain` is set | contract for the staff-email adapter (not built yet) |
-| `PAYMENTS_STRIPE_SECRET_KEY_TEST/_LIVE`, `PAYMENTS_STRIPE_WEBHOOK_SECRETS_TEST/_LIVE` | ✓ | ✓ | placeholders `integrations/payments-stripe-connect-*`, injected only when they hold a value | LIVE only in production; billing keys can never be injected as `PAYMENTS_*` |
-| `OPERATOR_TOKEN`, `PORTICO_OPERATORS` | non-production only | | placeholders (not created in production) | static operator tokens are refused in production (identity P2-17) |
-| `NODE_ENV=production`, `PORT`, `DB_POOL_MAX`, `CORS_ORIGINS`, `LOG_LEVEL`, `PORTICO_CELL`, `PORTICO_DEPLOYMENT`, bucket names, `AWS_REGION` | ✓ | ✓ (no port/CORS) | Terraform | — |
-| `WORKER_DATABASE_URL` | only with `api_holds_worker_credentials` | — | `db/worker` | for the public webhook route once it uses a worker pool |
-
-Why both ALB subnets **and** CloudFront: the chain is viewer → CloudFront (appends the viewer IP) → ALB (appends the
-CloudFront edge IP) → task. Trusting only the ALB would make the CloudFront edge the "client", so all viewers behind
-one edge location would share per-IP limits (sign-in: 20/minute). A viewer cannot forge its address: CloudFront always
-appends the address it saw. The CloudFront list comes from the AWS-managed prefix list at every plan.
-
-`terraform test` asserts this contract (`runtime_contract_lean_production` and the guard-rail runs).
+Every process starts behind `infra/ops/env-guard.mjs`: unknown deployment, a Stripe LIVE key (by value) or a live-only
+credential outside production, or missing/equal app keys → exit 78 before any application code runs.
 
 ## Validation status
 
 | What | Result | Where / how |
 |---|---|---|
 | `terraform fmt -check -recursive` | clean | Terraform 1.16.7 |
-| `terraform validate` — env roots bootstrap, demo, staging, production | **valid** | offline init (provider mirror: aws 6.72.0, random 3.9.1, archive 2.8.1) |
-| `terraform validate` — all 16 modules | **valid** | same |
-| `terraform test` — cell: demo, lean, resilient, inactive staging, runtime contract, 8 guard rails | **15/15 pass** | mocked AWS provider; real `random` (ephemeral resources cannot be mocked) |
-| `terraform test` — database: master-username guard | **2/2 pass** | mocked AWS provider |
-| Mutation checks | a `0.0.0.0/0` trusted proxy is refused; removing the smoke-test rollback fails the deploy test | done by hand, reverted |
-| Role model end to end (`infra/db/verify-roles.sh`) | **38/38** | SCRAM PostgreSQL 16.15; runtime from `pnpm deploy --prod` + tsx 4 (read-only, no TMPDIR): bootstrap → 19 migrations (main incl. identity-plus) as `portico_owner` → grants, then grants and roles each twice concurrently → probes → API `/health/ready` as `portico_app_blue` (and refusal without the seal key) → demo seed → worker ran all 15 jobs as `portico_worker_blue` (incl. identity's login-attempt purge, orphan-SSO-link purge and SSO domain re-check), 0 failed, outbox drained → worker as `portico_app_blue` refused → restore-drill SQL passes, and catches a re-granted routing function and an unbalanced journal entry |
-| Deploy script (`infra/ci/test/deploy-cell.test.sh`) | **27/27** | fake AWS CLI + fake skopeo + local HTTP server: order of steps, digest checks, refused mutable tag, failed migration, ECS rollback, failed smoke test, demo host |
-| Workflow file | parses; every action pinned to a commit SHA (resolved with `git ls-remote`, tags ≥ 2 weeks old) | never run on GitHub |
-| Dockerfiles | reviewed statically; runtime layout exercised (row above) | **NOT built** — no Docker daemon |
-| `pnpm lint` | exit 0 | repository root |
-| Gate block after the final merge of `main` (module-builder self-check §1) | install (frozen) exit 0; `turbo typecheck --force` exit 0 (18/18); `pnpm test` exit 0 (16/16 packages); `turbo run test --force` exit 0 (16/16) at load ≈ 20. Before that merge, the same command failed twice at load ≈ 42: `apps/api` demo-seed tests hit their 30 s timeout (`inventory.test.ts` 30.2 s, `rates.test.ts` 30.5 s) | load-sensitive timing in main's demo-seed tests; this branch changes nothing outside infra/, docs/runbooks/ and the Dockerfiles |
+| `terraform validate` | **22/22 valid** (5 env roots incl. `envs/github`, 17 modules) | offline provider mirror (aws 6.72.0, random 3.9.1, github 6.13.0) |
+| `terraform test` | **38/38**: cell 21, ci-deploy-role 6, database 3, restore-drill 3, account-security 2, envs/github 3 | mocked providers |
+| Infra unit tests (`node --test`) | **20/20**: env guard 7, definer lists 3, drill stop pattern 6, supply chain 4 | — |
+| Deploy script (`infra/ci/test/deploy-cell.test.sh`) | **28/28** | fake aws CLI, fake skopeo (index digests), local HTTP server |
+| Role model (`infra/db/verify-roles.sh`) | **53/53** | SCRAM PostgreSQL 16.15, production runtime layout (`RUNTIME_DIR`), `PG_LOG_FILE` for the log probe; pre-fix scripts fail 13 |
+| Mutation proof | 24 mutants, 23 red; the green one removes a redundant branch (`TaskFailedToStart`, also matched by "no exit code") | each guard removed in turn, then restored |
+| CI | `.github/workflows/ci.yml` job `infra` runs all of the above (log probe skipped without a log file) | never run on GitHub yet |
+| Docker images | **NOT built** (no daemon); corepack hash verified locally (good hash accepted, wrong hash refused) | — |
 
-**Never verified:** `terraform plan/apply` against AWS (provider-side validation, quotas, IAM policy correctness,
-service-linked roles, ACM/DNS validation, WAF capacity units, Aurora/RDS engine version availability — `engine_version`
-16.10 must be checked in the region), image builds and image size, ECS behaviour (circuit breaker, deployment alarms,
-`wait services-stable` timing), the restore drill against real snapshots, SES sandbox exit, CloudFront → ALB TLS with
-the origin certificate, the budget stop action, the GitHub workflow, YAML-anchor support in the runner, skopeo on the
-runner image, RDS-specific role behaviour (`rds_superuser`, IAM auth for `portico_ops_readonly`).
+### Not verified
 
-Run the checks yourself:
-
-```bash
-# Terraform (1.11+): offline-capable once providers are cached
-cd infra/terraform/modules/cell && terraform init -backend=false && terraform test
-# Role model (THROWAWAY SCRAM-auth Postgres 16 only — roles are cluster-wide)
-PORTICO_VERIFY_THROWAWAY_CLUSTER=yes ADMIN_URL=postgres://postgres:…@127.0.0.1:55440/postgres infra/db/verify-roles.sh
-# Deploy script control flow
-infra/ci/test/deploy-cell.test.sh
-# Cost tables
-node infra/cost/estimate.mjs
-```
+`terraform plan/apply` against AWS (IAM evaluation of the new policies, including whether ECS supplies
+`ecs:task-definition` on UpdateService; ECR `IMMUTABLE_WITH_EXCLUSION`; Secrets Manager resource-policy condition keys
+on DeleteSecret; whether the provider's refresh of a secret version needs `GetSecretValue`), image builds, ECS
+behaviour (init-container ordering, version consistency of the `release` tag, circuit breaker), the GitHub OIDC
+customized subject format on a real run, AWS/Backup metric dimensions, EventBridge matching on real ECS events (the
+pattern is tested with a local matcher), GuardDuty cost, the drill against real snapshots, SES sandbox exit.
 
 ## Cost per tier
 
-**ESTIMATES**, not quotes. Unit prices: AWS Price List Bulk API offer files for `ap-south-1` (CloudFront: global offer),
-downloaded **2026-11-07**; offer publication dates range from **2026-09-11 (Secrets Manager, ECR) to 2026-11-07
-(EC2)** — each is recorded in `infra/cost/unit-prices-ap-south-1.json`. On-demand USD, **no free tier, no credits, no
-taxes**, 730 h/month. Quantities = what the tier's plan creates (counted from `terraform test -verbose`) plus these
-usage assumptions for **one pilot hotel**: 2 M CloudFront requests and 20 GB out per month (India edge pricing; the
-"Asia Pacific" price is ≈ 10 % higher), 1 ALB LCU on average, 3 GB of logs (lean) / 8 GB (resilient), 20 GB database
-storage, 1,000 emails. Re-check with the AWS Pricing Calculator before authorizing spend.
+**ESTIMATES**, not quotes: AWS Price List offer files for `ap-south-1` (CloudFront: global), downloaded 2026-11-07;
+publication dates 2026-09-11 to 2026-11-07, recorded in `infra/cost/unit-prices-ap-south-1.json`. On-demand USD, no
+free tier, no credits, no taxes, 730 h/month. Usage assumptions for one pilot hotel: 2 M requests and 20 GB out per
+month through CloudFront (India pricing), 20 GB through NAT, 1 ALB LCU, 3 GB logs (lean) / 8 GB (resilient), 20 GB
+database. Regenerate: `node infra/cost/estimate.mjs`.
 
 | Tier | ≈ $/month | vs cost-model §4a |
 |---|---:|---|
 | T0 local / CI | **$0** | $0 |
-| T1 demo, office hours (Mon–Sat 08–20) | **$15** | $10–30 ✓ |
-| T1 demo, always on | **$20** | $10–30 ✓ |
-| T2 lean production pilot | **$121** | ≈ $90–160 ✓ |
-| T2 staging, off between releases (default) | **$0.30** | — |
-| T2 staging, one 2-day release rehearsal | **$8** | — |
-| Staging always on, tasks scaled to zero off-hours | **$108** | $40–80 (cost model) — higher: RDS, ALB and WAF run all month |
-| T3 resilient, quiet (Aurora at its 0.5 ACU floor) | **$407** | ≈ $300–500 ✓ |
-| T3 resilient, busy (Aurora ≈ 1 ACU per instance) | **$538** | above the range |
-| T3 variant: RDS Multi-AZ db.t4g.small instead of Aurora | **$334** | ≈ $300–500 ✓ |
+| T1 demo, office hours / always on | **$15 / $20** | $10–30 ✓ |
+| T2 lean production pilot (NAT default) | **$163** | ≈ $90–160 — slightly above: the NAT gateway (Q158) adds ≈ $45, minus $7 of task IPs |
+| T2 lean with the `public_task_ips` opt-in | ≈ $124 | ✓ |
+| Staging off (default) / 2-day rehearsal / always on | **$0.30 / $11 / $153** | — |
+| T3 resilient quiet / busy (Aurora 0.5 / 1 ACU each) | **$408 / $539** | ≈ $300–500 (busy above) |
+| T3 with RDS Multi-AZ instead of Aurora | **$335** | ✓ |
+| Per account: CloudTrail + GuardDuty + alarms | ≈ $0.05 + GuardDuty (usage-based, **unpriced**) | — |
 
-Not included: Channex ($137+/month when activated, Q23), the domain and its Route 53 hosted zone ($0.50/month,
-shared by all environments), AWS Support plans, paging tools, data transfer beyond the assumptions, taxes. AWS Free Tier: new accounts get **$100 + up to $100 in credits over 6 months** on the
-Free plan (verified 2026-11-07, cost-model §4a) — enough for the T1 demo for months, not a basis for a pilot. AWS
-"always free" allowances (e.g. some CloudWatch alarms and metrics) would trim a few dollars; they are not applied.
-CloudFront **flat-rate plans** (page fetched 2026-11-07: Free $0 — 1 M requests, 100 GB, 5 WAF rules; Pro $15 —
-10 M requests, 50 TB, 25 WAF rules) could replace the CloudFront + WAF line items (≈ $14 on lean) — not modelled in
-Terraform; an owner option to evaluate.
-
-The biggest levers: T3's NAT gateways (≈ $134 for three) and Aurora's two-instance floor (≈ $131); T2's database
-(≈ $33) and ALB (≈ $31 incl. IPs). Staging off by default saves ≈ $100/month.
+Not included: Channex ($137+/month, Q23), the domain and its hosted zone ($0.50/month), AWS Support, paging tools,
+GuardDuty usage, taxes. The AWS Free plan gives new accounts $100 + up to $100 in credits over 6 months (cost-model
+§4a) — enough for T1 for months, not a basis for a pilot. CloudFront flat-rate plans (Free / Pro $15, page fetched
+2026-11-07) could replace the CloudFront + WAF lines — not modelled.
 
 <details>
 <summary>Line items per tier (generated by <code>node infra/cost/estimate.mjs</code>)</summary>
@@ -227,22 +174,24 @@ The biggest levers: T3's NAT gateways (≈ $134 for three) and Aurora's two-inst
 | ECR 2 GB | $0.20 |
 | AWS Budgets (1 budget, 2 actions) — assumed free tier of Budgets, not in the price files: verify | $0 |
 
-**T2 lean — production pilot** — ≈ **$121.29/month**
+**T2 lean — production pilot** — ≈ **$162.54/month**
 
 | Line item | $/month |
 |---|---:|
 | Fargate ARM: api 0.5 vCPU/1 GB + worker 0.25 vCPU/0.5 GB | $15.90 |
-| Task public IPv4 × 2 (egress without NAT) | $7.30 |
+| NAT gateway × 1 (private tasks; Q158 default) | $40.88 |
+| NAT Elastic IP | $3.65 |
+| NAT data processing 20 GB | $1.12 |
 | RDS PostgreSQL db.t4g.small Single-AZ | $30.66 |
 | RDS gp3 20 GB (backups + 14-day PITR within the free allocation) | $2.62 |
-| Monthly restore drill (1 h restore + Fargate minutes) | $0.14 |
+| Monthly restore drill (1 h restore) + daily freshness task | $0.24 |
 | ALB (hours + 1 LCU average) | $23.29 |
 | ALB public IPv4 × 2 | $7.30 |
 | CloudFront 20 GB + 2M HTTPS requests (India) | $4.58 |
-| WAF basic (web ACL + 3 rules + 2M requests) | $9.20 |
-| Secrets Manager × 15 | $6.00 |
+| WAF basic (web ACL + 4 rules + 2M requests) | $10.20 |
+| Secrets Manager × 19 | $7.60 |
 | KMS keys × 5 | $5.00 |
-| CloudWatch: 17 alarms, 7 log-derived metrics, 3 GB logs | $5.90 |
+| CloudWatch: 19 alarms, 7 log-derived metrics, 3 GB logs | $6.10 |
 | Route 53 HTTPS health check (external) | $2.75 |
 | S3 10 GB (documents, exports, backups, logs) | $0.25 |
 | ECR 3 GB | $0.30 |
@@ -254,21 +203,21 @@ The biggest levers: T3's NAT gateways (≈ $134 for three) and Aurora's two-inst
 |---|---:|
 | ECR images kept for the next release (VPC, S3 gateway endpoint, budget: $0) | $0.30 |
 
-**T2 staging — one 2-day release rehearsal** — ≈ **$8.25/month**
+**T2 staging — one 2-day release rehearsal** — ≈ **$10.95/month**
 
 | Line item | $/month |
 |---|---:|
-| Lean cell active 2 days for a release rehearsal (prorated hourly) | $7.95 |
+| Lean cell active 2 days for a release rehearsal (prorated hourly) | $10.65 |
 | ECR | $0.30 |
 
-**T2/T3 staging — always on with office-hours scaling** — ≈ **$107.86/month**
+**T2/T3 staging — always on with office-hours scaling** — ≈ **$153.19/month**
 
 | Line item | $/month |
 |---|---:|
-| Lean cell always on, tasks scaled to zero outside office hours | $107.56 |
+| Lean cell always on, tasks scaled to zero outside office hours | $152.89 |
 | ECR | $0.30 |
 
-**T3 resilient — production, quiet (Aurora at its 0.5 ACU floor)** — ≈ **$406.86/month**
+**T3 resilient — production, quiet (Aurora at its 0.5 ACU floor)** — ≈ **$407.76/month**
 
 | Line item | $/month |
 |---|---:|
@@ -279,21 +228,21 @@ The biggest levers: T3's NAT gateways (≈ $134 for three) and Aurora's two-inst
 | Aurora Serverless v2: writer + reader at 0.5 ACU each | $131.40 |
 | Aurora storage 10 GB + 30M I/O | $7.70 |
 | AWS Backup cross-region copies (5 GB × 30 daily copies transferred + DR storage) | $16.92 |
-| Monthly restore drill (Aurora db.t4g.medium 1 h + Fargate minutes) | $0.29 |
+| Monthly restore drill (Aurora db.t4g.medium 1 h) + daily freshness task | $0.39 |
 | ALB (hours + 1 LCU average) | $23.29 |
 | ALB public IPv4 × 3 | $10.95 |
 | CloudFront 20 GB + 2M HTTPS requests (India) | $4.58 |
 | WAF full (web ACL + 6 rules + 2M requests) | $12.20 |
-| Secrets Manager × 18 | $7.20 |
+| Secrets Manager × 19 | $7.60 |
 | KMS keys × 7 | $7.00 |
-| CloudWatch: 19 alarms, 7 log-derived metrics, 8 GB logs | $9.60 |
+| CloudWatch: 23 alarms, 7 log-derived metrics, 8 GB logs | $10.00 |
 | Route 53 HTTPS health check (external) | $2.75 |
 | S3 20 GB (documents, exports, backups, logs) | $0.50 |
 | ECR 3 GB | $0.30 |
 | SES 1000 emails | $0.10 |
 | Container Insights + enhanced monitoring (metrics/logs) | $5.00 |
 
-**T3 resilient — production, busy (Aurora averaging 1 ACU per instance)** — ≈ **$538.26/month**
+**T3 resilient — production, busy (Aurora averaging 1 ACU per instance)** — ≈ **$539.16/month**
 
 | Line item | $/month |
 |---|---:|
@@ -304,21 +253,30 @@ The biggest levers: T3's NAT gateways (≈ $134 for three) and Aurora's two-inst
 | Aurora Serverless v2: writer + reader at 1 ACU each | $262.80 |
 | Aurora storage 10 GB + 30M I/O | $7.70 |
 | AWS Backup cross-region copies (5 GB × 30 daily copies transferred + DR storage) | $16.92 |
-| Monthly restore drill (Aurora db.t4g.medium 1 h + Fargate minutes) | $0.29 |
+| Monthly restore drill (Aurora db.t4g.medium 1 h) + daily freshness task | $0.39 |
 | ALB (hours + 1 LCU average) | $23.29 |
 | ALB public IPv4 × 3 | $10.95 |
 | CloudFront 20 GB + 2M HTTPS requests (India) | $4.58 |
 | WAF full (web ACL + 6 rules + 2M requests) | $12.20 |
-| Secrets Manager × 18 | $7.20 |
+| Secrets Manager × 19 | $7.60 |
 | KMS keys × 7 | $7.00 |
-| CloudWatch: 19 alarms, 7 log-derived metrics, 8 GB logs | $9.60 |
+| CloudWatch: 23 alarms, 7 log-derived metrics, 8 GB logs | $10.00 |
 | Route 53 HTTPS health check (external) | $2.75 |
 | S3 20 GB (documents, exports, backups, logs) | $0.50 |
 | ECR 3 GB | $0.30 |
 | SES 1000 emails | $0.10 |
 | Container Insights + enhanced monitoring (metrics/logs) | $5.00 |
 
-**T3 variant — resilient with RDS Multi-AZ instead of Aurora (overrides: db_engine = "rds", db_multi_az = true)** — ≈ **$334.32/month**
+**Per AWS account (envs/bootstrap): detective controls** — ≈ **$0.05/month**
+
+| Line item | $/month |
+|---|---:|
+| CloudTrail multi-region trail (first copy of management events: no CloudTrail charge) | $0 |
+| CloudTrail log bucket (≈ 2 GB) | $0.05 |
+| GuardDuty — usage-based, NOT in the downloaded price files (30-day trial, then a few $/month for a small account) [unpriced] | $0 |
+| Security EventBridge rules + 2 SNS topics (email) | $0 |
+
+**T3 variant — resilient with RDS Multi-AZ instead of Aurora (overrides: db_engine = "rds", db_multi_az = true)** — ≈ **$335.22/month**
 
 | Line item | $/month |
 |---|---:|
@@ -329,14 +287,14 @@ The biggest levers: T3's NAT gateways (≈ $134 for three) and Aurora's two-inst
 | RDS PostgreSQL db.t4g.small Multi-AZ (synchronous standby, automatic failover) | $61.32 |
 | RDS Multi-AZ gp3 20 GB | $5.24 |
 | AWS Backup cross-region copies (5 GB × 30 daily copies transferred + DR storage) | $16.92 |
-| Monthly restore drill (Aurora db.t4g.medium 1 h + Fargate minutes) | $0.29 |
+| Monthly restore drill (Aurora db.t4g.medium 1 h) + daily freshness task | $0.39 |
 | ALB (hours + 1 LCU average) | $23.29 |
 | ALB public IPv4 × 3 | $10.95 |
 | CloudFront 20 GB + 2M HTTPS requests (India) | $4.58 |
 | WAF full (web ACL + 6 rules + 2M requests) | $12.20 |
-| Secrets Manager × 18 | $7.20 |
+| Secrets Manager × 19 | $7.60 |
 | KMS keys × 7 | $7.00 |
-| CloudWatch: 19 alarms, 7 log-derived metrics, 8 GB logs | $9.60 |
+| CloudWatch: 23 alarms, 7 log-derived metrics, 8 GB logs | $10.00 |
 | Route 53 HTTPS health check (external) | $2.75 |
 | S3 20 GB (documents, exports, backups, logs) | $0.50 |
 | ECR 3 GB | $0.30 |
@@ -345,74 +303,103 @@ The biggest levers: T3's NAT gateways (≈ $134 for three) and Aurora's two-inst
 
 </details>
 
+## Personal data in infrastructure logs (infra owns these settings)
+
+| Log | Personal data | Control | Evidence |
+|---|---|---|---|
+| Postgres (RDS/Aurora, demo) | none: statements show `$n` placeholders; no bind values, no `Key (…)=(…)` details | `log_parameter_max_length[_on_error]=0`, `log_error_verbosity=terse` | database `no_bind_values_in_logs`; `verify-roles.sh` step 10 (log probe with positive control) |
+| WAF (CloudWatch, us-east-1) | client IPs, URLs of blocked/counted requests only | `authorization`, `cookie`, `x-origin-verify` redacted; 30 days | code `edge/waf.tf` |
+| ALB access logs (production) | client IPs (CloudFront edges), request URLs **including query strings** | 90-day expiry; erasure does not reach them — the retention is the control | code `storage/main.tf` (planned: strip query strings or shorten retention — owner/privacy decision) |
+| Application logs | the application's logger redaction list (CLAUDE.md §6) | retention 7/30/90 days per tier | not infra's code |
+| CloudTrail | AWS API calls, no guest data | log-file validation | `account-security` tests |
+
 ## Budget alerts vs hard caps
 
-**An AWS budget alert is not a spending cap.** Budgets evaluate billing data that lags usage by up to about a day and
-never stop spend by themselves. `modules/budgets` notifies at 50/80/100 % of actual and 100 % of forecast spend. On the
-**demo tier only**, budget actions at 100 % stop the host and attach a deny-StartInstances policy to the office-hours
-scheduler — still not a hard cap: EBS, the Elastic IP and CloudFront keep billing (≈ $5/month) and spend between the
-last billing update and the stop is incurred. Production budgets **only alert**: stopping a live hotel's system is
-worse than an overspend. Real hard stops: `terraform destroy` of the cell, or an AWS Organizations SCP denying
-everything in the account.
+**An AWS budget alert is not a spending cap.** Budgets lag usage by up to about a day and never stop spend by
+themselves. On the **demo tier only**, budget actions stop the host and block restarts — still not a hard cap (EBS,
+Elastic IP and CloudFront keep billing). Production budgets only alert. Real hard stops: `terraform destroy` of the
+cell, or an AWS Organizations SCP.
 
-## Requests to other modules (findings)
+## Review fixes (finding → commit → test)
 
-| # | For | Request | Why |
-|---|---|---|---|
-| 1 | payments + foundation | Serve the public Stripe webhook route with a `portico_worker` pool (`WORKER_DATABASE_URL`); then move `payments.route_webhook` to `ROUTING_FUNCTIONS.workerOnly` and set `api_holds_worker_credentials = true` in production | payments review P3-5: today the API role must still execute it |
-| 2 | packages/db | Create `portico_worker` (member of `portico_app`) in the development bootstrap (`migrate.ts`), let module migrations grant routing functions to it, and run job tests as that role | production revokes job routing from `portico_app`; tests should see the same privileges (the quality steward's "test as a role without RLS bypass" request) |
-| 3 | finance | Provide `finance.verify_trial_balance()` (ledger balanced per tenant **and** folio balances = ledger projection); the restore drill calls it when present | today the drill checks per-entry balance itself; folio projection is unchecked |
-| 4 | worker (foundation) | Emit `{"msg":"outbox stats","pending":N,"oldestPendingAgeSeconds":N,"dead":N}` every 60 s and `{"msg":"event delivery dead",…}`; a heartbeat would allow a container liveness check | outbox backlog/dead alarms stay INSUFFICIENT_DATA until then (`outbox_stats_contract_live`) |
-| 5 | kernel | KMS envelope encryption for the field key and key ids for field/seal key rotation | the keys are irreplaceable today; rotation would orphan data |
-| 6 | identity | Staff-email adapter on SES for `identity.staffMessage.requested` (infra provides `PORTICO_EMAIL_DOMAIN`, `PORTICO_SES_CONFIGURATION_SET`, `ses:SendEmail` on the cell's identity); operator console via IAM Identity Center before production | live invitations are queued with no adapter; the operator console is disabled in production |
-| 7 | apps/api | A real build step instead of tsx at runtime (packages export TS sources and resolve migrations via `import.meta.url`) | smaller images, faster start |
-| 8 | apps/api | `config.ts` comment for `TRUSTED_PROXY_CIDRS` says "the VPC CIDR"; behind CloudFront it must also list the CloudFront ranges (infra sets both) | avoid a future misconfiguration |
-| 9 | integration | `integration.tenant_schedule` is RLS-enabled but not forced (owner-run `claim_due_tenants`); the restore drill now lists it as a reviewed exception — confirm, or force RLS and read through the function only | the drill failed on main's schema until reviewed |
-| 10 | demo seed | The demo seed creates no journal entries, so seeded demos exercise no ledger; restore-drill evidence on a demo database proves less | — |
+| Finding | Commit | Test that proves it (red without the fix) |
+|---|---|---|
+| P1-1 deploy role admin-equivalent; trust by name | `c168bc5` | `ci-deploy-role/tests/least-privilege.tftest.hcl` (6 runs; mutants: PassRole/RunTask re-added, trust by name → red); cell `ci_cannot_reach_guest_money_keys`; `deploy-cell.test.sh` "no task definition registered…" (mutant red); `envs/github/tests` |
+| P1-2 egress default contradicts Q158 | `5e149f6` | cell `lean_tier_plans` (mutant `lean = "none"` → red), `lean_public_task_ips_is_an_explicit_opt_in`, `public_task_ips_refused_on_resilient` |
+| P1-3 drill never runs, nobody told | `44d71fd` | `restore-drill/tests/fails-loudly.tftest.hcl` (mutant notBreaching → red); `event-pattern.test.mjs` (mutant without the missing-exit-code branch → red); cell backup missing-job assertion (mutant → red) |
+| P2-1 LIVE guard by name only | `15966d4`, `5e149f6` | `env-guard.test.mjs` "staging refuses a LIVE Stripe key under the TEST name" (mutant → red); cell `live_key_under_a_test_name_refused_outside_production`, `channex_production_and_billing_keys_refused…` (mutant → red) |
+| P2-2 unreviewed definer only warns | `65b301a` | `verify-roles.sh` step 8 (pre-fix: 3 failures) |
+| P2-3 ops role reads directory PII | `65b301a` | `verify-roles.sh` step 9 (pre-fix: 2 failures) |
+| P2-4 drill misses policy/worker defects | `65b301a` | `verify-roles.sh` step 7, 7 planted defects (pre-fix: 7 missed) |
+| P2-5 PII in Postgres logs | `65b301a` | database `no_bind_values_in_logs` (mutant → red); `verify-roles.sh` step 10 (log probe with positive control) |
+| P2-6 keys destroyable / DR unusable | `5e149f6` | cell `lean_tier_plans` protected+replicated (mutant → red); `ci_cannot_reach_guest_money_keys` readers (mutant → red) |
+| P2-7 unpinned images | `15966d4` | `supply-chain.test.mjs` (mutant → red); corepack wrong-hash refusal (manual) |
+| P2-8 latest revision as template | `c168bc5` | deploy test "no task definition registered" + cell runtime_contract image tag |
+| P2-9 NODE_ENV everywhere production | `5e149f6` | cell `staging_runs_development_mode_behind_the_guard` (mutant → red); env-guard keys test (mutant → red) |
+| P2-10 Backup/SES cannot page | `5e149f6` | cell runtime_contract on-call publishers (mutant → red) |
+| P2-11 no detective controls | `5e149f6` | `account-security/tests` (mutant → red) |
+| P3-1 /0-only guard | `5e149f6` | cell runtime_contract "no range shorter than /8" |
+| P3-3 drill cleanup / skip=pass | `44d71fd` | code: `restore-drill.sh` TERM trap, sweep, SKIPPED → incomplete (no automated test: needs AWS) |
+| P3-4 confused deputy | `5e149f6`, `44d71fd` | code only (trust policies) |
+| P3-5 SCRAM verifiers in DDL logs | `65b301a` | code only (`bootstrap-roles.mjs` `set log_statement = 'none'`; RDS permission unverified) |
+| P3-6 no infra CI gate | `15966d4` | `ci.yml` job `infra` |
+| P3-7 skopeo platform | `c168bc5` | deploy test (fake refuses copy without `--all`; mutant → red) |
+| P3-8 `.env`, tfvars, npm in image | `15966d4` | code (`.dockerignore`, `infra/.gitignore`, Dockerfiles) |
+| P3-9 copied allow-lists | `65b301a` | `definer-lists.test.mjs` (mutant → red) |
+| P3-12 login rule only on full | `5e149f6` | code (`edge/waf.tf`) |
+| Not fixed: P3-2 (CloudFront VPC origin), P3-10 (readiness register rows — outside infra scope), P3-11 (identity SCIM URL — cross-module) | — | — |
+
+## Requests to other modules
+
+| # | For | Request |
+|---|---|---|
+| 1 | payments + foundation | Serve the public Stripe webhook route with a `portico_worker` pool; then move `payments.route_webhook` to `workerOnly` and set `api_holds_worker_credentials = true` |
+| 2 | packages/db | Create `portico_worker` in the development bootstrap; module migrations grant routing functions to it (listed in `infra/db/definer-registry.mjs`, never unlisted); run job tests as that role |
+| 3 | finance | `finance.verify_trial_balance()` incl. folio projection (the drill calls it when present) |
+| 4 | worker | outbox-stats and dead-delivery log lines; a heartbeat |
+| 5 | kernel | KMS envelope encryption and key ids for field/seal key rotation |
+| 6 | identity | SES staff-email adapter; IAM Identity Center for operators; key the operator console on `PORTICO_DEPLOYMENT`, not `NODE_ENV`; SCIM URLs from the public base URL (P3-11) |
+| 7 | apps/api | real build step; `config.ts` comment on `TRUSTED_PROXY_CIDRS` (ALB + CloudFront ranges); payments: refuse `sk_live_` unless `PORTICO_DEPLOYMENT = production` (defense in depth behind the guard) |
+| 8 | orchestrator | readiness register rows: infra technical R3 (offline), AWS R1 (P3-10); cost-model §4a lean figure now ≈ $163 with NAT |
 
 ## Owner decisions
 
 Defaults are what the code does today; nothing is applied until Q4/Q22 are answered.
 
-| # | Decision | Default in the code | Cost / risk if different | Blocks |
-|---|---|---|---|---|
-| D1 | AWS account(s) and permission to create paid resources (Q4a, Q22) | none; `allowed_account_ids` must be set | — | any hosted environment |
-| D2 | Primary region (Q4b) | `ap-south-1` Mumbai | variable change; prices differ per region | — |
-| D3 | Monthly ceilings: demo budget (Q22) and production alert level | demo $25 with stop action; production: required input (example $200), alert-only | — | hosted demo |
-| D4 | Hosted demo (T1) now? | no (local demo, $0) | ≈ $15–20/month; covered by Free-plan credits at first | remote demos |
-| D5 | Production tier for the first pilot: lean or resilient (Q26 pilot profile) | **no default** | lean ≈ $121 (zone failure = restore from backup, hours); resilient ≈ $410–540 or ≈ $335 with RDS Multi-AZ | pilot |
-| D6 | Lean egress: public task IPs or a NAT gateway (fixed egress IP, private tasks) | public task IPs | NAT ≈ +$45/month | providers that allow-list IPs |
-| D7 | DR region and whether guest data may be copied there (data residency) | `ap-south-2` (Hyderabad) for resilient backups and key replicas | — | resilient tier |
-| D8 | Separate recovery AWS account for restore drills | same account | small; stronger isolation | — |
-| D9 | Restore-drill cadence | monthly (support plan target: weekly) | weekly ≈ 4× a ~$1 cost | — |
-| D10 | Domain and email sender (Q1 answered "Portico"; purchase under Q22) | none (demo works on the CloudFront domain) | ≈ $15–50/year domain [estimate] | lean/resilient (HTTPS origins), staff email |
-| D11 | Paging/on-call tool and who is on call (Q21 support promise) | email to an SNS topic | tool cost | 24/7 claims (never made without it) |
-| D12 | Staging always on vs on demand | on demand (`active = false`) | always on ≈ $108/month | — |
-| D13 | Stripe Connect platform account (Q2) — TEST keys first | placeholders, no values; simulator only | — | sandbox payments |
-| D14 | Channex production activation (Q23) | placeholder, no value | $137+/month | OTA connectivity |
-| D15 | CloudFront flat-rate plan instead of pay-as-you-go CloudFront + WAF | pay-as-you-go | Pro plan $15/month (page 2026-11-07) | — |
-| D16 | Operator access in production: AWS IAM Identity Center | operator console disabled in production | — | operator support tooling in production |
+| # | Decision | Default in the code | Cost / risk if different |
+|---|---|---|---|
+| D1 | AWS account(s), permission to create paid resources (Q4a, Q22) | none; `allowed_account_ids` required | — |
+| D2 | Primary region (Q4b) | `ap-south-1` | variable |
+| D3 | Budgets: demo ceiling, production alert level (Q22) | demo $25 with stop action; production required (example $200), alert-only | — |
+| D4 | Hosted demo now? | no | ≈ $15–20/month |
+| D5 | Production tier for the first pilot (Q26) | **no default** | lean ≈ $163; resilient ≈ $410–540 (≈ $335 RDS Multi-AZ) |
+| D6 | Lean egress (Q158) | **NAT gateway, private tasks** | `public_task_ips` saves ≈ $38/month; Security Hub ECS.2 |
+| D7 | DR region for backups and key replicas (residency) | `ap-south-2`; key replicas on every production tier | — |
+| D8 | Separate recovery account for drills | same account | small |
+| D9 | Drill cadence | monthly + daily freshness | weekly ≈ 4× ~$1 |
+| D10 | Domain and email sender | none | ≈ $15–50/year |
+| D11 | Paging tool, who is on call, security emails (Q21) | email via SNS | tool cost |
+| D12 | Staging always on vs on demand | on demand | always on ≈ $153/month |
+| D13 | Stripe Connect platform account (Q2) | placeholders only | — |
+| D14 | Channex production (Q23) | placeholder only, production-only | $137+/month |
+| D15 | CloudFront flat-rate plan | pay-as-you-go | Pro $15/month |
+| D16 | Operator access in production (IAM Identity Center) | console off in production | — |
+| D17 | Break-glass role for the irreplaceable keys and who may use it (two people) | `role/portico-key-break-glass` (not created by Terraform) | — |
+| D18 | Compliance-mode vault lock for production backups (irreversible) | governance mode | — |
+| D19 | GitHub reviewers for staging/production (`envs/github`) | required input | — |
+| D20 | Allow deploys from release tags (`allow_release_tags`) | main only | needs a tag-protection ruleset |
 
 ## Layout
 
 ```
 infra/
   terraform/modules/   network, database, secrets, storage, registry, observability, compute, single-host, edge,
-                       email, budgets, backup, restore-drill, ci-deploy-role, state-bootstrap, cell (composition)
-  terraform/envs/      bootstrap (state bucket + GitHub OIDC), demo, staging, production
-  db/                  bootstrap-roles.mjs (roles + grants phases), verify-roles.sh (end-to-end check)
-  restore-drill/       restore-drill.sh, verify.sql, Dockerfile
-  ci/                  deploy.yml.example, deploy-cell.sh, test/ (offline tests)
+                       email, budgets, backup, restore-drill, ci-deploy-role, state-bootstrap, account-security, cell
+  terraform/envs/      bootstrap (state, OIDC, account security), github (GitHub-side controls), demo, staging, production
+  db/                  bootstrap-roles.mjs, definer-registry.mjs, definer-lists.test.mjs, verify-roles.sh
+  ops/                 env-guard.mjs (+ test)
+  restore-drill/       restore-drill.sh, verify.sql, Dockerfile, test/
+  ci/                  deploy.yml.example, deploy-cell.sh, test/
   cost/                unit-prices-ap-south-1.json, estimate.mjs
-  docker/tsx-runtime/  lockfile-pinned TypeScript loader for the images
-apps/api/Dockerfile, apps/worker/Dockerfile, .dockerignore
 docs/runbooks/         deploy, rollback, backup-restore-verification, incident-response, database-roles, disaster-recovery
 ```
-
-## Follow-ups
-
-- First real `terraform plan` in the authorized account; fix whatever AWS rejects; record evidence.
-- Pin `node:22.23.4-slim` by digest at the first real build; add image scanning gates on ECR findings.
-- Automate the DR-region cell (restore from a recovery point into a new cell, reuse replicated keys).
-- Restore drills in a separate recovery account (D8).
-- Off-AWS uptime check (the Route 53 checker runs inside AWS).

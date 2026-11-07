@@ -11,7 +11,7 @@
 | One availability zone fails | single-AZ database: **restore from backup / PITR** into another AZ (manual, minutes to hours); ALB and tasks move | Aurora promotes the reader in another AZ (automatic); NAT per AZ keeps egress | RTO ≤ 15 min (T3); hours (T2 — the documented trade-off of the lean tier) |
 | Bad deploy | application rollback ([rollback](rollback.md)), database untouched | same | RTO ≤ 4 h incl. repair |
 | Data corrupted / wrongly changed | PITR to a **side** instance, forward correction (below) | same | RPO ≤ 5 min (PITR), RTO ≤ 4 h |
-| Region lost (ap-south-1) | **no cross-region copy on lean**: recovery depends on AWS restoring the region | AWS Backup copies + key replicas in `dr_region` (default ap-south-2): rebuild the cell there | RTO ≤ 24 h, RPO ≤ 24 h (daily copies) for T3; none for T2 |
+| Region lost (ap-south-1) | **no cross-region DATA copy on lean** (the keys are replicated, the database is not): recovery depends on AWS restoring the region | AWS Backup copies + key replicas in `dr_region` (default ap-south-2): rebuild the cell there | RTO ≤ 24 h, RPO ≤ 24 h (daily copies) for T3; none for T2 |
 | Account compromised / deleted | backups in the same account: **not protected** | vault lock (governance) slows deletion; a separate recovery account is recommended | owner decision |
 
 Readiness consequence: a lean pilot must accept "a regional outage stops Portico until AWS recovers"; the hotel needs
@@ -48,8 +48,13 @@ release to a DR-region registry or rebuild from the same commit — not automate
    preset — and the database restored from the latest DR recovery point instead of an empty one (restore the
    recovery point first, then import it into the cell's state or pass its identifier — **procedure not yet
    automated or rehearsed**).
-4. Point the app at the **replicated** keys (the DR cell must reuse the replica secrets, not generate new ones —
-   new keys would make every encrypted field unreadable).
+4. Point the DR cell at the **replicated** keys — never let it generate new ones (every encrypted field would be
+   unreadable and every sealed term invalid): promote the replicas
+   (`aws secretsmanager stop-replication-to-replica --secret-id <replica ARN> --region <dr_region>`, break-glass role:
+   the primary's resource policy denies it to everyone else), then set the DR cell's
+   `existing_app_key_secret_arns = { PORTICO_FIELD_KEY = "<replica ARN>", PORTICO_BLIND_INDEX_KEY = "…",
+   PORTICO_TERMS_SEAL_KEY = "…" }`; the cell then generates only the rotatable simulator secret. Replicas exist on
+   every production tier (lean too) since the security fix round.
 5. Deploy the same image digests; run the restore-drill `verify.sql` against the restored database before opening it.
 6. Move DNS (`api.`/`app.` aliases) to the DR cell's CloudFront distribution.
 7. Reconcile: payments with the PSP (Stripe is authoritative for what was charged), channel bookings with Channex

@@ -91,3 +91,8 @@ output "secret_readers" {
 output "protected_keys" {
   value = one(module.secrets[*].protected_keys)
 }
+
+output "key_policy" {
+  description = "Resource policy on the protected application keys (decoded)."
+  value       = one(module.secrets[*].key_policy)
+}

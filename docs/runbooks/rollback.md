@@ -20,35 +20,32 @@ application version runs on the new schema.
 |---|---|---|
 | New api tasks fail health checks (`/health/ready`) or crash | ECS deployment circuit breaker | ECS returns the service to the last good revision |
 | 5xx rate or "no healthy targets" alarm during the rollout | ECS deployment alarms | same |
-| Rollout not COMPLETED after the wait | `deploy-cell.sh` | both api and worker set back to the revisions recorded before the release |
+| Rollout not COMPLETED after the wait (including a failed `migrate` or `grants` init container) | `deploy-cell.sh` | the `release` tags go back to the digests recorded before the release; api and worker redeployed |
 | Smoke test fails (`/health/ready` not ready, or `/v1/me` not 401 through the public URL) | `deploy-cell.sh` | same |
-| Migration fails | `deploy-cell.sh` | nothing to roll back: no service was updated; the failed migration's transaction rolled back |
+| Migration fails | the api's `migrate` init container exits non-zero | the new api never starts; the previous tasks keep serving; the failed migration's transaction rolled back |
 | Demo host readiness fails | `portico.sh` on the host | previous tag restarted |
 
 The pipeline job fails red in every case. Read its log first: it names the failing step.
 
 ## Manual application rollback (Fargate)
 
-When a release passed every check but misbehaves (wrong numbers, a broken screen):
+When a release passed every check but misbehaves:
 
 1. Declare an incident if a hotel is affected ([incident response](incident-response.md)).
-2. Find the previous revisions: ECS console → cluster → service → Deployments, or
+2. Re-run the deploy workflow for the **previous commit SHA** (its images are still in ECR under immutable SHA tags):
+   it moves `release` back to those digests and forces new deployments of the api and the worker. Migrations are a
+   no-op (expand/contract); the grants step re-applies the reviewed lists.
+3. Without the pipeline (a person with the deploy role): move the tag and force the deployments by hand —
    ```bash
-   aws ecs describe-services --cluster <prefix> --services api worker \
-     --query 'services[].{svc:serviceName,td:taskDefinition}'
-   aws ecs list-task-definitions --family-prefix <prefix>-api --sort DESC --max-items 3
+   M=$(aws ecr batch-get-image --repository-name <prefix>/api --image-ids imageTag=<previous sha> --query 'images[0].imageManifest' --output text)
+   aws ecr put-image --repository-name <prefix>/api --image-tag release --image-manifest "$M"   # same for worker
+   aws ecs update-service --cluster <prefix> --service api --force-new-deployment
+   aws ecs update-service --cluster <prefix> --service worker --force-new-deployment
+   aws ecs wait services-stable --cluster <prefix> --services api worker
    ```
-3. Roll both services back (the worker too: it runs the same composition root and job code):
-   ```bash
-   aws ecs update-service --cluster <prefix> --service worker --task-definition <prefix>-worker:<previous>
-   aws ecs update-service --cluster <prefix> --service api    --task-definition <prefix>-api:<previous>
-   aws ecs wait services-stable --cluster <prefix> --services worker api
-   ```
-   Or re-run the deploy workflow for the previous commit SHA: its images are still in ECR (immutable tags), so the
-   pipeline re-registers them; migrations are a no-op.
-4. Web app: re-run the deploy for the previous SHA, or copy the previous build to the web bucket and invalidate
-   `/index.html`.
-5. Verify: `/health/ready`, a login, the screen that broke. Keep the incident open until the hotel confirms.
+   Task definitions are never edited: Terraform owns them (`terraform apply` would revert any hand edit).
+4. Web app: re-run the deploy for the previous SHA.
+5. Verify `/health/ready`, a login and the screen that broke; keep the incident open until the hotel confirms.
 
 ## When the problem is in the data
 
