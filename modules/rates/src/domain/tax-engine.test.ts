@@ -149,6 +149,17 @@ describe('tax engine — effective dating and tax point', () => {
     );
   });
 
+  it('pinned versions ignore end dates set later by a successor (historical recompute stays identical)', () => {
+    const rules = maldivesLikeRules();
+    const tgst = rules.find((r) => r.rule.code === 'TGST');
+    const v17 = tgst?.versions[1];
+    const closed = { ...tgst, rule: tgst?.rule, versions: [{ ...v17, effectiveTo: '2027-01-01' }], pinned: true } as (typeof rules)[number];
+    const r = computeLine([closed], line({ amountMinor: 10_000, serviceDate: '2027-06-01', taxCategory: 'food_beverage' }), { classification: RESORT });
+    expect(r.taxes[0]?.ratePercent).toBe('17');
+    const live = computeLine([{ ...closed, pinned: false }], line({ amountMinor: 10_000, serviceDate: '2027-06-01', taxCategory: 'food_beverage' }), { classification: RESORT });
+    expect(live.taxes).toEqual([]);
+  });
+
   it('does not apply a rule before its first effective date', () => {
     const r = computeLine(maldivesLikeRules(), line({ amountMinor: 10_000, serviceDate: '2024-12-31', occupancy: adults2 }), {
       classification: RESORT,

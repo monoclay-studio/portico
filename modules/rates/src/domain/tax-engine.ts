@@ -51,6 +51,11 @@ export interface TaxRuleVersionData {
 export interface LoadedTaxRule {
   rule: TaxRuleHeader;
   versions: TaxRuleVersionData[];
+  /**
+   * Versions pinned by id (audit recompute): chosen by start date only. A later activation that CLOSES a pinned
+   * version (sets its effective_to) therefore never changes a historical recomputation (RAT-I05).
+   */
+  pinned?: boolean;
 }
 
 export type Classification = Record<string, string | number | boolean>;
@@ -80,6 +85,16 @@ export function versionEffectiveOn(versions: readonly TaxRuleVersionData[], date
  * deposit at payment). Otherwise by policy; when the deciding date is not known yet (a quote has no invoice or
  * payment), the service date is used as the estimate and reported on the tax line.
  */
+/** Pinned versions: the latest start on or before the date (end dates ignored). */
+export function pinnedVersionOn(versions: readonly TaxRuleVersionData[], date: LocalDate): TaxRuleVersionData | undefined {
+  let best: TaxRuleVersionData | undefined;
+  for (const v of versions) {
+    if (v.effectiveFrom !== null && v.effectiveFrom > date) continue;
+    if (!best || (best.effectiveFrom ?? '') < (v.effectiveFrom ?? '')) best = v;
+  }
+  return best;
+}
+
 export function taxPointDate(
   policy: TaxPointPolicy,
   line: Pick<ChargeLine, 'serviceDate' | 'taxPointDate'>,
@@ -149,9 +164,9 @@ function applicableRules(
   exemptionsApplied: Array<{ ruleCode: string; reference: string }>,
 ): Applicable[] {
   const out: Applicable[] = [];
-  for (const { rule, versions } of rules) {
+  for (const { rule, versions, pinned } of rules) {
     const pointDate = taxPointDate(rule.taxPointPolicy, line, ctx);
-    const version = versionEffectiveOn(versions, pointDate);
+    const version = pinned ? pinnedVersionOn(versions, pointDate) : versionEffectiveOn(versions, pointDate);
     if (!version) continue;
     const def = version.definition;
     if (!def.appliesTo.taxCategories.includes(line.taxCategory)) continue;

@@ -411,6 +411,7 @@ export async function loadTaxRulesForProperty(
       sequence: r.sequence,
     },
     versions: all.filter((v) => v.tax_rule_id === r.id).map(toVersionData),
+    ...(versions ? { pinned: true } : {}),
   }));
 }
 
