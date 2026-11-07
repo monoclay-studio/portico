@@ -39,7 +39,7 @@ export type LegalEntity = z.infer<typeof legalEntity>;
 
 /**
  * Jurisdiction classification consumed by tax & fee rules. Free-form per country; Maldives uses e.g.
- * { "mv.establishmentType": "resort" | "guesthouse" | "hotel" | "vessel", "mv.inhabitedIsland": true, "mv.roomCount": 12 }.
+ * { "mv.establishmentType": "resort" | "guesthouse" | "hotel" | "vessel", "mv.inhabitedIsland": true, "mv.registeredRooms": 12 }.
  */
 export const classification = z.record(z.string(), z.union([z.string(), z.number(), z.boolean()]));
 
