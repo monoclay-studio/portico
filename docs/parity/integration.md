@@ -17,8 +17,10 @@ R05 digest #1–#9, #17, #21–#25 and `05-market-deep-dive/11-one-button-migrat
 column (connection, workflow, mapping, exchange, forwarding, data authority, provenance).
 
 **Status and tests:** paths in the Test column are relative to `modules/integration/` unless they start with `apps/`
-or `modules/`. `tested` only where a named test on `main` proves the row; `building` = partly built and tested, the
-"partial:" note says what is missing; `built` = implemented without a proving test. All connectors are at most
+or `modules/`. A row is `tested` only when a test on `main` **asserts** the row (parity playbook v2, PR2-1): the Test cell quotes
+each asserting line as `file:line` with what it proves. `building` = part of the row is asserted and the "partial:"
+note says what is missing (also used where the proof runs only against a fake provider, pattern AP-51); `built` =
+implemented without an asserting test. All connectors are at most
 readiness R3: only the PMS simulator, CSV files and outbound webhooks are built; no vendor sandbox (R4) has been used.
 **Evidence:** a source marked "search-located" under *Sources* was found by web search but its host blocks direct
 fetches from this environment — facts resting only on it are unverified. Priorities: P0 compete/pilot, P1

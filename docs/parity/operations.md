@@ -6,10 +6,11 @@ minibar), `workforce.md` (labour standards, rosters), `utilities.md` (meters), `
 claims). Researched 2026-11-07 by the parity-ops researcher; **statuses updated 2026-11-07 against `modules/operations`
 on `main`** (README checkpoint: complete per the original brief plus steward review fixes; no known failing tests).
 
-**Test column:** paths are relative to `modules/operations/` unless they start with `apps/` or `modules/`. A row is
-`tested` only when a named test on `main` proves the behavior in the row; `building` means part of the row is built and
-tested and the "partial:" note says what is still missing; `built` means implemented without a test that proves it.
-Everything here is at most readiness R3 (implemented and tested internally): no staff validation, no external system
+**Test column:** paths are relative to `modules/operations/` unless they start with `apps/`, `modules/` or `packages/`.
+A row is `tested` only when a test on `main` **asserts** the row (parity playbook v2, PR2-1): the Test cell quotes
+each asserting line as `file:line` with what it proves. `building` = part of the row is asserted and the "partial:"
+note says what is missing (also used where the proof runs only against a fake provider, pattern AP-51); `built` =
+implemented without an asserting test. Everything here is at most readiness R3 (implemented and tested internally): no staff validation, no external system
 exercised, staff app UI not built.
 
 **Baseline:** OPERA Cloud 26.3 User Guide (Room Management, Task Sheets, Miscellaneous, Inventory Administration).

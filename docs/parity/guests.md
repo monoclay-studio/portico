@@ -7,9 +7,11 @@ specs written since: `guest-experience.md` (portal data capture), `guest-service
 `modules/guests` on `main`** (README: spec MUSTs done except R14 feeds, R15 recovery flags, R19 beyond documents,
 R20 booking-code binding; steward review fixes in; no known failing tests).
 
-**Test column:** paths are relative to `modules/guests/` unless they start with `apps/` or `modules/`. `tested` only
-where a named test on `main` proves the row; `building` = partly built and tested, the "partial:" note says what is
-missing; `built` = implemented without a test that proves it. Everything is at most readiness R3 (env/dev keys, no
+**Test column:** paths are relative to `modules/guests/` unless they start with `apps/`, `modules/` or `packages/`.
+A row is `tested` only when a test on `main` **asserts** the row (parity playbook v2, PR2-1): the Test cell quotes
+each asserting line as `file:line` with what it proves. `building` = part of the row is asserted and the "partial:"
+note says what is missing (also used where the proof runs only against a fake provider, pattern AP-51); `built` =
+implemented without an asserting test. Everything is at most readiness R3 (env/dev keys, no
 KMS, no external system).
 
 **Baseline:** OPERA Cloud 26.3 Client Relations (Profiles) and Client Relations Administration. **Modern additions:**
