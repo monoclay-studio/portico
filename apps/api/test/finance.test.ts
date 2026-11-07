@@ -1,22 +1,12 @@
-import { type FinanceService, financeLedgerForPayments, type TaxPort } from '@portico/finance';
 import { newId } from '@portico/kernel';
-import type { LedgerPort } from '@portico/payments';
-import type { RatesService } from '@portico/rates';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { type ApiHarness, signedInOrg, startApi } from './helpers';
 
 /**
- * Compile-time proof of the orchestrator's bindings (now that rates and payments are on main): rates' provider
- * functions satisfy finance's TaxPort, and finance's adapter satisfies payments' LedgerPort. `pnpm typecheck`
- * fails if either side drifts. (Bound in composition.ts by the orchestrator together with the API tests that
- * assume the stubs.)
+ * Finance through the real composition root: the tax engine is rates (`bindFinanceTax`), payments' LedgerPort is
+ * finance (`financeLedgerForPayments`, proven in payments.test.ts) and late-charge collection requests go to
+ * payments (`paymentsCollectionsForFinance`).
  */
-export const bindFinanceTax = (rates: RatesService): TaxPort => ({
-  computeTaxesDetailed: (tx, input) => rates.computeTaxesDetailed(tx, input),
-  getRulePackStatus: (tx, propertyId) => rates.getRulePackStatus(tx, propertyId),
-});
-export const bindPaymentsLedger = (finance: FinanceService): LedgerPort => financeLedgerForPayments(finance);
-
 let h: ApiHarness;
 beforeAll(async () => {
   h = await startApi();
@@ -71,7 +61,7 @@ describe('finance HTTP API', () => {
       code: 'SPA',
       name: 'Spa',
       group: 'spa',
-      taxGroup: 'services',
+      taxGroup: 'spa',
     });
     const stayId = newId();
     const folio = await o.post('/v1/finance/folios', {
@@ -107,15 +97,24 @@ describe('finance HTTP API', () => {
     });
     expect(missingKey.json().code).toBe('idempotency_key_required');
 
-    // The tax engine is not connected in this deployment: a taxable charge fails honestly, nothing is posted.
+    // finance ↔ rates (bindFinanceTax): a taxable charge is taxed by the rates engine with the installed rule pack
+    // (Maldives, unverified): TGST 17% on a spa treatment (the service charge applies to rooms and F&B only).
+    const install = await o.post('/v1/tax-templates/install', { template: 'MV' });
+    expect(install.statusCode).toBe(200);
     const taxed = await o.post('/v1/finance/charges', {
       ...payload,
       chargeCode: 'SPA',
+      amount: { amountMinor: 10000, currency: 'USD' },
       description: 'Massage',
     });
-    expect(taxed.statusCode).toBe(503);
-    expect(taxed.headers['content-type']).toContain('application/problem+json');
-    expect(taxed.json()).toMatchObject({ code: 'module_not_available', retryable: true });
+    expect(taxed.statusCode).toBe(201);
+    const taxedFolio = await h.app.inject({
+      method: 'GET',
+      url: `/v1/finance/folios/${folio.json().id}`,
+      headers: o.auth,
+    });
+    // 100.00 + TGST 17.00 = 117.00; with the transfer (no tax category) 450.00 → 567.00.
+    expect(taxedFolio.json().balance).toEqual({ amountMinor: 56700, currency: 'USD' });
 
     const read = await h.app.inject({
       method: 'GET',
@@ -123,7 +122,7 @@ describe('finance HTTP API', () => {
       headers: o.auth,
     });
     expect(read.statusCode).toBe(200);
-    expect(read.json().balance).toEqual({ amountMinor: 45000, currency: 'USD' });
+    expect(read.json().balance).toEqual({ amountMinor: 56700, currency: 'USD' });
     expect(read.json().allowedActions.map((a: { action: string }) => a.action)).toContain('issueInvoice');
     const etag = read.headers.etag as string;
     const settle = await h.app.inject({
@@ -135,7 +134,7 @@ describe('finance HTTP API', () => {
     expect(settle.json()).toMatchObject({ code: 'folio_balance_not_zero' });
     expect(settle.json().detail).toMatch(/Collect a payment/);
 
-    // Live invoices are blocked while the tax rule pack is not verified (rates not connected yet).
+    // Live invoices are blocked while the rates rule pack is not adviser-verified (RAT-R26 via getRulePackStatus).
     const inv = await o.post(`/v1/finance/folios/${folio.json().id}/invoices`, {});
     expect(inv.statusCode).toBe(422);
     expect(inv.json().code).toBe('tax_rules_unverified');
@@ -145,7 +144,7 @@ describe('finance HTTP API', () => {
       url: `/v1/finance/trial-balance?legalEntityId=${o.legalEntityId}`,
       headers: o.auth,
     });
-    expect(tb.json()).toMatchObject({ balanced: true, totalDebitMinor: 45000 });
+    expect(tb.json()).toMatchObject({ balanced: true, totalDebitMinor: 56700 });
     const search = await h.app.inject({ method: 'GET', url: '/v1/search?q=Nadia', headers: o.auth });
     expect(search.json().items.map((i: { type: string }) => i.type)).toContain('folio');
     const history = await h.app.inject({

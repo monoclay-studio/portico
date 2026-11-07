@@ -6,7 +6,7 @@
  *  - worker subscriptions (executor + reconciler).
  */
 import { type TxContext, type TxEventSubscription, withTenantTx } from '@portico/db';
-import { DomainError, type RequestContext } from '@portico/kernel';
+import { DomainError, delegateAtProperty, type RequestContext } from '@portico/kernel';
 import type { Authorization, Payment, PaymentRequest, Refund } from '../contracts';
 import { type BreakerConfig, DEFAULT_BREAKER } from '../domain/circuit-breaker';
 import { PaymentsEvents } from '../events';
@@ -30,6 +30,58 @@ export interface PaymentsServiceDeps {
 }
 
 type Target = { type: 'payment' | 'authorization' | 'refund'; id: string };
+
+/** Payments keys a port call implies once the calling module authorized its own command at the property. */
+export const PAYMENTS_PORT_DELEGATION: readonly string[] = [
+  'payments.payment.read',
+  'payments.payment.collect',
+  'payments.paymentRequest.create',
+];
+const PORT_DELEGATION = PAYMENTS_PORT_DELEGATION;
+
+function scopeMismatch(kind: string, id: string, propertyId: string): DomainError {
+  return new DomainError(
+    'scope_mismatch',
+    `This ${kind} belongs to another property, so it cannot be used from here. Open it at its own property.`,
+    { status: 403, details: { kind, id, propertyId } },
+  );
+}
+
+async function assertRecordAt(
+  tx: TxContext,
+  table: 'authorizations' | 'payments',
+  kind: string,
+  id: string,
+  propertyId: string,
+): Promise<void> {
+  const row = await db(tx)
+    .selectFrom(`payments.${table}`)
+    .select('property_id')
+    .where('id', '=', id)
+    .executeTakeFirst();
+  if (row && row.property_id !== propertyId) throw scopeMismatch(kind, id, propertyId);
+}
+
+async function assertRefAt(
+  tx: TxContext,
+  ref: { type: string; id: string },
+  propertyId: string,
+): Promise<void> {
+  const rows = await db(tx)
+    .selectFrom('payments.payments')
+    .select('property_id')
+    .where('ref_type', '=', ref.type as 'folio')
+    .where('ref_id', '=', ref.id)
+    .union(
+      db(tx)
+        .selectFrom('payments.authorizations')
+        .select('property_id')
+        .where('ref_type', '=', ref.type)
+        .where('ref_id', '=', ref.id),
+    )
+    .execute();
+  if (rows.some((r) => r.property_id !== propertyId)) throw scopeMismatch(ref.type, ref.id, propertyId);
+}
 
 export function createPaymentsService(input: PaymentsServiceDeps) {
   const d: PaymentsDeps = { ...input, breaker: input.breaker ?? DEFAULT_BREAKER };
@@ -81,6 +133,10 @@ export function createPaymentsService(input: PaymentsServiceDeps) {
     deps: d,
 
     // ── domain-map provider functions (called inside the caller's transaction) ──
+    // ADR-0015: the calling module (reservations, finance, front desk) authorized the user's intent at `propertyId`;
+    // payments does not re-check its own keys for that user (granted at that property only) and refuses records of
+    // another property (`scope_mismatch`). Refunds stay explicit: the user needs payments.payment.refund (§5).
+    // Payments' own HTTP routes keep every permission check.
     provider: {
       async createPaymentRequest(
         tx: TxContext,
@@ -101,6 +157,7 @@ export function createPaymentsService(input: PaymentsServiceDeps) {
           description?: string;
         },
       ): Promise<PaymentRequest> {
+        tx = delegateAtProperty(tx, PORT_DELEGATION, i.propertyId);
         const r = await requests.createPaymentRequest(d, tx, {
           propertyId: i.propertyId,
           payer: i.payer,
@@ -126,6 +183,7 @@ export function createPaymentsService(input: PaymentsServiceDeps) {
         },
       ): Promise<Authorization> {
         // Who initiates is derived from the consent record (P1-8), never declared by the caller.
+        tx = delegateAtProperty(tx, PORT_DELEGATION, i.propertyId);
         const s = await collect.authorize(d, tx, {
           propertyId: i.propertyId,
           methodId: i.methodId,
@@ -143,9 +201,16 @@ export function createPaymentsService(input: PaymentsServiceDeps) {
           amount?: { amountMinor: number; currency: string };
           ledgerRef?: { type: 'folio' | 'booking'; id: string };
           idempotencyKey: string;
+          /** The property the caller authorized (ADR-0015); the hold must belong to it. */
+          propertyId?: string;
         },
       ): Promise<Payment> {
-        const s = await collect.capture(d, tx, { ...i, businessKey: i.idempotencyKey });
+        const { propertyId, ...rest } = i;
+        if (propertyId) {
+          await assertRecordAt(tx, 'authorizations', 'authorization', i.authorizationId, propertyId);
+          tx = delegateAtProperty(tx, PORT_DELEGATION, propertyId);
+        }
+        const s = await collect.capture(d, tx, { ...rest, businessKey: i.idempotencyKey });
         scheduleAfterCommit(tx, s.operationId);
         return queries.getPayment(tx, s.id);
       },
@@ -160,6 +225,7 @@ export function createPaymentsService(input: PaymentsServiceDeps) {
           purpose?: 'deposit' | 'balance' | 'incidentals' | 'custom';
         },
       ): Promise<Payment> {
+        tx = delegateAtProperty(tx, PORT_DELEGATION, i.propertyId);
         const s = await collect.charge(d, tx, {
           propertyId: i.propertyId,
           methodId: i.methodId,
@@ -184,9 +250,21 @@ export function createPaymentsService(input: PaymentsServiceDeps) {
         scheduleAfterCommit(tx, s.operationId);
         return queries.getRefund(tx, s.id);
       },
-      getPaymentStatus: (tx: TxContext, ref: { type: string; id: string }) =>
-        queries.getPaymentStatus(tx, ref),
-      listUnresolved: (tx: TxContext, i: { propertyId: string }) => queries.listUnresolved(tx, i),
+      /**
+       * `scope` (ADR-0015): the property the caller authorized; every record on the reference must belong to it.
+       * Without it, the caller's own payments read permission applies (HTTP-equivalent behaviour).
+       */
+      async getPaymentStatus(
+        tx: TxContext,
+        ref: { type: string; id: string },
+        scope?: { propertyId: string },
+      ) {
+        if (!scope) return queries.getPaymentStatus(tx, ref);
+        await assertRefAt(tx, ref, scope.propertyId);
+        return queries.getPaymentStatus(delegateAtProperty(tx, PORT_DELEGATION, scope.propertyId), ref);
+      },
+      listUnresolved: (tx: TxContext, i: { propertyId: string }) =>
+        queries.listUnresolved(delegateAtProperty(tx, PORT_DELEGATION, i.propertyId), i),
     },
 
     // ── drivers: command + execute (+ verify on retry) ──

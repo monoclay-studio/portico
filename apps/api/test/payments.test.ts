@@ -1,7 +1,7 @@
 /**
- * Payments over HTTP through the real composition root (finance not merged yet → its LedgerPort is an
- * "unavailable" stub: folio collections are refused because nobody can confirm which property owns the folio;
- * booking deposits are taken and show `ledger: failed` + an owned exception — never a fake posting).
+ * Payments over HTTP through the real composition root. Its LedgerPort is finance (`financeLedgerForPayments`):
+ * every confirmed payment is posted exactly once with the property, legal entity and clearing account; folios of
+ * another property are refused before any money moves.
  */
 import { createHmac } from 'node:crypto';
 import { newId } from '@portico/kernel';
@@ -115,9 +115,9 @@ describe('payments API', () => {
     const retry = await org.post('/v1/payments/charges', body, key);
     expect(retry.statusCode).toBe(201);
     expect(retry.json().id).toBe(first.json().id);
-    // Finance is not connected in this build: the money truth is kept and the bill gap is flagged.
-    expect(retry.json().status).toMatchObject({ payment: 'succeeded', ledger: 'failed' });
-    expect(retry.json().issues.map((i: { code: string }) => i.code)).toContain('ledger_not_posted');
+    // payments → finance: the confirmed deposit is posted to the booking's deposit account (a liability) once.
+    expect(retry.json().status).toMatchObject({ payment: 'succeeded', ledger: 'posted' });
+    expect(retry.json().issues.map((i: { code: string }) => i.code)).not.toContain('ledger_not_posted');
 
     const check = await h.app.inject({
       method: 'POST',
@@ -162,25 +162,76 @@ describe('payments API', () => {
     expect(res.json().detail).toMatch(/insufficient funds[\s\S]*payment link[\s\S]*Nothing was collected/);
   });
 
-  it('without finance, a folio collection is refused before any money moves (nobody can place the folio)', async () => {
+  it('folio collections post to finance; unknown and other-property folios are refused before money moves', async () => {
     const org = await demoOrg();
     const m = await org.method('pm_card_visa');
-    const folioId = newId();
-    const res = await org.post('/v1/payments/charges', {
+    const folio = await org.post('/v1/finance/folios', {
       propertyId: org.propertyId,
-      methodId: m.json().id,
-      amount: { amountMinor: 1_000, currency: 'USD' },
-      ref: { type: 'folio', id: folioId },
+      owner: { type: 'stay', id: newId() },
+      payer: { type: 'guest', name: 'Nadia Rasheed' },
     });
-    expect(res.statusCode).toBe(503);
-    expect(res.json()).toMatchObject({ code: 'module_not_available', retryable: true });
-    expect(res.json().detail).toMatch(/booking deposit/);
-    const status = await h.app.inject({
+    expect(folio.statusCode).toBe(201);
+    const charge = (propertyId: string, folioId: string) =>
+      org.post('/v1/payments/charges', {
+        propertyId,
+        methodId: m.json().id,
+        amount: { amountMinor: 1_000, currency: 'USD' },
+        ref: { type: 'folio', id: folioId },
+      });
+    const ok = await charge(org.propertyId, folio.json().id);
+    expect(ok.statusCode).toBe(201);
+    expect(ok.json().status).toMatchObject({ payment: 'succeeded', ledger: 'posted' });
+    const read = await h.app.inject({
       method: 'GET',
-      url: `/v1/payments/status-by-ref?refType=folio&refId=${folioId}`,
+      url: `/v1/finance/folios/${folio.json().id}`,
       headers: org.auth,
     });
-    expect(status.json()).toMatchObject({ status: 'none', payments: [] });
+    expect(read.json().balance).toEqual({ amountMinor: -1_000, currency: 'USD' });
+
+    // Nobody can place an unknown folio: refused, nothing recorded.
+    const unknownId = newId();
+    const unknown = await charge(org.propertyId, unknownId);
+    expect(unknown.statusCode).toBe(422);
+    expect(unknown.json().code).toBe('ledger_target_unknown');
+    const none = await h.app.inject({
+      method: 'GET',
+      url: `/v1/payments/status-by-ref?refType=folio&refId=${unknownId}`,
+      headers: org.auth,
+    });
+    expect(none.json()).toMatchObject({ status: 'none', payments: [] });
+
+    // A folio of another property (and legal entity) of the same organization is refused (P0-1, ADR-0015).
+    const le2 = await org.post('/v1/legal-entities', {
+      name: 'Sister',
+      legalName: 'Sister Pvt Ltd',
+      countryCode: 'MV',
+      baseCurrency: 'USD',
+    });
+    const p2 = await org.post('/v1/properties', {
+      code: 'SIS',
+      name: 'Sister Island',
+      profile: 'resort',
+      legalEntityId: le2.json().id,
+      countryCode: 'MV',
+      timezone: 'Indian/Maldives',
+      baseCurrency: 'USD',
+      businessDate: '2026-11-07',
+    });
+    const otherFolio = await org.post('/v1/finance/folios', {
+      propertyId: p2.json().id,
+      owner: { type: 'stay', id: newId() },
+      payer: { type: 'guest', name: 'Other guest' },
+    });
+    expect(otherFolio.statusCode).toBe(201);
+    const cross = await charge(org.propertyId, otherFolio.json().id);
+    expect(cross.statusCode).toBe(422);
+    expect(cross.json().code).toBe('ledger_target_other_property');
+    const otherRead = await h.app.inject({
+      method: 'GET',
+      url: `/v1/finance/folios/${otherFolio.json().id}`,
+      headers: org.auth,
+    });
+    expect(otherRead.json().balance).toEqual({ amountMinor: 0, currency: 'USD' });
   });
 
   it('card numbers are refused at the boundary', async () => {

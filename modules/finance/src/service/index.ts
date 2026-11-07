@@ -643,8 +643,9 @@ export function financeForReservations(service: FinanceService) {
     async getFolioBalance(
       tx: TxContext,
       folioId: string,
+      scope?: { propertyId: string },
     ): Promise<{ folioId: string; balance: Money; status: string }> {
-      const f = await service.getFolio(d(tx), folioId);
+      const f = await service.getFolio(d(tx, scope?.propertyId), folioId);
       return { folioId, balance: f.balance, status: f.status.folio };
     },
     async listFolios(
@@ -711,8 +712,11 @@ export function financeForReservations(service: FinanceService) {
       });
       return { ruleIds: r.ruleIds };
     },
-    async getDepositBalance(tx: TxContext, input: { bookingId: string }): Promise<Money | null> {
-      return (await service.getDeposits(d(tx), input.bookingId))?.balance ?? null;
+    async getDepositBalance(
+      tx: TxContext,
+      input: { bookingId: string; propertyId?: string },
+    ): Promise<Money | null> {
+      return (await service.getDeposits(d(tx, input.propertyId), input.bookingId))?.balance ?? null;
     },
   };
 }

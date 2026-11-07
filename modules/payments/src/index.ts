@@ -2,6 +2,7 @@ export * from './contracts';
 export { seedPaymentsDemo } from './demo-seed';
 export { explainDecline } from './domain/declines';
 export { PaymentsEvents } from './events';
+export { type FinanceCollectionRequest, paymentsCollectionsForFinance } from './finance-collections';
 export { paymentsJobs } from './jobs';
 export * from './manifest';
 export type { EntityRef, LedgerPaymentMethod, LedgerPort, PlatformPort, PropertyInfo } from './ports';
@@ -24,7 +25,12 @@ export { SIMULATOR_SIGNATURE_HEADER, SIMULATOR_TEST_TOKENS, SimulatorProvider } 
 export { STRIPE_SIGNATURE_HEADER, StripeConnectProvider } from './providers/stripe-connect';
 export { paymentsHttp } from './routes';
 export { paymentsSearch } from './search';
-export { createPaymentsService, type PaymentsService, type PaymentsServiceDeps } from './service';
+export {
+  createPaymentsService,
+  PAYMENTS_PORT_DELEGATION,
+  type PaymentsService,
+  type PaymentsServiceDeps,
+} from './service';
 export type { PaymentsDB } from './tables';
 
 import type { PorticoDatabase } from '@portico/db';

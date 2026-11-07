@@ -14,11 +14,13 @@ import {
   createFinance,
   type FinancePorts,
   financeDemoSeed,
+  financeForReservations,
   financeHttp,
+  financeLedgerForPayments,
   financeManifest,
   financeSearch,
   financeSubscriptions,
-  unavailableFinancePorts,
+  type TaxPort,
 } from '@portico/finance';
 import {
   createGuestsDemoSeed,
@@ -79,9 +81,9 @@ import {
 import {
   createPaymentsModule,
   envProviderSecrets,
-  type LedgerPort,
   type PlatformPort as PaymentsPlatformPort,
   type PaymentsService,
+  paymentsCollectionsForFinance,
   paymentsManifest,
   paymentsSearch,
   seedPaymentsDemo,
@@ -146,23 +148,6 @@ function unavailablePort<T extends object>(module: string, available: Partial<T>
   });
 }
 
-/**
- * Finance is not merged yet. Payments may not collect against a folio it cannot place (P0-1: the folio might belong
- * to another property or company), so folio collections are refused with a clear reason; a booking deposit is
- * accepted (finance binds the booking to the property when it posts the deposit, and refuses a mismatch) and shows
- * "not yet on the bill" until finance is connected. Every posting fails retryably and is retried by reconciliation.
- */
-const ledgerUntilFinanceMerges = unavailablePort<LedgerPort>('finance', {
-  async describeTarget(_tx, ref) {
-    if (ref.type === 'booking') return null;
-    throw new DomainError(
-      'module_not_available',
-      'Finance is not connected yet, so Portico cannot confirm which property this folio belongs to and will not collect against it. Take the payment as a booking deposit, or record it once finance is connected.',
-      { status: 503, retryable: true, details: { module: 'finance', operation: 'describeTarget' } },
-    );
-  },
-});
-
 // ── inventory ── bound once; inventory's only port is platform (exists on main), so nothing is stubbed.
 // Other modules (reservations, operations, groups, distribution, day-close) bind their inventory ports to this.
 export const inventoryService: InventoryService = createInventoryService({
@@ -177,6 +162,15 @@ export const inventoryService: InventoryService = createInventoryService({
 /** DemoSeedStep `run` for inventory (registered in `Composition.demoSeedSteps`). */
 export const inventoryDemoSeed = createInventoryDemoSeed(inventoryService, {
   businessDate: platform.getBusinessDate,
+});
+
+/**
+ * finance ↔ rates: rates' provider functions satisfy finance's TaxPort (rates' canonical contract). `rates` is
+ * resolved per call so the composition root can create finance before rates.
+ */
+export const bindFinanceTax = (rates: () => RatesService): TaxPort => ({
+  computeTaxesDetailed: (tx, input) => rates().computeTaxesDetailed(tx, input),
+  getRulePackStatus: (tx, propertyId) => rates().getRulePackStatus(tx, propertyId),
 });
 
 export interface Composition {
@@ -234,8 +228,15 @@ export function compose(database: PorticoDatabase): Composition {
   const inventoryModule = inventoryHttp({ database, inventory: inventoryService });
 
   // ── finance ──
-  // Tax engine (rates) and payments are wave-1 modules built in parallel: bound to explicit "not connected"
-  // stubs until they merge (tax computation fails loudly; collection requests report 'unavailable').
+  // Tax engine = rates (single tax computation, RAT-R23); collection requests for late charges = payments (intent
+  // only, a payment request); payer names = guests. Rates and payments are created below, so finance's ports reach
+  // them through late-bound references (both exist before any request is served).
+  let ratesRef: RatesService | undefined;
+  let paymentsRef: PaymentsService | undefined;
+  const bound = <T>(ref: T | undefined, module: string): T => {
+    if (!ref) throw new ModuleUnavailableError(module, 'composition');
+    return ref;
+  };
   const financePorts: FinancePorts = {
     platform: {
       // Routing metadata only (legal entity, currency): not gated by platform.property.read.
@@ -244,7 +245,11 @@ export function compose(database: PorticoDatabase): Composition {
       getLegalEntity: platform.getLegalEntity,
       assertWritable: platform.assertWritable,
     },
-    ...unavailableFinancePorts(),
+    tax: bindFinanceTax(() => bound(ratesRef, 'rates')),
+    payments: {
+      requestCollection: (tx, input) =>
+        paymentsCollectionsForFinance(bound(paymentsRef, 'payments')).requestCollection(tx, input),
+    },
     // Payer names for folios and tax invoices: guest profiles by id (companies/agencies when that module exists).
     payers: {
       async describePayer(tx, input) {
@@ -385,6 +390,7 @@ export function compose(database: PorticoDatabase): Composition {
   };
   // Agreed terms are sealed with a server key (PORTICO_TERMS_SEAL_KEY; required in production).
   const rates = ratesService(ratesPorts, { termsSealKey: termsSealKeyFromEnv().key });
+  ratesRef = rates;
   const ratesModule = ratesHttp({ database, rates });
 
   // ── integration ──
@@ -466,7 +472,7 @@ export function compose(database: PorticoDatabase): Composition {
     simulators: { pms: pmsSimulators },
   };
   const integrationModule = integrationHttp({ database, integration: integrationDeps });
-  // ── payments ── (finance LedgerPort: bind `financeLedgerForPayments(finance)` when finance merges)
+  // ── payments ── LedgerPort = finance (scoped postings, clearing account per provider, verification, fees)
   const paymentsPlatform: PaymentsPlatformPort = {
     // Payments has already checked its own permission; it needs the merchant (legal entity) and time zone.
     async getProperty(tx, propertyId) {
@@ -484,11 +490,12 @@ export function compose(database: PorticoDatabase): Composition {
   };
   const payments = createPaymentsModule({
     database,
-    ledger: ledgerUntilFinanceMerges,
+    ledger: financeLedgerForPayments(finance),
     platform: paymentsPlatform,
     secrets: envProviderSecrets(process.env),
     simulatorSigningSecret: process.env.PAYMENTS_SIMULATOR_SIGNING_SECRET ?? randomToken(),
   });
+  paymentsRef = payments.service;
 
   // ── cross-module experience: global search, summaries, record history ──
   const searchProviders: SearchProvider[] = [

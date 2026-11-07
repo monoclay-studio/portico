@@ -755,6 +755,7 @@ export async function postCharge(
                 reason: 'late_charge',
                 ref: { type: 'journal_entry', id: claim.entryId },
                 idempotencyKey: `${idempotencyKey}:collect:${folioId}`,
+                payerName: f.payer_name,
               }),
             ).catch((err: unknown) => ({
               status: 'failed',

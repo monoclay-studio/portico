@@ -105,6 +105,8 @@ export interface CollectionRequest {
   reason: 'late_charge';
   ref: { type: string; id: string };
   idempotencyKey: string;
+  /** The folio payer's name, for the payment request payments creates. */
+  payerName?: string;
 }
 
 export interface PaymentsPort {
