@@ -364,3 +364,18 @@ Each agent's brief and report are in `agents/`.
   - The question template has an "Implemented by" line.
   - Every build and fix brief requires self-check v6. It was sent to the running infra fix round together with the
     restore-drill state machine and the CI infra job.
+- **22:33 — Distribution + Channex adapter build done** <!-- t: agent-a7e54633dbf24e059 @ 2026-11-07T22:33:51.080Z (Build distribution + Channex adapter) -->; readiness R3 against a Channex simulator, never the real Channex. Branch `feat/distribution-channex` was pushed.
+  - All four owner requirements work end to end:
+    - **ARI engine:** an event-driven record of changed nights, with no table polling.
+    - **Queue:** a sliding-window budget of 10 + 10 requests per minute, so never more than 20 in any 60 s; 429 pauses
+      the budget; 50 edits became 1 call.
+    - **Webhook:** each revision is stored unchangeable before the 200 is returned; orphans are parked; a 15-minute
+      pull recovers missed deliveries.
+    - **Acknowledgement:** only after a committed final outcome, enforced by a database check.
+  - 91 module tests and 3 API tests. Each guard was disabled in turn to prove its test fails.
+  - The channel/OTA coverage gate rose from 0% to 31% of rows.
+  - Blocker: rates cannot yet price a channel booking (`termsFromChannelPrices`), so real bookings are stored but not
+    acknowledged. This went to rates.
+  - Channex facts that could not be verified from its docs (blocked to automated fetches) are listed for the R4
+    staging test, which needs the owner's staging key.
+  - Next: steward review, subject to the usage rule.
