@@ -36,6 +36,29 @@
   for UX round 1 when the black-box tester finishes; (4) resume infra and parity-ops. Running at this time: fix rounds
   for rates, payments, reservations, integration, finance, identity-plus; black-box UX tester.
 
+- **2026-11-07 12:36 UTC — PAUSE + CHECKPOINT (5-hour usage 92%; resets 16:10 UTC).** No agents were running.
+  `tools/checkpoint.sh` committed WIP and pushed every branch (docs/parity-finance was behind its remote; its
+  commits are already in main — nothing lost). UX lab servers may be gone after the pause: `tools/ux-lab.sh refresh`
+  then `start`.
+  **On main now:** guests, inventory, operations, rates, payments, reservations, integration, finance (all steward
+  fixes verified, full suite green), market deep dive, UX round-1 findings, ADR-0017.
+  **Resume queue (in order, after re-checking usage):**
+  1. identity-plus (`feat/identity-platform-enterprise`, pushed): fix round DONE (both P0 closed, PoCs are regression
+     tests). Before merge: (a) **second steward review** focused on ADR-0017 (the promised re-review);
+     (b) adapt 13 tests in other modules to the new rules — inventory isolation-permissions ×3, finance
+     security-and-corrections ×1, operations real-inventory R2 ×1 (data authority needs an authority transition);
+     apps/api payments.test ×6 + integration.test ×1 (sign in with MFA: `signedInOrg`/`enrolMfa` in
+     apps/api/test/helpers.ts); guests sharing.test ×1 (Professional plan now has `portfolio.crossPropertyProfiles`).
+     Then merge; bind integration FR-2 (platform transitions); kernel `responsiblePerson`/`assertHumanApprover`
+     (identity FR-6/platform FR-3); owner questions Q146–Q149 are on the branch.
+  2. Integration step: bind ports for real (pending-fixes.md: finance↔rates tax, payments LedgerPort→finance,
+     reservations `ratesPortFrom` + guests/finance/payments/operations, ADR-0015 port re-checks removed in inventory
+     and payments) → scenario tests S01–S20.
+  3. Backoffice fix round (`reviews/review-backoffice.md`, P0 cache leak first) — author agent resumable.
+  4. UX refining agent on `docs/ux/round-1/blackbox-findings.md`.
+  5. Gap strategist → `docs/strategy/` 10x briefs (input: `docs/research/05-digest.md`).
+  6. Resume infra (`TRUSTED_PROXY_CIDRS`, `PORTICO_TERMS_SEAL_KEY`, worker DB role) and parity-ops.
+
 ## 1. Owner, product and how to work with the owner
 
 - Owner: founder of **Monoclay LLC** (Delaware, Stripe Atlas), based in the Maldives. Product: **Portico** (final name).
@@ -91,7 +114,7 @@ direction, experience architecture, parity framework, this orchestration folder.
 | `feat/operations-core` | wt/operations | housekeeping, maintenance, tasks, offline sync | **MERGED** to main (9296305) — both P0 + most P1 fixed; P1-5/6/8 deferred with reasons (README) | — |
 | `feat/integration-core` | wt/integration | connector framework, setup, health, webhooks | **MERGED** to main (4d90c6a) — P0 SSRF fixed (`safeFetch`), F2–F9 fixed | bind platform transitions after identity-plus merges (FR-2) |
 | `feat/backoffice-core` | wt/backoffice | packages/ui + apps/backoffice | steward review: **merge after fixes** (P0 cached data leaks to next user on shared tab; 6 P1) — `reviews/review-backoffice.md` | **fix round queued for after usage reset** → verify → merge |
-| `feat/identity-platform-enterprise` | wt/identity-plus | MFA, SSO, SCIM, custom roles, break-glass, trials, activation | steward review: **do not merge** (2 P0 cross-org takeover, 8 P1) → ADR-0017 → **fix round running** (sent 11:55Z) | second steward review → merge |
+| `feat/identity-platform-enterprise` | wt/identity-plus | MFA, SSO, SCIM, custom roles, break-glass, trials, activation | fix round **DONE** (pushed): both P0 closed, PoCs → regression tests; identity 105, platform 62 | second steward review + adapt 13 tests in other modules → merge (resume queue item 1) |
 | `feat/infra-aws` | wt/infra | Terraform, Dockerfiles, runbooks | **paused** (usage) | resume when usage < 80%; set `TRUSTED_PROXY_CIDRS` (pending-fixes) |
 | `docs/parity-ops` | wt/parity-ops | parity: operations, guests, comms, resort, access, guest-experience, crm, identity, integration, ai | **paused** (usage) | resume when usage < 80% |
 | journey, back-of-house, parity-front, parity-finance, readiness, product, adoption docs | — | docs | **MERGED** to main | spec change requests folded in at integration step |
