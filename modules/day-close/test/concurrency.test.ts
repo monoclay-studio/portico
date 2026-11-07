@@ -115,7 +115,9 @@ describe('two auditors at once', () => {
     const refused = results.filter((r) => r.status === 'rejected') as PromiseRejectedResult[];
     expect(ok).toHaveLength(1);
     expect(refused).toHaveLength(1);
-    expect(['run_in_progress', 'version_conflict']).toContain((refused[0]?.reason as { code: string }).code);
+    expect(['run_in_progress', 'version_conflict']).toContain(
+      (refused[0] as PromiseRejectedResult).reason.code,
+    );
     expect((await entriesByKey(h, org.tenantId, 'room:')).map((r) => r.n)).toEqual([1, 1, 1]);
     expect(await businessDate(org)).toBe('2026-11-08');
   });

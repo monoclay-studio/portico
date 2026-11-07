@@ -17,6 +17,7 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
+    "@portico/day-close": "workspace:*",
     "@portico/db": "workspace:*",
     "@portico/finance": "workspace:*",
     "@portico/guests": "workspace:*",

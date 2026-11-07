@@ -40,7 +40,10 @@ async function schedule(org: Org, extra: Record<string, unknown> = {}) {
     await h.service.updatePolicy(
       tx,
       org.propertyId,
-      { policy: { schedule: { enabled: true, localTime: '02:00', autoContinue: true }, ...extra }, reason: 'auto-close' },
+      {
+        policy: { schedule: { enabled: true, localTime: '02:00', autoContinue: true }, ...extra },
+        reason: 'auto-close',
+      },
       p.version,
     );
   });
@@ -81,7 +84,12 @@ describe('scheduler', () => {
     expect(await runsOf(org)).toHaveLength(0);
     await tick('2026-11-07T21:00:30.000Z');
     const [run] = await runsOf(org);
-    expect(run).toMatchObject({ trigger: 'schedule', status: 'blocked', auto_continue: true, started_by: 'system:dayClose.scheduler' });
+    expect(run).toMatchObject({
+      trigger: 'schedule',
+      status: 'blocked',
+      auto_continue: true,
+      started_by: 'system:dayClose.scheduler',
+    });
     expect(await eventCount(org, 'dayClose.run.blocked')).toBe(1);
     // Re-checked every minute; the duty roles are told once, not every minute.
     await tick('2026-11-07T21:01:30.000Z');
@@ -113,7 +121,10 @@ describe('scheduler', () => {
     await schedule(org);
     h.clock.set('2026-11-07T21:00:30.000Z');
     const sys = { ...org.admin, actor: { kind: 'system' as const, process: 'dayClose.scheduler' } };
-    const { run } = await org.run((tx) => h.service.createRun(tx, { propertyId: org.propertyId, trigger: 'schedule' }), sys);
+    const { run } = await org.run(
+      (tx) => h.service.createRun(tx, { propertyId: org.propertyId, trigger: 'schedule' }),
+      sys,
+    );
     const { SimulatedCrash } = await import('../src');
     await expect(
       h.service.executeRun(h.t.db, sys, run.id, {
@@ -145,7 +156,7 @@ describe('scheduler', () => {
       await tick('2026-11-07T21:00:30.000Z');
       let [run] = await runsOf(org);
       expect(run).toMatchObject({ status: 'failed', retry_count: 1 });
-      expect((run?.next_retry_at as Date).toISOString()).toBe('2026-11-07T21:05:30.000Z');
+      expect(new Date(run?.next_retry_at as Date).toISOString()).toBe('2026-11-07T21:05:30.000Z');
       await tick('2026-11-07T21:05:30.000Z');
       await tick('2026-11-07T21:10:30.000Z');
       await tick('2026-11-07T21:15:30.000Z');
@@ -204,7 +215,14 @@ describe('day reports and facts', () => {
     const run = await h.service.startRun(h.t.db, auditor, { propertyId: org.propertyId });
     expect(run.runStatus).toBe('completed');
     const facts = await org.run((tx) => h.service.getFacts(tx, org.propertyId, D), auditor);
-    expect(facts.rooms).toEqual({ capacity: 12, outOfOrder: 0, available: 11, sold: 1, complimentary: 0, houseUse: 1 });
+    expect(facts.rooms).toEqual({
+      capacity: 12,
+      outOfOrder: 0,
+      available: 11,
+      sold: 1,
+      complimentary: 0,
+      houseUse: 1,
+    });
     expect(facts.occupancyPercent).toBe('9.09');
     expect(facts.adr.amountMinor).toBe(facts.roomRevenue.amountMinor);
     expect(facts.nationality.status).toBe('incomplete');

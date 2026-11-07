@@ -3,6 +3,17 @@
  * Each module contributes: a manifest (migrations + permissions), an HTTP module, event subscriptions and
  * port bindings. Keep one block per module to make parallel work merge cleanly.
  */
+
+import {
+  createDayCloseDemoSeed,
+  createDayCloseService,
+  type DayClosePorts,
+  type DayCloseService,
+  dayCloseHttp,
+  dayCloseJobs,
+  dayCloseManifest,
+  dayCloseSearch,
+} from '@portico/day-close';
 import {
   CORE_JOBS,
   type PorticoDatabase,
@@ -16,6 +27,7 @@ import {
   financeDemoSeed,
   financeHttp,
   financeManifest,
+  financeProvider,
   financeSearch,
   financeSubscriptions,
   unavailableFinancePorts,
@@ -51,6 +63,7 @@ import {
   integrationJobs,
   integrationManifest,
   integrationSearch,
+  integration as integrationService,
   integrationSubscriptions,
   localSecretStore,
   noAuthorityTransitions,
@@ -70,6 +83,8 @@ import {
   inventorySearch,
 } from '@portico/inventory';
 import {
+  addDays,
+  BusinessRuleError,
   DomainError,
   fieldCryptoFromEnv,
   type ModuleManifest,
@@ -114,6 +129,7 @@ import {
   ratesManifest,
   ratesSearch,
   ratesService,
+  type TermsSnapshot,
   termsSealKeyFromEnv,
 } from '@portico/rates';
 import {
@@ -129,6 +145,7 @@ import {
   reservationsHttp,
   reservationsJobs,
   reservationsManifest,
+  reservationsProvider,
   reservationsService,
 } from '@portico/reservations';
 import { createTrialForOrganization, provisioningHttp } from './provisioning';
@@ -147,6 +164,8 @@ export const MANIFESTS: readonly ModuleManifest[] = [
   integrationManifest,
   // wave-1 modules register here
   paymentsManifest,
+  // wave-2
+  dayCloseManifest,
 ];
 
 /**
@@ -212,6 +231,7 @@ export interface Composition {
     operations: OperationsService;
     rates: RatesService;
     payments: PaymentsService;
+    dayClose: DayCloseService;
   };
   /** Demo data contributed by each module, run in order inside each demo organization (apps/api/src/seed). */
   demoSeedSteps: DemoSeedStep[];
@@ -561,6 +581,254 @@ export function compose(database: PorticoDatabase, options: CompositionOptions =
     simulatorSigningSecret: process.env.PAYMENTS_SIMULATOR_SIGNING_SECRET ?? randomToken(),
   });
 
+  // ── day-close ── (DCL; docs/specs/day-close.md). Day Close authorizes the user's intent (dayClose.run.* at the
+  // property) and passes the property as a required scope on every port call (ADR-0015). Providers are called with
+  // system scope and still enforce integrity, invariants and data authority — EXCEPT the business-date advance,
+  // which runs with the acting user's own context so platform checks `platform.businessDate.advance` on that person.
+  // Providers missing on main are bound to `module_not_available` stubs (modules/day-close/README.md § Contract
+  // requests): payments' agreed no-show collection and due-collection scheduling, integration's journal export.
+  const dayCloseFinance = financeProvider(finance, 'dayClose');
+  const dayCloseLegalEntity = async (tx: Parameters<typeof platform.getProperty>[0], propertyId: string) =>
+    (await platform.getProperty(asSystem(tx), propertyId)).legalEntityId;
+  const reservationsForDayClose = reservationsProvider(reservations);
+  const dueStay = (st: Awaited<ReturnType<typeof reservations.getStay>>) => {
+    const details = st.arrivalDetails as {
+      transportMode?: string;
+      scheduledAt?: string;
+      estimatedAt?: string;
+    };
+    return {
+      stayId: st.id,
+      bookingId: st.bookingId,
+      propertyId: st.propertyId,
+      status: st.status.stay,
+      arrival: st.arrival,
+      departure: st.departure,
+      commercialType: st.commercialType,
+      unitId: st.unitId,
+      eta: st.eta,
+      transfer: {
+        mode: details.transportMode ?? null,
+        scheduledAt: details.scheduledAt ?? null,
+        estimatedAt: details.estimatedAt ?? null,
+      },
+    };
+  };
+  const dayClosePorts: DayClosePorts = {
+    platform: {
+      async getProperty(tx, propertyId) {
+        const p = await platform.getProperty(asSystem(tx), propertyId);
+        return {
+          id: p.id,
+          name: p.name,
+          profile: p.profile,
+          timezone: p.timezone,
+          legalEntityId: p.legalEntityId,
+          baseCurrency: p.baseCurrency,
+          businessDate: p.businessDate,
+        };
+      },
+      getBusinessDate: (tx, propertyId) => platform.getBusinessDate(tx, propertyId),
+      // The acting user's own context: platform checks platform.businessDate.advance (sensitive) on that person.
+      advanceBusinessDate: (tx, i) =>
+        platform.advanceBusinessDate(tx, i.propertyId, i.expected, { dayCloseRunId: i.dayCloseRunId }),
+      async resolvePolicy(tx, propertyId, key) {
+        const r = await platform.resolvePolicy(tx, propertyId, key, null as unknown);
+        return { value: r.value, source: r.source };
+      },
+      // Day Close authorized dayClose.policy.manage (sensitive) at the property first.
+      setPropertyPolicy: (tx, i) =>
+        platform.setPolicy(asSystem(tx), {
+          key: i.key,
+          scopeType: 'property',
+          scopeId: i.propertyId,
+          value: i.value,
+          reason: i.reason,
+        }),
+      async getDataAuthority(tx, propertyId, domain) {
+        const a = await platform.getDataAuthority(tx, propertyId, domain);
+        return { authority: a.authority, systemName: a.systemName };
+      },
+      hasEntitlement: (tx, feature, propertyId) => platform.hasEntitlement(tx, feature, { propertyId }),
+      async listProperties(tx) {
+        return (await platform.listProperties(asSystem(tx))).map((p) => ({
+          id: p.id,
+          name: p.name,
+          businessDate: p.businessDate,
+          timezone: p.timezone,
+        }));
+      },
+      async listDepartments(tx, propertyId) {
+        return (await platform.listDepartments(asSystem(tx), propertyId)).map((d) => ({
+          id: d.id,
+          kind: d.kind,
+          name: d.name,
+        }));
+      },
+    },
+    reservations: {
+      async listInHouseStaysForNight(tx, input) {
+        const stays = await reservationsForDayClose.listInHouseStaysForNight(asSystem(tx), input);
+        const out = [];
+        for (const st of stays) {
+          // Stay dates are not part of StayForPosting yet (contract request): read them from the stay.
+          const full = await reservationsForDayClose.getStay(asSystem(tx), st.stayId);
+          out.push({
+            stayId: st.stayId,
+            bookingId: st.bookingId,
+            propertyId: st.propertyId,
+            night: st.night,
+            arrival: full.arrival,
+            departure: full.departure,
+            commercialType: st.commercialType,
+            unitId: st.unitId,
+            unitTypeId: st.unitTypeId,
+            ratePlanId: st.ratePlanId,
+            occupancy: st.occupancy,
+            terms: st.terms,
+          });
+        }
+        return out;
+      },
+      listDueArrivals: async (tx, input) =>
+        (await reservationsForDayClose.listDueArrivals(asSystem(tx), input)).map(dueStay),
+      listDueDepartures: async (tx, input) =>
+        (await reservationsForDayClose.listDueDepartures(asSystem(tx), input)).map(dueStay),
+      async markNoShow(tx, input) {
+        // ADR-0015 §3: the stay must belong to the property Day Close authorized.
+        const st = await reservationsForDayClose.getStay(asSystem(tx), input.stayId);
+        if (st.propertyId !== input.propertyId) {
+          throw new BusinessRuleError(
+            'stay_other_property',
+            'This stay belongs to another property; nothing was changed.',
+          );
+        }
+        const r = await reservationsForDayClose.markNoShow(asSystem(tx), {
+          stayId: input.stayId,
+          idempotencyKey: input.idempotencyKey,
+        });
+        return {
+          stayId: r.stayId,
+          penalty: r.penalty,
+          penaltyPostingIds: r.penaltyPostingIds,
+          replayed: r.replayed,
+        };
+      },
+    },
+    rates: {
+      verifyTerms: (terms) => rates.verifyTerms(terms),
+      postingPlan: (terms, stayId) => rates.postingPlan(terms as TermsSnapshot, stayId),
+      allowances: (terms) =>
+        ((terms as Partial<TermsSnapshot>).allowances ?? []).map((a) => ({
+          inclusionId: a.inclusionId,
+          code: a.code,
+          name: a.name,
+          kind: a.terms.kind,
+          period: a.terms.period,
+          eligibleChargeCodes: [...a.terms.eligibleChargeCodes],
+          remainderPolicy: a.terms.remainderPolicy,
+        })),
+    },
+    finance: {
+      async postCharge(tx, scope, input) {
+        const r = await dayCloseFinance.postCharge(tx, scope, input);
+        return { entryId: r.entryId, postingIds: r.postingIds, folioId: r.folioId, replayed: r.replayed };
+      },
+      async defaultFolio(tx, scope, stayId) {
+        const fs = await dayCloseFinance.listFolios(tx, scope, { owner: { type: 'stay', id: stayId } });
+        const f = fs.find((x) => x.isDefault) ?? fs[0];
+        return f ? { folioId: f.id } : null;
+      },
+      async grantAllowance(tx, scope, input) {
+        const r = await dayCloseFinance.grantAllowance(tx, scope, input);
+        return { instanceId: r.instance.id, entryId: r.entryId, replayed: r.replayed };
+      },
+      async closeAllowances(tx, scope, input) {
+        return { closed: (await dayCloseFinance.closeAllowances(tx, scope, input)).closed.length };
+      },
+      getUnbalancedItems: (tx, scope, businessDate) =>
+        dayCloseFinance.getUnbalancedItems(tx, scope, businessDate),
+      // Ledger-wide reads of the property's legal entity (finance.ledger.read is organization-level): system scope
+      // after Day Close authorized the run at the property. Contract request: finance.runIntegrityChecks(scope).
+      integrityReport: async (tx, scope) =>
+        finance.integrityReport(asSystem(tx), await dayCloseLegalEntity(tx, scope.propertyId)),
+      trialBalance: async (tx, scope, input) =>
+        finance.trialBalance(asSystem(tx), {
+          legalEntityId: await dayCloseLegalEntity(tx, scope.propertyId),
+          asOf: input.asOf,
+        }),
+      dailyRevenue: (tx, scope, input) =>
+        finance.dailyRevenue(asSystem(tx), {
+          propertyId: scope.propertyId,
+          businessDate: input.businessDate,
+        }),
+    },
+    payments: unavailablePort<DayClosePorts['payments']>('payments', {
+      listUnresolved: (tx, input) => payments.service.provider.listUnresolved(asSystem(tx), input),
+    }),
+    inventory: {
+      async getAvailability(tx, input) {
+        const cells = await inventoryService.getAvailability(asSystem(tx), {
+          propertyId: input.propertyId,
+          range: { from: input.date, to: addDays(input.date, 1) },
+        });
+        return cells.map((c) => ({
+          unitTypeId: c.unitTypeId,
+          date: c.date,
+          capacity: c.capacity,
+          outOfOrder: c.outOfOrder,
+          sold: c.sold,
+          houseUse: c.houseUse,
+          composite: c.composite !== null,
+        }));
+      },
+      async checkLedgerConsistency(tx, input) {
+        const all = await inventoryService.checkLedgerConsistency(asSystem(tx), {
+          fromNight: input.fromNight,
+          report: false,
+        });
+        return all
+          .filter((d) => d.propertyId === input.propertyId)
+          .map((d) => ({ unitTypeId: d.unitTypeId, night: d.night, sold: d.sold, consumed: d.consumed }));
+      },
+      async listUnits(tx, input) {
+        return (await inventoryService.listUnits(asSystem(tx), input.propertyId)).map((u) => ({
+          id: u.id,
+          number: u.number,
+        }));
+      },
+    },
+    operations: {
+      async listUnitConditions(tx, input) {
+        return (await operationsService.listUnitConditions(asSystem(tx), input)).map((c) => ({
+          unitId: c.unitId,
+          unitNumber: c.unitNumber,
+          condition: c.condition,
+          discrepancy: c.discrepancy,
+        }));
+      },
+    },
+    integration: unavailablePort<DayClosePorts['integration']>('integration', {
+      async listOpenExceptions(tx, input) {
+        return (
+          await integrationService.listExceptions(asSystem(tx), {
+            propertyId: input.propertyId,
+            status: 'unresolved',
+          })
+        ).map((e) => ({
+          id: e.id,
+          severity: e.severity,
+          problem: e.problem,
+          nextStep: e.nextStep,
+          responsibleParty: e.responsibleParty,
+          workflow: e.workflow,
+        }));
+      },
+    }),
+  };
+  const dayClose = createDayCloseService(dayClosePorts);
+  const dayCloseModule = dayCloseHttp({ database, service: dayClose });
+
   // ── cross-module experience: global search, summaries, record history ──
   const searchProviders: SearchProvider[] = [
     platformSearch,
@@ -572,6 +840,7 @@ export function compose(database: PorticoDatabase, options: CompositionOptions =
     ratesSearch,
     integrationSearch,
     paymentsSearch,
+    dayCloseSearch,
   ];
   const recordsModule = recordsHttp({ database, manifests: MANIFESTS, searchProviders });
 
@@ -589,6 +858,7 @@ export function compose(database: PorticoDatabase, options: CompositionOptions =
       ratesModule,
       integrationModule,
       payments.http,
+      dayCloseModule,
       recordsModule,
     ],
     subscriptions: [
@@ -620,6 +890,18 @@ export function compose(database: PorticoDatabase, options: CompositionOptions =
           ),
       }),
       ...integrationJobs(integrationDeps),
+      ...dayCloseJobs(dayClose, {
+        onError: (job, propertyId, err) =>
+          console.error(
+            JSON.stringify({
+              level: 'error',
+              msg: 'job failed for property',
+              job,
+              propertyId,
+              err: err instanceof DomainError ? err.code : err instanceof Error ? err.name : 'unknown',
+            }),
+          ),
+      }),
     ],
     services: {
       guests: guestsService,
@@ -627,6 +909,7 @@ export function compose(database: PorticoDatabase, options: CompositionOptions =
       operations: operationsService,
       rates,
       payments: payments.service,
+      dayClose,
     },
     demoSeedSteps: [
       { name: 'inventory', run: inventoryDemoSeed },
@@ -636,6 +919,7 @@ export function compose(database: PorticoDatabase, options: CompositionOptions =
       { name: 'rates', run: createRatesDemoSeed(rates, ratesPorts) },
       { name: 'payments', run: seedPaymentsDemo },
       { name: 'finance', run: (tx, org) => financeDemoSeed(tx, org) },
+      createDayCloseDemoSeed(dayClose),
     ],
     identityPorts,
     platformPorts,

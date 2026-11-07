@@ -86,6 +86,9 @@ importers:
 
   apps/api:
     dependencies:
+      '@portico/day-close':
+        specifier: workspace:*
+        version: link:../../modules/day-close
       '@portico/db':
         specifier: workspace:*
         version: link:../../packages/db

@@ -157,7 +157,9 @@ describe('blocking, overrides and policy', () => {
       .where('type', '=', 'dayClose.run.blocked')
       .execute();
     expect(blocked).toHaveLength(1);
-    expect((blocked[0]?.payload as { notification: { mode: string } }).notification.mode).toBe('live');
+    expect((blocked[0] as { payload: { notification: { mode: string } } }).payload.notification.mode).toBe(
+      'live',
+    );
     const key = run.blockers[0]?.key as string;
     // Without the permission: refused. Without a reason: refused. Nothing recorded.
     const noRight = org.as(['dayClose.run.read', 'dayClose.run.resume'], [org.propertyId]);
