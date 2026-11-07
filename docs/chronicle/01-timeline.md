@@ -248,4 +248,9 @@ Each agent's brief and report are in `agents/`.
   - It includes the staff-app sign-in code step and the demo second factor (ADR-0017 Amendment 2).
 - **18:37 — Guests erasure fix done** (replay plans store ids only; a redaction net; replays wait for an erasure). A
   focused re-review launches before merge.
+- **18:43 — Heartbeat (5-hour 72%).**
+  - UX round 2 is deliberately deferred: round 1 is in its module-owner stage, and the refiner's plan re-runs the 34
+    tasks only once the UI uses real data. Re-testing simulated screens would waste a round.
+  - Quality steward meta-loop round 2 starts on the fix sweep, the integration re-review, the identity merge, the
+    parity-ops merge and the orchestrator's escapes.
 

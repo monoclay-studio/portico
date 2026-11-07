@@ -1,6 +1,6 @@
 # Agent run: Quality steward (meta loop) round 0
 
-- Started: 2026-11-07T16:54:09.351Z · last activity: 2026-11-07T17:57:27.831Z
+- Started: 2026-11-07T16:54:09.351Z · last activity: 2026-11-07T18:43:52.918Z
 - Turns: 364 · tool uses: 210 · output tokens: 833,568
 - Type: general-purpose
 
@@ -114,6 +114,34 @@ Resume after the owner's checkpoint. Your tree on docs/quality was clean. Run me
 - the new playbooks/orchestrator.md.
 
 Then reply with the improvements, the escape counts and the exact edits.
+
+Address this before completing your current task.
+````
+
+## Follow-up message (2026-11-07T18:43:52.918Z)
+
+````text
+The coordinator sent a message while you were working:
+The heartbeat is starting meta-loop round 2. Merge main first: identity-plus, parity-ops and your round-1 edits are all on main.
+
+Checking rounds completed since round 1:
+1. **Fix re-attack sweep** (reviews/review-fix-sweep.md): the first run measured on steward playbook v2.1.
+   - 48 of 56 attacks refused.
+   - 4 residual P1s: payments ×3, guests ×1. Three of them guarded only the reviewer's exact path.
+2. **Integration-step focused re-review** (reviews/review-integration-step-2.md): 9 of 9 original PoCs refused, but 3 new P1s, each "one step beyond" its fix. The builder had filled the re-attack table, but its own siblings and step-beyond attacks missed these, which is evidence about self-check v3.
+3. **Identity merge.** My spot-check confirmed the W-1..W-3 regression tests assert refusal and all gates passed. Playwright on non-default ports went 11/12: a flaky 409-toast test that passed twice on rerun.
+4. **Parity-ops merge.** The first run on the parity playbook v2: 179 tested rows quoted, 17 downgraded.
+5. **The guests erasure fix.** The builder's report included self-check tables. A focused re-review is running now; fold it in when it lands, or next round.
+6. **My orchestrator escapes:**
+   - three more estimated chronicle times (18:13 → 18:15, 18:30 → 18:29, plus the earlier ones), each corrected from agent records;
+   - one force-push attempt on a branch whose WIP checkpoint commit the agent had rewritten. The safety policy declined it; I resolved it with an `-s ours` merge and added a rule to the builder playbook.
+
+Questions this round should answer:
+- (a) Did v2.1's "attack the fix" and the builder's self-check §3 work, or do the "one step beyond" P1s show a missing technique? If so, propose it.
+- (b) What concrete mechanism would stop my estimated timestamps for good? I'm considering a helper that prints an agent's report time from the chronicle extract.
+- (c) Is UX round 2 correctly deferred until the UI uses real data?
+
+Write retros/2026-11-07-round2.md, update escapes, the scorecard and patterns, and give me the exact edits to apply. Same rules: write only under docs/quality, commit, don't push, and run CPU-only canaries at most.
 
 Address this before completing your current task.
 ````
