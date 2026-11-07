@@ -379,10 +379,10 @@ export class FakeInventory implements InventoryPort {
       unitTypeId: input.unitTypeId,
       date: input.date,
       available: cells[0]?.available ?? 0,
-      consumers: rows.map((r) => ({
+      sold: rows.map((r) => ({
         ref: { type: r.ref_type, id: r.ref_id },
         quantity: r.quantity,
-        consumedAt: r.consumed_at.toISOString(),
+        kind: 'stay',
       })),
     };
   }

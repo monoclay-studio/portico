@@ -1923,33 +1923,26 @@ async function explainShortfall(
   }
   for (const { unitTypeId, date } of [...short.values()].slice(0, 5)) {
     const explanation = await deps.ports.inventory.explainAvailability(tx, { propertyId, unitTypeId, date });
-    const lastSale = [...explanation.consumers].sort((a, b) => (a.consumedAt < b.consumedAt ? 1 : -1))[0];
-    if (!lastSale) continue;
-    if (lastSale.ref.type !== 'stay') {
-      out.push(`${date}: the last unit was taken by ${lastSale.ref.type} ${lastSale.ref.id}.`);
+    // Who sold it last: inventory says WHICH refs hold the night; reservations' own version history says WHEN
+    // and BY WHOM (no dependency on an inventory timestamp — review R-13).
+    const stayIds = explanation.sold.filter((x) => x.ref.type === 'stay').map((x) => x.ref.id);
+    const others = explanation.sold.filter((x) => x.ref.type !== 'stay');
+    if (stayIds.length === 0) {
+      if (others[0]) out.push(`${date}: the last unit is held by ${others[0].ref.type} ${others[0].ref.id}.`);
       continue;
     }
-    const stay = await db(tx)
-      .selectFrom('reservations.stays')
-      .select(['booking_id'])
-      .where('id', '=', lastSale.ref.id)
+    const latest = await db(tx)
+      .selectFrom('reservations.stays as s')
+      .innerJoin('reservations.bookings as b', 'b.id', 's.booking_id')
+      .innerJoin('reservations.booking_versions as v', 'v.booking_id', 'b.id')
+      .select(['b.code', 'v.actor_name', 'v.changed_at'])
+      .where('s.id', 'in', stayIds)
+      .orderBy('v.changed_at', 'desc')
       .executeTakeFirst();
-    if (!stay) continue;
-    const b = await db(tx)
-      .selectFrom('reservations.bookings')
-      .select(['code'])
-      .where('id', '=', stay.booking_id)
-      .executeTakeFirstOrThrow();
-    const version = await db(tx)
-      .selectFrom('reservations.booking_versions')
-      .select(['actor_name', 'changed_at'])
-      .where('booking_id', '=', stay.booking_id)
-      .where('changed_at', '<=', new Date(lastSale.consumedAt))
-      .orderBy('changed_at', 'desc')
-      .executeTakeFirst();
-    const seconds = Math.max(0, Math.round((tx.now.getTime() - Date.parse(lastSale.consumedAt)) / 1000));
+    if (!latest) continue;
+    const seconds = Math.max(0, Math.round((tx.now.getTime() - latest.changed_at.getTime()) / 1000));
     out.push(
-      `${date}: sold ${seconds} second${seconds === 1 ? '' : 's'} ago by ${version?.actor_name ?? 'another user'}, booking ${b.code}.`,
+      `${date}: sold ${seconds} second${seconds === 1 ? '' : 's'} ago by ${latest.actor_name}, booking ${latest.code}.`,
     );
   }
   return out;

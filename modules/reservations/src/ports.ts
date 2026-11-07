@@ -115,11 +115,12 @@ export interface AvailabilityCell {
   available: number;
 }
 
+/** Subset of inventory's explainAvailability result that reservations reads (real shape: `sold[]`). */
 export interface AvailabilityExplanation {
   unitTypeId: string;
   date: LocalDate;
   available: number;
-  consumers: Array<{ ref: EntityRef; quantity: number; consumedAt: string }>;
+  sold: Array<{ ref: EntityRef; quantity: number; kind?: string }>;
 }
 
 export interface UnitCandidate {
@@ -615,12 +616,18 @@ export function inventoryShortfall(err: unknown): Array<{ date: LocalDate; avail
   return Array.isArray(short) ? (short as Array<{ date: LocalDate; available: number }>) : [];
 }
 
-/** Conflicting refs from an inventory assignment-overlap error (code `unit_assignment_conflict`), else null. */
+/**
+ * Conflicting refs from an inventory assignment-overlap error (code `unit_assignment_conflict`), else null. Real
+ * inventory: instance `.conflicts: EntityRef[]`, `details.conflicts: [{ ref, unitId, unitNumber, nights }]`.
+ */
 export function assignmentConflicts(err: unknown): EntityRef[] | null {
   if (!(err instanceof DomainError)) return null;
   if (err.code !== 'unit_assignment_conflict' && err.name !== 'UnitAssignmentConflictError') return null;
+  const own = (err as DomainError & { conflicts?: unknown }).conflicts;
+  if (Array.isArray(own)) return own as EntityRef[];
   const c = err.details?.conflicts;
-  return Array.isArray(c) ? (c as EntityRef[]) : [];
+  if (!Array.isArray(c)) return [];
+  return c.map((x) => (x as { ref?: EntityRef }).ref ?? (x as EntityRef));
 }
 
 /** A port stub for a provider module that is not wired yet (bound by the orchestrator at merge). */
