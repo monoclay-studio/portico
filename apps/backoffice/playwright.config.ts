@@ -7,8 +7,10 @@ import { defineConfig, devices } from '@playwright/test';
  */
 const DB = process.env.PORTICO_E2E_DB ?? 'portico_w1_ui';
 /** Ports are configurable so parallel worktrees never test each other's servers (P3-7). */
-const API_PORT = process.env.PORTICO_E2E_API_PORT ?? '4100';
-const WEB_PORT = process.env.PORTICO_E2E_WEB_PORT ?? '5180';
+export const API_PORT = process.env.PORTICO_E2E_API_PORT ?? '4100';
+export const WEB_PORT = process.env.PORTICO_E2E_WEB_PORT ?? '5180';
+/** The staff app under test (fixtures call the API through it, like the browser does). */
+export const WEB_URL = `http://127.0.0.1:${WEB_PORT}`;
 /** Reuse an already running server only when asked (PORTICO_E2E_REUSE=1). */
 const reuse = process.env.PORTICO_E2E_REUSE === '1';
 export const E2E_ENV = {
@@ -26,7 +28,7 @@ export default defineConfig({
   reporter: [['list']],
   globalSetup: './e2e/global-setup.ts',
   use: {
-    baseURL: `http://127.0.0.1:${WEB_PORT}`,
+    baseURL: WEB_URL,
     trace: 'retain-on-failure',
     viewport: { width: 1440, height: 900 },
     locale: 'en-GB',
@@ -45,7 +47,7 @@ export default defineConfig({
     },
     {
       command: `pnpm exec vite --port ${WEB_PORT} --strictPort`,
-      url: `http://127.0.0.1:${WEB_PORT}`,
+      url: WEB_URL,
       reuseExistingServer: reuse,
       timeout: 90_000,
       env: { PORTICO_API_URL: `http://127.0.0.1:${API_PORT}` },

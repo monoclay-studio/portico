@@ -1,5 +1,16 @@
 import AxeBuilder from '@axe-core/playwright';
-import { apiGet, DEMO_ORG, DIRECTOR, expect, FRONT_DESK, PASSWORD, startSignedIn, test } from './fixtures';
+import { codeCandidates, totpForStep } from './demo-authenticator';
+import {
+  apiGet,
+  DEMO_ORG,
+  DIRECTOR,
+  enterSignInCode,
+  expect,
+  FRONT_DESK,
+  PASSWORD,
+  startSignedIn,
+  test,
+} from './fixtures';
 
 interface Property {
   id: string;
@@ -19,6 +30,8 @@ test.describe('back office smoke (real API on :4100)', () => {
     await expect(page.getByRole('heading', { name: 'Choose an organization' })).toBeVisible();
     await page.getByText(DEMO_ORG).click();
     await page.getByRole('button', { name: 'Continue' }).click();
+    // Demo users have two-step verification (ADR-0017 rule 16): the code from the authenticator app comes next.
+    await enterSignInCode(page, DIRECTOR);
     await expect(page).toHaveURL(/\/today/);
     await expect(page.getByRole('region', { name: 'Environment: Demo' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Today' })).toBeVisible();
@@ -35,6 +48,7 @@ test.describe('back office smoke (real API on :4100)', () => {
     await page.getByRole('button', { name: 'Sign in' }).click();
     await page.getByText(DEMO_ORG).click();
     await page.getByRole('button', { name: 'Continue' }).click();
+    await enterSignInCode(page, DIRECTOR);
     await expect(page).not.toHaveURL(/sign-in/);
     await page.goto('/settings/users');
     await expect(page.getByRole('grid', { name: 'Users & roles' })).toContainText('Front Desk Agent');
@@ -51,11 +65,41 @@ test.describe('back office smoke (real API on :4100)', () => {
     await page.getByLabel('Work email').fill(FRONT_DESK);
     await page.getByLabel('Password').fill(PASSWORD);
     await page.getByRole('button', { name: 'Sign in' }).click();
+    await enterSignInCode(page, FRONT_DESK);
     await expect(page.getByRole('button', { name: /Account: Front Desk Agent/ })).toBeVisible();
     await page.goto('/settings/users');
     // No cached staff list: the server refuses this user and the screen says so.
     await expect(page.getByRole('alert')).toContainText(/do not have permission|don.t have access/i);
     await expect(page.getByText('finance.manager@demo-azure-atoll.demo.portico.invalid')).toHaveCount(0);
+  });
+
+  test('sign-in code step: keyboard-first, a wrong code is explained at the field, the right one signs in', async ({
+    page,
+  }) => {
+    await page.goto('/sign-in');
+    await page.getByLabel('Work email').fill(FRONT_DESK);
+    await page.getByLabel('Password').fill(PASSWORD);
+    await page.keyboard.press('Enter');
+    await expect(page.getByRole('heading', { name: 'Enter your sign-in code' })).toBeVisible();
+    const field = page.getByLabel('6-digit code');
+    await expect(field).toBeFocused();
+    await expect(page.getByRole('button', { name: 'Use a recovery code instead' })).toBeVisible();
+    await expect(page.getByText(/demo authenticator secret/)).toBeVisible();
+    // A code that no step around now produces: refused at the field, with the tries left, on the same step.
+    const valid = new Set(codeCandidates(FRONT_DESK).map((c) => c.code));
+    let wrong = totpForStep(0);
+    while (valid.has(wrong)) wrong = String((Number(wrong) + 1) % 1_000_000).padStart(6, '0');
+    await field.fill(wrong);
+    await field.press('Enter');
+    await expect(page.getByText(/That code is not right\. .*4 more tries/)).toBeVisible();
+    await expect(field).toHaveAttribute('aria-invalid', 'true');
+    await expect(page).toHaveURL(/\/sign-in/);
+    const axe = await new AxeBuilder({ page })
+      .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'])
+      .analyze();
+    expect(axe.violations.map((v) => `${v.impact} ${v.id}`)).toEqual([]);
+    await enterSignInCode(page, FRONT_DESK);
+    await expect(page.getByRole('button', { name: /Account: Front Desk Agent/ })).toBeVisible();
   });
 
   test('wrong password explains the problem and keeps the reference id', async ({ page }) => {
