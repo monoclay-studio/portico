@@ -5,6 +5,7 @@
  * inventory conflict for nights that became oversold, and availability/explanations change immediately.
  * Relocating the guests (move, upgrade) resolves the conflict; releasing the block restores capacity.
  */
+import type { EntityRef } from '@portico/kernel';
 import type { TestDatabase } from '@portico/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
@@ -123,7 +124,7 @@ describe('S08 — a maintenance outage makes several assigned villas unavailable
     // Blocked villas cannot be assigned; the block names its reason and end.
     await expect(
       p.run((tx) =>
-        inventory.assignUnit(tx, { unitId: villas[0] as string, ref: guests[3] as never, nights: STAYS }),
+        inventory.assignUnit(tx, { unitId: villas[0] as string, ref: guests[3] as EntityRef, nights: STAYS }),
       ),
     ).rejects.toThrow(/out of order \(Jetty A boards unsafe\) from 2026-11-11 until 2026-11-13/);
 
@@ -144,12 +145,16 @@ describe('S08 — a maintenance outage makes several assigned villas unavailable
     await p.run(async (tx) => {
       const up = await inventory.assignUnit(tx, {
         unitId: owvUnits[0]?.id as string,
-        ref: guests[0] as never,
+        ref: guests[0] as EntityRef,
         nights: STAYS,
         upgrade: { reason: 'Relocated: jetty maintenance', chargeable: false },
       });
       expect(up).toMatchObject({ change: 'moved', upgradedFromUnitTypeIds: [wv.id] });
-      await inventory.assignUnit(tx, { unitId: villas[4] as string, ref: guests[1] as never, nights: STAYS });
+      await inventory.assignUnit(tx, {
+        unitId: villas[4] as string,
+        ref: guests[1] as EntityRef,
+        nights: STAYS,
+      });
     });
     const after = await cell(p, wv.id, '2026-11-11');
     expect(after).toMatchObject({ sold: 3, available: 0, oversoldBy: 0, conflictId: null });

@@ -103,8 +103,11 @@ export async function consume(deps: Deps, tx: TxContext, input: ConsumeInput): P
   });
 }
 
-export async function consumeNights(deps: Deps, tx: TxContext, a: ConsumeNightsArgs): Promise<ConsumeResult> {
-  void deps;
+export async function consumeNights(
+  _deps: Deps,
+  tx: TxContext,
+  a: ConsumeNightsArgs,
+): Promise<ConsumeResult> {
   const session = await LedgerSession.open(
     tx,
     a.propertyId,
