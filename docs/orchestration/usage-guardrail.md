@@ -41,6 +41,13 @@ days, so pace against it as well:
   at most 3 agents at once; the UX heartbeat and research pause until the window resets.
 - **≥ 92% seven-day:** PAUSE + CHECKPOINT as for the 5-hour window and schedule the resume at the seven-day reset.
 
+**Hard-stop note (2026-11-07 22:38 UTC).** Pacing still follows the 5-hour window only, per the owner. The seven-day
+allowance is a hard stop with no overage, though: at 100% all work stops until it resets. So two safety rules stay:
+- **≥ 85% seven-day:** only critical-path finishing work starts (fix rounds and merges of branches already in flight).
+  No new modules or new reviews.
+- **≥ 95% seven-day:** CHECKPOINT (`tools/checkpoint.sh`, STATUS resume log), then schedule the resume at the
+  seven-day reset. This is for data safety, not pacing.
+
 ## Resume messages (orchestrator v3)
 When resuming an agent after a checkpoint, say: "your WIP was committed and pushed as `<sha>`; build on top of it;
 never amend, reset or rebase it". Never force-push; reconcile diverged branches with a normal merge or `git merge -s ours`.
