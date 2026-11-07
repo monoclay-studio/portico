@@ -7,7 +7,13 @@
  */
 import { type PorticoDatabase, runIdempotent, type TxContext, withTenantTx } from '@portico/db';
 import { type HttpModule, idParams, requireIdempotencyKey, requireIfMatch, setVersion } from '@portico/http';
-import { ConflictError, NotFoundError, requirePermission } from '@portico/kernel';
+import {
+  ConflictError,
+  ForbiddenError,
+  NotFoundError,
+  type RequestContext,
+  requirePermission,
+} from '@portico/kernel';
 import { z } from 'zod';
 import {
   assignExceptionInput,
@@ -58,6 +64,12 @@ import { SOURCE_ADAPTERS } from './sources/adapters';
 import { TEMPLATE_GUIDE, templateFiles, templateWorkbook } from './sources/templates';
 
 const tags = ['Migration'];
+
+/** Deny by default: catalogue and templates are for people who may read migrations somewhere. */
+function requireAnyRead(ctx: RequestContext): void {
+  const scope = ctx.authz.propertyScope(P.read);
+  if (scope !== 'all' && scope.length === 0) throw new ForbiddenError(P.read);
+}
 const UPLOAD_LIMIT = 32 * 1024 * 1024;
 const items = <T extends z.ZodType>(t: T) => z.object({ items: z.array(t) });
 
@@ -72,18 +84,21 @@ export function migrationHttp(deps: { database: PorticoDatabase; migration: Migr
       app.get(
         '/migration/sources',
         { schema: { tags, response: { 200: items(sourceAdapterView) } } },
-        async () => ({
-          items: SOURCE_ADAPTERS.map((a) => ({
-            key: a.key,
-            label: a.label,
-            vendor: a.vendor,
-            kind: a.kind,
-            verification: a.verification,
-            verificationNote: a.verificationNote,
-            provides: a.provides,
-            assessment: { ...a.assessment },
-          })),
-        }),
+        async (req) => {
+          requireAnyRead(req.ctx);
+          return {
+            items: SOURCE_ADAPTERS.map((a) => ({
+              key: a.key,
+              label: a.label,
+              vendor: a.vendor,
+              kind: a.kind,
+              verification: a.verification,
+              verificationNote: a.verificationNote,
+              provides: a.provides,
+              assessment: { ...a.assessment },
+            })),
+          };
+        },
       );
       app.get(
         '/migration/templates',
@@ -99,11 +114,14 @@ export function migrationHttp(deps: { database: PorticoDatabase; migration: Migr
             },
           },
         },
-        async () => ({
-          guide: TEMPLATE_GUIDE,
-          files: templateFiles().map((f) => ({ name: f.name, content: f.content })),
-          workbook: { name: 'portico-migration-templates.xlsx', base64: templateWorkbook() },
-        }),
+        async (req) => {
+          requireAnyRead(req.ctx);
+          return {
+            guide: TEMPLATE_GUIDE,
+            files: templateFiles().map((f) => ({ name: f.name, content: f.content })),
+            workbook: { name: 'portico-migration-templates.xlsx', base64: templateWorkbook() },
+          };
+        },
       );
 
       // ── jobs ──
