@@ -150,10 +150,10 @@ Pending cross-module fixes awaiting the next round for each author: `docs/orches
    (`modules/identity/src/domain/role-templates.ts`) with the module's permissions; update
    `docs/readiness/readiness-register.md`.
 5. Run full checks on main (`pnpm lint && pnpm turbo run typecheck --force && pnpm test`), push.
-7. Quality meta loop: after every steward review / fix round / scenario run / UX round, resume the quality steward
-   (retro, scorecard, escapes, playbook versions); launch future checkers from `docs/quality/playbooks/` (latest).
 6. Chronicle: append the merge to `docs/chronicle/01-timeline.md`; refresh with `tools/chronicle/extract.py` +
    `snapshot.py` (pass the test log); commit `docs(chronicle): …`.
+7. Quality meta loop: after every steward review / fix round / scenario run / UX round, resume the quality steward
+   (retro, scorecard, escapes, playbook versions); launch future checkers from `docs/quality/playbooks/` (latest).
 **Merge order:** guests, inventory, rates (independent) → operations, integration, finance → payments (needs
 finance ledger port) → reservations (needs all) → identity-platform-enterprise → backoffice → infra → docs branches
 any time (OPEN_QUESTIONS.md always conflicts at the end: keep both sides, sort by number).
