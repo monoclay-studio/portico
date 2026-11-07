@@ -1,5 +1,14 @@
-import { explainVersionMiss, type Selectable, sql, type TxContext } from '@portico/db';
 import {
+  explainVersionMiss,
+  pgCode,
+  pgConstraint,
+  type Selectable,
+  sql,
+  type TxContext,
+  withSavepoint,
+} from '@portico/db';
+import {
+  addDays,
   BusinessRuleError,
   ConflictError,
   type LocalDate,
@@ -29,8 +38,6 @@ import {
   type Deps,
   guardAvailabilityWrite,
   idb,
-  pgCode,
-  pgConstraint,
   requireAnyPermission,
 } from './context';
 import { LedgerSession } from './ledger';
@@ -629,6 +636,8 @@ export async function createCompositeUnit(
       { invalidUnitIds: bad },
     );
   }
+  // Lock the composite type first so two concurrent creations cannot store different component mixes.
+  await lockTypesForCapacityChange(tx, [type.id]);
   const mix = new Map<string, number>();
   for (const c of components) mix.set(c.unitTypeId, (mix.get(c.unitTypeId) ?? 0) + 1);
   const existing = (await loadCompositeStructures(tx, [type.id])).get(type.id);
@@ -643,7 +652,6 @@ export async function createCompositeUnit(
     }
   }
   await assertFeatures(tx, propertyId, input.features);
-  await lockTypesForCapacityChange(tx, [type.id]);
   const values = unitValues(tx, propertyId, input, bd, true);
   try {
     await idb(tx).insertInto('inventory.units').values(values).execute();
@@ -709,6 +717,127 @@ export async function listUnits(
   return toUnits(tx, rows);
 }
 
+interface LeaveCheck {
+  cutoff: LocalDate;
+  affectedAssignments: Array<{
+    ref: { type: string; id: string };
+    nights: { from: LocalDate; to: LocalDate };
+  }>;
+  refusal: BusinessRuleError | null;
+}
+
+/** Stays assigned to a unit from the night it would leave inventory, and whether that blocks the change. */
+async function leaveCheck(
+  tx: TxContext,
+  before: Row<UnitsTable>,
+  patch: UnitUpdate,
+  bd: LocalDate,
+): Promise<LeaveCheck> {
+  const cutoff =
+    patch.status !== undefined && patch.status !== 'active'
+      ? bd
+      : patch.inInventoryTo && patch.inInventoryTo > bd
+        ? patch.inInventoryTo
+        : bd;
+  const future = (
+    await loadAssignments(tx, { unitIds: [before.id], span: { from: cutoff, to: '9999-12-31' } })
+  ).filter((a) => a.nights.to > cutoff);
+  const affectedAssignments = future.map((a) => ({ ref: a.ref, nights: a.nights }));
+  if (future.length > 0) {
+    return {
+      cutoff,
+      affectedAssignments,
+      refusal: new BusinessRuleError(
+        'unit_has_future_assignments',
+        `Unit ${before.number} is assigned to ${future.length} stay(s) on or after ${cutoff}. Move them to other units first.`,
+        { assignments: affectedAssignments },
+      ),
+    };
+  }
+  const { rows: memberOf } = await sql<{ number: string }>`
+    select u.number from inventory.composite_components cc join inventory.units u on u.id = cc.composite_unit_id
+    where cc.component_unit_id = ${before.id} and u.status = 'active'`.execute(tx.db);
+  if (memberOf.length > 0) {
+    return {
+      cutoff,
+      affectedAssignments,
+      refusal: new BusinessRuleError(
+        'unit_is_component',
+        `Unit ${before.number} is part of ${memberOf.map((m) => m.number).join(', ')}. Take the combined unit out of inventory first.`,
+      ),
+    };
+  }
+  return { cutoff, affectedAssignments, refusal: null };
+}
+
+export interface UnitChangePreview {
+  /** Whether `updateUnit` with this patch would be accepted now. */
+  allowed: boolean;
+  /** Why not, in plain language (stays still assigned, part of a combined unit). */
+  reason: string | null;
+  /** Stays assigned to the unit from the night it leaves inventory: they must be moved first. */
+  affectedAssignments: LeaveCheck['affectedAssignments'];
+  /** Nights (within a year from the business date) that would be oversold beyond authorization after the change. */
+  oversoldNights: Array<{ unitTypeId: string; night: LocalDate; shortfall: number }>;
+}
+
+class PreviewRollback extends Error {
+  constructor(readonly oversold: UnitChangePreview['oversoldNights']) {
+    super('preview');
+  }
+}
+
+/**
+ * Preview taking a unit out of (or back into) inventory before committing (PAR-INV-011): the stays that would need a
+ * new unit and the nights that would become oversold. The capacity effect is computed by the real code path inside a
+ * savepoint that is always rolled back.
+ */
+export async function previewUnitChange(
+  deps: Deps,
+  tx: TxContext,
+  id: string,
+  patch: Pick<UnitUpdate, 'status' | 'inInventoryTo'>,
+): Promise<UnitChangePreview> {
+  const before = await loadUnitRow(tx, id);
+  requirePermission(tx, INVENTORY_PERMISSIONS.unitManage, { propertyId: before.property_id });
+  const bd = await deps.ports.platform.getBusinessDate(tx, before.property_id);
+  const check = await leaveCheck(tx, before, patch, bd);
+  let oversold: UnitChangePreview['oversoldNights'] = [];
+  try {
+    await withSavepoint(tx, 'inv_unit_change_preview', async () => {
+      await lockTypesForCapacityChange(tx, [before.unit_type_id]);
+      await idb(tx)
+        .updateTable('inventory.units')
+        .set({
+          ...(patch.status !== undefined ? { status: patch.status } : {}),
+          ...(patch.inInventoryTo !== undefined ? { in_inventory_to: patch.inInventoryTo } : {}),
+        })
+        .where('id', '=', id)
+        .execute();
+      await recomputeCapacity(tx, before.property_id, [before.unit_type_id], bd);
+      const { rows } = await sql<{ unit_type_id: string; night: string; available: number }>`
+        select l.unit_type_id, l.night::text as night,
+               (l.capacity - l.out_of_order - l.sold - l.held + l.overbooking_allowance)::int as available
+        from inventory.ledger l
+        where l.unit_type_id = ${before.unit_type_id} and l.night >= ${bd}::date and l.night < ${addDays(bd, 366)}::date
+          and l.capacity - l.out_of_order - l.sold - l.held + l.overbooking_allowance < 0
+        order by l.night`.execute(tx.db);
+      throw new PreviewRollback(
+        rows.map((r) => ({ unitTypeId: r.unit_type_id, night: r.night, shortfall: -r.available })),
+      );
+    });
+  } catch (err) {
+    if (!(err instanceof PreviewRollback)) throw err;
+    oversold = err.oversold;
+  }
+  return {
+    allowed: check.refusal === null,
+    reason: check.refusal?.message ?? null,
+    affectedAssignments: check.affectedAssignments,
+    oversoldNights: oversold,
+  };
+}
+
 /**
  * Edit a unit. Taking a unit out of inventory (inactive/retired or an end date) is refused while stays are
  * assigned to it on later nights — they are listed so they can be moved first (nothing is moved silently).
@@ -751,31 +880,8 @@ export async function updateUnit(
     (patch.status !== undefined && patch.status !== before.status) ||
     patch.inInventoryTo !== undefined;
   if (leaving) {
-    const cutoff =
-      patch.status !== undefined && patch.status !== 'active'
-        ? bd
-        : (patch.inInventoryTo as string) > bd
-          ? (patch.inInventoryTo as string)
-          : bd;
-    const future = (
-      await loadAssignments(tx, { unitIds: [id], span: { from: cutoff, to: '9999-12-31' } })
-    ).filter((a) => a.nights.to > cutoff);
-    if (future.length > 0) {
-      throw new BusinessRuleError(
-        'unit_has_future_assignments',
-        `Unit ${before.number} is assigned to ${future.length} stay(s) on or after ${cutoff}. Move them to other units first.`,
-        { assignments: future.map((a) => ({ ref: a.ref, nights: a.nights })) },
-      );
-    }
-    const { rows: memberOf } = await sql<{ number: string }>`
-      select u.number from inventory.composite_components cc join inventory.units u on u.id = cc.composite_unit_id
-      where cc.component_unit_id = ${id} and u.status = 'active'`.execute(tx.db);
-    if (memberOf.length > 0) {
-      throw new BusinessRuleError(
-        'unit_is_component',
-        `Unit ${before.number} is part of ${memberOf.map((m) => m.number).join(', ')}. Take the combined unit out of inventory first.`,
-      );
-    }
+    const check = await leaveCheck(tx, before, patch, bd);
+    if (check.refusal) throw check.refusal;
   }
   if (capacityAffecting) await lockTypesForCapacityChange(tx, [before.unit_type_id]);
   const row = await idb(tx)

@@ -1,4 +1,4 @@
-import { sql, type TxContext, typed } from '@portico/db';
+import { type TxContext, typed } from '@portico/db';
 import {
   actorId,
   actorLabel,
@@ -9,7 +9,7 @@ import {
   NotFoundError,
   ValidationError,
 } from '@portico/kernel';
-import type { InventoryPorts } from '../ports';
+import type { InventoryDataDomain, InventoryPorts } from '../ports';
 import type { InventoryDB } from '../tables';
 
 export const idb = (tx: TxContext) => typed<InventoryDB>(tx.db);
@@ -68,37 +68,54 @@ export function assertUuid(id: string, entity: string): string {
   return id;
 }
 
-/** Origin of a catalog/manual change made on behalf of an integration mirroring the system of record. */
+/** Origin of a change made on behalf of an integration mirroring the system of record. */
 export interface ChangeOrigin {
   /** The integration connection that is the system of record; mirroring writes from it are allowed. */
   connectionId: string;
 }
 
+/** Options internal callers pass through provider functions (never exposed on the public provider inputs). */
+export interface WriteOptions {
+  origin?: ChangeOrigin;
+}
+
 /**
- * Data authority guard for configuration and manual inventory changes (ADR-0014). When an external system is the
- * system of record for `availability`, Portico does not change availability itself: read-only connections reject
- * the change with an explanation, and forward-mode connections need the integration to forward it (not yet
- * available in wave 1, so the change is rejected with guidance). Integrations mirroring the system of record pass
- * their connection as `origin`.
+ * Data authority guard (ADR-0014, CLAUDE.md §4.15). Inventory owns the `availability` domain, so EVERY write to the
+ * ledger, holds, assignments, blocks, allowances and the catalog passes through here — including provider calls
+ * made inside other modules' commands (reservations, distribution, groups). When an external system is the system
+ * of record, Portico does not change availability itself: read-only connections are refused with an explanation,
+ * and forward-mode connections are refused with guidance until forwarding exists. The mirroring integration passes
+ * its own connection as `origin` (see `applyExternalAvailability`). `maintenance` is checked the same way for
+ * out-of-order / out-of-service blocks.
  */
-export async function guardAvailabilityWrite(
+export async function guardDomainWrite(
+  tx: TxContext,
+  deps: Deps,
+  propertyId: string,
+  domain: InventoryDataDomain,
+  origin?: ChangeOrigin,
+): Promise<void> {
+  const authority = await deps.ports.platform.getDataAuthority(tx, propertyId, domain);
+  if (authority.authority === 'portico') return;
+  if (origin && authority.connectionId && origin.connectionId === authority.connectionId) return;
+  const mode = await deps.ports.platform.assertWritable(tx, propertyId, domain);
+  if (mode === 'forward') {
+    const system = authority.systemName ?? 'the external system of record';
+    throw new BusinessRuleError(
+      'forwarding_not_available',
+      `${system} is the system of record for ${domain} at this property. Forwarding this change to it is not available yet, so make the change in ${system}; Portico will show it once it is received.`,
+      { domain, systemName: authority.systemName, connectionId: authority.connectionId },
+    );
+  }
+}
+
+export function guardAvailabilityWrite(
   tx: TxContext,
   deps: Deps,
   propertyId: string,
   origin?: ChangeOrigin,
 ): Promise<void> {
-  const authority = await deps.ports.platform.getDataAuthority(tx, propertyId, 'availability');
-  if (authority.authority === 'portico') return;
-  if (origin && authority.connectionId && origin.connectionId === authority.connectionId) return;
-  const mode = await deps.ports.platform.assertWritable(tx, propertyId, 'availability');
-  if (mode === 'forward') {
-    const system = authority.systemName ?? 'the external system of record';
-    throw new BusinessRuleError(
-      'forwarding_not_available',
-      `${system} is the system of record for availability at this property. Forwarding this change to it is not available yet, so make the change in ${system}; Portico will show it once it is received.`,
-      { domain: 'availability', systemName: authority.systemName, connectionId: authority.connectionId },
-    );
-  }
+  return guardDomainWrite(tx, deps, propertyId, 'availability', origin);
 }
 
 export const iso = (d: Date | string | null): string | null =>
@@ -106,37 +123,6 @@ export const iso = (d: Date | string | null): string | null =>
 
 export function isoRequired(d: Date | string): string {
   return typeof d === 'string' ? new Date(d).toISOString() : d.toISOString();
-}
-
-/** Postgres error code helper. */
-export function pgCode(err: unknown): string | undefined {
-  return typeof err === 'object' && err !== null && 'code' in err
-    ? String((err as { code: unknown }).code)
-    : undefined;
-}
-
-export function pgConstraint(err: unknown): string | undefined {
-  return typeof err === 'object' && err !== null && 'constraint' in err
-    ? String((err as { constraint: unknown }).constraint)
-    : undefined;
-}
-
-/**
- * Run `fn` inside a savepoint so that a failure leaves the surrounding transaction usable and unchanged
- * (callers may catch the error and continue, e.g. to offer alternatives).
- */
-export async function withSavepoint<T>(tx: TxContext, name: string, fn: () => Promise<T>): Promise<T> {
-  const sp = sql.raw(name);
-  await sql`savepoint ${sp}`.execute(tx.db);
-  try {
-    const result = await fn();
-    await sql`release savepoint ${sp}`.execute(tx.db);
-    return result;
-  } catch (err) {
-    await sql`rollback to savepoint ${sp}`.execute(tx.db);
-    await sql`release savepoint ${sp}`.execute(tx.db);
-    throw err;
-  }
 }
 
 export const DEFAULT_NOUNS: Record<string, string> = {

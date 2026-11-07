@@ -31,6 +31,8 @@ export interface PlatformPort {
   ): Promise<'portico' | 'forward'>;
   /** Plan limit (e.g. `limits.units`); null = unlimited. */
   getLimit(tx: TxContext, limitKey: string): Promise<number | null>;
+  /** Policy value with inheritance (property → region → brand → organization → default). */
+  resolvePolicy<T>(tx: TxContext, propertyId: string, key: string, defaultValue: T): Promise<{ value: T }>;
 }
 
 export interface InventoryPorts {

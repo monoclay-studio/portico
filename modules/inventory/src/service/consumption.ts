@@ -1,4 +1,4 @@
-import { sql, type TxContext } from '@portico/db';
+import { sql, type TxContext, withSavepoint } from '@portico/db';
 import {
   BusinessRuleError,
   ConflictError,
@@ -16,7 +16,17 @@ import { InventoryUnavailableError } from '../errors';
 import { INVENTORY_EVENTS } from '../events';
 import { INVENTORY_PERMISSIONS } from '../manifest';
 import { placeAssignment, type TrimmedAssignment, trimAssignments } from './assignment-store';
-import { actorKey, actorName, assertQuantity, assertRef, type Deps, idb, withSavepoint } from './context';
+import {
+  actorKey,
+  actorName,
+  assertQuantity,
+  assertRef,
+  type ChangeOrigin,
+  type Deps,
+  guardAvailabilityWrite,
+  idb,
+  type WriteOptions,
+} from './context';
 import { LedgerSession, nightsOf, requireType, type TypeInfo } from './ledger';
 import {
   type CompositeUnitInfo,
@@ -77,7 +87,12 @@ interface ConsumeNightsArgs {
  * Authorization: this is a provider call made inside the caller's command (e.g. reservations confirming a booking),
  * so the caller's own permission and data-authority checks apply; inventory does not re-check them.
  */
-export async function consume(deps: Deps, tx: TxContext, input: ConsumeInput): Promise<ConsumeResult> {
+export async function consume(
+  deps: Deps,
+  tx: TxContext,
+  input: ConsumeInput,
+  opts: WriteOptions = {},
+): Promise<ConsumeResult> {
   const ref = assertRef(input.ref);
   const quantity = assertQuantity(input.quantity);
   const nights = nightsOfRange(input.nights);
@@ -89,6 +104,7 @@ export async function consume(deps: Deps, tx: TxContext, input: ConsumeInput): P
       { unitTypeId: type.id },
     );
   }
+  await guardAvailabilityWrite(tx, deps, input.propertyId, opts.origin);
   return consumeNights(deps, tx, {
     propertyId: input.propertyId,
     type,
@@ -443,10 +459,21 @@ export interface ReleaseResult {
 }
 
 /** Release all or part of a ref's inventory (cancellation, shortening). Its unit assignments go with it. */
-export async function release(deps: Deps, tx: TxContext, input: ReleaseInput): Promise<ReleaseResult> {
+export async function release(
+  deps: Deps,
+  tx: TxContext,
+  input: ReleaseInput,
+  opts: WriteOptions = {},
+): Promise<ReleaseResult> {
   const ref = assertRef(input.ref);
   const range = input.nights ? toRange(nightsOfRange(input.nights)) : null;
-  return releaseInternal(deps, tx, ref, { range, cells: null, includeHolds: range === null }, 'release');
+  return releaseInternal(
+    deps,
+    tx,
+    ref,
+    { range, cells: null, includeHolds: range === null, ...(opts.origin ? { origin: opts.origin } : {}) },
+    'release',
+  );
 }
 
 interface ReleaseSelector {
@@ -454,10 +481,11 @@ interface ReleaseSelector {
   /** Specific (unit type, night) cells to release (changeConsumption). */
   cells: CellRef[] | null;
   includeHolds: boolean;
+  origin?: ChangeOrigin;
 }
 
 async function releaseInternal(
-  _deps: Deps,
+  deps: Deps,
   tx: TxContext,
   ref: EntityRef,
   sel: ReleaseSelector,
@@ -555,37 +583,84 @@ async function releaseInternal(
       ),
       ...touchedComposite,
     ];
+    // Lock first (global order), then re-read and change only what is still there: a concurrent release or
+    // change of the same ref that committed while we waited has already removed its rows, so nothing is
+    // subtracted twice (exactly-once per ref and night). Holds that expired were released by `open` itself.
+    await guardAvailabilityWrite(tx, deps, propertyId, sel.origin);
     const session = await LedgerSession.open(tx, propertyId, targets);
-    for (const r of pRows) session.adjust(r.unit_type_id, r.night, { sold: -r.quantity });
-    if (pRows.length > 0) {
+    const lockedRows = (
       await idb(tx)
-        .deleteFrom('inventory.consumptions')
-        .where(
-          'id',
-          'in',
-          pRows.map((r) => r.id),
-        )
-        .execute();
-    }
-    for (const x of pAllow) {
-      session.adjust(x.unit_type_id, x.night, { overbookingAllowance: -x.quantity });
+        .selectFrom('inventory.consumptions')
+        .select(['id', 'unit_type_id', 'night', 'quantity', 'parent_unit_type_id'])
+        .where('ref_type', '=', ref.type)
+        .where('ref_id', '=', ref.id)
+        .where('property_id', '=', propertyId)
+        .forUpdate()
+        .execute()
+    ).filter(
+      (r) => inScope(r.unit_type_id, r.night, r.parent_unit_type_id) && session.has(r.unit_type_id, r.night),
+    );
+    const deleted =
+      lockedRows.length > 0
+        ? await idb(tx)
+            .deleteFrom('inventory.consumptions')
+            .where(
+              'id',
+              'in',
+              lockedRows.map((r) => r.id),
+            )
+            .returning(['unit_type_id', 'night', 'quantity'])
+            .execute()
+        : [];
+    for (const r of deleted) session.adjust(r.unit_type_id, r.night, { sold: -r.quantity });
+    const lockedAllowances = (
       await idb(tx)
-        .updateTable('inventory.overbooking_allowances')
-        .set({ status: 'revoked', closed_at: tx.now })
-        .where('id', '=', x.id)
-        .execute();
-    }
-    for (const h of pHolds) {
-      const nights = nightsOf(h.from, h.to);
-      for (const n of nights) {
-        session.adjust(h.unit_type_id, n, { held: -h.quantity });
-        for (const c of h.component_quantities) session.adjust(c.unitTypeId, n, { held: -c.quantity });
+        .selectFrom('inventory.overbooking_allowances')
+        .select(['id', 'unit_type_id', 'night'])
+        .where('ref_type', '=', ref.type)
+        .where('ref_id', '=', ref.id)
+        .where('property_id', '=', propertyId)
+        .where('status', '=', 'active')
+        .forUpdate()
+        .execute()
+    ).filter((r) => inScope(r.unit_type_id, r.night) && session.has(r.unit_type_id, r.night));
+    const revoked =
+      lockedAllowances.length > 0
+        ? await idb(tx)
+            .updateTable('inventory.overbooking_allowances')
+            .set({ status: 'revoked', closed_at: tx.now })
+            .where(
+              'id',
+              'in',
+              lockedAllowances.map((r) => r.id),
+            )
+            .where('status', '=', 'active')
+            .returning(['unit_type_id', 'night', 'quantity'])
+            .execute()
+        : [];
+    for (const x of revoked) session.adjust(x.unit_type_id, x.night, { overbookingAllowance: -x.quantity });
+    if (sel.includeHolds && pHolds.length > 0) {
+      const { rows: closed } = await sql<{
+        id: string;
+        unit_type_id: string;
+        from: string;
+        to: string;
+        quantity: number;
+        component_quantities: Array<{ unitTypeId: string; quantity: number }>;
+      }>`
+        update inventory.holds
+           set status = 'released', closed_at = ${tx.now}, close_reason = ${'Released with its ref'},
+               version = version + 1
+         where id = any(${pHolds.map((h) => h.id)}::uuid[]) and status = 'active'
+        returning id, unit_type_id, lower(nights)::text as from, upper(nights)::text as to, quantity,
+                  component_quantities`.execute(tx.db);
+      for (const h of closed) {
+        for (const n of nightsOf(h.from, h.to)) {
+          session.adjust(h.unit_type_id, n, { held: -h.quantity });
+          for (const c of h.component_quantities) session.adjust(c.unitTypeId, n, { held: -c.quantity });
+        }
+        result.holdsReleased.push(h.id);
       }
-      await sql`update inventory.holds set status = 'released', closed_at = ${tx.now},
-                  close_reason = ${'Released with its ref'}, version = version + 1 where id = ${h.id}`.execute(
-        tx.db,
-      );
-      result.holdsReleased.push(h.id);
     }
     let trimmed: TrimmedAssignment[] = [];
     if (pAssign.length > 0) {
@@ -599,7 +674,7 @@ async function releaseInternal(
     const conflicts = await session.finish({ kind: causeKind, ref });
     result.conflictsResolved.push(...conflicts.resolved);
     result.releasedCells.push(
-      ...pRows.map((r) => ({ unitTypeId: r.unit_type_id, night: r.night, quantity: r.quantity })),
+      ...deleted.map((r) => ({ unitTypeId: r.unit_type_id, night: r.night, quantity: r.quantity })),
     );
     for (const t of trimmed) {
       result.unassigned.push({ unitId: t.assignment.unitId, nights: t.removed });
@@ -668,6 +743,7 @@ export async function changeConsumption(
   deps: Deps,
   tx: TxContext,
   input: ChangeConsumptionInput,
+  opts: WriteOptions = {},
 ): Promise<ChangeConsumptionResult> {
   const ref = assertRef(input.ref);
   const fromNights = nightsOfRange(input.from.nights, undefined, 'from.nights');
@@ -680,6 +756,21 @@ export async function changeConsumption(
       `${toType.name} is archived and can no longer be sold.`,
     );
   }
+  await guardAvailabilityWrite(tx, deps, fromType.propertyId, opts.origin);
+  // Lock every cell the change can touch up front, in global order (so the release and consume steps cannot
+  // deadlock with a change moving inventory the other way), THEN read the ref's consumption: the validation and
+  // the diff are computed on rows nobody else can change until we commit.
+  const own = await loadAssignments(tx, { ref, topLevelOnly: true });
+  const compositeCells: CellRef[] = [];
+  for (const x of own) {
+    for (const t of await compositeTypesContainingUnits(tx, [x.unitId]))
+      for (const n of nightsOf(x.nights.from, x.nights.to)) compositeCells.push({ unitTypeId: t, night: n });
+  }
+  await LedgerSession.open(tx, fromType.propertyId, [
+    ...fromNights.map((night) => ({ unitTypeId: fromType.id, night })),
+    ...toNights.map((night) => ({ unitTypeId: toType.id, night })),
+    ...compositeCells,
+  ]);
   const current = await idb(tx)
     .selectFrom('inventory.consumptions')
     .select(['unit_type_id', 'night', 'quantity', 'kind'])
@@ -727,19 +818,6 @@ export async function changeConsumption(
       : input.reason === 'relocation'
         ? 'assignment'
         : 'consumption_change';
-  // Lock every affected cell up front, in global order, so the release and consume steps cannot deadlock with
-  // another change moving inventory the other way.
-  const own = await loadAssignments(tx, { ref, topLevelOnly: true });
-  const compositeCells: CellRef[] = [];
-  for (const x of own) {
-    for (const t of await compositeTypesContainingUnits(tx, [x.unitId]))
-      for (const n of nightsOf(x.nights.from, x.nights.to)) compositeCells.push({ unitTypeId: t, night: n });
-  }
-  await LedgerSession.open(tx, fromType.propertyId, [
-    ...diff.remove.map((c) => ({ unitTypeId: c.unitTypeId, night: c.night })),
-    ...diff.add.map((c) => ({ unitTypeId: c.unitTypeId, night: c.night })),
-    ...compositeCells,
-  ]);
   const preferUnitId =
     input.preferUnitId ??
     (toType.isComposite ? own.find((x) => x.unitTypeId === toType.id)?.unitId : undefined);
@@ -754,6 +832,7 @@ export async function changeConsumption(
           range: null,
           cells: diff.remove.map((c) => ({ unitTypeId: c.unitTypeId, night: c.night })),
           includeHolds: false,
+          ...(opts.origin ? { origin: opts.origin } : {}),
         },
         causeKind,
       );
@@ -794,9 +873,10 @@ export interface TransferConsumptionInput {
  * up by a stay. Composite types are not transferable (they are sold with a specific unit).
  */
 export async function transferConsumption(
-  _deps: Deps,
+  deps: Deps,
   tx: TxContext,
   input: TransferConsumptionInput,
+  opts: WriteOptions = {},
 ): Promise<{ nights: LocalDate[] }> {
   const from = assertRef(input.from, 'from');
   const to = assertRef(input.to, 'to');
@@ -809,6 +889,7 @@ export async function transferConsumption(
       `${type.name} is sold with a specific unit and cannot be transferred between refs; release and consume instead.`,
     );
   }
+  await guardAvailabilityWrite(tx, deps, type.propertyId, opts.origin);
   await LedgerSession.open(
     tx,
     type.propertyId,

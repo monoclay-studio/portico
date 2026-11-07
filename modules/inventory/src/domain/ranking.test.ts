@@ -57,4 +57,20 @@ describe('assignable unit ranking', () => {
     });
     expect(ranked.map((r) => r.facts.number)).toEqual(['50', '9', '10']);
   });
+
+  it('keeps accessible units for guests who need them (PAR-INV-005)', () => {
+    const ranked = rankCandidates(
+      [unit('101', { features: ['accessible'] }), unit('102'), unit('103', { isComponent: true })],
+      {
+        compositeStay: false,
+      },
+    );
+    expect(ranked.map((r) => r.facts.number)).toEqual(['102', '103', '101']);
+    expect(ranked[2]?.ranking.join(' ')).toMatch(/kept for guests who need it \(accessible\)/);
+    const asked = rankCandidates([unit('101', { features: ['accessible'] }), unit('102')], {
+      requestedFeatures: ['accessible'],
+      compositeStay: false,
+    });
+    expect(asked[0]?.facts.number).toBe('101');
+  });
 });

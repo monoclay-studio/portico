@@ -22,6 +22,7 @@ import {
   type ChangeOrigin,
   type Deps,
   guardAvailabilityWrite,
+  guardDomainWrite,
   iso,
   isoRequired,
   requireAnyPermission,
@@ -222,6 +223,10 @@ export async function blockUnit(
     requirePermission(tx, INVENTORY_PERMISSIONS.houseUseCreate, { propertyId: unit.propertyId });
   }
   await guardAvailabilityWrite(tx, deps, unit.propertyId, opts.origin);
+  if (input.kind !== 'house_use') {
+    // Out of order / out of service are maintenance facts: refused (or forwarded) when maintenance is external.
+    await guardDomainWrite(tx, deps, unit.propertyId, 'maintenance', opts.origin);
+  }
   if (unit.isComposite) {
     throw new BusinessRuleError(
       'block_component_units',
@@ -391,6 +396,7 @@ export async function releaseBlock(
   }
   if (row.status === 'released') return getBlock(tx, row.id);
   await guardAvailabilityWrite(tx, deps, row.property_id, opts.origin);
+  if (row.kind !== 'house_use') await guardDomainWrite(tx, deps, row.property_id, 'maintenance', opts.origin);
   const businessDate = await deps.ports.platform.getBusinessDate(tx, row.property_id);
   const effFrom = row.eff_from ?? row.from;
   const effTo = row.eff_to ?? row.from;

@@ -34,8 +34,10 @@ import type { InventoryPorts } from './ports';
 import * as assignments from './service/assignments';
 import * as blocks from './service/blocks';
 import * as catalog from './service/catalog';
+import * as consistency from './service/consistency';
 import * as consumption from './service/consumption';
 import type { ChangeOrigin, Deps } from './service/context';
+import * as external from './service/external';
 import * as holds from './service/holds';
 import * as overbooking from './service/overbooking';
 import * as reads from './service/reads';
@@ -48,6 +50,8 @@ export type {
   UnassignUnitInput,
 } from './service/assignments';
 export type { BlockUnitInput, BlockUnitResult } from './service/blocks';
+export type { UnitChangePreview } from './service/catalog';
+export type { LedgerDiscrepancy } from './service/consistency';
 export type {
   ChangeConsumptionInput,
   ChangeConsumptionResult,
@@ -58,6 +62,11 @@ export type {
   TransferConsumptionInput,
 } from './service/consumption';
 export type { ChangeOrigin } from './service/context';
+export type {
+  ApplyExternalAvailabilityInput,
+  ApplyExternalAvailabilityResult,
+  ExternalAvailabilityOperation,
+} from './service/external';
 export type { CreateHoldInput } from './service/holds';
 
 type Origin = { origin?: ChangeOrigin };
@@ -84,6 +93,19 @@ export interface InventoryService {
   extendHold(tx: TxContext, input: { holdId: string; expiresAt: Date | string }): Promise<Hold>;
   getHold(tx: TxContext, holdId: string): Promise<Hold>;
   expireDueHolds(tx: TxContext, opts?: { limit?: number }): Promise<{ expired: number }>;
+  /** Sweeper: expire lapsed overbooking allowances and open conflicts for nights left beyond authorization. */
+  expireDueAllowances(tx: TxContext, opts?: { limit?: number }): Promise<{ expired: number }>;
+  /** INV-I02 check from a night on; reports (event + audit) and returns discrepancies, never corrects them. */
+  checkLedgerConsistency(
+    tx: TxContext,
+    opts: { fromNight: LocalDate; report?: boolean },
+  ): Promise<consistency.LedgerDiscrepancy[]>;
+  // ── connected mode ──
+  /** The only write path while an external system is the system of record for availability (integration). */
+  applyExternalAvailability(
+    tx: TxContext,
+    input: external.ApplyExternalAvailabilityInput,
+  ): Promise<external.ApplyExternalAvailabilityResult>;
   // ── assignments ──
   assignUnit(tx: TxContext, input: assignments.AssignUnitInput): Promise<assignments.AssignUnitResult>;
   unassignUnit(
@@ -187,6 +209,12 @@ export interface InventoryService {
     opts?: Origin,
   ): Promise<Unit>;
   getUnit(tx: TxContext, id: string): Promise<Unit>;
+  /** What taking a unit out of (or back into) inventory would do — nothing is committed. */
+  previewUnitChange(
+    tx: TxContext,
+    id: string,
+    patch: Pick<UnitUpdate, 'status' | 'inInventoryTo'>,
+  ): Promise<catalog.UnitChangePreview>;
   // ── universal record contract (GET of primary records) ──
   getUnitRecord(tx: TxContext, id: string): Promise<UnitRecord>;
   getUnitTypeRecord(tx: TxContext, id: string): Promise<UnitTypeRecord>;
@@ -212,6 +240,9 @@ export function createInventoryService(ports: InventoryPorts): InventoryService 
     extendHold: (tx, input) => holds.extendHold(deps, tx, input),
     getHold: (tx, holdId) => holds.getHold(tx, holdId),
     expireDueHolds: (tx, opts) => holds.expireDueHolds(deps, tx, opts),
+    expireDueAllowances: (tx, opts) => holds.expireDueAllowances(deps, tx, opts),
+    checkLedgerConsistency: (tx, opts) => consistency.checkLedgerConsistency(tx, opts),
+    applyExternalAvailability: (tx, input) => external.applyExternalAvailability(deps, tx, input),
     assignUnit: (tx, input) => assignments.assignUnit(deps, tx, input),
     unassignUnit: (tx, input) => assignments.unassignUnit(deps, tx, input),
     findAssignableUnits: (tx, input) => assignments.findAssignableUnits(tx, input),
@@ -243,6 +274,7 @@ export function createInventoryService(ports: InventoryPorts): InventoryService 
       catalog.createCompositeUnit(deps, tx, propertyId, input, opts),
     updateUnit: (tx, id, v, patch, opts) => catalog.updateUnit(deps, tx, id, v, patch, opts),
     getUnit: (tx, id) => catalog.getUnit(tx, id),
+    previewUnitChange: (tx, id, patch) => catalog.previewUnitChange(deps, tx, id, patch),
     listUnits: (tx, propertyId, filter) => catalog.listUnits(tx, propertyId, filter),
     getUnitRecord: async (tx, id) => records.unitRecord(deps, tx, await catalog.getUnit(tx, id)),
     getUnitTypeRecord: async (tx, id) => records.unitTypeRecord(deps, tx, await catalog.getUnitType(tx, id)),

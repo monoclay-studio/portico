@@ -13,7 +13,6 @@ import {
   assertLedgerConsistent,
   cell,
   createInventoryTestDatabase,
-  dropTestDatabase,
   inventory,
   setupProperty,
   stay,
@@ -26,7 +25,7 @@ beforeAll(async () => {
 });
 afterAll(async () => {
   if (t) await assertLedgerConsistent(t);
-  await dropTestDatabase(t);
+  await t?.drop();
 });
 
 const ORIGINAL = { from: '2026-11-10', to: '2026-11-13' };
@@ -105,7 +104,9 @@ describe('S03 — extension into nights where the assigned villa is taken', () =
     const err = outcome.conflict as UnitAssignmentConflictError;
     expect(err.code).toBe('unit_assignment_conflict');
     expect(err.status).toBe(409);
-    expect(err.conflicts).toEqual([next]);
+    // domain-map contract: { ref, nights }[] (unit details alongside in conflictDetails)
+    expect(err.conflicts).toEqual([{ ref: next, nights: EXTRA }]);
+    expect(err.details?.conflicts).toEqual([{ ref: next, nights: EXTRA }]);
     expect(err.conflictDetails[0]).toMatchObject({ unitNumber: numbers[0], nights: EXTRA });
     expect(err.message).toMatch(/Choose another unit .* or move the other stay first/);
 

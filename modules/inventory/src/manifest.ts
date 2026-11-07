@@ -76,7 +76,8 @@ export const inventoryManifest: ModuleManifest = {
     },
     {
       key: INVENTORY_PERMISSIONS.availabilityManage,
-      description: 'Manage holds and take ownership of inventory conflicts',
+      description:
+        'Hold or extend holds beyond the property policy maximum (inventory.hold.maxDays) and take ownership of inventory conflicts',
       scope: 'property',
     },
     {

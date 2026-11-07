@@ -1,4 +1,4 @@
-import { sql, type TxContext } from '@portico/db';
+import { sql, type TxContext, withSavepoint } from '@portico/db';
 import {
   BusinessRuleError,
   ConflictError,
@@ -21,10 +21,11 @@ import {
   actorKey,
   assertRef,
   type Deps,
+  guardAvailabilityWrite,
   idb,
   isoRequired,
   requireAnyPermission,
-  withSavepoint,
+  type WriteOptions,
 } from './context';
 import { LedgerSession, nightsOf, requireType } from './ledger';
 import {
@@ -53,6 +54,11 @@ export interface AssignUnitInput {
   upgrade?: { reason: string; chargeable: boolean };
   /** Move or replace a locked assignment of this ref (requires inventory.assignment.overrideLock). */
   overrideLock?: boolean;
+  /**
+   * Assign even though it leaves fewer free combined units (e.g. two-bedroom residences) than are held or sold for
+   * these nights. The inventory conflict this opens is returned in `conflictsCreated`.
+   */
+  allowCompositeConflict?: boolean;
 }
 
 export interface AssignUnitResult {
@@ -61,6 +67,8 @@ export interface AssignUnitResult {
   nights: DateRange;
   previousUnitIds: string[];
   upgradedFromUnitTypeIds: string[];
+  /** Inventory conflicts opened by this assignment (only with `allowCompositeConflict`). */
+  conflictsCreated: string[];
 }
 
 /**
@@ -73,6 +81,7 @@ export async function assignUnit(
   deps: Deps,
   tx: TxContext,
   input: AssignUnitInput,
+  opts: WriteOptions = {},
 ): Promise<AssignUnitResult> {
   const ref = assertRef(input.ref);
   const nights = nightsOfRange(input.nights);
@@ -80,6 +89,7 @@ export async function assignUnit(
   const [unit] = await loadUnits(tx, { ids: [input.unitId] });
   if (!unit) throw new NotFoundError('unit', input.unitId);
   requirePermission(tx, INVENTORY_PERMISSIONS.assignmentManage, { propertyId: unit.propertyId });
+  await guardAvailabilityWrite(tx, deps, unit.propertyId, opts.origin);
   if (input.locked && !input.lockReason?.trim()) {
     throw new ValidationError(
       'lock_reason_required',
@@ -146,6 +156,7 @@ export async function assignUnit(
       nights: range,
       previousUnitIds: [],
       upgradedFromUnitTypeIds: [],
+      conflictsCreated: [],
     };
   }
   const lockedOthers = existing.filter((a) => a.locked && a.unitId !== unit.id);
@@ -207,6 +218,22 @@ export async function assignUnit(
     }
     await lockUnits(tx, [unit.id, ...components.map((c) => c.id)]);
     await assertAssignable(tx, unit, components, range, ref);
+    // What the combined units allow before the change (to detect holds/sales this assignment would break).
+    const compositeSession =
+      compositeTypes.size > 0
+        ? await LedgerSession.open(
+            tx,
+            unit.propertyId,
+            [...compositeTypes].flatMap((t) => nights.map((night) => ({ unitTypeId: t, night }))),
+          )
+        : null;
+    const before = new Map<string, number>();
+    if (compositeSession) {
+      for (const t of compositeTypes) {
+        for (const [n, st] of await compositeSession.compositeState(t, nights))
+          before.set(`${t}|${n}`, st.availability.unitLimit);
+      }
+    }
     await trimAssignments(tx, ref, range);
     await placeAssignment(tx, {
       propertyId: unit.propertyId,
@@ -227,14 +254,28 @@ export async function assignUnit(
           : null,
       createdBy: actorKey(tx),
     });
-    if (compositeTypes.size > 0) {
-      const session = await LedgerSession.open(
-        tx,
-        unit.propertyId,
-        [...compositeTypes].flatMap((t) => nights.map((night) => ({ unitTypeId: t, night }))),
-      );
-      for (const t of compositeTypes) session.touchComposite(t, nights);
-      await session.finish({ kind: 'assignment', ref });
+    let conflictsCreated: string[] = [];
+    if (compositeSession) {
+      // INV-R07: a component villa given to an ordinary stay must not silently break a residence hold or sale.
+      const broken: Array<{ unitTypeId: string; night: LocalDate; unitLimit: number }> = [];
+      for (const t of compositeTypes) {
+        for (const [n, st] of await compositeSession.compositeState(t, nights)) {
+          const was = before.get(`${t}|${n}`) ?? 0;
+          if (st.availability.unitLimit < 0 && st.availability.unitLimit < was) {
+            broken.push({ unitTypeId: t, night: n, unitLimit: st.availability.unitLimit });
+          }
+        }
+      }
+      if (broken.length > 0 && !input.allowCompositeConflict) {
+        const typeName = compositeSession.type(broken[0]?.unitTypeId as string).name;
+        throw new BusinessRuleError(
+          'composite_hold_at_risk',
+          `Assigning unit ${unit.number} would leave too few free ${typeName} units for the holds or sales already made on ${[...new Set(broken.map((b) => b.night))].join(', ')} — that booking could no longer be honoured. Choose another unit (assignable units lists ones outside combined units first), or confirm to record an inventory conflict.`,
+          { unitId: unit.id, broken },
+        );
+      }
+      for (const t of compositeTypes) compositeSession.touchComposite(t, nights);
+      conflictsCreated = (await compositeSession.finish({ kind: 'assignment', ref })).created;
     }
     const change = previousUnitIds.length > 0 ? 'moved' : 'assigned';
     await tx.audit({
@@ -261,6 +302,7 @@ export async function assignUnit(
       nights: range,
       previousUnitIds,
       upgradedFromUnitTypeIds: [...upgradedFrom],
+      conflictsCreated,
     };
   });
 }
@@ -318,9 +360,10 @@ export interface UnassignUnitInput {
 
 /** Remove a ref's unit assignment for some or all nights (the consumption stays; the stay becomes unassigned). */
 export async function unassignUnit(
-  _deps: Deps,
+  deps: Deps,
   tx: TxContext,
   input: UnassignUnitInput,
+  opts: WriteOptions = {},
 ): Promise<{ unassigned: Array<{ unitId: string; nights: DateRange }> }> {
   const ref = assertRef(input.ref);
   const range = input.nights ? (spanOf(nightsOfRange(input.nights)) as DateRange) : null;
@@ -328,6 +371,17 @@ export async function unassignUnit(
   if (existing.length === 0) return { unassigned: [] };
   const propertyId = (existing[0] as AssignmentRow).propertyId;
   requirePermission(tx, INVENTORY_PERMISSIONS.assignmentManage, { propertyId });
+  await guardAvailabilityWrite(tx, deps, propertyId, opts.origin);
+  const compositeUnits = (await loadUnits(tx, { ids: existing.map((a) => a.unitId) })).filter(
+    (u) => u.isComposite,
+  );
+  if (compositeUnits.length > 0) {
+    throw new BusinessRuleError(
+      'composite_must_stay_assigned',
+      `${compositeUnits.map((u) => u.number).join(', ')} is a combined unit, sold together with its specific units, so the stay cannot be left unassigned. Move it to another combined unit (assign) or release the nights instead.`,
+      { ref, unitIds: compositeUnits.map((u) => u.id) },
+    );
+  }
   if (existing.some((a) => a.locked)) {
     if (!input.overrideLock) {
       throw new ConflictError(

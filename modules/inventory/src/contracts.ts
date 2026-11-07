@@ -231,6 +231,8 @@ export const availabilityCell = z.object({
   overbookingAllowance: z.number().int(),
   /** capacity − outOfOrder − sold − held + overbookingAllowance (composite types: see `composite`). */
   available: z.number().int(),
+  /** What may be published/sold: never negative (an oversold type shows 0, with `oversoldBy` > 0). */
+  sellable: z.number().int(),
   /** Informational: units out of service (counted, not assignable) and units in house use (inside `sold`). */
   outOfService: z.number().int(),
   houseUse: z.number().int(),
@@ -276,6 +278,28 @@ export const availabilityGrid = z.object({
     }),
   ),
   cells: z.array(availabilityCell),
+  /** When the external system of record last applied its state (connected mode); null otherwise. */
+  lastSyncAt: timestamp.nullable(),
+  /**
+   * House totals per night over every physical (non-composite) unit type of the property, even when `cells` is
+   * filtered. Combined units are not added on top (their components already count). `sellable` is the most that
+   * may be sold across all types that night; channels must not publish more in total.
+   */
+  houseTotals: z.array(
+    z.object({
+      date: localDate,
+      capacity: z.number().int(),
+      outOfOrder: z.number().int(),
+      outOfService: z.number().int(),
+      sold: z.number().int(),
+      houseUse: z.number().int(),
+      held: z.number().int(),
+      overbookingAllowance: z.number().int(),
+      available: z.number().int(),
+      sellable: z.number().int(),
+      oversoldTypes: z.number().int(),
+    }),
+  ),
 });
 export type AvailabilityGrid = z.infer<typeof availabilityGrid>;
 
@@ -416,6 +440,7 @@ export const availabilityExplanation = z.object({
   conflict: inventoryConflict.nullable(),
   composite: availabilityCell.shape.composite,
   provenance,
+  lastSyncAt: timestamp.nullable(),
   authority: dataAuthoritySummary,
   generatedAt: timestamp,
 });
@@ -573,3 +598,14 @@ export const unitBlockPreview = z.object({
   availabilityAfter: z.array(availabilityCell),
 });
 export type UnitBlockPreview = z.infer<typeof unitBlockPreview>;
+
+export const unitChangePreviewInput = z.object({
+  status: z.enum(['active', 'inactive', 'retired']).optional(),
+  inInventoryTo: localDate.nullable().optional(),
+});
+export const unitChangePreview = z.object({
+  allowed: z.boolean(),
+  reason: z.string().nullable(),
+  affectedAssignments: z.array(z.object({ ref: entityRef, nights: nightRange })),
+  oversoldNights: z.array(z.object({ unitTypeId: z.uuid(), night: localDate, shortfall: z.number().int() })),
+});

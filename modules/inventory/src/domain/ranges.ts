@@ -10,8 +10,11 @@ import {
 
 /** Longest night range a single inventory command may touch (two years covers long-stay apartments). */
 export const MAX_COMMAND_NIGHTS = 731;
-/** Longest range an availability read may cover (spec INV-R29). */
-export const MAX_READ_NIGHTS = 400;
+/**
+ * Longest range one availability read may cover: two years (PAR-INV-032 asks for ≥ 400 nights; the spec's 400 is
+ * raised so a full year ahead plus history fits one request).
+ */
+export const MAX_READ_NIGHTS = 731;
 
 /** Validate a half-open night range [from, to) and return its nights. */
 export function nightsOfRange(range: DateRange, max = MAX_COMMAND_NIGHTS, field = 'nights'): LocalDate[] {

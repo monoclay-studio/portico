@@ -9,7 +9,6 @@ import {
   assertLedgerConsistent,
   cell,
   createInventoryTestDatabase,
-  dropTestDatabase,
   inventory,
   setupProperty,
   unitTypeWithUnits,
@@ -21,10 +20,10 @@ beforeAll(async () => {
 });
 afterAll(async () => {
   if (t) await assertLedgerConsistent(t);
-  await dropTestDatabase(t);
+  await t?.drop();
 });
 
-describe('inventory.expireHolds job', () => {
+describe('inventory.expireDue job', () => {
   it('expires due holds across organizations and emits hold.expired once per hold', async () => {
     const N = { from: '2026-11-10', to: '2026-11-12' };
     const orgs = [await setupProperty(t), await setupProperty(t)];
@@ -58,7 +57,7 @@ describe('inventory.expireHolds job', () => {
     }
     await new Promise((r) => setTimeout(r, 1100));
     const ran = await runDueJobs(t.db, createInventoryJobs(inventory));
-    expect(ran).toEqual(['inventory.expireHolds']);
+    expect(ran).toEqual(['inventory.expireDue', 'inventory.checkLedger']);
     for (const [i, p] of orgs.entries()) {
       expect((await p.run((tx) => inventory.getHold(tx, holds[i] as string))).status).toBe('expired');
       const ledger = await adminQuery<{ held: number }>(

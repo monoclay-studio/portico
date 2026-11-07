@@ -183,8 +183,14 @@ export class LedgerSession {
       });
     }
     // 4) lazily release expired holds and allowances on the locked rows (INV-I09), then start clean
-    const changed = (await s.expireHolds(expired.map((h) => h.id))) + (await s.expireAllowances());
-    if (changed > 0) await s.finish({ kind: 'hold_closed', note: 'Expired holds or allowances released' });
+    const holdsExpired = await s.expireHolds(expired.map((h) => h.id));
+    const allowancesExpired = await s.expireAllowances();
+    if (allowancesExpired > 0) {
+      // A lapsed allowance can leave sales beyond authorization: reconcile opens the conflict (INV-I03).
+      await s.finish({ kind: 'allowance_change', note: 'Authorized overbooking expired' });
+    } else if (holdsExpired > 0) {
+      await s.finish({ kind: 'hold_closed', note: 'Expired holds released' });
+    }
     return s;
   }
 

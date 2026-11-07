@@ -12,6 +12,7 @@ export const inventory: InventoryService = createInventoryService({
     getDataAuthority: platform.getDataAuthority,
     assertWritable: platform.assertWritable,
     getLimit: platform.getLimit,
+    resolvePolicy: platform.resolvePolicy,
   },
 });
 
@@ -147,8 +148,7 @@ export function next(date: string, days = 1): string {
  * connection so it sees every row, after the scenario).
  */
 /**
- * Superuser query on the test database through a short-lived client (bypasses RLS — inspection only). A dedicated
- * client avoids TestDatabase.drop() racing the admin pool's idle connections (see FOUNDATION_REQUESTS.md).
+ * Superuser query on the test database through a short-lived client (bypasses RLS — inspection only).
  */
 export async function adminQuery<R extends pg.QueryResultRow>(
   t: TestDatabase,
@@ -162,25 +162,6 @@ export async function adminQuery<R extends pg.QueryResultRow>(
   } finally {
     await client.end();
   }
-}
-
-/**
- * Close the pools, wait until Postgres has really let go of their backends, then drop the database. Avoids
- * TestDatabase.drop() force-terminating half-closed connections (FOUNDATION_REQUESTS.md #1).
- */
-export async function dropTestDatabase(t: TestDatabase | undefined): Promise<void> {
-  if (!t) return;
-  await t.db.close();
-  await t.admin.close();
-  for (let i = 0; i < 100; i++) {
-    const rows = await adminQuery<{ n: number }>(
-      t,
-      'select count(*)::int as n from pg_stat_activity where datname = current_database() and pid <> pg_backend_pid()',
-    );
-    if ((rows[0]?.n ?? 0) === 0) break;
-    await new Promise((r) => setTimeout(r, 20));
-  }
-  await t.drop();
 }
 
 export async function assertLedgerConsistent(t: TestDatabase): Promise<void> {

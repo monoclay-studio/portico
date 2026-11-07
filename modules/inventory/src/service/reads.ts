@@ -21,6 +21,7 @@ import { cellKey, MAX_READ_NIGHTS, nightsOfRange } from '../domain/ranges';
 import { INVENTORY_PERMISSIONS } from '../manifest';
 import type { DataAuthorityView } from '../ports';
 import { type Deps, idb } from './context';
+import { lastExternalSync } from './external';
 import { listActiveHolds } from './holds';
 import { loadTypes, nightsOf, type TypeInfo } from './ledger';
 import {
@@ -220,6 +221,7 @@ async function buildCells(
         available,
         outOfService: oos.get(k) ?? 0,
         houseUse: houseUse.get(k) ?? 0,
+        sellable: Math.max(0, available),
         overbookingInUse: st ? 0 : overbookingInUse(c),
         oversoldBy: over,
         conflictId: conflictByKey.get(k) ?? null,
@@ -254,9 +256,46 @@ export async function getAvailability(
   return out;
 }
 
-function provenanceOf(tx: TxContext, authority: DataAuthorityView): AvailabilityGrid['provenance'] {
-  if (tx.environment === 'trial') return 'copied';
-  return authority.authority === 'external' ? 'external' : 'live';
+/**
+ * Provenance of the numbers (CLAUDE.md §4.16): `copied` in a trial; when an external system is the system of record,
+ * `external` with the last time it applied its state here, or `incomplete` if it never did (the local ledger alone
+ * does not reflect the external system's sales).
+ */
+export async function provenanceOf(
+  tx: TxContext,
+  propertyId: string,
+  authority: DataAuthorityView,
+): Promise<{ provenance: AvailabilityGrid['provenance']; lastSyncAt: string | null }> {
+  if (authority.authority === 'external') {
+    const last = await lastExternalSync(tx, propertyId, authority.connectionId);
+    return { provenance: last ? 'external' : 'incomplete', lastSyncAt: last ? last.toISOString() : null };
+  }
+  return { provenance: tx.environment === 'trial' ? 'copied' : 'live', lastSyncAt: null };
+}
+
+/** House totals over physical unit types only (combined units are counted through their components). */
+function houseTotals(
+  cells: readonly AvailabilityCell[],
+  nights: readonly LocalDate[],
+): AvailabilityGrid['houseTotals'] {
+  return nights.map((date) => {
+    const physical = cells.filter((c) => c.date === date && c.composite === null);
+    const sum = (f: (c: AvailabilityCell) => number) => physical.reduce((s, c) => s + f(c), 0);
+    const available = sum((c) => c.available);
+    return {
+      date,
+      capacity: sum((c) => c.capacity),
+      outOfOrder: sum((c) => c.outOfOrder),
+      outOfService: sum((c) => c.outOfService),
+      sold: sum((c) => c.sold),
+      houseUse: sum((c) => c.houseUse),
+      held: sum((c) => c.held),
+      overbookingAllowance: sum((c) => c.overbookingAllowance),
+      available,
+      sellable: Math.max(0, available),
+      oversoldTypes: physical.filter((c) => c.oversoldBy > 0).length,
+    };
+  });
 }
 
 export async function getAvailabilityGrid(
@@ -264,7 +303,13 @@ export async function getAvailabilityGrid(
   tx: TxContext,
   input: { propertyId: string; unitTypeIds?: string[]; range: DateRange },
 ): Promise<AvailabilityGrid> {
-  const cells = await getAvailability(deps, tx, input);
+  // House totals always cover every unit type of the property, even when the grid is filtered.
+  const all = await getAvailability(deps, tx, { propertyId: input.propertyId, range: input.range });
+  const wanted = input.unitTypeIds && input.unitTypeIds.length > 0 ? new Set(input.unitTypeIds) : null;
+  const cells = wanted
+    ? (await getAvailability(deps, tx, input)).filter((c) => wanted.has(c.unitTypeId))
+    : all;
+  const nights = nightsOfRange(input.range, MAX_READ_NIGHTS, 'range');
   const authority = await deps.ports.platform.getDataAuthority(tx, input.propertyId, 'availability');
   const typeIds = [...new Set(cells.map((c) => c.unitTypeId))];
   const typeRows =
@@ -281,7 +326,7 @@ export async function getAvailabilityGrid(
     propertyId: input.propertyId,
     range: { from: input.range.from, to: input.range.to },
     generatedAt: tx.now.toISOString(),
-    provenance: provenanceOf(tx, authority),
+    ...(await provenanceOf(tx, input.propertyId, authority)),
     authority: {
       authority: authority.authority,
       systemName: authority.systemName,
@@ -295,6 +340,7 @@ export async function getAvailabilityGrid(
       isComposite: t.is_composite,
     })),
     cells,
+    houseTotals: houseTotals(all, nights),
   };
 }
 
@@ -527,7 +573,7 @@ export async function explainAvailability(
     allowances,
     conflict,
     composite: cell.composite,
-    provenance: provenanceOf(tx, authority),
+    ...(await provenanceOf(tx, input.propertyId, authority)),
     authority: {
       authority: authority.authority,
       systemName: authority.systemName,

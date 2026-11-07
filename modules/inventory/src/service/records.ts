@@ -27,7 +27,7 @@ import { INVENTORY_PERMISSIONS as P } from '../manifest';
 import { type BlockUnitInput, blockUnit } from './blocks';
 import { type Deps, idb } from './context';
 import { loadActiveBlocks, loadAssignments, loadUnits } from './occupancy';
-import { getAvailability } from './reads';
+import { getAvailability, provenanceOf } from './reads';
 
 const KIND_LABEL = {
   out_of_order: 'Out of order',
@@ -61,9 +61,9 @@ function action(
 }
 
 async function provenanceFor(deps: Deps, tx: TxContext, propertyId: string) {
-  if (tx.environment === 'trial') return 'copied' as const;
   const a = await deps.ports.platform.getDataAuthority(tx, propertyId, 'availability');
-  return a.authority === 'external' ? ('external' as const) : undefined;
+  const p = await provenanceOf(tx, propertyId, a);
+  return p.provenance === 'live' ? undefined : p.provenance;
 }
 
 // ───────────────────────────── Unit ─────────────────────────────

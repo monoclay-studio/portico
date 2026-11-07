@@ -13,8 +13,15 @@ export const INVENTORY_EVENTS = {
   overbookingAuthorized: 'inventory.overbooking.authorized',
   unitTypeChanged: 'inventory.unitType.changed',
   unitChanged: 'inventory.unit.changed',
+  /** Urgent: the consistency check found sold/held that do not match consumption/holds (never auto-corrected). */
+  ledgerInconsistent: 'inventory.ledger.inconsistent',
 } as const;
 
+/**
+ * THE payload of `inventory.availability.changed`: one event per unit type per command, carrying the half-open
+ * `range` that covers every changed night (not a list of cells). Consumers re-read availability for that range;
+ * events with the same `coalesceKey` may be merged by widening the range.
+ */
 export interface AvailabilityChangedPayload extends Record<string, unknown> {
   propertyId: string;
   unitTypeId: string;

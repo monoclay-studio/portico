@@ -1,8 +1,7 @@
-import { sql, type TxContext } from '@portico/db';
+import { pgCode, sql, type TxContext, withSavepoint } from '@portico/db';
 import { addDays, type DateRange, type EntityRef, newId } from '@portico/kernel';
 import { earlierDate, intersectRanges, laterDate, subtractRange } from '../domain/ranges';
 import { type AssignmentConflictDetail, UnitAssignmentConflictError } from '../errors';
-import { pgCode, withSavepoint } from './context';
 import { type AssignmentRow, loadAssignments, loadUnits, type UnitLite } from './occupancy';
 
 export interface PlaceAssignmentInput {

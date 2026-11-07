@@ -42,11 +42,22 @@ export function compareUnitNumbers(a: string, b: string): number {
   return a.localeCompare(b, 'en', { numeric: true, sensitivity: 'base' });
 }
 
+/**
+ * Features that protect a unit from casual assignment (PAR-INV-005): an accessible unit is kept for guests who need
+ * it, so it ranks last unless the guest asked for that feature.
+ */
+export const PROTECTED_FEATURES: readonly string[] = ['accessible'];
+
 export function rankCandidates<T extends CandidateFacts>(
   candidates: readonly T[],
-  opts: { requestedFeatures?: readonly string[]; compositeStay: boolean },
+  opts: {
+    requestedFeatures?: readonly string[];
+    compositeStay: boolean;
+    protectedFeatures?: readonly string[];
+  },
 ): RankedCandidate<T>[] {
   const wanted = [...new Set(opts.requestedFeatures ?? [])];
+  const protectedFeatures = opts.protectedFeatures ?? PROTECTED_FEATURES;
   const ranked = candidates.map((facts) => {
     const assignable = facts.exclusions.length === 0;
     const matched = wanted.filter((f) => facts.features.includes(f));
@@ -66,6 +77,14 @@ export function rankCandidates<T extends CandidateFacts>(
       } else score += 100;
     }
     score += matched.length * 10 - missing.length * 10;
+    const kept = protectedFeatures.filter((f) => facts.features.includes(f) && !wanted.includes(f));
+    if (kept.length > 0) {
+      score -= 150;
+      if (assignable)
+        ranking.push(
+          `Ranked last: kept for guests who need it (${kept.join(', ')}); use it only if nothing else fits.`,
+        );
+    }
     if (wanted.length > 0 && assignable) {
       ranking.push(
         missing.length === 0

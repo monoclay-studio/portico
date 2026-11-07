@@ -40,6 +40,7 @@ export const inventoryService: InventoryService = createInventoryService({
     getDataAuthority: platform.getDataAuthority,
     assertWritable: platform.assertWritable,
     getLimit: platform.getLimit,
+    resolvePolicy: platform.resolvePolicy,
   },
 });
 /** DemoSeedStep `run` for inventory (register as { name: 'inventory', run: inventoryDemoSeed }). */

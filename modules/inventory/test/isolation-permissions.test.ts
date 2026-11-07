@@ -12,7 +12,6 @@ import {
   assertLedgerConsistent,
   cell,
   createInventoryTestDatabase,
-  dropTestDatabase,
   inventory,
   setupProperty,
   stay,
@@ -25,7 +24,7 @@ beforeAll(async () => {
 });
 afterAll(async () => {
   if (t) await assertLedgerConsistent(t);
-  await dropTestDatabase(t);
+  await t?.drop();
 });
 
 const N = { from: '2026-11-10', to: '2026-11-12' };
@@ -259,49 +258,154 @@ describe('units leaving inventory', () => {
 });
 
 describe('connected mode: an external system is the system of record for availability', () => {
-  async function connected(writeMode: 'read_only' | 'forward') {
+  async function connected(writeMode: 'read_only' | 'forward', maintenance = false) {
     const p = await setupProperty(t);
     const { type, unitIds } = await unitTypeWithUnits(p, { code: 'WV', count: 2 });
     const connectionId = newId();
-    await p.run((tx) =>
-      platform.setDataAuthority(tx, {
-        propertyId: p.propertyId,
-        domain: 'availability',
-        authority: 'external',
-        connectionId,
-        systemName: 'Legacy PMS',
-        writeMode,
-        reason: 'Connect alongside: PMS keeps selling',
-      }),
-    );
+    for (const domain of maintenance ? (['maintenance'] as const) : (['availability'] as const)) {
+      await p.run((tx) =>
+        platform.setDataAuthority(tx, {
+          propertyId: p.propertyId,
+          domain,
+          authority: 'external',
+          connectionId,
+          systemName: 'Legacy PMS',
+          writeMode,
+          reason: 'Connect alongside: PMS keeps selling',
+        }),
+      );
+    }
     return { p, type, unitIds, connectionId };
   }
 
-  it('rejects manual inventory changes with an explanation, but lets the integration mirror the catalog', async () => {
+  it('refuses every direct inventory write — catalog, blocks, allowances, sales, holds, assignments', async () => {
+    const { p, type, unitIds } = await connected('read_only');
+    const guest = stay();
+    const attempts: Array<[string, () => Promise<unknown>]> = [
+      [
+        'createUnit',
+        () => p.run((tx) => inventory.createUnit(tx, p.propertyId, { unitTypeId: type.id, number: 'W9' })),
+      ],
+      [
+        'blockUnit',
+        () =>
+          p.run((tx) =>
+            inventory.blockUnit(tx, {
+              unitId: unitIds[0] as string,
+              nights: N,
+              kind: 'out_of_order',
+              reason: 'Leak',
+            }),
+          ),
+      ],
+      [
+        'setOverbookingAllowance',
+        () =>
+          p.run((tx) =>
+            inventory.setOverbookingAllowance(tx, p.propertyId, {
+              unitTypeId: type.id,
+              nights: N,
+              quantity: 1,
+              reason: 'No-shows',
+            }),
+          ),
+      ],
+      [
+        'consume',
+        () =>
+          p.run((tx) =>
+            inventory.consume(tx, {
+              propertyId: p.propertyId,
+              unitTypeId: type.id,
+              nights: N,
+              quantity: 1,
+              ref: guest,
+            }),
+          ),
+      ],
+      [
+        'createHold',
+        () =>
+          p.run((tx) =>
+            inventory.createHold(tx, {
+              propertyId: p.propertyId,
+              unitTypeId: type.id,
+              nights: N,
+              quantity: 1,
+              expiresAt: new Date(Date.now() + 600_000),
+              ref: { type: 'quote', id: newId() },
+            }),
+          ),
+      ],
+      [
+        'assignUnit',
+        () =>
+          p.run((tx) => inventory.assignUnit(tx, { unitId: unitIds[0] as string, ref: guest, nights: N })),
+      ],
+    ];
+    for (const [name, attempt] of attempts) {
+      const err = await attempt().catch((e: unknown) => e);
+      expect(err, name).toMatchObject({ code: 'external_system_of_record' });
+      expect((err as Error).message, name).toMatch(/Legacy PMS is the system of record for availability/);
+    }
+  });
+
+  it('applies mirrored state only through applyExternalAvailability from the authoritative connection', async () => {
     const { p, type, unitIds, connectionId } = await connected('read_only');
-    await expect(
-      p.run((tx) => inventory.createUnit(tx, p.propertyId, { unitTypeId: type.id, number: 'W9' })),
-    ).rejects.toThrow(/Legacy PMS is the system of record for availability/);
-    await expect(
-      p.run((tx) =>
-        inventory.blockUnit(tx, {
-          unitId: unitIds[0] as string,
-          nights: N,
-          kind: 'out_of_order',
-          reason: 'Leak',
-        }),
-      ),
-    ).rejects.toThrow(/system of record/);
+    // Before any sync, the local numbers do not reflect the external system: labelled incomplete.
+    const before = await p.run((tx) =>
+      inventory.getAvailabilityGrid(tx, { propertyId: p.propertyId, range: N }),
+    );
+    expect(before).toMatchObject({ provenance: 'incomplete', lastSyncAt: null });
     await expect(
       p.run((tx) =>
-        inventory.setOverbookingAllowance(tx, p.propertyId, {
-          unitTypeId: type.id,
-          nights: N,
-          quantity: 1,
-          reason: 'No-shows',
+        inventory.applyExternalAvailability(tx, {
+          propertyId: p.propertyId,
+          connectionId: newId(),
+          operations: [],
         }),
       ),
-    ).rejects.toThrow(/system of record/);
+    ).rejects.toMatchObject({ code: 'not_system_of_record' });
+    const guest = stay();
+    const r = await p.run((tx) =>
+      inventory.applyExternalAvailability(tx, {
+        propertyId: p.propertyId,
+        connectionId,
+        operations: [
+          {
+            op: 'consume',
+            unitTypeId: type.id,
+            nights: N,
+            quantity: 2,
+            ref: { type: 'externalBlock', id: newId() },
+          },
+          { op: 'consume', unitTypeId: type.id, nights: N, quantity: 1, ref: guest },
+          { op: 'assign', unitId: unitIds[0] as string, ref: guest, nights: N },
+        ],
+      }),
+    );
+    // the external system sold 3 of 2 villas: mirrored, and the difference is a visible conflict, not a refusal
+    expect(r.applied).toBe(3);
+    expect(r.conflictIds.length).toBeGreaterThan(0);
+    const grid = await p.run((tx) =>
+      inventory.getAvailabilityGrid(tx, { propertyId: p.propertyId, range: N }),
+    );
+    expect(grid).toMatchObject({
+      provenance: 'external',
+      authority: { authority: 'external', systemName: 'Legacy PMS' },
+    });
+    expect(grid.lastSyncAt).not.toBeNull();
+    expect(grid.cells[0]).toMatchObject({ sold: 3, oversoldBy: 1, sellable: 0 });
+    const why = await p.run((tx) =>
+      inventory.explainAvailability(tx, {
+        propertyId: p.propertyId,
+        unitTypeId: type.id,
+        date: '2026-11-10',
+      }),
+    );
+    expect(why.reasons[0]).toMatch(/managed in Legacy PMS/);
+    expect(why.lastSyncAt).not.toBeNull();
+    // the integration can mirror the catalog too (origin = the authoritative connection)
     const mirrored = await p.run((tx) =>
       inventory.createUnit(
         tx,
@@ -311,41 +415,48 @@ describe('connected mode: an external system is the system of record for availab
       ),
     );
     expect(mirrored.number).toBe('W9');
-    // Reads say where the numbers come from.
-    const grid = await p.run((tx) =>
-      inventory.getAvailabilityGrid(tx, { propertyId: p.propertyId, range: N }),
-    );
-    expect(grid).toMatchObject({
-      provenance: 'external',
-      authority: { authority: 'external', systemName: 'Legacy PMS' },
-    });
-    const why = await p.run((tx) =>
-      inventory.explainAvailability(tx, {
-        propertyId: p.propertyId,
-        unitTypeId: type.id,
-        date: '2026-11-10',
-      }),
-    );
-    expect(why.reasons[0]).toMatch(/managed in Legacy PMS/);
     const record = await p.run((tx) => inventory.getUnitRecord(tx, unitIds[0] as string));
     expect(record.provenance).toBe('external');
   });
 
-  it('forward mode is refused clearly until forwarding exists; consumption is authorized by the caller', async () => {
+  it('forward mode is refused clearly until forwarding exists — including sales', async () => {
     const { p, type } = await connected('forward');
     await expect(
       p.run((tx) => inventory.createUnit(tx, p.propertyId, { unitTypeId: type.id, number: 'W9' })),
     ).rejects.toThrow(/Forwarding this change to it is not available yet/);
-    // consume is a provider call inside the caller's command (reservations checks its own authority)
-    const r = await p.run((tx) =>
-      inventory.consume(tx, {
-        propertyId: p.propertyId,
-        unitTypeId: type.id,
+    await expect(
+      p.run((tx) =>
+        inventory.consume(tx, {
+          propertyId: p.propertyId,
+          unitTypeId: type.id,
+          nights: N,
+          quantity: 1,
+          ref: stay(),
+        }),
+      ),
+    ).rejects.toMatchObject({ code: 'forwarding_not_available' });
+  });
+
+  it('out-of-order blocks respect an external maintenance system; house use does not depend on it', async () => {
+    const { p, unitIds } = await connected('read_only', true);
+    await expect(
+      p.run((tx) =>
+        inventory.blockUnit(tx, {
+          unitId: unitIds[0] as string,
+          nights: N,
+          kind: 'out_of_order',
+          reason: 'Leak',
+        }),
+      ),
+    ).rejects.toThrow(/system of record for maintenance/);
+    const houseUse = await p.run((tx) =>
+      inventory.blockUnit(tx, {
+        unitId: unitIds[1] as string,
         nights: N,
-        quantity: 1,
-        ref: stay(),
+        kind: 'house_use',
+        reason: 'Owner visit',
       }),
     );
-    expect(r.applied).toBe(true);
+    expect(houseUse.block.kind).toBe('house_use');
   });
 });

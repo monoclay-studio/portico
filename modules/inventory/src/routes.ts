@@ -30,6 +30,8 @@ import {
   unitBlockPreview,
   unitBlockRecord,
   unitCandidate,
+  unitChangePreview,
+  unitChangePreviewInput,
   unitInput,
   unitRecord,
   unitsQuery,
@@ -264,6 +266,25 @@ export function inventoryHttp(deps: { database: PorticoDatabase; inventory: Inve
           setVersion(reply, r.version);
           return r;
         },
+      );
+
+      app.post(
+        '/units/:id/preview-change',
+        {
+          schema: {
+            tags,
+            params: idParams,
+            body: unitChangePreviewInput,
+            response: { 200: unitChangePreview },
+          },
+        },
+        async (req) =>
+          withTenantTx(database, req.ctx, (tx) =>
+            inventory.previewUnitChange(tx, req.params.id, {
+              ...(req.body.status !== undefined ? { status: req.body.status } : {}),
+              ...(req.body.inInventoryTo !== undefined ? { inInventoryTo: req.body.inInventoryTo } : {}),
+            }),
+          ),
       );
 
       // ── availability ──

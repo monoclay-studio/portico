@@ -1,8 +1,10 @@
 import { sql, type TxContext } from '@portico/db';
 import {
   BusinessRuleError,
+  ConflictError,
   type DateRange,
   type EntityRef,
+  ForbiddenError,
   type LocalDate,
   NotFoundError,
   newId,
@@ -12,14 +14,65 @@ import type { Hold } from '../contracts';
 import { nightsOfRange, nightsToRuns, spanOf } from '../domain/ranges';
 import { InventoryUnavailableError } from '../errors';
 import { INVENTORY_EVENTS } from '../events';
+import { INVENTORY_PERMISSIONS } from '../manifest';
 import { placeAssignment } from './assignment-store';
 import { type ConsumeResult, consumeNights, pickCompositeUnit } from './consumption';
-import { actorKey, assertQuantity, assertRef, assertUuid, type Deps, idb, iso, isoRequired } from './context';
+import {
+  actorKey,
+  assertQuantity,
+  assertRef,
+  assertUuid,
+  type Deps,
+  guardAvailabilityWrite,
+  idb,
+  iso,
+  isoRequired,
+  type WriteOptions,
+} from './context';
 import { LedgerSession, nightsOf, requireType } from './ledger';
 import { loadUnits } from './occupancy';
 
-/** Longest hold (group options can be long; quotes and carts are minutes). Beyond this, book tentatively. */
+/** Absolute ceiling for a hold (group options can be long). Beyond this, book tentatively. */
 export const MAX_HOLD_DAYS = 180;
+/** Policy key (platform policies, inheritable) for how long a hold may last without extra permission. */
+export const HOLD_POLICY_KEY = 'inventory.hold.maxDays';
+const DEFAULT_POLICY_MAX_DAYS = 14;
+
+/**
+ * INV-R15/R17: holds up to the property's policy maximum (default 14 days, spec "tentative option up to 14 days")
+ * need nothing more; longer holds (up to the 180-day ceiling) need `inventory.availability.manage`.
+ */
+async function assertHoldDuration(
+  deps: Deps,
+  tx: TxContext,
+  propertyId: string,
+  expiresAt: Date,
+): Promise<void> {
+  if (Number.isNaN(expiresAt.getTime()) || expiresAt.getTime() <= tx.now.getTime()) {
+    throw new ValidationError('invalid_hold_expiry', 'A hold must expire in the future.');
+  }
+  const ms = expiresAt.getTime() - tx.now.getTime();
+  if (ms > MAX_HOLD_DAYS * 86_400_000) {
+    throw new ValidationError(
+      'hold_too_long',
+      `Holds can last at most ${MAX_HOLD_DAYS} days. Make a tentative booking with an option date instead.`,
+    );
+  }
+  const policy = await deps.ports.platform.resolvePolicy<number>(
+    tx,
+    propertyId,
+    HOLD_POLICY_KEY,
+    DEFAULT_POLICY_MAX_DAYS,
+  );
+  const maxDays =
+    typeof policy.value === 'number' && policy.value > 0 ? policy.value : DEFAULT_POLICY_MAX_DAYS;
+  if (ms > maxDays * 86_400_000 && !tx.authz.can(INVENTORY_PERMISSIONS.availabilityManage, { propertyId })) {
+    throw new ForbiddenError(INVENTORY_PERMISSIONS.availabilityManage, {
+      propertyId,
+      policyMaxDays: maxDays,
+    });
+  }
+}
 
 interface HoldSqlRow {
   id: string;
@@ -106,27 +159,21 @@ export interface CreateHoldInput {
  * make it unconvertible.
  */
 export async function createHold(
-  _deps: Deps,
+  deps: Deps,
   tx: TxContext,
   input: CreateHoldInput,
+  opts: WriteOptions = {},
 ): Promise<{ holdId: string; expiresAt: string }> {
   const ref = assertRef(input.ref);
   const quantity = assertQuantity(input.quantity);
   const nights = nightsOfRange(input.nights);
   const expiresAt = new Date(input.expiresAt);
-  if (Number.isNaN(expiresAt.getTime()) || expiresAt.getTime() <= tx.now.getTime()) {
-    throw new ValidationError('invalid_hold_expiry', 'A hold must expire in the future.');
-  }
-  if (expiresAt.getTime() - tx.now.getTime() > MAX_HOLD_DAYS * 86_400_000) {
-    throw new ValidationError(
-      'hold_too_long',
-      `Holds can last at most ${MAX_HOLD_DAYS} days. Make a tentative booking with an option date instead.`,
-    );
-  }
   const type = await requireType(tx, input.unitTypeId, input.propertyId);
+  await assertHoldDuration(deps, tx, input.propertyId, expiresAt);
   if (type.status === 'archived') {
     throw new BusinessRuleError('unit_type_archived', `${type.name} is archived and can no longer be sold.`);
   }
+  await guardAvailabilityWrite(tx, deps, input.propertyId, opts.origin);
   const session = await LedgerSession.open(
     tx,
     input.propertyId,
@@ -176,6 +223,7 @@ export async function convertHold(
   deps: Deps,
   tx: TxContext,
   input: { holdId: string; ref: EntityRef },
+  opts: WriteOptions = {},
 ): Promise<ConsumeResult & { holdId: string }> {
   const ref = assertRef(input.ref);
   const hold = await loadHold(tx, input.holdId);
@@ -196,22 +244,66 @@ export async function convertHold(
       { holdId: hold.id },
     );
   }
-  if (hold.status !== 'active') {
+  if (hold.status === 'released') {
     throw new BusinessRuleError(
       'hold_not_active',
-      `This hold was ${hold.status} at ${iso(hold.closed_at)}. Check availability and book again.`,
+      `This hold was released at ${iso(hold.closed_at)}. Check availability and book again.`,
       { holdId: hold.id, status: hold.status },
     );
   }
+  // An expired hold (already released lazily by another command) continues below: the booking is tried as a fresh
+  // sale under lock and fails with a clear "hold expired and the unit was sold" if the inventory is gone.
   const type = await requireType(tx, hold.unit_type_id);
   const nights = nightsOf(hold.from, hold.to);
+  await guardAvailabilityWrite(tx, deps, hold.property_id, opts.origin);
   const session = await LedgerSession.open(
     tx,
     hold.property_id,
     nights.map((night) => ({ unitTypeId: type.id, night })),
   );
   const locked = await loadHold(tx, hold.id, true);
-  if (locked.status !== 'active') {
+  // Decide on the status as it is under the lock: a concurrent conversion or release that committed while we
+  // waited must never turn this call into a second sale (one hold → at most one booking).
+  if (locked.status === 'converted') {
+    if (locked.converted_ref_type === ref.type && locked.converted_ref_id === ref.id) {
+      return {
+        holdId: hold.id,
+        applied: false,
+        nights: [],
+        overbookingAllowanceIds: [],
+        conflictIds: [],
+        assignedUnitId: null,
+      };
+    }
+    throw new BusinessRuleError(
+      'hold_already_converted',
+      'This hold was already converted into another booking. Check availability and book again.',
+      { holdId: hold.id },
+    );
+  }
+  if (locked.status === 'released') {
+    throw new BusinessRuleError(
+      'hold_not_active',
+      `This hold was released at ${iso(locked.closed_at)}. Check availability and book again.`,
+      { holdId: hold.id, status: locked.status },
+    );
+  }
+  const already = await idb(tx)
+    .selectFrom('inventory.consumptions')
+    .select('night')
+    .where('ref_type', '=', ref.type)
+    .where('ref_id', '=', ref.id)
+    .where('unit_type_id', '=', type.id)
+    .where('night', 'in', nights)
+    .execute();
+  if (already.length > 0) {
+    throw new ConflictError(
+      'consumption_mismatch',
+      `${ref.type} ${ref.id} already consumes ${type.name} on ${already.map((a) => a.night).join(', ')}; a hold cannot be converted onto nights the booking already holds. Release the hold instead.`,
+      { ref, holdId: hold.id },
+    );
+  }
+  if (locked.status === 'expired') {
     // Expired while we were locking (lazy expiry, INV-I09): try a fresh sale of the same inventory.
     try {
       const r = await consumeNights(deps, tx, {
@@ -233,7 +325,7 @@ export async function convertHold(
           unitTypeName: type.name,
           requested: hold.quantity,
           shortNights: err.shortNights,
-          reason: 'hold_not_convertible',
+          reason: 'hold_expired_sold',
         });
       }
       throw err;
@@ -339,12 +431,14 @@ export async function convertHold(
 
 /** Release a hold before it expires (quote abandoned, option declined). Idempotent. */
 export async function releaseHold(
-  _deps: Deps,
+  deps: Deps,
   tx: TxContext,
   input: { holdId: string; reason?: string },
+  opts: WriteOptions = {},
 ): Promise<{ released: boolean }> {
   const hold = await loadHold(tx, input.holdId);
   if (hold.status !== 'active') return { released: false };
+  await guardAvailabilityWrite(tx, deps, hold.property_id, opts.origin);
   const nights = nightsOf(hold.from, hold.to);
   const session = await LedgerSession.open(
     tx,
@@ -367,11 +461,13 @@ export async function releaseHold(
 
 /** Move a hold's expiry (e.g. extend a tentative option). Only active, unexpired holds can be extended. */
 export async function extendHold(
-  _deps: Deps,
+  deps: Deps,
   tx: TxContext,
   input: { holdId: string; expiresAt: Date | string },
+  opts: WriteOptions = {},
 ): Promise<Hold> {
   const hold = await loadHold(tx, input.holdId, true);
+  await guardAvailabilityWrite(tx, deps, hold.property_id, opts.origin);
   const expiresAt = new Date(input.expiresAt);
   if (hold.status !== 'active' || hold.expires_at.getTime() <= tx.now.getTime()) {
     throw new BusinessRuleError(
@@ -380,12 +476,7 @@ export async function extendHold(
       { holdId: hold.id },
     );
   }
-  if (Number.isNaN(expiresAt.getTime()) || expiresAt.getTime() <= tx.now.getTime()) {
-    throw new ValidationError('invalid_hold_expiry', 'A hold must expire in the future.');
-  }
-  if (expiresAt.getTime() - tx.now.getTime() > MAX_HOLD_DAYS * 86_400_000) {
-    throw new ValidationError('hold_too_long', `Holds can last at most ${MAX_HOLD_DAYS} days.`);
-  }
+  await assertHoldDuration(deps, tx, hold.property_id, expiresAt);
   await sql`update inventory.holds set expires_at = ${expiresAt}, version = version + 1 where id = ${hold.id}`.execute(
     tx.db,
   );
@@ -429,4 +520,32 @@ export async function expireDueHolds(
     if (after.status === 'expired') expired++;
   }
   return { expired };
+}
+
+/**
+ * Sweeper (INV-I03): expire overbooking allowances that lapsed in this organization. Opening the ledger session on
+ * their cells expires them and reconciles conflicts, so a night left sold beyond authorization gets its open
+ * conflict (owner, causes, event) even if nobody touches it.
+ */
+export async function expireDueAllowances(
+  _deps: Deps,
+  tx: TxContext,
+  opts: { limit?: number } = {},
+): Promise<{ expired: number }> {
+  const { rows } = await sql<{ id: string; property_id: string; unit_type_id: string; night: string }>`
+    select id, property_id, unit_type_id, night::text as night from inventory.overbooking_allowances
+    where status = 'active' and expires_at is not null and expires_at <= ${tx.now}
+    order by property_id, unit_type_id, night limit ${opts.limit ?? 500}`.execute(tx.db);
+  const byProperty = new Map<string, Array<{ unitTypeId: string; night: string }>>();
+  for (const r of rows) {
+    byProperty.set(r.property_id, [
+      ...(byProperty.get(r.property_id) ?? []),
+      { unitTypeId: r.unit_type_id, night: r.night },
+    ]);
+  }
+  for (const [propertyId, cells] of byProperty) await LedgerSession.open(tx, propertyId, cells);
+  const { rows: left } = await sql<{ n: number }>`
+    select count(*)::int as n from inventory.overbooking_allowances
+    where id = any(${rows.map((r) => r.id)}::uuid[]) and status = 'expired'`.execute(tx.db);
+  return { expired: left[0]?.n ?? 0 };
 }
