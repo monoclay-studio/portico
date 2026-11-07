@@ -11,6 +11,7 @@ import {
   type TxEventSubscription,
 } from '@portico/db';
 import {
+  createGuestsDemoSeed,
   createGuestsService,
   type GuestsService,
   guestsHttp,
@@ -23,6 +24,7 @@ import { type IdentityPorts, identityAuthenticator, identityHttp, identityManife
 import { fieldCryptoFromEnv, type ModuleManifest, systemAuthorizer } from '@portico/kernel';
 import { platform, platformHttp, platformManifest, platformSearch } from '@portico/platform';
 import { recordsHttp } from './records-routes';
+import type { DemoSeedStep } from './seed/demo';
 
 export const MANIFESTS: readonly ModuleManifest[] = [
   platformManifest,
@@ -40,6 +42,8 @@ export interface Composition {
   jobs: ScheduledJob[];
   /** Provider services other modules' ports bind to (domain map). */
   services: { guests: GuestsService };
+  /** Demo data contributed by each module, run in order inside each demo organization (apps/api/src/seed). */
+  demoSeedSteps: DemoSeedStep[];
 }
 
 export function compose(database: PorticoDatabase): Composition {
@@ -85,6 +89,7 @@ export function compose(database: PorticoDatabase): Composition {
     searchProviders,
     jobs: [...CORE_JOBS, ...guestsJobs(guestsService)],
     services: { guests: guestsService },
+    demoSeedSteps: [createGuestsDemoSeed(guestsService)],
   };
 }
 
