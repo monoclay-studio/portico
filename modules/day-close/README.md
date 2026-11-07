@@ -37,7 +37,7 @@ modules, simulated in non-live organizations.
 | DCL-R02.4 | Allowance periods close (`finance.closeAllowances`, forfeit → breakage); the next night's allowances are pre-granted after the advance so guests can use them that day | R3 | `test/scenario-s19-…` |
 | DCL-R02.6 | Integrity: finance's integrity report (trial balance balanced FIN-I02, control accounts = sub-ledgers FIN-I14), finance's ledger alarms, inventory ledger consistency (INV-I02); a failure stops before the advance, raises a blocking alarm to finance, is never overridden and never retried automatically | R3 | `test/readiness-and-overrides.test.ts` › "a failed integrity check stops before the advance, …" |
 | DCL-R02.7 | Day facts frozen once (occupancy, ADR, RevPAR with Decimal; rooms capacity/out of order/sold/complimentary/house use; revenue by charge code; arrivals, no-shows, in-house, guests). Departures count and nationality reported as missing (CR-3, CR-17) | R3 | `test/scheduler-and-reports.test.ts` › "keeps the as-closed pack and frozen facts; …" |
-| DCL-R02.8 | Advance through `platform.advanceBusinessDate(expected = D)` with the acting person's own `platform.businessDate.advance` (sensitive) | R3 | `test/lifecycle-and-security.test.ts` › "advancing needs platform.businessDate.advance on the person: …" |
+| DCL-R02.8 | Advance through `platform.advanceBusinessDate(expected = D)` with the acting person's own `platform.businessDate.advance` (sensitive); what blocks is re-checked right before the date moves (EC-DCL-019) | R3 | `test/lifecycle-and-security.test.ts` › "advancing needs platform.businessDate.advance on the person: …"; `test/readiness-and-overrides.test.ts` › "what blocks is re-checked right before the advance: …" |
 | DCL-R02.9 | Day report pack (manager flash, trial balance as of D, exceptions, overrides, step log) stored once; journal export requested when accounting is external (stub, CR-12); `dayClose.day.closed` announced once | R3 (export R1) | `test/scheduler-and-reports.test.ts`, `test/chaos-every-step.test.ts` |
 | DCL-R03 | Resume at the first incomplete step; failed items retried, done items never; run page progress "88 of 112 posted" counted live from committed items | R3 | `test/scenario-s09-…` (asserts `'Room postings: 67 of 112 stay-nights posted, 45 remaining'`) |
 | DCL-R04 | Non-blocking; cut-over: postings before the advance land on D, after it on D+1; an in-flight posting stamped D after the close shows in the report's restatements (prevention needs FR-1) | R3 (detection only) | `test/concurrency.test.ts` › "postings arriving during the close" |
@@ -153,8 +153,6 @@ data-authority domain. Trial organizations close days with every external effect
 - Report pack lacks guest ledger, cashier summary, no-show list, adjustments, paid-outs and deposits sections
   (PAR-DCL-065); report rendering/e-mail (PAR-DCL-064) not built.
 - Zero-price nights: Green Tax of complimentary/house-use stays is not posted (CR-10).
-- Blocking items are evaluated at preflight; a payment that becomes pending after preflight is not re-checked before
-  the advance (EC-DCL-019).
 - Day-use stays, reinstated no-shows, arrivals with deposit balance, scheduled room moves, fixed charges (CR-6,
   PAR-DCL-025/026/043): not handled.
 - Tax change effective tomorrow (EC-DCL-016) relies on rates/finance computing by service date; no Day Close test.

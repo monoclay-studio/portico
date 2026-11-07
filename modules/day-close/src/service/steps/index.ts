@@ -394,6 +394,18 @@ async function advance(s: StepContext): Promise<StepOutcome> {
   if (swept) return swept;
   const propertyId = s.property.id;
   const D = s.run.business_date;
+  // Re-evaluate what blocks right before the date moves (EC-DCL-019): something may have appeared since preflight
+  // (e.g. a payment now pending verification where policy blocks on it). Overrides of this run still apply.
+  const recheck = await s.inTx((tx) =>
+    collectReadiness(s.deps, tx, propertyId, { runId: s.run.id, businessDate: D }),
+  );
+  if (recheck.blocking.length) {
+    return {
+      status: 'blocked',
+      blockers: recheck.blocking,
+      detail: { recheckedAt: recheck.evaluatedAt, blocking: recheck.blocking.map((b) => b.key) },
+    };
+  }
   const outcome = await s.inTx(async (tx) => {
     // One advance per property at a time, whoever runs it (serializes with any other Day Close executor).
     await sql`select pg_advisory_xact_lock(hashtextextended(${`day_close:advance:${tx.tenantId}:${propertyId}`}, 0))`.execute(

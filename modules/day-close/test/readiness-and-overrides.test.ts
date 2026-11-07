@@ -311,6 +311,46 @@ describe('blocking, overrides and policy', () => {
     ).rejects.toMatchObject({ code: 'forbidden' });
   });
 
+  it('what blocks is re-checked right before the advance: a payment pending since preflight stops the date (EC-DCL-019)', async () => {
+    const org = await setupOrg(h);
+    await addStay(h, org, { arrival: '2026-11-06', departure: '2026-11-09' });
+    const auditor = nightAudit(h, org);
+    const p = await org.run((tx) => h.service.getPolicy(tx, org.propertyId), auditor);
+    await org.run((tx) =>
+      h.service.updatePolicy(
+        tx,
+        org.propertyId,
+        { policy: { blockingCodes: ['payment_pending_verification'] }, reason: 'verify before closing' },
+        p.version,
+      ),
+    );
+    const pending = {
+      propertyId: org.propertyId,
+      type: 'payment',
+      id: newId(),
+      amountMinor: 80_000,
+      currency: 'USD',
+      since: '2026-11-07T19:50:00.000Z',
+    };
+    const run = await h.service.startRun(h.t.db, auditor, {
+      propertyId: org.propertyId,
+      hooks: {
+        afterStep: (step) => {
+          if (step === 'integrity') h.fakes.payments.pending.push(pending); // a desk card payment times out
+        },
+      },
+    });
+    expect(run.runStatus).toBe('blocked');
+    expect(run.currentStep).toBe('advance');
+    expect(run.blockers.map((b) => b.code)).toEqual(['payment_pending_verification']);
+    expect(await businessDate(org)).toBe(D);
+    // The provider answers; nothing is pending any more: resume moves the date.
+    h.fakes.payments.pending = h.fakes.payments.pending.filter((x) => x.id !== pending.id);
+    const done = await h.service.resumeRun(h.t.db, auditor, run.id, run.version);
+    expect(done.runStatus).toBe('completed');
+    expect(await businessDate(org)).toBe('2026-11-08');
+  });
+
   it('an unreadable stored policy fails closed: defaults apply and a non-overridable blocking item says what to fix', async () => {
     const org = await setupOrg(h);
     await org.run((tx) =>
