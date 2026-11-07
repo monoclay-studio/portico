@@ -39,6 +39,7 @@ import {
   assertLedgerTarget,
   assertPaymentsWritable,
   assertSameRequest,
+  bookingConsentEvidence,
   db,
   effectiveModeFor,
   loadAccount,
@@ -983,6 +984,16 @@ export async function registerVirtualCard(
           purposes: ['guarantee', 'deposit', 'balance', 'no_show'],
           maxAmount: input.amount,
           bookingIds: [input.bookingId],
+          // Amendment 3: the booking's stays as the channel sent it — a stay added later is not paid by this card.
+          bookingEvidence: {
+            [input.bookingId]: await bookingConsentEvidence(
+              d,
+              tx,
+              input.bookingId,
+              tx.now.toISOString(),
+              `channel:${input.channel}`,
+            ),
+          },
         },
       }),
       entry_channel: 'vault',
