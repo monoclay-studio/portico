@@ -169,6 +169,24 @@ describe('permissions at the record’s property', () => {
   });
 });
 
+describe('external identifiers', () => {
+  it('a production hub property can be claimed by one active connection across ALL organizations', async () => {
+    const a = await setupOrg(h, { environment: 'live' });
+    const b = await setupOrg(h, { environment: 'live' });
+    const create = (org: typeof a) =>
+      org.run((tx) =>
+        svc.createConnection(tx, h.dist.deps, {
+          propertyId: org.propertyId,
+          name: 'Channex',
+          externalPropertyId: 'prod-shared-1',
+          apiKey: 'prod-key-not-real',
+        }),
+      );
+    await create(a);
+    await expect(create(b)).rejects.toMatchObject({ code: 'connection_exists' });
+  });
+});
+
 describe('simulator and environment', () => {
   it('simulator controls are refused for a real-hub connection and in live organizations', async () => {
     const live = await setupOrg(h, { environment: 'live' });

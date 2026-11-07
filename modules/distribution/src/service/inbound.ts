@@ -992,7 +992,10 @@ export async function pullFeed(
         });
         continue;
       }
-      if (it.revision.externalPropertyId !== conn.external_property_id) continue;
+      if (it.revision.externalPropertyId !== conn.external_property_id) {
+        await logDelivery(tx, { connectionId: conn.id, via, outcome: 'property_mismatch', detail: { revisionId: it.revision.revisionId } });
+        continue;
+      }
       const r = await storeRevision(tx, conn, it.revision, via);
       if (r.outcome === 'stored') {
         stored++;
@@ -1124,7 +1127,8 @@ export async function resolveRevision(
     throw new VersionConflictError('channel_revision', revisionRowId, expectedVersion, row.version);
   const by = actorKey(tx);
   if (input.action === 'retry') {
-    if (row.state === 'failed' || row.state === 'rejected') {
+    // A dismissed revision is closed by a person's decision (and acknowledged): it is never re-opened by Retry.
+    if ((row.state === 'failed' || row.state === 'rejected') && row.ack_state === 'not_due') {
       await db(tx)
         .updateTable('distribution.revision_processing')
         .set({
@@ -1235,8 +1239,7 @@ function revisionView(tx: TxContext, row: Joined, conn: Pick<ConnectionRow, 'tar
     ...(!ok ? { reason: why } : !canRecover ? { reason: noPerm } : {}),
   });
   const retryable =
-    row.state === 'failed' ||
-    row.state === 'rejected' ||
+    ((row.state === 'failed' || row.state === 'rejected') && row.ack_state === 'not_due') ||
     (row.ack_state === 'failed' && FINAL.includes(row.state));
   const issues: RevisionView['issues'] = [];
   if (row.state === 'parked') {

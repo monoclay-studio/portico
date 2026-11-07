@@ -379,6 +379,17 @@ describe('ordering, parking and recovery (DST-R09, DST-R11)', () => {
         (e) => e.code,
       ),
     ).not.toContain('orphan_revision');
+    // Inverse of dismiss: a dismissed (and acknowledged) revision is never re-opened by Retry.
+    const [closed] = await revisions(org, c);
+    expect(closed?.allowedActions.find((a) => a.action === 'retry')?.enabled).toBe(false);
+    await expect(
+      org.run((tx) =>
+        svc.resolveRevision(tx, h.dist.deps, closed?.id as string, closed?.version as number, {
+          action: 'retry',
+          reason: 'second thoughts',
+        }),
+      ),
+    ).rejects.toMatchObject({ code: 'revision_not_retryable' });
   });
 
   it('missed webhooks are recovered by the feed pull, exactly once, and the gap degrades health', async () => {
