@@ -181,7 +181,7 @@ Each agent's brief and report are in `agents/`.
     suite 11/11, including an axe scan with zero violations (WCAG 2.2 AA, every screen, drawer and palette open,
     light and dark).
   - All ten wave-1 code branches except identity-plus and the integration step are now on main.
-- **17:24 — Quality steward round 0 done.**
+- **17:27 — Quality steward round 0 done.**
   - 38 escapes traced (2 P0, 9 P1, 17 P2, 10 P3); L2 steward review is the largest source at 11.
   - v2 playbooks for 7 checkers; 51 attack patterns and 17 UX traps; a canary catalogue; a checker scorecard.
   - Top improvement: re-attack every fix before merge. The 14 P0 fixes already on main have never been re-attacked.
