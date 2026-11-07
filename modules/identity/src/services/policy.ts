@@ -1,6 +1,8 @@
 import { explainVersionMiss, sql, type TxContext, typed } from '@portico/db';
-import { actorId, requirePermission, ValidationError } from '@portico/kernel';
+import { actorId, BusinessRuleError, requirePermission, ValidationError } from '@portico/kernel';
 import type { IdentityDB } from '../tables';
+import { assertCanGrantRole, assertNotElevated } from './guard';
+import { raiseSecurityAlert } from './security';
 
 const db = (tx: TxContext) => typed<IdentityDB>(tx.db);
 
@@ -54,22 +56,55 @@ export async function updateSecurityPolicy(
   patch: SecurityPolicyPatch,
 ): Promise<SecurityPolicy> {
   requirePermission(tx, 'identity.security.manage');
+  assertNotElevated(tx, 'Changing the security policy');
   const before = await getSecurityPolicy(tx);
   const next = { ...before, ...patch };
-  if (next.breakGlassUserIds.length > 5)
-    throw new ValidationError('too_many_break_glass_users', 'Designate at most 5 break-glass users.');
-  if (patch.breakGlassRoleKey) {
+  const designationChanged =
+    (patch.breakGlassUserIds !== undefined &&
+      [...patch.breakGlassUserIds].sort().join() !== [...before.breakGlassUserIds].sort().join()) ||
+    (patch.breakGlassRoleKey !== undefined && patch.breakGlassRoleKey !== before.breakGlassRoleKey);
+  if (designationChanged) {
+    // ADR-0017 §10: nobody designates themselves, and the designator must hold everything the role grants.
+    const added = next.breakGlassUserIds.filter((u) => !before.breakGlassUserIds.includes(u));
+    if (tx.actor.kind === 'user' && added.includes(tx.actor.userId)) {
+      throw new BusinessRuleError(
+        'segregation_of_duties',
+        'You cannot designate yourself for emergency access. Ask another administrator.',
+      );
+    }
     const role = await db(tx)
       .selectFrom('identity.roles')
-      .select('id')
-      .where('key', '=', patch.breakGlassRoleKey)
+      .select(['permissions'])
+      .where('key', '=', next.breakGlassRoleKey)
+      .where('archived_at', 'is', null)
       .executeTakeFirst();
     if (!role)
       throw new ValidationError(
         'unknown_role',
-        `There is no role "${patch.breakGlassRoleKey}" in this organization.`,
+        `There is no role "${next.breakGlassRoleKey}" in this organization.`,
       );
+    await assertCanGrantRole(
+      tx,
+      role.permissions,
+      { type: 'organization', id: null },
+      undefined,
+      'Only someone who holds every permission of the emergency role can designate emergency-access users.',
+    );
+    for (const u of added) {
+      const m = await db(tx)
+        .selectFrom('identity.memberships')
+        .select('status')
+        .where('user_id', '=', u)
+        .executeTakeFirst();
+      if (m?.status !== 'active')
+        throw new ValidationError(
+          'not_an_active_member',
+          'Emergency access can only be given to active members.',
+        );
+    }
   }
+  if (next.breakGlassUserIds.length > 5)
+    throw new ValidationError('too_many_break_glass_users', 'Designate at most 5 break-glass users.');
   const values = {
     mfa_step_up_window_minutes: next.mfaStepUpWindowMinutes,
     mfa_grace_period_hours: next.mfaGracePeriodHours,
@@ -106,5 +141,18 @@ export async function updateSecurityPolicy(
     before,
     after,
   });
+  if (designationChanged) {
+    await raiseSecurityAlert(tx, {
+      rule: 'break_glass_designation_changed',
+      severity: 'high',
+      summary: `Emergency-access designation changed (role ${after.breakGlassRoleKey}, ${after.breakGlassUserIds.length} designated).`,
+      details: {
+        before: before.breakGlassUserIds,
+        after: after.breakGlassUserIds,
+        role: after.breakGlassRoleKey,
+      },
+      dedupeKey: `break-glass-designation:${after.version}`,
+    });
+  }
   return after;
 }

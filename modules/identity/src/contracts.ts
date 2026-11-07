@@ -65,6 +65,14 @@ export const createUserRequest = z.object({
     .default([]),
 });
 
+export const createUserResponse = z.object({
+  userId: z.uuid(),
+  /** `invited` when the email already belongs to a person: they accept while signed in as themselves (ADR-0017 §2). */
+  status: z.enum(['active', 'invited']),
+  invitationExpiresAt: z.string().optional(),
+  delivery: z.lazy(() => delivery).optional(),
+});
+
 export const userSummary = z.object({
   userId: z.uuid(),
   email: z.string(),
@@ -94,6 +102,17 @@ export const mfaChallengeRequest = z
 export const stepUpRequest = secondFactor;
 export const stepUpResponse = z.object({ verifiedAt: z.string(), method: z.enum(['totp', 'recovery_code']) });
 export const totpEnrolResponse = z.object({ factorId: z.uuid(), secret: z.string(), otpauthUri: z.string() });
+/**
+ * Proof of the person's existing credential before a global credential changes (ADR-0017 §4): the current
+ * authenticator code (or a recovery code) when one is enrolled, otherwise the current password.
+ */
+export const credentialProof = z
+  .object({
+    currentPassword: z.string().min(1).max(500).optional(),
+    code: z.string().min(6).max(10).optional(),
+    recoveryCode: z.string().min(10).max(20).optional(),
+  })
+  .default({});
 export const totpConfirmRequest = z.object({ code: z.string().min(6).max(10) });
 export const recoveryCodesResponse = z.object({ recoveryCodes: z.array(z.string()) });
 export const mfaStatusResponse = z.object({
@@ -107,7 +126,7 @@ export const mfaStatusResponse = z.object({
 
 export const securityPolicy = z.object({
   mfaStepUpWindowMinutes: z.number().int().min(1).max(720),
-  mfaGracePeriodHours: z.number().int().min(0).max(720),
+  mfaGracePeriodHours: z.number().int().min(0).max(72),
   requireMfaForAll: z.boolean(),
   supportAccessApproval: z.enum(['always_required', 'auto_approve_read_only']),
   supportMaxMinutes: z.number().int().min(15).max(1440),
@@ -209,22 +228,29 @@ export const inviteRequest = z.object({
   jobTitle: z.string().max(200).optional(),
   roles: z.array(roleGrant.omit({ reason: true })).default([]),
 });
-const staffMessage = z.object({
-  kind: z.string(),
-  to: z.string(),
-  subject: z.string(),
-  body: z.string(),
-  link: z.string().optional(),
-});
-export const delivery = z.object({
-  mode: z.enum(['live', 'sandbox', 'simulate']),
-  /** Only outside the live environment: the message that would have been sent, labelled simulated. */
-  simulated: staffMessage.optional(),
-});
+/**
+ * How a staff message (invitation, reset) was handled. Never contains the message or its link (ADR-0017 §3):
+ * `queued` = handed to delivery, not yet confirmed sent; `simulated` = non-live, kept in the operator/developer
+ * mailbox; `sandbox` = provider test mode.
+ */
+export const delivery = z.object({ mode: z.enum(['queued', 'simulated', 'sandbox']) });
 export const inviteResponse = z.object({ userId: z.uuid(), invitationExpiresAt: z.string(), delivery });
 export const acceptInvitationRequest = z.object({
   token: z.string().min(10).max(200),
-  password: z.string().min(12).max(500).optional(),
+  /** A brand-new person chooses a password; a person who already has one enters it (ADR-0017 §2/§4). */
+  password: z.string().min(1).max(500).optional(),
+  code: z.string().min(6).max(10).optional(),
+  recoveryCode: z.string().min(10).max(20).optional(),
+});
+export const myInvitation = z.object({ organizationId: z.uuid(), name: z.string(), environment: z.string() });
+export const devMailboxMessage = z.object({
+  id: z.uuid(),
+  organizationId: z.uuid(),
+  kind: z.string(),
+  subject: z.string(),
+  body: z.string(),
+  link: z.string().nullable(),
+  createdAt: z.string(),
 });
 export const passwordResetRequest = z.object({ email: z.email() });
 export const passwordResetComplete = z.object({
@@ -386,10 +412,23 @@ export const ssoEnforcementRequest = z.object({
   exemptUserIds: z.array(z.uuid()).max(3).default([]),
 });
 export const ssoStartRequest = z.object({ organizationId: z.uuid() });
-export const ssoStartResponse = z.object({ authorizationUrl: z.string(), expiresAt: z.string() });
+export const ssoStartResponse = z.object({
+  authorizationUrl: z.string(),
+  expiresAt: z.string(),
+  /** Keep in the starting tab (sessionStorage) and send back with the callback; binds the login to this browser. */
+  browserBinding: z.string(),
+});
 export const ssoCallbackRequest = z.object({
   state: z.string().min(10).max(300),
   code: z.string().min(1).max(4000),
+  browserBinding: z.string().min(10).max(200),
+});
+export const ssoDomainRequest = z.object({ domain: z.string().min(3).max(253) });
+export const ssoDomain = z.object({
+  domain: z.string(),
+  verified: z.boolean(),
+  verifiedAt: z.string().nullable(),
+  txtRecord: z.object({ name: z.string(), value: z.string() }),
 });
 
 // ───────────────────────────── SCIM (RFC 7643/7644) ─────────────────────────────

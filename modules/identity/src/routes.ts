@@ -10,9 +10,16 @@ import {
   setVersion,
   toProblem,
 } from '@portico/http';
-import { BusinessRuleError, requirePermission, UnauthenticatedError } from '@portico/kernel';
+import {
+  BusinessRuleError,
+  ConflictError,
+  DomainError,
+  requirePermission,
+  UnauthenticatedError,
+} from '@portico/kernel';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
+import { readDevMailbox } from './adapters';
 import * as svc from './api';
 import {
   acceptInvitationRequest,
@@ -22,6 +29,10 @@ import {
   cloneRoleRequest,
   createRoleRequest,
   createUserRequest,
+  createUserResponse,
+  credentialProof,
+  delivery,
+  devMailboxMessage,
   elevationRequest,
   elevationView,
   inviteRequest,
@@ -33,6 +44,7 @@ import {
   memberUpdate,
   mfaChallengeRequest,
   mfaStatusResponse,
+  myInvitation,
   passwordResetComplete,
   passwordResetRequest,
   permissionCatalog,
@@ -53,6 +65,8 @@ import {
   ssoCallbackRequest,
   ssoConfigRequest,
   ssoConnection,
+  ssoDomain,
+  ssoDomainRequest,
   ssoEnforcementRequest,
   ssoMappingsRequest,
   ssoStartRequest,
@@ -115,6 +129,12 @@ async function maybeIdempotent<T>(
   return withTenantTx(database, req.ctx, fn);
 }
 
+/** Credential changes return their failure (so the failure counter commits) and are thrown here, after commit. */
+function unwrap<T>(outcome: svc.Outcome<T>): T {
+  if (!outcome.ok) throw outcome.error;
+  return outcome.value;
+}
+
 function currentUserId(req: FastifyRequest): string {
   const a = req.ctx.actor;
   if (a.kind !== 'user')
@@ -132,7 +152,10 @@ function installStepUpTranslator(app: PorticoApp) {
     if (reply.statusCode !== 403 || typeof payload !== 'string' || !req.auth) return payload;
     const authz = req.auth.authz;
     if (!isExplainingAuthorizer(authz)) return payload;
-    let problem: { code?: string; details?: { permission?: string; scope?: { propertyId?: string } } };
+    let problem: {
+      code?: string;
+      details?: { permission?: string; scope?: { propertyId?: string; reason?: string } };
+    };
     try {
       problem = JSON.parse(payload);
     } catch {
@@ -140,7 +163,14 @@ function installStepUpTranslator(app: PorticoApp) {
     }
     const permission = problem.details?.permission;
     if (problem.code !== 'forbidden' || !permission) return payload;
-    const denial = authz.explainDenial(permission, problem.details?.scope);
+    const scope = problem.details?.scope;
+    // Identity's own escalation refusals ("you can only grant what you hold") carry a reason, not a property:
+    // stepping up would not help, so they stay `forbidden` (P2-1). Only a property scope is passed on.
+    if (scope?.reason) return payload;
+    const denial = authz.explainDenial(
+      permission,
+      scope?.propertyId ? { propertyId: scope.propertyId } : undefined,
+    );
     if (!denial) return payload;
     const err =
       denial === 'mfa_required'
@@ -151,6 +181,14 @@ function installStepUpTranslator(app: PorticoApp) {
 }
 
 async function requireOperator(ports: IdentityPorts, req: FastifyRequest): Promise<Operator> {
+  // P2-17: static operator tokens have no expiry and no MFA, so the console is off in production until operators
+  // sign in through AWS IAM Identity Center (launch gate in the readiness register).
+  if (ports.config?.operatorConsoleEnabled === false)
+    throw new DomainError(
+      'operator_console_disabled',
+      'The operator console is disabled in this deployment until operator sign-in uses AWS IAM Identity Center.',
+      { status: 403 },
+    );
   const token = bearerToken(req);
   const op = token && ports.operators ? ports.operators.authenticate(token) : null;
   if (!op)
@@ -219,7 +257,11 @@ function registerAuthRoutes(app: PorticoApp, database: PorticoDatabase, ports: I
     },
     async (req) => {
       const r = await svc.startSsoLogin(database, ports, req.body);
-      return { authorizationUrl: r.authorizationUrl, expiresAt: r.expiresAt.toISOString() };
+      return {
+        authorizationUrl: r.authorizationUrl,
+        expiresAt: r.expiresAt.toISOString(),
+        browserBinding: r.browserBinding,
+      };
     },
   );
   app.post(
@@ -243,7 +285,7 @@ function registerAuthRoutes(app: PorticoApp, database: PorticoDatabase, ports: I
         response: { 200: z.object({ organizationId: z.uuid(), userId: z.uuid() }) },
       },
     },
-    (req) => svc.acceptInvitation(database, req.body),
+    (req) => svc.acceptInvitation(database, ports, req.body),
   );
   app.post(
     '/auth/password-reset',
@@ -309,10 +351,18 @@ function registerSelfRoutes(app: PorticoApp, database: PorticoDatabase, ports: I
     { schema: { tags: ['Two-step verification'], response: { 200: mfaStatusResponse } } },
     (req) => withTenantTx(database, req.ctx, (tx) => svc.mfaStatus(tx, currentUserId(req))),
   );
+  // ADR-0017 §4: changing a global credential needs proof of the existing one (current code or recovery code when
+  // enrolled, otherwise the current password); a fresh session is not enough.
   app.post(
     '/me/mfa/totp',
-    { schema: { tags: ['Two-step verification'], response: { 200: totpEnrolResponse } } },
-    (req) => withTenantTx(database, req.ctx, (tx) => svc.enrolTotp(tx, ports)),
+    {
+      schema: {
+        tags: ['Two-step verification'],
+        body: credentialProof,
+        response: { 200: totpEnrolResponse },
+      },
+    },
+    async (req) => unwrap(await withTenantTx(database, req.ctx, (tx) => svc.enrolTotp(tx, ports, req.body))),
   );
   app.post(
     '/me/mfa/totp/confirm',
@@ -339,16 +389,44 @@ function registerSelfRoutes(app: PorticoApp, database: PorticoDatabase, ports: I
   );
   app.post(
     '/me/mfa/recovery-codes',
-    { schema: { tags: ['Two-step verification'], response: { 200: recoveryCodesResponse } } },
-    (req) => withTenantTx(database, req.ctx, (tx) => svc.regenerateRecoveryCodes(tx)),
-  );
-  app.delete(
-    '/me/mfa',
-    { schema: { tags: ['Two-step verification'], response: { 204: z.null() } } },
-    async (req, reply) => {
-      await withTenantTx(database, req.ctx, (tx) => svc.disableOwnMfa(tx));
-      return reply.status(204).send(null);
+    {
+      schema: {
+        tags: ['Two-step verification'],
+        body: credentialProof,
+        response: { 200: recoveryCodesResponse },
+      },
     },
+    async (req) =>
+      unwrap(await withTenantTx(database, req.ctx, (tx) => svc.regenerateRecoveryCodes(tx, ports, req.body))),
+  );
+  const disableMfa = async (
+    req: FastifyRequest<{ Body: z.infer<typeof credentialProof> }>,
+    reply: FastifyReply,
+  ) => {
+    unwrap(await withTenantTx(database, req.ctx, (tx) => svc.disableOwnMfa(tx, ports, req.body)));
+    return reply.status(204).send(null);
+  };
+  const disableSchema = {
+    schema: { tags: ['Two-step verification'], body: credentialProof, response: { 204: z.null() } },
+  };
+  app.delete('/me/mfa', disableSchema, disableMfa);
+  // Same as DELETE /me/mfa for clients that cannot send a body with DELETE.
+  app.post('/me/mfa/disable', disableSchema, disableMfa);
+  app.get(
+    '/me/invitations',
+    { schema: { tags: ['Authentication'], response: { 200: z.object({ items: z.array(myInvitation) }) } } },
+    async (req) => ({ items: await svc.listMyInvitations(database, req.ctx.actor) }),
+  );
+  app.post(
+    '/me/invitations/:organizationId/accept',
+    {
+      schema: {
+        tags: ['Authentication'],
+        params: z.object({ organizationId: z.uuid() }),
+        response: { 200: z.object({ organizationId: z.uuid(), userId: z.uuid() }) },
+      },
+    },
+    (req) => svc.acceptMembershipAsSelf(database, req.ctx.actor, req.params.organizationId),
   );
   app.get(
     '/me/sessions',
@@ -419,7 +497,7 @@ function registerAdminRoutes(app: PorticoApp, database: PorticoDatabase, ports: 
   app.post(
     '/users',
     {
-      schema: { tags: ['Users'], body: createUserRequest, response: { 201: z.object({ userId: z.uuid() }) } },
+      schema: { tags: ['Users'], body: createUserRequest, response: { 201: createUserResponse } },
     },
     async (req, reply) => {
       const key = requireIdempotencyKey(req);
@@ -427,7 +505,17 @@ function registerAdminRoutes(app: PorticoApp, database: PorticoDatabase, ports: 
         database,
         req.ctx,
         { scope: 'POST /users', key, request: { ...req.body, initialPassword: undefined } },
-        async (tx) => ({ status: 201, body: await svc.createUser(tx, req.body) }),
+        async (tx) => {
+          const created = await svc.createUser(tx, req.body);
+          if (created.status === 'active') return { status: 201, body: created };
+          // An existing person: they are invited and accept themselves (ADR-0017 §2). The link goes only to them.
+          const sent = await svc.sendInvitation(tx, ports, {
+            userId: created.userId,
+            email: req.body.email,
+            displayName: req.body.displayName,
+          });
+          return { status: 201, body: { ...created, ...sent } };
+        },
       );
       return reply.status(201).send(res.body);
     },
@@ -516,7 +604,7 @@ function registerAdminRoutes(app: PorticoApp, database: PorticoDatabase, ports: 
     },
     (req) =>
       withTenantTx(database, req.ctx, async (tx) => {
-        await svc.revokeAssignment(tx, req.params.assignmentId, req.body.reason);
+        await svc.revokeAssignment(tx, req.params.assignmentId, req.body.reason, ports);
         return svc.getMember(tx, req.params.id);
       }),
   );
@@ -559,7 +647,7 @@ function registerAdminRoutes(app: PorticoApp, database: PorticoDatabase, ports: 
     { schema: { tags: ['Users'], params: idParams, body: reasonRequest, response: { 200: memberDetail } } },
     (req) =>
       maybeIdempotent(database, req, `POST /users/${req.params.id}/suspend`, req.body, async (tx) => {
-        await svc.suspendMember(tx, req.params.id, req.body.reason);
+        await svc.suspendMember(tx, req.params.id, req.body.reason, ports);
         return svc.getMember(tx, req.params.id);
       }),
   );
@@ -589,7 +677,7 @@ function registerAdminRoutes(app: PorticoApp, database: PorticoDatabase, ports: 
     },
     (req) =>
       maybeIdempotent(database, req, `POST /users/${req.params.id}/remove`, req.body, (tx) =>
-        svc.removeMember(tx, req.params.id, req.body.reason),
+        svc.removeMember(tx, req.params.id, req.body.reason, ports),
       ),
   );
   app.post(
@@ -598,25 +686,23 @@ function registerAdminRoutes(app: PorticoApp, database: PorticoDatabase, ports: 
       schema: {
         tags: ['Users'],
         params: idParams,
-        response: {
-          202: z.object({
-            delivery: z.object({ mode: z.string(), simulated: z.record(z.string(), z.unknown()).optional() }),
-          }),
-        },
+        response: { 202: z.object({ delivery }) },
       },
     },
     async (req, reply) => {
       const delivery = await withTenantTx(database, req.ctx, (tx) =>
         svc.sendPasswordResetForMember(tx, ports, req.params.id),
       );
-      return reply.status(202).send({ delivery: delivery as never });
+      return reply.status(202).send({ delivery: { mode: delivery.mode } });
     },
   );
   app.post(
     '/users/:id/mfa/reset',
     { schema: { tags: ['Users'], params: idParams, body: reasonRequest, response: { 204: z.null() } } },
     async (req, reply) => {
-      await withTenantTx(database, req.ctx, (tx) => svc.resetMemberMfa(tx, req.params.id, req.body.reason));
+      await withTenantTx(database, req.ctx, (tx) =>
+        svc.resetMemberMfa(tx, req.params.id, req.body.reason, ports),
+      );
       return reply.status(204).send(null);
     },
   );
@@ -661,19 +747,29 @@ function registerAdminRoutes(app: PorticoApp, database: PorticoDatabase, ports: 
     { schema: { tags: ['API clients'], body: apiClientRequest, response: { 201: apiClientCreated } } },
     async (req, reply) => {
       const key = requireIdempotencyKey(req);
+      // P2-7: the token is shown once and never stored with the idempotency record. A replay of the same request
+      // finds the key already issued and says so instead of returning (or re-minting) the secret.
+      let token: string | null = null;
       const res = await runIdempotent(
         database,
         req.ctx,
         { scope: 'POST /api-clients', key, request: req.body },
-        async (tx) => ({
-          status: 201,
-          body: await svc.issueApiClient(tx, ports, {
+        async (tx) => {
+          const issued = await svc.issueApiClient(tx, ports, {
             ...req.body,
             expiresAt: req.body.expiresAt ? new Date(req.body.expiresAt) : undefined,
-          }),
-        }),
+          });
+          token = issued.token;
+          return { status: 201, body: { clientId: issued.clientId } };
+        },
       );
-      return reply.status(201).send(res.body);
+      if (res.replayed || token === null)
+        throw new ConflictError(
+          'already_issued',
+          'This API client was already issued for this request and its token is shown only once. If the token was lost, revoke the client and issue a new one.',
+          { clientId: res.body.clientId },
+        );
+      return reply.status(201).send({ clientId: res.body.clientId, token });
     },
   );
   app.post(
@@ -909,7 +1005,12 @@ function registerSsoRoutes(app: PorticoApp, database: PorticoDatabase, ports: Id
     { schema: { tags: ['Single sign-on'], body: ssoConfigRequest, response: { 200: ssoConnection } } },
     async (req, reply) => {
       const ifMatch = req.headers['if-match'] ? requireIfMatch(req) : undefined;
-      const c = await withTenantTx(database, req.ctx, (tx) => svc.configureSso(tx, ports, req.body, ifMatch));
+      requirePermission(req.ctx, 'identity.sso.manage');
+      // The identity provider is called before the transaction opens (P2-2).
+      const discovery = await svc.discoverIssuer(ports, req.body.issuer);
+      const c = await withTenantTx(database, req.ctx, (tx) =>
+        svc.configureSso(tx, ports, req.body, ifMatch, discovery),
+      );
       setVersion(reply, c.version);
       return c;
     },
@@ -939,6 +1040,31 @@ function registerSsoRoutes(app: PorticoApp, database: PorticoDatabase, ports: Id
       },
     },
     (req) => withTenantTx(database, req.ctx, (tx) => svc.setSsoEnforcement(tx, req.body)),
+  );
+  // ADR-0017 §5: an organization proves it owns an email domain before SSO may link existing people of it.
+  app.get(
+    '/sso/domains',
+    { schema: { tags: ['Single sign-on'], response: { 200: z.object({ items: z.array(ssoDomain) }) } } },
+    async (req) => ({ items: await withTenantTx(database, req.ctx, (tx) => svc.listSsoDomains(tx)) }),
+  );
+  app.post(
+    '/sso/domains',
+    { schema: { tags: ['Single sign-on'], body: ssoDomainRequest, response: { 201: ssoDomain } } },
+    async (req, reply) =>
+      reply
+        .status(201)
+        .send(await withTenantTx(database, req.ctx, (tx) => svc.addSsoDomain(tx, req.body.domain))),
+  );
+  app.post(
+    '/sso/domains/:domain/verify',
+    {
+      schema: {
+        tags: ['Single sign-on'],
+        params: z.object({ domain: z.string().min(3).max(253) }),
+        response: { 200: ssoDomain },
+      },
+    },
+    (req) => svc.verifySsoDomain(database, req.ctx, ports, req.params.domain),
   );
 }
 
@@ -1103,6 +1229,22 @@ function registerOperatorRoutes(app: PorticoApp, database: PorticoDatabase, port
     async (req) => {
       await requireOperator(ports, req);
       return { items: await svc.listPlatformAlerts(database) };
+    },
+  );
+  // ADR-0017 §3: simulated (non-live) invitations and resets land here, never in the admin's API response.
+  app.get(
+    '/operator/mailbox',
+    {
+      config,
+      schema: {
+        tags,
+        querystring: z.object({ recipient: z.email() }),
+        response: { 200: z.object({ items: z.array(devMailboxMessage) }) },
+      },
+    },
+    async (req) => {
+      await requireOperator(ports, req);
+      return { items: await readDevMailbox(database, ports.cipher, req.query.recipient) };
     },
   );
 }

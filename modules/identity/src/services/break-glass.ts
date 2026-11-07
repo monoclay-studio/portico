@@ -8,8 +8,10 @@ import {
   requirePermission,
   ValidationError,
 } from '@portico/kernel';
+import { entryCovers } from '../domain/permissions';
 import type { IdentityPorts } from '../ports';
 import type { IdentityDB } from '../tables';
+import { assertHumanApprover } from './guard';
 import { hasActiveTotp, requireRecentStepUp } from './mfa';
 import { getSecurityPolicy } from './policy';
 import { raiseSecurityAlert } from './security';
@@ -108,22 +110,27 @@ export async function startElevation(
     dedupeKey: `elevation:${id}`,
   });
   if (ports.notifier) {
-    const admins = await db(tx)
+    // P3-4: every organization administrator (anyone holding identity.user.manage org-wide), not one template.
+    const rows = await db(tx)
       .selectFrom('identity.role_assignments as a')
       .innerJoin('identity.roles as r', 'r.id', 'a.role_id')
       .innerJoin('identity.users as u', 'u.id', 'a.user_id')
       .innerJoin('identity.memberships as m', 'm.user_id', 'a.user_id')
-      .select('u.email')
-      .distinct()
-      .where('r.key', '=', 'org_admin')
+      .select(['u.email', 'r.permissions', 'a.user_id'])
+      .where('a.scope_type', '=', 'organization')
       .where('a.revoked_at', 'is', null)
       .where('m.status', '=', 'active')
       .where('a.user_id', '<>', userId)
       .execute();
-    for (const a of admins) {
+    const emails = new Set(
+      rows
+        .filter((r) => r.permissions.some((p) => entryCovers(p, 'identity.user.manage')))
+        .map((r) => r.email),
+    );
+    for (const email of emails) {
       await ports.notifier.send(tx, {
         kind: 'staff.securityAlert',
-        to: a.email,
+        to: email,
         subject: 'Emergency access started',
         body: `${tx.actor.displayName ?? 'A staff member'} started emergency access until ${endsAt.toISOString()}. Reason: ${input.reason}`,
       });
@@ -177,6 +184,7 @@ export async function listElevations(tx: TxContext, opts: { pendingReviewOnly?: 
 /** Post-incident review by a different administrator (the elevated person cannot review their own). */
 export async function reviewElevation(tx: TxContext, elevationId: string, notes: string) {
   requirePermission(tx, 'identity.elevation.review');
+  assertHumanApprover(tx, 'The review of emergency access');
   const e = await db(tx)
     .selectFrom('identity.elevations')
     .selectAll()

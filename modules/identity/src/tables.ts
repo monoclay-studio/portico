@@ -14,6 +14,9 @@ export interface IdentityDB {
     mfa_secret_enc: string | null;
     created_at: Generated<Date>;
     updated_at: Generated<Date>;
+    first_activated_at: Date | null;
+    mfa_failed_attempts: Generated<number>;
+    mfa_locked_until: Date | null;
   };
   'identity.memberships': {
     id: string;
@@ -115,6 +118,7 @@ export interface IdentityDB {
     code_hash: string;
     created_at: Generated<Date>;
     used_at: Date | null;
+    revoked_at: Generated<Date | null>;
   };
   'identity.mfa_challenges': {
     id: string;
@@ -193,12 +197,31 @@ export interface IdentityDB {
     id: string;
     tenant_id: string;
     state_hash: string;
+    binding_hash: string;
     nonce: string;
     code_verifier_enc: string;
     redirect_uri: string;
     created_at: Generated<Date>;
     expires_at: Date;
     consumed_at: Date | null;
+  };
+  'identity.sso_identities': {
+    id: string;
+    tenant_id: string;
+    issuer: string;
+    subject: string;
+    user_id: string;
+    email_at_link: string;
+    linked_at: Date;
+  };
+  'identity.sso_domains': {
+    id: string;
+    tenant_id: string;
+    domain: string;
+    verification_token: string;
+    verified_at: Date | null;
+    created_at: Generated<Date>;
+    created_by: string;
   };
   'identity.secret_values': {
     tenant_id: string;

@@ -1,6 +1,8 @@
 import { type TxContext, typed } from '@portico/db';
 import { ForbiddenError, NotFoundError, requirePermission, ValidationError } from '@portico/kernel';
 import { indexCatalog, validateRolePermissions } from '../domain/permissions';
+import { isExplainingAuthorizer } from '../domain/step-up';
+import { MfaRequiredError } from '../errors';
 import type { IdentityPorts } from '../ports';
 import { createApiClient } from '../service';
 import type { IdentityDB } from '../tables';
@@ -13,6 +15,11 @@ import type { IdentityDB } from '../tables';
  */
 const db = (tx: TxContext) => typed<IdentityDB>(tx.db);
 
+/** ADR-0017 §9: keys never carry identity administration, except SCIM provisioning. */
+const FORBIDDEN_IN_KEYS = (p: string) =>
+  p === '*' || ((p === 'identity.*' || p.startsWith('identity.')) && p !== 'identity.scim.provision');
+export const MAX_SENSITIVE_KEY_DAYS = 90;
+
 export async function issueApiClient(
   tx: TxContext,
   ports: Pick<IdentityPorts, 'permissionCatalog'>,
@@ -24,8 +31,17 @@ export async function issueApiClient(
   },
 ) {
   requirePermission(tx, 'identity.apiClient.manage');
-  if (ports.permissionCatalog) {
-    const issues = validateRolePermissions(input.permissions, indexCatalog(ports.permissionCatalog()));
+  const forbidden = input.permissions.filter(FORBIDDEN_IN_KEYS);
+  if (forbidden.length) {
+    throw new ValidationError(
+      'permission_not_allowed_in_keys',
+      `API keys cannot carry identity administration (${forbidden.join(', ')}). Only identity.scim.provision is allowed; administrators act as themselves.`,
+      { forbidden },
+    );
+  }
+  const catalog = ports.permissionCatalog ? indexCatalog(ports.permissionCatalog()) : null;
+  if (catalog) {
+    const issues = validateRolePermissions(input.permissions, catalog);
     if (issues.length)
       throw new ValidationError(
         'invalid_permissions',
@@ -35,6 +51,23 @@ export async function issueApiClient(
   }
   if (input.expiresAt && input.expiresAt <= tx.now)
     throw new ValidationError('invalid_expiry', 'The expiry must be in the future.');
+  const sensitive = catalog ? input.permissions.some((p) => catalog.isSensitive(p)) : true;
+  if (sensitive) {
+    // ADR-0017 §9: a key with ⚑ permissions expires within 90 days and needs a fresh MFA verification to issue.
+    const max = new Date(tx.now.getTime() + MAX_SENSITIVE_KEY_DAYS * 86_400_000);
+    if (!input.expiresAt || input.expiresAt > max) {
+      throw new ValidationError(
+        'expiry_required',
+        `A key with sensitive permissions must expire within ${MAX_SENSITIVE_KEY_DAYS} days. Set an expiry date.`,
+      );
+    }
+    if (tx.actor.kind !== 'system') {
+      const s = isExplainingAuthorizer(tx.authz) ? tx.authz.stepUp : null;
+      const fresh =
+        !!s?.mfaVerifiedAt && tx.now.getTime() - s.mfaVerifiedAt.getTime() <= s.stepUpWindowMinutes * 60_000;
+      if (!fresh) throw new MfaRequiredError({ stepUpWindowMinutes: s?.stepUpWindowMinutes ?? 15 });
+    }
+  }
   for (const p of input.permissions) {
     const held = tx.authz.propertyScope(p);
     const ok =

@@ -1,5 +1,5 @@
 import { type Selectable, sql, type TxContext, typed } from '@portico/db';
-import { DomainError, EntitlementError, newId, requirePermission } from '@portico/kernel';
+import { BusinessRuleError, DomainError, EntitlementError, newId, requirePermission } from '@portico/kernel';
 import {
   interpretGroupPatch,
   interpretUserPatch,
@@ -13,14 +13,19 @@ import {
 } from '../domain/scim';
 import type { IdentityPorts } from '../ports';
 import type { IdentityDB } from '../tables';
+import { assertAdministratorRemains, membershipsElsewhere, revokeApiKeysIssuedBy } from './guard';
+import { sendInvitation } from './lifecycle';
 import { reconcileMappedRoles } from './mapped-roles';
 
 /**
  * SCIM 2.0 provisioning (RFC 7643/7644) for Users and Groups. The IdP authenticates with an API client token whose
  * permissions include `identity.scim.provision` (created by an administrator; shown once, revocable).
  *  - Users: create (membership, no password — members sign in through SSO), read, list/filter, replace, patch
- *    (`active=false` suspends: sessions and roles revoked; `active=true` reactivates and re-applies group roles),
- *    delete (membership removed; records kept for audit).
+ *    (`active=false` suspends: sessions, roles and the person's API keys revoked; `active=true` reactivates and
+ *    re-applies group roles), delete (membership removed; records kept for audit).
+ *  - ADR-0017 §2: a person who also belongs to another organization is provisioned `invited` and accepts while
+ *    signed in as themselves; SCIM never activates them silently (`active=true` leaves them invited).
+ *  - ADR-0017 §6: deactivating or deleting the last administrator is refused.
  *  - Groups: create, read, list, patch membership, rename, delete. Group membership drives roles through the same
  *    group → role mappings as OIDC (assignments with source `scim`).
  */
@@ -111,7 +116,7 @@ export interface ScimUserInput {
 
 export async function scimCreateUser(
   tx: TxContext,
-  ports: Pick<IdentityPorts, 'hasEntitlement'>,
+  ports: Pick<IdentityPorts, 'hasEntitlement' | 'notifier' | 'config' | 'organizationName'>,
   base: string,
   input: ScimUserInput,
 ) {
@@ -119,9 +124,10 @@ export async function scimCreateUser(
   const email = input.userName.toLowerCase();
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email))
     throw new ScimError(400, 'userName must be the person’s work email.', 'invalidValue');
+  const candidate = newId();
   const { rows } = await sql<{
     id: string;
-  }>`select identity.ensure_user(${newId()}::uuid, ${email}) as id`.execute(tx.db);
+  }>`select identity.ensure_user(${candidate}::uuid, ${email}) as id`.execute(tx.db);
   const userId = rows[0]?.id as string;
   const existing = await db(tx)
     .selectFrom('identity.memberships')
@@ -131,10 +137,13 @@ export async function scimCreateUser(
   if (existing && existing.status !== 'removed')
     throw new ScimError(409, `${email} is already provisioned.`, 'uniqueness');
   const active = input.active ?? true;
+  // ADR-0017 §2: someone who already works for another organization joins only with their consent.
+  const invited = userId !== candidate && (await membershipsElsewhere(tx, userId)) > 0;
+  const status = invited ? 'invited' : active ? 'active' : 'suspended';
   const values = {
     display_name: scimDisplayName(input),
-    status: (active ? 'active' : 'suspended') as 'active' | 'suspended',
-    activated_at: active ? tx.now : null,
+    status: status as 'invited' | 'active' | 'suspended',
+    activated_at: status === 'active' ? tx.now : null,
     provisioned_by: 'scim' as const,
     external_id: input.externalId ?? null,
     status_reason: null,
@@ -162,13 +171,17 @@ export async function scimCreateUser(
   await tx.audit({
     action: 'identity.scim.createUser',
     target: { type: 'user', id: userId },
-    after: { email, externalId: input.externalId ?? null, active },
+    after: { externalId: input.externalId ?? null, active, status },
   });
-  await tx.emit({
-    type: 'identity.membership.activated',
-    aggregate: { type: 'user', id: userId },
-    payload: { userId, via: 'scim' },
-  });
+  if (invited) {
+    await sendInvitation(tx, ports, { userId, email, displayName: values.display_name });
+  } else if (status === 'active') {
+    await tx.emit({
+      type: 'identity.membership.activated',
+      aggregate: { type: 'user', id: userId },
+      payload: { userId, via: 'scim' },
+    });
+  }
   await reconcileFromGroups(tx, userId);
   return userResource(await loadMember(tx, userId), base);
 }
@@ -219,7 +232,28 @@ export async function scimListUsers(
 async function setActive(tx: TxContext, userId: string, active: boolean) {
   const m = await loadMember(tx, userId);
   if (m.status === (active ? 'active' : 'suspended')) return;
+  // An invitation is accepted only by the person (ADR-0017 §2): SCIM can neither activate nor suspend it.
+  if (m.status === 'invited') return;
   if (active) {
+    const row = await db(tx)
+      .selectFrom('identity.memberships')
+      .select('activated_at')
+      .where('user_id', '=', userId)
+      .executeTakeFirstOrThrow();
+    if (row.activated_at === null && (await membershipsElsewhere(tx, userId)) > 0) {
+      // Provisioned inactive and never accepted, and the person now works elsewhere too: invite, don't activate.
+      await db(tx)
+        .updateTable('identity.memberships')
+        .set({ status: 'invited', status_reason: 'scim: awaiting acceptance', version: sql`version + 1` })
+        .where('user_id', '=', userId)
+        .execute();
+      await tx.audit({
+        action: 'identity.scim.activateUser',
+        target: { type: 'user', id: userId },
+        metadata: { result: 'invited' },
+      });
+      return;
+    }
     await db(tx)
       .updateTable('identity.memberships')
       .set({
@@ -237,6 +271,7 @@ async function setActive(tx: TxContext, userId: string, active: boolean) {
       payload: { userId, via: 'scim' },
     });
   } else {
+    await lastAdministratorGuard(tx, userId);
     await db(tx)
       .updateTable('identity.memberships')
       .set({ status: 'suspended', status_reason: 'scim: deactivated', version: sql`version + 1` })
@@ -254,6 +289,7 @@ async function setActive(tx: TxContext, userId: string, active: boolean) {
       .where('user_id', '=', userId)
       .where('revoked_at', 'is', null)
       .execute();
+    await revokeApiKeysIssuedBy(tx, userId);
     await tx.emit({
       type: 'identity.membership.suspended',
       aggregate: { type: 'user', id: userId },
@@ -342,6 +378,7 @@ export async function scimDeleteUser(
 ) {
   await guard(tx, ports);
   await loadMember(tx, userId);
+  await lastAdministratorGuard(tx, userId);
   await setActive(tx, userId, false);
   await db(tx)
     .updateTable('identity.memberships')
@@ -355,6 +392,16 @@ export async function scimDeleteUser(
     aggregate: { type: 'user', id: userId },
     payload: { userId, via: 'scim' },
   });
+}
+
+/** ADR-0017 §6 for the identity provider: never deprovision the organization's last administrator. */
+async function lastAdministratorGuard(tx: TxContext, userId: string) {
+  try {
+    await assertAdministratorRemains(tx, { userId });
+  } catch (err) {
+    if (err instanceof BusinessRuleError) throw new ScimError(409, err.message, 'mutability');
+    throw err;
+  }
 }
 
 // ───────────────────────────── Groups ─────────────────────────────

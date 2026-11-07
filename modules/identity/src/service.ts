@@ -3,6 +3,7 @@ import { type PorticoDatabase, sql, type TxContext, typed, withTenantTx } from '
 import {
   type Actor,
   type Authorizer,
+  assertExternalEffectAllowed,
   BusinessRuleError,
   DomainError,
   ForbiddenError,
@@ -24,6 +25,13 @@ import { ROLE_TEMPLATES } from './domain/role-templates';
 import { type StepUpState, stepUpAuthorizer } from './domain/step-up';
 import type { IdentityPorts } from './ports';
 import { activeElevation } from './services/break-glass';
+import {
+  assertAdministratorRemains,
+  assertCanGrantRole,
+  assertNotElevated,
+  assertPowerOver,
+  revokeApiKeysIssuedBy,
+} from './services/guard';
 import { createMfaChallenge, hasActiveTotp } from './services/mfa';
 import { getSecurityPolicy } from './services/policy';
 import { checkSignInLocation, recordSignInAttempt } from './services/security';
@@ -48,6 +56,11 @@ export async function hashPassword(password: string): Promise<string> {
 
 // ───────────────────────────── Roles ─────────────────────────────
 
+/**
+ * Seed or refresh the system role templates. P2-15: a template never overwrites a custom role that happens to use
+ * the same key (custom keys are refused for template keys and the `portico_` namespace, so this only matters for
+ * rows created before the reservation existed).
+ */
 export async function seedSystemRoles(tx: TxContext): Promise<void> {
   for (const t of ROLE_TEMPLATES) {
     await db(tx)
@@ -64,7 +77,8 @@ export async function seedSystemRoles(tx: TxContext): Promise<void> {
       .onConflict((oc) =>
         oc
           .columns(['tenant_id', 'key'])
-          .doUpdateSet({ permissions: [...t.permissions], name: t.name, description: t.description }),
+          .doUpdateSet({ permissions: [...t.permissions], name: t.name, description: t.description })
+          .where('identity.roles.is_system', '=', true),
       )
       .execute();
   }
@@ -92,12 +106,23 @@ export interface CreateUserInput {
   }>;
 }
 
-export async function createUser(tx: TxContext, input: CreateUserInput): Promise<{ userId: string }> {
+/**
+ * Add a staff member. ADR-0017 §2: when the email already belongs to a person (a global user who works elsewhere or
+ * was provisioned before), the membership is created `invited` — the person accepts it while signed in as themselves
+ * — and no password is ever set for them. An initial password is accepted only for a brand-new person.
+ */
+export async function createUser(
+  tx: TxContext,
+  input: CreateUserInput,
+): Promise<{ userId: string; status: 'active' | 'invited' }> {
   requirePermission(tx, 'identity.user.manage');
+  assertNotElevated(tx, 'Adding staff');
+  const candidate = newId();
   const { rows } = await sql<{
     id: string;
-  }>`select identity.ensure_user(${newId()}::uuid, ${input.email}) as id`.execute(tx.db);
+  }>`select identity.ensure_user(${candidate}::uuid, ${input.email}) as id`.execute(tx.db);
   const userId = rows[0]?.id as string;
+  const brandNew = userId === candidate;
   const existing = await db(tx)
     .selectFrom('identity.memberships')
     .select('id')
@@ -105,6 +130,13 @@ export async function createUser(tx: TxContext, input: CreateUserInput): Promise
     .executeTakeFirst();
   if (existing)
     throw new BusinessRuleError('already_member', `${input.email} is already a member of this organization.`);
+  if (!brandNew && input.initialPassword) {
+    throw new ValidationError(
+      'person_already_has_sign_in',
+      'This person already has a Portico sign-in. Add them without a password: they will be invited and keep their own password.',
+    );
+  }
+  const status = brandNew ? 'active' : 'invited';
   await db(tx)
     .insertInto('identity.memberships')
     .values({
@@ -113,58 +145,53 @@ export async function createUser(tx: TxContext, input: CreateUserInput): Promise
       user_id: userId,
       display_name: input.displayName,
       job_title: input.jobTitle ?? null,
+      status,
+      activated_at: brandNew ? tx.now : null,
+      provisioned_by: brandNew ? 'manual' : 'invitation',
     })
     .execute();
-  if (input.initialPassword) {
-    const user = await db(tx)
-      .selectFrom('identity.users')
-      .select('password_hash')
+  if (brandNew && input.initialPassword) {
+    await db(tx)
+      .updateTable('identity.users')
+      .set({ password_hash: await hashPassword(input.initialPassword) })
       .where('id', '=', userId)
-      .executeTakeFirstOrThrow();
-    if (!user.password_hash) {
-      await db(tx)
-        .updateTable('identity.users')
-        .set({ password_hash: await hashPassword(input.initialPassword) })
-        .where('id', '=', userId)
-        .execute();
-    }
+      .execute();
   }
   for (const r of input.roles) await assignRole(tx, { userId, ...r });
   await tx.audit({
     action: 'identity.user.create',
     target: { type: 'user', id: userId },
-    after: { email: input.email, displayName: input.displayName, roles: input.roles },
+    after: { displayName: input.displayName, roles: input.roles, status },
   });
-  return { userId };
+  return { userId, status };
 }
 
 /**
- * Guardrail against privilege escalation: the person granting a role must themselves hold every permission of that
- * role across the whole target scope (IDN-R14). Trusted system processes (provisioning, SSO/SCIM reconciliation)
- * use the system authorizer and pass.
+ * Trusted provisioning only (system actor): give the requesting person — already signed in as themselves — an
+ * active membership in an organization they just created (e.g. their own trial). This is the person's consent.
  */
-export async function assertCanGrantRole(
+export async function addSelfToOrganization(
   tx: TxContext,
-  permissions: readonly string[],
-  scope: { type: 'organization' | 'brand' | 'region' | 'property'; id: string | null },
-  ports?: Pick<IdentityPorts, 'propertyIdsInScope'>,
+  input: { userId: string; displayName: string; roleKey: string },
 ): Promise<void> {
-  let propertyIds: string[] | 'all' = 'all';
-  if (scope.type === 'property') propertyIds = [scope.id as string];
-  else if ((scope.type === 'brand' || scope.type === 'region') && ports)
-    propertyIds = await ports.propertyIdsInScope(tx, { type: scope.type, id: scope.id as string });
-  for (const p of permissions) {
-    const held = tx.authz.propertyScope(p);
-    const ok =
-      held === 'all' ||
-      (propertyIds !== 'all' && propertyIds.length > 0 && propertyIds.every((id) => held.includes(id)));
-    if (!ok) {
-      throw new ForbiddenError(p, {
-        reason: 'You can only grant roles whose permissions you hold yourself for the same scope.',
-      });
-    }
-  }
+  if (tx.actor.kind !== 'system') throw new ForbiddenError('identity.user.manage');
+  await db(tx)
+    .insertInto('identity.memberships')
+    .values({
+      id: newId(),
+      tenant_id: tx.tenantId,
+      user_id: input.userId,
+      display_name: input.displayName,
+      status: 'active',
+      activated_at: tx.now,
+      provisioned_by: 'manual',
+    })
+    .execute();
+  await assignRole(tx, { userId: input.userId, roleKey: input.roleKey, scopeType: 'organization' });
+  await tx.audit({ action: 'identity.user.joinOwnOrganization', target: { type: 'user', id: input.userId } });
 }
+
+export { assertCanGrantRole };
 
 export async function assignRole(
   tx: TxContext,
@@ -182,6 +209,7 @@ export async function assignRole(
   ports?: Pick<IdentityPorts, 'propertyIdsInScope' | 'assertPropertyExists'>,
 ): Promise<{ assignmentId: string }> {
   requirePermission(tx, 'identity.role.assign');
+  assertNotElevated(tx, 'Granting roles');
   if ((input.scopeType === 'organization') !== (input.scopeId === undefined)) {
     throw new ValidationError(
       'invalid_scope',
@@ -253,7 +281,12 @@ export async function assignRole(
 }
 
 /** Revoke one role assignment (immediately effective: authorizers are built per request). */
-export async function revokeAssignment(tx: TxContext, assignmentId: string, reason: string): Promise<void> {
+export async function revokeAssignment(
+  tx: TxContext,
+  assignmentId: string,
+  reason: string,
+  ports?: Pick<IdentityPorts, 'propertyIdsInScope'>,
+): Promise<void> {
   requirePermission(tx, 'identity.role.assign');
   const a = await db(tx)
     .selectFrom('identity.role_assignments')
@@ -264,6 +297,9 @@ export async function revokeAssignment(tx: TxContext, assignmentId: string, reas
   if (tx.actor.kind === 'user' && tx.actor.userId === a.user_id)
     throw new BusinessRuleError('segregation_of_duties', 'You cannot change your own role assignments.');
   if (a.revoked_at) return;
+  // ADR-0017 §6: only someone holding at least the target's access may take it away; never the last administrator.
+  await assertPowerOver(tx, a.user_id, ports);
+  await assertAdministratorRemains(tx, { assignmentIds: [assignmentId] });
   await db(tx)
     .updateTable('identity.role_assignments')
     .set({
@@ -288,10 +324,17 @@ export async function revokeAssignment(tx: TxContext, assignmentId: string, reas
 }
 
 /** Offboarding: suspend membership, revoke all sessions and role assignments immediately. */
-export async function suspendMember(tx: TxContext, userId: string, reason: string): Promise<void> {
+export async function suspendMember(
+  tx: TxContext,
+  userId: string,
+  reason: string,
+  ports?: Pick<IdentityPorts, 'propertyIdsInScope'>,
+): Promise<void> {
   requirePermission(tx, 'identity.user.manage');
   if (tx.actor.kind === 'user' && tx.actor.userId === userId)
     throw new BusinessRuleError('segregation_of_duties', 'You cannot suspend yourself.');
+  await assertPowerOver(tx, userId, ports);
+  await assertAdministratorRemains(tx, { userId });
   const updated = await db(tx)
     .updateTable('identity.memberships')
     .set({ status: 'suspended', status_reason: reason, version: sql`version + 1` })
@@ -311,7 +354,14 @@ export async function suspendMember(tx: TxContext, userId: string, reason: strin
     .where('user_id', '=', userId)
     .where('revoked_at', 'is', null)
     .execute();
-  await tx.audit({ action: 'identity.user.suspend', target: { type: 'user', id: userId }, reason });
+  // ADR-0017 §9: API keys the person issued stop with them.
+  const keys = await revokeApiKeysIssuedBy(tx, userId);
+  await tx.audit({
+    action: 'identity.user.suspend',
+    target: { type: 'user', id: userId },
+    reason,
+    metadata: { apiKeysRevoked: keys },
+  });
   await tx.emit({
     type: 'identity.membership.suspended',
     aggregate: { type: 'user', id: userId },
@@ -389,12 +439,13 @@ async function stepUpStateFor(
     auth_method: 'password' | 'sso';
     idp_mfa: boolean;
   },
-  membership: { activated_at: Date | null; created_at: Date },
+  person: { first_activated_at: Date | null; created_at: Date },
 ): Promise<StepUpState> {
   const policy = await getSecurityPolicy(tx);
   const totp = await hasActiveTotp(tx, session.user_id);
   const ssoMfa = session.auth_method === 'sso' && session.idp_mfa;
-  const since = membership.activated_at ?? membership.created_at;
+  // ADR-0017 §8: anchored to the person's FIRST activation anywhere — rehire or re-invitation cannot restart it.
+  const since = person.first_activated_at ?? person.created_at;
   return {
     now: tx.now,
     mfaEnrolled: totp || ssoMfa,
@@ -601,6 +652,7 @@ export async function authenticateToken(
           'm.activated_at',
           'm.created_at',
           'u.status as user_status',
+          'u.first_activated_at',
         ])
         .where('s.token_hash', '=', sha256Hex(token))
         .executeTakeFirst();
@@ -666,7 +718,13 @@ export async function authenticateToken(
     return {
       tenantId,
       environment,
-      actor: { kind: 'api_client', clientId, displayName: client.name },
+      // `createdBy` lets separation-of-duties checks resolve the key to the person responsible for it (ADR-0017 §7).
+      actor: {
+        kind: 'api_client',
+        clientId,
+        displayName: client.name,
+        createdBy: client.created_by,
+      } as Actor,
       authz: staticAuthorizer(client.permissions.map((permission) => ({ permission, propertyIds }))),
     };
   });
@@ -687,6 +745,9 @@ export async function createApiClient(
   input: { name: string; permissions: string[]; propertyIds?: string[]; expiresAt?: Date },
 ): Promise<{ clientId: string; token: string }> {
   requirePermission(tx, 'identity.apiClient.manage');
+  assertNotElevated(tx, 'Issuing API keys');
+  // ADR-0010 / ADR-0017 §9: production credentials are never issued outside the live environment.
+  assertExternalEffectAllowed(tx, 'credentials.production');
   const clientId = newId();
   const token = `ptk.${tx.tenantId}.${clientId}.${randomToken(32)}`;
   await db(tx)

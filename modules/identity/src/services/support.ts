@@ -20,6 +20,7 @@ import {
 import { isReadPermission } from '../domain/permissions';
 import type { Operator, OperatorDirectory } from '../ports';
 import type { IdentityDB } from '../tables';
+import { assertHumanApprover } from './guard';
 import { getSecurityPolicy } from './policy';
 import { raiseSecurityAlert } from './security';
 
@@ -259,6 +260,7 @@ export async function approveSupportSession(
 ): Promise<SupportSessionView> {
   requirePermission(tx, 'identity.supportAccess.approve');
   if (isSupportActor(tx.actor)) throw new ForbiddenError('identity.supportAccess.approve');
+  assertHumanApprover(tx, 'Monoclay support access');
   const r = await loadForDecision(tx, id);
   if (r.status !== 'pending_approval')
     throw new BusinessRuleError(

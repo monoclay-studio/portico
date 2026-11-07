@@ -16,9 +16,11 @@ import {
   type PermissionCatalogIndex,
   validateRolePermissions,
 } from '../domain/permissions';
+import { ROLE_TEMPLATES } from '../domain/role-templates';
 import { NotConfiguredError } from '../errors';
 import type { IdentityPorts } from '../ports';
 import type { IdentityDB } from '../tables';
+import { assertNotElevated } from './guard';
 
 /**
  * Custom roles built from the permission catalog (IDN-R10). System role templates are read-only and clonable.
@@ -128,6 +130,11 @@ function assertEditorHolds(tx: TxContext, entries: readonly string[]) {
 }
 
 const KEY_RE = /^[a-z][a-z0-9_]{2,49}$/;
+/** P2-15: system template keys and the `portico_` namespace (future templates) are reserved for Monoclay. */
+const RESERVED_KEYS = new Set(ROLE_TEMPLATES.map((t) => t.key));
+export function isReservedRoleKey(key: string): boolean {
+  return RESERVED_KEYS.has(key) || key.startsWith('portico_');
+}
 
 export async function createRole(
   tx: TxContext,
@@ -141,11 +148,17 @@ export async function createRole(
   },
 ): Promise<RoleView> {
   requirePermission(tx, 'identity.role.manage');
+  assertNotElevated(tx, 'Creating roles');
   const cat = catalogOf(ports);
   if (!KEY_RE.test(input.key))
     throw new ValidationError(
       'invalid_role_key',
       'Role keys use 3–50 lowercase letters, digits and underscores.',
+    );
+  if (isReservedRoleKey(input.key))
+    throw new ValidationError(
+      'reserved_role_key',
+      `"${input.key}" is reserved for Portico's built-in roles. Choose another key.`,
     );
   assertValid(input.permissions, cat);
   assertEditorHolds(tx, input.permissions);
@@ -187,6 +200,7 @@ export async function cloneRole(
   sourceId: string,
   input: { key: string; name: string; description?: string | undefined },
 ): Promise<RoleView> {
+  requirePermission(tx, 'identity.role.manage');
   const src = await db(tx)
     .selectFrom('identity.roles')
     .selectAll()
@@ -239,6 +253,7 @@ export async function updateRole(
   patch: { name?: string | undefined; description?: string | undefined; permissions?: string[] | undefined },
 ): Promise<RoleView> {
   requirePermission(tx, 'identity.role.manage');
+  assertNotElevated(tx, 'Editing roles');
   const role = await db(tx)
     .selectFrom('identity.roles')
     .selectAll()

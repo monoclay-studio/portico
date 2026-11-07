@@ -1,3 +1,4 @@
+import { verify as argonVerify } from '@node-rs/argon2';
 import {
   explainVersionMiss,
   type PorticoDatabase,
@@ -24,7 +25,23 @@ import {
 import type { IdentityPorts, NotifierResult, StaffMessage } from '../ports';
 import { assignRole, hashPassword } from '../service';
 import type { IdentityDB } from '../tables';
-import { mfaStatus } from './mfa';
+import {
+  assertAdministratorRemains,
+  assertNotElevated,
+  assertPowerOver,
+  assertSoleOrganizationMember,
+  isHumanSelf,
+  membershipsElsewhere,
+} from './guard';
+import {
+  hasActiveTotp,
+  mfaStatus,
+  recordSecondFactorFailure,
+  recordSecondFactorSuccess,
+  SecondFactorLockedError,
+  secondFactorLock,
+  verifySecondFactor,
+} from './mfa';
 
 /**
  * Staff lifecycle (readiness brief §13 "onboarding, transfers and termination"; IDN-R05/R06/R07):
@@ -53,8 +70,9 @@ async function send(
   ports: Pick<IdentityPorts, 'notifier'>,
   message: StaffMessage,
 ): Promise<NotifierResult> {
-  // Without a bound notifier nothing can be delivered; treat it as simulated so the caller can show the link.
-  if (!ports.notifier) return { mode: 'simulate', simulated: message };
+  // ADR-0017 §3: links reach only the person. Without a bound notifier nothing is delivered (and nothing is
+  // returned to the caller either).
+  if (!ports.notifier) return { mode: 'simulated' };
   return ports.notifier.send(tx, message);
 }
 
@@ -106,6 +124,7 @@ export async function inviteMember(
   input: { email: string; displayName: string; jobTitle?: string | undefined; roles: RoleInput[] },
 ) {
   requirePermission(tx, 'identity.user.manage');
+  assertNotElevated(tx, 'Inviting staff');
   const { rows } = await sql<{
     id: string;
   }>`select identity.ensure_user(${newId()}::uuid, ${input.email}) as id`.execute(tx.db);
@@ -169,31 +188,43 @@ export async function inviteMember(
       ports,
     );
   }
-  const { token, expiresAt } = await issueToken(tx, userId, 'invitation', INVITATION_DAYS * 86_400_000);
+  const sent = await sendInvitation(tx, ports, {
+    userId,
+    email: input.email,
+    displayName: input.displayName,
+  });
+  await tx.audit({
+    action: 'identity.user.invite',
+    target: { type: 'user', id: userId },
+    after: { displayName: input.displayName, roles: input.roles, delivery: sent.delivery.mode },
+  });
+  return { userId, ...sent };
+}
+
+/**
+ * Send (or re-send) the invitation link to the person's OWN email (ADR-0017 §3). The link is never returned to the
+ * caller; in non-live environments it lands in the operator/developer mailbox.
+ */
+export async function sendInvitation(
+  tx: TxContext,
+  ports: Pick<IdentityPorts, 'notifier' | 'config' | 'organizationName'>,
+  input: { userId: string; email: string; displayName: string },
+): Promise<{ invitationExpiresAt: string; delivery: NotifierResult }> {
+  const { token, expiresAt } = await issueToken(tx, input.userId, 'invitation', INVITATION_DAYS * 86_400_000);
   const orgName = ports.organizationName ? await ports.organizationName(tx) : 'your organization';
   const delivery = await send(tx, ports, {
     kind: 'staff.invitation',
     to: input.email,
     subject: `You have been invited to ${orgName} on Portico`,
-    body: `${input.displayName}, you have been invited to join ${orgName}. The invitation is valid until ${expiresAt.toISOString()}.`,
+    body: `${input.displayName}, you have been invited to join ${orgName}. The invitation is valid until ${expiresAt.toISOString()}. If you already use Portico, sign in and accept it from your account.`,
     link: link(ports, '/accept-invitation', token),
-  });
-  await tx.audit({
-    action: 'identity.user.invite',
-    target: { type: 'user', id: userId },
-    after: {
-      email: input.email,
-      displayName: input.displayName,
-      roles: input.roles,
-      delivery: delivery.mode,
-    },
   });
   await tx.emit({
     type: 'identity.membership.invited',
-    aggregate: { type: 'user', id: userId },
-    payload: { userId, expiresAt: expiresAt.toISOString(), delivery: delivery.mode },
+    aggregate: { type: 'user', id: input.userId },
+    payload: { userId: input.userId, expiresAt: expiresAt.toISOString(), delivery: delivery.mode },
   });
-  return { userId, invitationExpiresAt: expiresAt.toISOString(), delivery };
+  return { invitationExpiresAt: expiresAt.toISOString(), delivery };
 }
 
 async function tokenContext(database: PorticoDatabase, token: string, prefix: 'inv' | 'prt') {
@@ -235,58 +266,184 @@ async function consumeToken(tx: TxContext, token: string, kind: 'invitation' | '
 const INVALID_TOKEN =
   'This link is invalid, already used or expired. Ask your administrator to send a new invitation or reset link.';
 
-/** Accept an invitation (public). Sets the first password if the person has none yet. */
+/**
+ * Accept an invitation with the emailed link (public). ADR-0017 §2/§4:
+ *  - a brand-new person (no other membership) chooses their first password here;
+ *  - a person who already has a Portico sign-in must prove it — their current password and, when enrolled, a code
+ *    from their authenticator (or a recovery code); their credentials are never changed here;
+ *  - a person who exists elsewhere but has no password (SSO/SCIM-only) accepts while signed in as themselves
+ *    (`acceptMembershipAsSelf`).
+ * Failed proofs count towards the per-person lock and do not consume the link.
+ */
 export async function acceptInvitation(
   database: PorticoDatabase,
-  input: { token: string; password?: string | undefined },
+  ports: Pick<IdentityPorts, 'cipher' | 'notifier'>,
+  input: {
+    token: string;
+    password?: string | undefined;
+    code?: string | undefined;
+    recoveryCode?: string | undefined;
+  },
 ): Promise<{ organizationId: string; userId: string }> {
   const ctx = await tokenContext(database, input.token, 'inv');
   if (!ctx) throw new UnauthenticatedError(INVALID_TOKEN);
-  const passwordHash = input.password ? await hashPassword(input.password) : null;
+  const outcome = await withTenantTx(
+    database,
+    ctx,
+    async (tx): Promise<{ ok: true; userId: string } | { ok: false; error: Error }> => {
+      const t = await db(tx)
+        .selectFrom('identity.credential_tokens')
+        .selectAll()
+        .where('token_hash', '=', sha256Hex(input.token))
+        .where('kind', '=', 'invitation')
+        .forUpdate()
+        .executeTakeFirst();
+      if (!t || t.used_at || t.revoked_at || t.expires_at <= tx.now)
+        throw new UnauthenticatedError(INVALID_TOKEN);
+      const m = await db(tx)
+        .selectFrom('identity.memberships')
+        .select(['id', 'status'])
+        .where('user_id', '=', t.user_id)
+        .executeTakeFirst();
+      if (m?.status !== 'invited') throw new UnauthenticatedError(INVALID_TOKEN);
+      const u = await db(tx)
+        .selectFrom('identity.users')
+        .select('password_hash')
+        .where('id', '=', t.user_id)
+        .executeTakeFirstOrThrow();
+      if (u.password_hash) {
+        const lock = await secondFactorLock(tx, t.user_id);
+        if (lock) return { ok: false, error: new SecondFactorLockedError(lock) };
+        if (!input.password)
+          return {
+            ok: false,
+            error: new ValidationError(
+              'proof_required',
+              'You already have a Portico sign-in: enter your current password (and a code from your authenticator if you use one) to accept.',
+            ),
+          };
+        const pwOk = await argonVerify(u.password_hash, input.password).catch(() => false);
+        const factorOk =
+          !(await hasActiveTotp(tx, t.user_id)) ||
+          ((!!input.code || !!input.recoveryCode) &&
+            (await verifySecondFactor(tx, ports, t.user_id, input)) !== null);
+        if (!pwOk || !factorOk) {
+          await recordSecondFactorFailure(tx, ports, t.user_id);
+          return {
+            ok: false,
+            error: new UnauthenticatedError(
+              'Your password or verification code is not correct. Enter the credentials you already use for Portico.',
+            ),
+          };
+        }
+        await recordSecondFactorSuccess(tx, t.user_id);
+      } else {
+        if ((await membershipsElsewhere(tx, t.user_id)) > 0) {
+          return {
+            ok: false,
+            error: new BusinessRuleError(
+              'sign_in_to_accept',
+              'You already use Portico with another organization. Sign in there and accept this invitation from your account.',
+            ),
+          };
+        }
+        const sso = await db(tx)
+          .selectFrom('identity.sso_connections')
+          .select(['sso_required', 'status'])
+          .executeTakeFirst();
+        const ssoOnly = sso?.status === 'active' && sso.sso_required;
+        if (!ssoOnly && (input.password ?? '').length < 12)
+          throw new ValidationError(
+            'password_required',
+            'Choose a password (at least 12 characters) to finish joining.',
+          );
+        const newHash = input.password && !ssoOnly ? await hashPassword(input.password) : null;
+        if (newHash)
+          await db(tx)
+            .updateTable('identity.users')
+            .set({ password_hash: newHash })
+            .where('id', '=', t.user_id)
+            .execute();
+      }
+      await db(tx)
+        .updateTable('identity.credential_tokens')
+        .set({ used_at: tx.now })
+        .where('id', '=', t.id)
+        .execute();
+      await activateInvitedMembership(tx, m.id, t.user_id, 'invitation_link');
+      return { ok: true, userId: t.user_id };
+    },
+  );
+  if (!outcome.ok) throw outcome.error;
+  return { organizationId: ctx.tenantId, userId: outcome.userId };
+}
+
+async function activateInvitedMembership(tx: TxContext, membershipId: string, userId: string, via: string) {
+  await db(tx)
+    .updateTable('identity.memberships')
+    .set({ status: 'active', activated_at: tx.now, version: sql`version + 1` })
+    .where('id', '=', membershipId)
+    .execute();
+  await tx.audit({
+    action: 'identity.user.acceptInvitation',
+    target: { type: 'user', id: userId },
+    metadata: { via },
+  });
+  await tx.emit({
+    type: 'identity.membership.activated',
+    aggregate: { type: 'user', id: userId },
+    payload: { userId, via },
+  });
+}
+
+/** Organizations that invited the signed-in person (ADR-0017 §2), so they can accept while signed in. */
+export async function listMyInvitations(database: PorticoDatabase, actor: RequestContext['actor']) {
+  if (!isHumanSelf(actor)) return [];
+  const { rows } = await sql<{ id: string; name: string; environment: string; status: string }>`
+    select id, name, environment, status from platform.tenant_summaries(
+      array(select identity.pending_invitations(${actor.userId}::uuid))::uuid[])`.execute(database.kysely);
+  return rows
+    .filter((r) => r.status === 'active')
+    .map((r) => ({ organizationId: r.id, name: r.name, environment: r.environment }));
+}
+
+/** Accept an invitation while signed in as oneself (any organization's session proves the person). */
+export async function acceptMembershipAsSelf(
+  database: PorticoDatabase,
+  actor: RequestContext['actor'],
+  organizationId: string,
+): Promise<{ organizationId: string; userId: string }> {
+  if (!isHumanSelf(actor) || !actor.sessionId)
+    throw new BusinessRuleError('not_a_user', 'Sign in as yourself to accept an invitation.');
+  const { rows } = await sql<{ environment: string; status: string }>`
+    select environment, status from platform.tenant_summaries(${[organizationId]}::uuid[])`.execute(
+    database.kysely,
+  );
+  const org = rows[0];
+  if (org?.status !== 'active') throw new NotFoundError('invitation', organizationId);
+  const ctx: RequestContext = {
+    tenantId: organizationId,
+    environment: org.environment as TenantEnvironment,
+    actor,
+    authz: systemAuthorizer,
+    correlationId: newId(),
+  };
   return withTenantTx(database, ctx, async (tx) => {
-    const t = await consumeToken(tx, input.token, 'invitation');
-    if (!t) throw new UnauthenticatedError(INVALID_TOKEN);
     const m = await db(tx)
       .selectFrom('identity.memberships')
       .select(['id', 'status'])
-      .where('user_id', '=', t.user_id)
+      .where('user_id', '=', actor.userId)
       .executeTakeFirst();
-    if (m?.status !== 'invited') throw new UnauthenticatedError(INVALID_TOKEN);
-    const u = await db(tx)
-      .selectFrom('identity.users')
-      .select('password_hash')
-      .where('id', '=', t.user_id)
-      .executeTakeFirstOrThrow();
-    if (!u.password_hash) {
-      const sso = await db(tx)
-        .selectFrom('identity.sso_connections')
-        .select(['sso_required', 'status'])
-        .executeTakeFirst();
-      const ssoOnly = sso?.status === 'active' && sso.sso_required;
-      if (!passwordHash && !ssoOnly)
-        throw new ValidationError(
-          'password_required',
-          'Choose a password (at least 12 characters) to finish joining.',
-        );
-      if (passwordHash && !ssoOnly)
-        await db(tx)
-          .updateTable('identity.users')
-          .set({ password_hash: passwordHash })
-          .where('id', '=', t.user_id)
-          .execute();
-    }
+    if (m?.status !== 'invited') throw new NotFoundError('invitation', organizationId);
     await db(tx)
-      .updateTable('identity.memberships')
-      .set({ status: 'active', activated_at: tx.now, version: sql`version + 1` })
-      .where('id', '=', m.id)
+      .updateTable('identity.credential_tokens')
+      .set({ used_at: tx.now })
+      .where('user_id', '=', actor.userId)
+      .where('kind', '=', 'invitation')
+      .where('used_at', 'is', null)
       .execute();
-    await tx.audit({ action: 'identity.user.acceptInvitation', target: { type: 'user', id: t.user_id } });
-    await tx.emit({
-      type: 'identity.membership.activated',
-      aggregate: { type: 'user', id: t.user_id },
-      payload: { userId: t.user_id },
-    });
-    return { organizationId: tx.tenantId, userId: t.user_id };
+    await activateInvitedMembership(tx, m.id, actor.userId, 'signed_in_acceptance');
+    return { organizationId, userId: actor.userId };
   });
 }
 
@@ -368,7 +525,7 @@ export async function requestPasswordReset(
 /** Administrator sends a reset link to a member (lost password; never sets a password for them). */
 export async function sendPasswordResetForMember(
   tx: TxContext,
-  ports: Pick<IdentityPorts, 'notifier' | 'config'>,
+  ports: Pick<IdentityPorts, 'notifier' | 'config' | 'propertyIdsInScope'>,
   userId: string,
 ) {
   requirePermission(tx, 'identity.user.manage');
@@ -379,6 +536,9 @@ export async function sendPasswordResetForMember(
     .where('u.id', '=', userId)
     .executeTakeFirst();
   if (!u || u.status === 'removed') throw new NotFoundError('user', userId);
+  // ADR-0017 §1/§6: only for a person whose every membership is here, and only by someone with at least their access.
+  await assertSoleOrganizationMember(tx, userId, 'password_reset');
+  await assertPowerOver(tx, userId, ports);
   return sendReset(tx, ports, u);
 }
 
@@ -616,13 +776,20 @@ export async function reactivateMember(tx: TxContext, userId: string, reason: st
  * elevations and the API credentials this person issued in this organization are revoked immediately. The person's
  * records stay for audit attribution; other organizations are unaffected.
  */
-export async function removeMember(tx: TxContext, userId: string, reason: string) {
+export async function removeMember(
+  tx: TxContext,
+  userId: string,
+  reason: string,
+  ports?: Pick<IdentityPorts, 'propertyIdsInScope'>,
+) {
   requirePermission(tx, 'identity.user.manage');
   if (tx.actor.kind === 'user' && tx.actor.userId === userId)
     throw new BusinessRuleError(
       'segregation_of_duties',
       'You cannot remove yourself. Ask another administrator.',
     );
+  await assertPowerOver(tx, userId, ports);
+  await assertAdministratorRemains(tx, { userId });
   const res = await db(tx)
     .updateTable('identity.memberships')
     .set({ status: 'removed', status_reason: reason, removed_at: tx.now, version: sql`version + 1` })

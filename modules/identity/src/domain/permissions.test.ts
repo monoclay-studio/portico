@@ -101,15 +101,18 @@ describe('MFA step-up policy', () => {
     expect(stepUpDenial(false, { ...base, mfaVerifiedAt: null })).toBeNull();
   });
 
-  it('requires enrolment for sensitive permissions once the grace period ends', () => {
+  it('never lets sensitive permissions work without MFA, even inside the enrolment grace (ADR-0017 §8)', () => {
     const unenrolled = { ...base, mfaEnrolled: false, mfaVerifiedAt: null };
-    expect(
-      stepUpDenial(true, { ...unenrolled, enrolmentGraceEndsAt: new Date(now.getTime() + 1) }),
-    ).toBeNull();
-    expect(stepUpDenial(true, { ...unenrolled, enrolmentGraceEndsAt: now })).toBe('mfa_enrollment_required');
+    const inGrace = { ...unenrolled, enrolmentGraceEndsAt: new Date(now.getTime() + 3600_000) };
+    expect(stepUpDenial(true, inGrace)).toBe('mfa_enrollment_required');
     expect(stepUpDenial(true, unenrolled)).toBe('mfa_enrollment_required');
+    expect(stepUpDenial(false, inGrace)).toBeNull();
     expect(stepUpDenial(false, unenrolled)).toBeNull();
-    expect(stepUpDenial(false, { ...unenrolled, requireMfaForAll: true })).toBe('mfa_enrollment_required');
+    // requireMfaForAll: the grace keeps non-sensitive work possible while the member enrols, then stops it.
+    expect(stepUpDenial(false, { ...inGrace, requireMfaForAll: true })).toBeNull();
+    expect(stepUpDenial(false, { ...unenrolled, requireMfaForAll: true, enrolmentGraceEndsAt: now })).toBe(
+      'mfa_enrollment_required',
+    );
   });
 
   it('wraps an authorizer: can() stays boolean, scope fails closed, denials are explained', () => {

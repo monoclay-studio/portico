@@ -1,6 +1,8 @@
+import { verify as argonVerify } from '@node-rs/argon2';
 import { type PorticoDatabase, sql, type TxContext, typed, withTenantTx } from '@portico/db';
 import {
   BusinessRuleError,
+  DomainError,
   type FieldCipher,
   ForbiddenError,
   isUuid,
@@ -16,22 +18,46 @@ import {
   ValidationError,
 } from '@portico/kernel';
 import { generateRecoveryCodes, hashRecoveryCode } from '../domain/recovery-codes';
+import { alertDedupeKey } from '../domain/security-rules';
 import { base32Decode, generateTotpSecret, provisioningUri, verifyTotp } from '../domain/totp';
 import { MfaRequiredError, NotConfiguredError } from '../errors';
 import type { IdentityPorts } from '../ports';
 import type { IdentityDB } from '../tables';
+import {
+  assertPowerOver,
+  assertSoleOrganizationMember,
+  membershipsElsewhere,
+  revokeApiKeysIssuedBy,
+} from './guard';
 import { getSecurityPolicy } from './policy';
+import { checkSignInLocation, raiseSecurityAlert } from './security';
 import { createSession } from './sessions';
 
 /**
  * Multi-factor authentication: TOTP (RFC 6238) with replay protection, single-use recovery codes, a second-factor
  * challenge at sign-in for enrolled members, and step-up verification on the session (mfa_verified_at).
  * WebAuthn/passkeys are LATER (same factor table, kind 'webauthn').
+ *
+ * ADR-0017: factors belong to the PERSON (global). Changing them needs proof of the existing credential (§4);
+ * second-factor failures are counted per person across challenges, with escalating delays, a lock and an alert (§8).
  */
 const db = (tx: TxContext) => typed<IdentityDB>(tx.db);
 
 export const MFA_CHALLENGE_MINUTES = 5;
 export const MFA_MAX_ATTEMPTS = 5;
+/** A pending factor must be confirmed within this time after enrolment started. */
+export const MFA_PENDING_MINUTES = 15;
+/** Per-person second-factor failures (across challenges, step-ups and credential proofs). */
+export const SECOND_FACTOR_LIMITS = { delayAfter: 5, alertAfter: 10, lockAfter: 20 } as const;
+
+/** A result that must commit even when it is a failure (failure counters), reported after the transaction. */
+export type Outcome<T> = { ok: true; value: T } | { ok: false; error: DomainError };
+
+export interface CredentialProof {
+  currentPassword?: string | undefined;
+  code?: string | undefined;
+  recoveryCode?: string | undefined;
+}
 
 function cipherOf(ports: Pick<IdentityPorts, 'cipher'>): FieldCipher {
   if (!ports.cipher) throw new NotConfiguredError('Two-step verification', 'field encryption');
@@ -69,6 +95,7 @@ export async function mfaStatus(tx: TxContext, userId: string) {
     .select(sql<number>`count(*)::int`.as('n'))
     .where('user_id', '=', userId)
     .where('used_at', 'is', null)
+    .where('revoked_at', 'is', null)
     .executeTakeFirstOrThrow();
   const active = factors.find((f) => f.status === 'active');
   return {
@@ -83,12 +110,12 @@ async function currentSession(tx: TxContext) {
   if (tx.actor.kind !== 'user' || !tx.actor.sessionId) return undefined;
   return db(tx)
     .selectFrom('identity.sessions')
-    .select(['id', 'mfa_verified_at', 'mfa_failures'])
+    .select(['id', 'mfa_verified_at', 'mfa_failures', 'auth_method'])
     .where('id', '=', tx.actor.sessionId)
     .executeTakeFirst();
 }
 
-/** Sensitive self-service changes (re-enrol, disable, new recovery codes) need a recent verification. */
+/** Organization step-up for emergency access (break-glass). Not used for credential changes (§4). */
 export async function requireRecentStepUp(tx: TxContext): Promise<void> {
   const policy = await getSecurityPolicy(tx);
   const s = await currentSession(tx);
@@ -98,11 +125,157 @@ export async function requireRecentStepUp(tx: TxContext): Promise<void> {
   if (!fresh) throw new MfaRequiredError({ stepUpWindowMinutes: policy.mfaStepUpWindowMinutes });
 }
 
-/** Start TOTP enrolment: returns the secret and the otpauth:// URI for the QR code (shown once). */
-export async function enrolTotp(tx: TxContext, ports: Pick<IdentityPorts, 'cipher' | 'config'>) {
+// ───────────────────────────── Per-person second-factor failures (ADR-0017 §8) ─────────────────────────────
+
+export class SecondFactorLockedError extends DomainError {
+  constructor(until: Date) {
+    super(
+      'second_factor_locked',
+      `Too many wrong verification codes. For your protection, try again after ${until.toISOString()}. If this was not you, tell your administrator.`,
+      { status: 429, retryable: true, details: { retryAfter: until.toISOString() } },
+    );
+  }
+}
+
+/** The person's second-factor lock, if any. */
+export async function secondFactorLock(tx: TxContext, userId: string): Promise<Date | null> {
+  const u = await db(tx)
+    .selectFrom('identity.users')
+    .select('mfa_locked_until')
+    .where('id', '=', userId)
+    .executeTakeFirst();
+  return u?.mfa_locked_until && u.mfa_locked_until > tx.now ? u.mfa_locked_until : null;
+}
+
+/** Count one failure for the person; escalate delays, lock, and alert the person and the organization's admins. */
+export async function recordSecondFactorFailure(
+  tx: TxContext,
+  ports: Pick<IdentityPorts, 'notifier'>,
+  userId: string,
+): Promise<number> {
+  const row = await db(tx)
+    .updateTable('identity.users')
+    .set({ mfa_failed_attempts: sql`mfa_failed_attempts + 1` })
+    .where('id', '=', userId)
+    .returning(['mfa_failed_attempts', 'email'])
+    .executeTakeFirst();
+  const n = row?.mfa_failed_attempts ?? 0;
+  const L = SECOND_FACTOR_LIMITS;
+  const delayMinutes = n >= L.lockAfter ? 24 * 60 : n >= L.alertAfter ? 15 : n >= L.delayAfter ? 1 : 0;
+  if (delayMinutes > 0) {
+    await db(tx)
+      .updateTable('identity.users')
+      .set({ mfa_locked_until: new Date(tx.now.getTime() + delayMinutes * 60_000) })
+      .where('id', '=', userId)
+      .execute();
+  }
+  if (n === L.alertAfter || n === L.lockAfter) {
+    await raiseSecurityAlert(tx, {
+      rule: 'mfa_bruteforce_suspected',
+      severity: 'high',
+      summary: `${n} wrong second-factor codes in a row for one member; further attempts are delayed${n >= L.lockAfter ? ' and the second factor is locked for 24 hours' : ''}.`,
+      subjectUserId: userId,
+      details: { failures: n },
+      dedupeKey: alertDedupeKey('mfa_bruteforce_suspected', `${userId}:${n}`, tx.now, 24 * 60),
+    });
+    if (row?.email && ports.notifier) {
+      await ports.notifier.send(tx, {
+        kind: 'staff.securityAlert',
+        to: row.email,
+        subject: 'Repeated wrong verification codes on your account',
+        body: `Someone entered ${n} wrong verification codes for your Portico account. If this was not you, change your password and tell your administrator.`,
+      });
+    }
+  }
+  return n;
+}
+
+export async function recordSecondFactorSuccess(tx: TxContext, userId: string): Promise<void> {
+  await db(tx)
+    .updateTable('identity.users')
+    .set({ mfa_failed_attempts: 0, mfa_locked_until: null })
+    .where('id', '=', userId)
+    .execute();
+}
+
+// ───────────────────────────── Proof of the existing credential (ADR-0017 §4) ─────────────────────────────
+
+const PROOF_REQUIRED_TOTP =
+  'Confirm it is you: enter a code from your current authenticator app (or a recovery code).';
+const PROOF_REQUIRED_PASSWORD = 'Confirm it is you: enter your current password.';
+
+/**
+ * Prove the person's existing credential before changing a global credential: the current TOTP (or a recovery
+ * code) when one is enrolled, otherwise the current password. A person without either (SSO-only) may change their
+ * own factors only while every membership is in this organization (its identity provider is then their only
+ * authority). Failures count towards the per-person lock; the caller reports them after the transaction commits.
+ */
+export async function proveExistingCredential(
+  tx: TxContext,
+  ports: Pick<IdentityPorts, 'cipher' | 'notifier'>,
+  userId: string,
+  proof: CredentialProof,
+): Promise<{ ok: true } | { ok: false; error: DomainError }> {
+  const lock = await secondFactorLock(tx, userId);
+  if (lock) return { ok: false, error: new SecondFactorLockedError(lock) };
+  if (await hasActiveTotp(tx, userId)) {
+    if (!proof.code && !proof.recoveryCode)
+      return { ok: false, error: new ValidationError('proof_required', PROOF_REQUIRED_TOTP) };
+    const method = await verifySecondFactor(tx, ports, userId, proof);
+    if (!method) {
+      await recordSecondFactorFailure(tx, ports, userId);
+      return {
+        ok: false,
+        error: new ValidationError('invalid_code', `That code is not valid. ${PROOF_REQUIRED_TOTP}`),
+      };
+    }
+    await recordSecondFactorSuccess(tx, userId);
+    return { ok: true };
+  }
+  const user = await db(tx)
+    .selectFrom('identity.users')
+    .select('password_hash')
+    .where('id', '=', userId)
+    .executeTakeFirstOrThrow();
+  if (user.password_hash) {
+    if (!proof.currentPassword)
+      return { ok: false, error: new ValidationError('proof_required', PROOF_REQUIRED_PASSWORD) };
+    const ok = await argonVerify(user.password_hash, proof.currentPassword).catch(() => false);
+    if (!ok) {
+      await recordSecondFactorFailure(tx, ports, userId);
+      return {
+        ok: false,
+        error: new ValidationError(
+          'invalid_password',
+          `That password is not correct. ${PROOF_REQUIRED_PASSWORD}`,
+        ),
+      };
+    }
+    await recordSecondFactorSuccess(tx, userId);
+    return { ok: true };
+  }
+  if ((await membershipsElsewhere(tx, userId)) > 0) {
+    return {
+      ok: false,
+      error: new BusinessRuleError(
+        'proof_unavailable',
+        'Your sign-in is shared with another organization and has no password or authenticator yet. Sign in there with your own credentials to set up two-step verification.',
+      ),
+    };
+  }
+  return { ok: true };
+}
+
+/** Start TOTP enrolment (after proving the existing credential): the secret and `otpauth://` URI, shown once. */
+export async function enrolTotp(
+  tx: TxContext,
+  ports: Pick<IdentityPorts, 'cipher' | 'config' | 'notifier'>,
+  proof: CredentialProof = {},
+): Promise<Outcome<{ factorId: string; secret: string; otpauthUri: string }>> {
   const userId = selfUserId(tx);
   const cipher = cipherOf(ports);
-  if (await hasActiveTotp(tx, userId)) await requireRecentStepUp(tx);
+  const proven = await proveExistingCredential(tx, ports, userId, proof);
+  if (!proven.ok) return proven;
   const user = await db(tx)
     .selectFrom('identity.users')
     .select('email')
@@ -132,13 +305,16 @@ export async function enrolTotp(tx: TxContext, ports: Pick<IdentityPorts, 'ciphe
     .execute();
   await tx.audit({ action: 'identity.mfa.enrolStart', target: { type: 'user', id: userId } });
   return {
-    factorId: id,
-    secret,
-    otpauthUri: provisioningUri({
+    ok: true,
+    value: {
+      factorId: id,
       secret,
-      accountName: user.email,
-      issuer: ports.config?.totpIssuer ?? 'Portico',
-    }),
+      otpauthUri: provisioningUri({
+        secret,
+        accountName: user.email,
+        issuer: ports.config?.totpIssuer ?? 'Portico',
+      }),
+    },
   };
 }
 
@@ -174,11 +350,12 @@ export async function confirmTotp(
     .selectAll()
     .where('user_id', '=', userId)
     .where('status', '=', 'pending')
+    .where('created_at', '>', new Date(tx.now.getTime() - MFA_PENDING_MINUTES * 60_000))
     .executeTakeFirst();
   if (!pending)
     throw new BusinessRuleError(
       'no_pending_enrolment',
-      'Start the authenticator set-up first, then enter a code from the app.',
+      'Start the authenticator set-up first (it expires after 15 minutes), then enter a code from the app.',
     );
   if (!(await verifyFactorCode(tx, cipher, pending, input.code))) {
     throw new ValidationError(
@@ -218,13 +395,18 @@ export async function confirmTotp(
   return { recoveryCodes: codes };
 }
 
-async function replaceRecoveryCodes(tx: TxContext, userId: string): Promise<string[]> {
+async function revokeRecoveryCodes(tx: TxContext, userId: string) {
   await db(tx)
     .updateTable('identity.mfa_recovery_codes')
-    .set({ used_at: tx.now })
+    .set({ revoked_at: tx.now })
     .where('user_id', '=', userId)
     .where('used_at', 'is', null)
+    .where('revoked_at', 'is', null)
     .execute();
+}
+
+async function replaceRecoveryCodes(tx: TxContext, userId: string): Promise<string[]> {
+  await revokeRecoveryCodes(tx, userId);
   const codes = generateRecoveryCodes();
   await db(tx)
     .insertInto('identity.mfa_recovery_codes')
@@ -240,17 +422,22 @@ async function replaceRecoveryCodes(tx: TxContext, userId: string): Promise<stri
   return codes;
 }
 
-export async function regenerateRecoveryCodes(tx: TxContext) {
+export async function regenerateRecoveryCodes(
+  tx: TxContext,
+  ports: Pick<IdentityPorts, 'cipher' | 'notifier'>,
+  proof: CredentialProof,
+): Promise<Outcome<{ recoveryCodes: string[] }>> {
   const userId = selfUserId(tx);
   if (!(await hasActiveTotp(tx, userId)))
     throw new BusinessRuleError('mfa_not_enrolled', 'Set up an authenticator app first.');
-  await requireRecentStepUp(tx);
+  const proven = await proveExistingCredential(tx, ports, userId, proof);
+  if (!proven.ok) return proven;
   const codes = await replaceRecoveryCodes(tx, userId);
   await tx.audit({ action: 'identity.mfa.recoveryCodes.regenerate', target: { type: 'user', id: userId } });
-  return { recoveryCodes: codes };
+  return { ok: true, value: { recoveryCodes: codes } };
 }
 
-/** Check a TOTP code or a recovery code for a member (single use for both). */
+/** Check a TOTP code or a recovery code for a member (single use for both). Does not count failures. */
 export async function verifySecondFactor(
   tx: TxContext,
   ports: Pick<IdentityPorts, 'cipher'>,
@@ -276,6 +463,7 @@ export async function verifySecondFactor(
       .where('user_id', '=', userId)
       .where('code_hash', '=', hash)
       .where('used_at', 'is', null)
+      .where('revoked_at', 'is', null)
       .executeTakeFirst();
     if (Number(res.numUpdatedRows) === 1) {
       await tx.audit({ action: 'identity.mfa.recoveryCodeUsed', target: { type: 'user', id: userId } });
@@ -287,21 +475,23 @@ export async function verifySecondFactor(
 
 export type StepUpOutcome =
   | { ok: true; verifiedAt: string; method: 'totp' | 'recovery_code' }
-  | { ok: false; attemptsRemaining: number; sessionRevoked: boolean };
+  | { ok: false; attemptsRemaining: number; sessionRevoked: boolean; lockedUntil?: Date };
 
 /**
- * Step-up: verify on the current session and record `mfa_verified_at`. After 5 consecutive failures the session is
- * revoked (the person signs in again) — protects a stolen session from guessing codes. Failures are returned (not
- * thrown) so the failure counter commits; the caller reports the error after the transaction.
+ * Step-up: verify on the current session and record `mfa_verified_at`. Failures count per session (5 → the session
+ * is revoked) and per person (escalating delays, lock, alert). Failures are returned (not thrown) so the counters
+ * commit; the caller reports the error after the transaction.
  */
 export async function stepUp(
   tx: TxContext,
-  ports: Pick<IdentityPorts, 'cipher'>,
+  ports: Pick<IdentityPorts, 'cipher' | 'notifier'>,
   input: { code?: string | undefined; recoveryCode?: string | undefined },
 ): Promise<StepUpOutcome> {
   const userId = selfUserId(tx);
   const session = await currentSession(tx);
   if (!session) throw new UnauthenticatedError();
+  const lock = await secondFactorLock(tx, userId);
+  if (lock) return { ok: false, attemptsRemaining: 0, sessionRevoked: false, lockedUntil: lock };
   const method = await verifySecondFactor(tx, ports, userId, input);
   if (!method) {
     const failures = session.mfa_failures + 1;
@@ -314,6 +504,7 @@ export async function stepUp(
       })
       .where('id', '=', session.id)
       .execute();
+    await recordSecondFactorFailure(tx, ports, userId);
     await tx.audit({
       action: 'identity.mfa.verifyFailed',
       target: { type: 'user', id: userId },
@@ -321,6 +512,7 @@ export async function stepUp(
     });
     return { ok: false, attemptsRemaining: Math.max(0, MFA_MAX_ATTEMPTS - failures), sessionRevoked: revoke };
   }
+  await recordSecondFactorSuccess(tx, userId);
   await db(tx)
     .updateTable('identity.sessions')
     .set({ mfa_verified_at: tx.now, mfa_verified: true, mfa_failures: 0 })
@@ -334,10 +526,9 @@ export async function stepUp(
   return { ok: true, verifiedAt: tx.now.toISOString(), method };
 }
 
-/** The error to report for a failed step-up (after the failure counter has committed). */
-export function stepUpFailure(
-  outcome: Extract<StepUpOutcome, { ok: false }>,
-): ValidationError | UnauthenticatedError {
+/** The error to report for a failed step-up (after the failure counters have committed). */
+export function stepUpFailure(outcome: Extract<StepUpOutcome, { ok: false }>): DomainError {
+  if (outcome.lockedUntil) return new SecondFactorLockedError(outcome.lockedUntil);
   if (outcome.sessionRevoked)
     return new UnauthenticatedError(
       'Too many wrong verification codes. You have been signed out; sign in again.',
@@ -349,10 +540,17 @@ export function stepUpFailure(
   );
 }
 
-/** Turn off one's own MFA (needs a recent verification). Sensitive permissions stop working until re-enrolled. */
-export async function disableOwnMfa(tx: TxContext): Promise<void> {
+/** Turn off one's own MFA (proof of the current factor required). Sensitive permissions stop working. */
+export async function disableOwnMfa(
+  tx: TxContext,
+  ports: Pick<IdentityPorts, 'cipher' | 'notifier'>,
+  proof: CredentialProof,
+): Promise<Outcome<null>> {
   const userId = selfUserId(tx);
-  await requireRecentStepUp(tx);
+  if (!(await hasActiveTotp(tx, userId)))
+    throw new BusinessRuleError('mfa_not_enrolled', 'Two-step verification is not set up.');
+  const proven = await proveExistingCredential(tx, ports, userId, proof);
+  if (!proven.ok) return proven;
   await disableFactors(tx, userId);
   await tx.audit({ action: 'identity.mfa.disable', target: { type: 'user', id: userId } });
   await tx.emit({
@@ -360,6 +558,7 @@ export async function disableOwnMfa(tx: TxContext): Promise<void> {
     aggregate: { type: 'user', id: userId },
     payload: { userId, by: 'self' },
   });
+  return { ok: true, value: null };
 }
 
 async function disableFactors(tx: TxContext, userId: string) {
@@ -369,20 +568,20 @@ async function disableFactors(tx: TxContext, userId: string) {
     .where('user_id', '=', userId)
     .where('status', 'in', ['active', 'pending'])
     .execute();
-  await db(tx)
-    .updateTable('identity.mfa_recovery_codes')
-    .set({ used_at: tx.now })
-    .where('user_id', '=', userId)
-    .where('used_at', 'is', null)
-    .execute();
+  await revokeRecoveryCodes(tx, userId);
 }
 
 /**
- * Lost device: an administrator resets another member's MFA. Allowed only when this person's sign-in identity is
- * not shared with another organization (otherwise one organization could weaken another's security); then Monoclay
- * support handles it. The member's sessions are revoked.
+ * Lost device: an administrator resets another member's MFA. ADR-0017 §1: only for a person whose EVERY membership
+ * (any status) is in this organization, and only by someone holding at least the person's access (§6). The person's
+ * sessions and the API keys they issued are revoked (§9).
  */
-export async function resetMemberMfa(tx: TxContext, userId: string, reason: string): Promise<void> {
+export async function resetMemberMfa(
+  tx: TxContext,
+  userId: string,
+  reason: string,
+  ports?: Pick<IdentityPorts, 'propertyIdsInScope'>,
+): Promise<void> {
   requirePermission(tx, 'identity.user.manage');
   if (tx.actor.kind === 'user' && tx.actor.userId === userId)
     throw new ForbiddenError('identity.user.manage', {
@@ -394,23 +593,23 @@ export async function resetMemberMfa(tx: TxContext, userId: string, reason: stri
     .where('user_id', '=', userId)
     .executeTakeFirst();
   if (!member) throw new NotFoundError('user', userId);
-  const { rows } = await sql<{
-    n: number;
-  }>`select identity.active_membership_count(${userId}::uuid) as n`.execute(tx.db);
-  if ((rows[0]?.n ?? 0) > 1) {
-    throw new BusinessRuleError(
-      'mfa_reset_requires_support',
-      "This person's sign-in is shared with another organization, so their two-step verification can only be reset by Monoclay support after identity checks.",
-    );
-  }
+  await assertSoleOrganizationMember(tx, userId, 'mfa_reset');
+  await assertPowerOver(tx, userId, ports);
   await disableFactors(tx, userId);
+  await recordSecondFactorSuccess(tx, userId);
   await db(tx)
     .updateTable('identity.sessions')
     .set({ revoked_at: tx.now, revoked_reason: 'mfa_reset' })
     .where('user_id', '=', userId)
     .where('revoked_at', 'is', null)
     .execute();
-  await tx.audit({ action: 'identity.mfa.adminReset', target: { type: 'user', id: userId }, reason });
+  const keys = await revokeApiKeysIssuedBy(tx, userId);
+  await tx.audit({
+    action: 'identity.mfa.adminReset',
+    target: { type: 'user', id: userId },
+    reason,
+    metadata: { apiKeysRevoked: keys },
+  });
   await tx.emit({
     type: 'identity.mfa.disabled',
     aggregate: { type: 'user', id: userId },
@@ -448,7 +647,7 @@ const CHALLENGE_ERROR =
 /** Complete sign-in with the second factor. Returns a session bound to the organization chosen at sign-in. */
 export async function completeMfaChallenge(
   database: PorticoDatabase,
-  ports: Pick<IdentityPorts, 'cipher'>,
+  ports: Pick<IdentityPorts, 'cipher' | 'notifier' | 'geo'>,
   input: {
     challengeToken: string;
     code?: string | undefined;
@@ -481,6 +680,8 @@ export async function completeMfaChallenge(
       .executeTakeFirst();
     if (!c || c.consumed_at || c.expires_at <= tx.now || c.attempts >= MFA_MAX_ATTEMPTS)
       return { ok: false as const };
+    const lock = await secondFactorLock(tx, c.user_id);
+    if (lock) return { ok: false as const, lock };
     const method = await verifySecondFactor(tx, ports, c.user_id, input);
     if (!method) {
       await db(tx)
@@ -488,9 +689,11 @@ export async function completeMfaChallenge(
         .set({ attempts: sql`attempts + 1` })
         .where('id', '=', c.id)
         .execute();
+      await recordSecondFactorFailure(tx, ports, c.user_id);
       await tx.audit({ action: 'identity.mfa.challengeFailed', target: { type: 'user', id: c.user_id } });
       return { ok: false as const };
     }
+    await recordSecondFactorSuccess(tx, c.user_id);
     await db(tx)
       .updateTable('identity.mfa_challenges')
       .set({ consumed_at: tx.now })
@@ -503,9 +706,14 @@ export async function completeMfaChallenge(
       ip: input.ip ?? c.ip ?? undefined,
       userAgent: input.userAgent ?? c.user_agent ?? undefined,
     });
+    // P3-2: the new-country signal also covers members who sign in with a second factor.
+    await checkSignInLocation(tx, ports, { userId: c.user_id, ip: input.ip ?? c.ip ?? undefined });
     return { ok: true as const, userId: c.user_id, ...session };
   });
-  if (!outcome.ok) throw new UnauthenticatedError(CHALLENGE_ERROR);
+  if (!outcome.ok) {
+    if ('lock' in outcome && outcome.lock) throw new SecondFactorLockedError(outcome.lock);
+    throw new UnauthenticatedError(CHALLENGE_ERROR);
+  }
   return {
     status: 'signed_in' as const,
     token: outcome.token,

@@ -20,6 +20,8 @@ export type SecurityAlertRule =
   | 'new_country_sign_in'
   | 'mass_export'
   | 'break_glass_activated'
+  | 'break_glass_designation_changed'
+  | 'mfa_bruteforce_suspected'
   | 'support_session_started';
 
 export type AlertSeverity = 'low' | 'medium' | 'high';

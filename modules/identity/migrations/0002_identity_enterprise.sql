@@ -12,6 +12,13 @@ alter table identity.sessions
   add column revoked_by      text;
 create index sessions_user_idx on identity.sessions (tenant_id, user_id) where revoked_at is null;
 
+-- ADR-0017 §8: the MFA enrolment grace is anchored to the person's FIRST activation anywhere (rehire, re-invitation
+-- or SCIM cycling cannot restart it), and second-factor failures are counted per person across challenges.
+alter table identity.users
+  add column first_activated_at   timestamptz,
+  add column mfa_failed_attempts  int not null default 0,
+  add column mfa_locked_until     timestamptz;
+
 alter table identity.memberships
   add column activated_at    timestamptz,
   add column external_id     text,
@@ -19,6 +26,8 @@ alter table identity.memberships
   add column status_reason   text,
   add column removed_at      timestamptz;
 update identity.memberships set activated_at = created_at where status <> 'invited' and activated_at is null;
+update identity.users u set first_activated_at = (select min(m.created_at) from identity.memberships m
+                                                    where m.user_id = u.id and m.status <> 'invited');
 create unique index memberships_external_id_idx on identity.memberships (tenant_id, external_id) where external_id is not null;
 
 alter table identity.role_assignments
@@ -56,6 +65,7 @@ create table identity.mfa_recovery_codes (
   code_hash   text not null,
   created_at  timestamptz not null default now(),
   used_at     timestamptz,
+  revoked_at  timestamptz,           -- replaced by new codes or MFA disabled (distinct from "used")
   unique (user_id, code_hash)
 );
 
@@ -93,7 +103,7 @@ select core.enable_tenant_isolation('identity.mfa_challenges');
 create table identity.organization_security (
   tenant_id                    uuid primary key,
   mfa_step_up_window_minutes   int not null default 15 check (mfa_step_up_window_minutes between 1 and 720),
-  mfa_grace_period_hours       int not null default 72 check (mfa_grace_period_hours between 0 and 720),
+  mfa_grace_period_hours       int not null default 72 check (mfa_grace_period_hours between 0 and 72),
   require_mfa_for_all          boolean not null default false,
   support_access_approval      text not null default 'always_required'
                                check (support_access_approval in ('always_required', 'auto_approve_read_only')),
@@ -179,6 +189,7 @@ create table identity.sso_login_states (
   id                  uuid primary key,
   tenant_id           uuid not null,
   state_hash          text not null unique,
+  binding_hash        text not null,     -- hash of a secret the starting browser keeps; required at the callback
   nonce               text not null,
   code_verifier_enc   text not null,
   redirect_uri        text not null,
@@ -199,6 +210,34 @@ create table identity.secret_values (
   primary key (tenant_id, ref)
 );
 select core.enable_tenant_isolation('identity.secret_values');
+
+-- ADR-0017 §5: after the first link, SSO sign-in matches on (issuer, sub), never on the mutable email claim.
+create table identity.sso_identities (
+  id          uuid primary key,
+  tenant_id   uuid not null,
+  issuer      text not null,
+  subject     text not null,
+  user_id     uuid not null references identity.users(id),
+  email_at_link text not null,
+  linked_at   timestamptz not null,
+  unique (tenant_id, issuer, subject)
+);
+create index sso_identities_user_idx on identity.sso_identities (tenant_id, user_id);
+select core.enable_tenant_isolation('identity.sso_identities');
+
+-- ADR-0017 §5: an organization may link EXISTING global users of an email domain only after proving it owns the
+-- domain (DNS TXT record `_portico-verification.<domain>` = `portico-verify=<token>`).
+create table identity.sso_domains (
+  id                  uuid primary key,
+  tenant_id           uuid not null,
+  domain              text not null,
+  verification_token  text not null,
+  verified_at         timestamptz,
+  created_at          timestamptz not null default now(),
+  created_by          text not null,
+  unique (tenant_id, domain)
+);
+select core.enable_tenant_isolation('identity.sso_domains');
 
 ---------------------------------------------------------------------------------------------------------
 -- SCIM groups
@@ -286,7 +325,7 @@ create table identity.elevations (
   version         int not null default 1,
   check (ends_at > started_at and ends_at <= started_at + interval '4 hours')
 );
-create index elevations_session_idx on identity.elevations (tenant_id, session_id) where ended_at is null;
+create unique index elevations_session_idx on identity.elevations (session_id) where ended_at is null;
 select core.enable_tenant_isolation('identity.elevations');
 
 ---------------------------------------------------------------------------------------------------------
@@ -420,16 +459,59 @@ begin
      where user_id = p_user_id and revoked_at is null;
     get diagnostics c = row_count;
     n := n + c;
+    -- ADR-0017 §9: API keys issued by the person stop working when their credential is reset.
+    update identity.api_clients set status = 'revoked' where created_by = p_user_id::text and status = 'active';
   end loop;
   perform set_config('app.tenant_id', coalesce(previous, ''), true);
   return n;
 end $$;
 
--- How many organizations a person is an active member of (MFA reset by an organization admin is only allowed when
--- the sign-in identity is not shared with another organization). Returns a count, never which organizations.
-create or replace function identity.active_membership_count(p_user_id uuid) returns int
+-- ADR-0017 §1: how many memberships (ANY status) a person has OUTSIDE the given organization. An organization may
+-- reset a person's credentials only when this is 0. Returns a count, never which organizations.
+create or replace function identity.memberships_elsewhere(p_user_id uuid, p_tenant_id uuid) returns int
   language sql stable security definer set search_path = identity, pg_temp as $$
-    select count(*)::int from identity.user_tenants where user_id = p_user_id and status = 'active'
+    select count(*)::int from identity.user_tenants where user_id = p_user_id and tenant_id <> p_tenant_id
+$$;
+
+-- ADR-0017 §8: record the person's first activation anywhere (grace anchor). Runs as definer because the person's
+-- other organizations are invisible to the caller.
+create or replace function identity.mark_first_activation() returns trigger
+  language plpgsql security definer set search_path = identity, pg_temp as $$
+begin
+  if new.status = 'active' then
+    update identity.users set first_activated_at = coalesce(first_activated_at, now()) where id = new.user_id;
+  end if;
+  return new;
+end $$;
+create trigger mark_first_activation after insert or update of status on identity.memberships
+  for each row execute function identity.mark_first_activation();
+
+-- Developer / operator mailbox for SIMULATED staff messages from non-live organizations (ADR-0017 §3): credential
+-- links never go back to the admin who triggered them. Not tenant data; app role has no direct access.
+create table identity.dev_mailbox (
+  id          uuid primary key,
+  tenant_id   uuid not null,
+  recipient   text not null,
+  kind        text not null,
+  subject     text not null,
+  body        text not null,
+  link_enc    text,
+  created_at  timestamptz not null default now()
+);
+create index dev_mailbox_recipient_idx on identity.dev_mailbox (lower(recipient), created_at desc);
+revoke all on identity.dev_mailbox from portico_app;
+
+create or replace function identity.deposit_simulated_message(p_id uuid, p_tenant_id uuid, p_recipient text,
+  p_kind text, p_subject text, p_body text, p_link_enc text) returns void
+  language sql security definer set search_path = identity, pg_temp as $$
+    insert into identity.dev_mailbox (id, tenant_id, recipient, kind, subject, body, link_enc)
+    values (p_id, p_tenant_id, p_recipient, p_kind, p_subject, p_body, p_link_enc)
+$$;
+create or replace function identity.read_dev_mailbox(p_recipient text, p_limit int)
+  returns table (id uuid, tenant_id uuid, kind text, subject text, body text, link_enc text, created_at timestamptz)
+  language sql stable security definer set search_path = identity, pg_temp as $$
+    select id, tenant_id, kind, subject, body, link_enc, created_at from identity.dev_mailbox
+     where lower(recipient) = lower(p_recipient) order by created_at desc limit least(p_limit, 50)
 $$;
 
 -- Retention: pre-authentication sign-in attempts are only needed for the detection window (keep 48 h by default).
@@ -446,8 +528,20 @@ end $$;
 revoke execute on function identity.purge_login_attempts(int, int) from public;
 grant execute on function identity.purge_login_attempts(int, int) to portico_app;
 
-revoke execute on function identity.active_membership_count(uuid) from public;
-grant execute on function identity.active_membership_count(uuid) to portico_app;
+-- Pending invitations of a person across organizations (the person lists and accepts them while signed in).
+create or replace function identity.pending_invitations(p_user_id uuid) returns setof uuid
+  language sql stable security definer set search_path = identity, pg_temp as $$
+    select tenant_id from identity.user_tenants where user_id = p_user_id and status = 'invited'
+$$;
+revoke execute on function identity.pending_invitations(uuid) from public;
+grant execute on function identity.pending_invitations(uuid) to portico_app;
+
+revoke execute on function identity.memberships_elsewhere(uuid, uuid), identity.mark_first_activation(),
+  identity.deposit_simulated_message(uuid, uuid, text, text, text, text, text), identity.read_dev_mailbox(text, int)
+  from public;
+grant execute on function identity.memberships_elsewhere(uuid, uuid),
+  identity.deposit_simulated_message(uuid, uuid, text, text, text, text, text), identity.read_dev_mailbox(text, int)
+  to portico_app;
 
 revoke execute on function identity.record_login_attempt(text, text, boolean, int),
   identity.raise_platform_alert(uuid, text, text, jsonb, text), identity.list_platform_alerts(int),

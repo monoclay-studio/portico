@@ -1,5 +1,5 @@
 import type { TxContext } from '@portico/db';
-import type { EffectMode, FieldCipher, PermissionDefinition } from '@portico/kernel';
+import type { FieldCipher, PermissionDefinition } from '@portico/kernel';
 
 /**
  * What identity needs from other modules and from infrastructure. Bound in apps/api/src/composition.ts; tests bind
@@ -23,6 +23,8 @@ export interface IdentityPorts {
   notifier?: Notifier;
   /** HTTP access to identity providers (OIDC discovery, JWKS, token endpoint). */
   oidcHttp?: OidcHttpClient;
+  /** DNS TXT records of a name (SSO domain verification). */
+  dnsTxt?: (name: string) => Promise<string[]>;
   /** Country of an IP address for the new-country sign-in signal (placeholder binding knows none). */
   geo?: GeoIpResolver;
   /** Monoclay operators allowed to use the internal console (support sessions). */
@@ -43,6 +45,10 @@ export interface IdentityConfig {
   appBaseUrl?: string;
   /** Issuer label shown in authenticator apps. */
   totpIssuer?: string;
+  /** Development only: accept `http://localhost` identity providers. Never set in production. */
+  allowLocalIdentityProvider?: boolean;
+  /** Production: the operator console stays disabled until AWS IAM Identity Center is wired (P2-17). */
+  operatorConsoleEnabled?: boolean;
 }
 
 /** Secret storage port. References are opaque strings safe to store in tables; values never are. */
@@ -64,10 +70,12 @@ export interface StaffMessage {
 }
 
 export interface NotifierResult {
-  /** `live` = handed to the delivery channel; `simulate` = recorded only (non-live environments); `sandbox`. */
-  mode: Exclude<EffectMode, 'blocked'>;
-  /** In non-live environments the message is returned to the caller so it can be shown as *simulated*. */
-  simulated?: StaffMessage;
+  /**
+   * `queued` = handed to the delivery pipeline (live) — NOT "sent": nothing confirms delivery yet (CLAUDE.md §5);
+   * `simulated` = non-live environment, kept in the operator/developer mailbox (never returned to the caller);
+   * `sandbox` = provider test mode.
+   */
+  mode: 'queued' | 'simulated' | 'sandbox';
 }
 
 /** Adapters must call `assertExternalEffectAllowed(tx, 'message.staff')` before delivering anything. */

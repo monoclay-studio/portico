@@ -54,7 +54,8 @@ export const identityManifest: ModuleManifest = {
     },
     {
       key: 'identity.scim.provision',
-      description: 'Provision staff accounts and groups through SCIM (identity provider integrations)',
+      description:
+        'Provision staff accounts and groups through SCIM (identity provider integrations). Equivalent to holding every role mapped to an identity-provider group: the client can place anyone in those groups.',
       scope: 'organization',
       sensitive: true,
     },

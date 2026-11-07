@@ -20,8 +20,8 @@ import { createLocalJWKSet, type JSONWebKeySet, type JWTPayload, jwtVerify } fro
 import { emailDomainAllowed, groupsFromClaim } from '../domain/role-mapping';
 import { NotConfiguredError } from '../errors';
 import type { IdentityPorts } from '../ports';
-import { assertCanGrantRole } from '../service';
 import type { IdentityDB } from '../tables';
+import { assertCanGrantRole, assertNotElevated, membershipsElsewhere } from './guard';
 import { reconcileMappedRoles } from './mapped-roles';
 import { checkSignInLocation } from './security';
 import { createSession } from './sessions';
@@ -51,7 +51,8 @@ async function requireSsoEntitlement(
   if (ports.hasEntitlement && !(await ports.hasEntitlement(tx, feature))) throw new EntitlementError(feature);
 }
 
-function assertSecureUrl(url: string, field: string) {
+/** P2-2: https only; `http://localhost` only when the deployment explicitly allows a local development IdP. */
+function assertSecureUrl(url: string, field: string, allowLocal = false) {
   let u: URL;
   try {
     u = new URL(url);
@@ -59,18 +60,29 @@ function assertSecureUrl(url: string, field: string) {
     throw new ValidationError('invalid_url', `${field} is not a valid URL.`);
   }
   const local = u.hostname === 'localhost' || u.hostname === '127.0.0.1';
-  if (u.protocol !== 'https:' && !(local && u.protocol === 'http:'))
+  if (local && !allowLocal)
+    throw new ValidationError('insecure_url', `${field} must be a public https address.`);
+  if (u.protocol !== 'https:' && !(allowLocal && local && u.protocol === 'http:'))
     throw new ValidationError('insecure_url', `${field} must use https.`);
 }
 
-interface Discovery {
+export interface Discovery {
   issuer: string;
   authorization_endpoint: string;
   token_endpoint: string;
   jwks_uri: string;
 }
 
-async function discover(ports: Pick<IdentityPorts, 'oidcHttp'>, issuer: string): Promise<Discovery> {
+/**
+ * Read the issuer's OpenID configuration. Call it OUTSIDE any database transaction (P2-2) and pass the result to
+ * `configureSso`.
+ */
+export async function discoverIssuer(
+  ports: Pick<IdentityPorts, 'oidcHttp' | 'config'>,
+  issuer: string,
+): Promise<Discovery> {
+  const allowLocal = ports.config?.allowLocalIdentityProvider ?? false;
+  assertSecureUrl(issuer, 'issuer', allowLocal);
   const http = requireHttp(ports);
   const url = `${issuer.replace(/\/$/, '')}/.well-known/openid-configuration`;
   let doc: unknown;
@@ -110,7 +122,7 @@ async function discover(ports: Pick<IdentityPorts, 'oidcHttp'>, issuer: string):
     token_endpoint: d.token_endpoint,
     jwks_uri: d.jwks_uri,
   }))
-    assertSecureUrl(v, k);
+    assertSecureUrl(v, k, allowLocal);
   return d as Discovery;
 }
 
@@ -193,18 +205,21 @@ export interface SsoConfigInput {
  */
 export async function configureSso(
   tx: TxContext,
-  ports: Pick<IdentityPorts, 'oidcHttp' | 'secrets' | 'hasEntitlement'>,
+  ports: Pick<IdentityPorts, 'oidcHttp' | 'secrets' | 'hasEntitlement' | 'config'>,
   input: SsoConfigInput,
   expectedVersion?: number,
+  /** Pre-fetched with `discoverIssuer` outside the transaction (routes do this; tests may omit it). */
+  discovery?: Discovery,
 ): Promise<SsoConnectionView> {
   requirePermission(tx, 'identity.sso.manage');
+  assertNotElevated(tx, 'Changing single sign-on');
   await requireSsoEntitlement(tx, ports);
   if (!ports.secrets) throw new NotConfiguredError('Single sign-on', 'the secret store');
-  assertSecureUrl(input.issuer, 'issuer');
   const domains = [...new Set(input.allowedEmailDomains.map((d) => d.toLowerCase().trim()))];
   if (domains.length === 0 || domains.some((d) => !/^[a-z0-9.-]+\.[a-z]{2,}$/.test(d)))
     throw new ValidationError('invalid_domains', 'List at least one email domain such as lagoon.mv.');
-  const d = await discover(ports, input.issuer);
+  const d =
+    discovery && discovery.issuer === input.issuer ? discovery : await discoverIssuer(ports, input.issuer);
   const existing = await db(tx).selectFrom('identity.sso_connections').selectAll().executeTakeFirst();
   if (existing && expectedVersion === undefined)
     throw new ValidationError('if_match_required', 'Send If-Match with the connection version to change it.');
@@ -277,6 +292,7 @@ export async function setGroupRoleMappings(
   }>,
 ) {
   requirePermission(tx, 'identity.sso.manage');
+  assertNotElevated(tx, 'Changing single sign-on role mappings');
   const roles = new Map(
     (
       await db(tx).selectFrom('identity.roles').select(['id', 'key', 'permissions', 'archived_at']).execute()
@@ -324,19 +340,35 @@ export async function setGroupRoleMappings(
 
 /**
  * Turn "SSO required" on or off. To prevent lock-out, enabling it requires that the administrator is currently
- * signed in through this organization's SSO. Password sessions of non-exempt members are revoked.
+ * signed in through this organization's SSO and that at least one active member keeps password sign-in as an
+ * emergency account (P2-4). Password sessions of non-exempt members are revoked.
  */
 export async function setSsoEnforcement(
   tx: TxContext,
   input: { ssoRequired: boolean; exemptUserIds: string[] },
 ) {
   requirePermission(tx, 'identity.sso.manage');
+  assertNotElevated(tx, 'Changing single sign-on enforcement');
   const c = await db(tx).selectFrom('identity.sso_connections').selectAll().executeTakeFirst();
   if (c?.status !== 'active')
     throw new BusinessRuleError('sso_not_configured', 'Configure and activate SSO first.');
   if (input.exemptUserIds.length > 3)
     throw new ValidationError('too_many_exemptions', 'At most 3 accounts may keep password sign-in.');
   if (input.ssoRequired) {
+    const active = input.exemptUserIds.length
+      ? await db(tx)
+          .selectFrom('identity.memberships')
+          .select('user_id')
+          .where('user_id', 'in', input.exemptUserIds)
+          .where('status', '=', 'active')
+          .execute()
+      : [];
+    if (active.length === 0) {
+      throw new ValidationError(
+        'emergency_account_required',
+        'Keep at least one active member on password sign-in while SSO is required, so the organization can still sign in if the identity provider fails.',
+      );
+    }
     const sessionId = tx.actor.kind === 'user' ? tx.actor.sessionId : undefined;
     const s = sessionId
       ? await db(tx)
@@ -409,7 +441,7 @@ export async function startSsoLogin(
   database: PorticoDatabase,
   ports: Pick<IdentityPorts, 'cipher' | 'config'>,
   input: { organizationId: string },
-): Promise<{ authorizationUrl: string; expiresAt: Date }> {
+): Promise<{ authorizationUrl: string; expiresAt: Date; browserBinding: string }> {
   if (!ports.cipher) throw new NotConfiguredError('Single sign-on', 'field encryption');
   const redirectUri = ports.config?.ssoRedirectUri;
   if (!redirectUri) throw new NotConfiguredError('Single sign-on', 'the redirect URI');
@@ -427,6 +459,9 @@ export async function startSsoLogin(
     const nonce = randomToken(24);
     const verifier = randomToken(48);
     const challenge = b64url(createHash('sha256').update(verifier).digest());
+    // P2-3: a secret the starting browser keeps (sessionStorage/cookie) and must present at the callback, so a
+    // leaked (state, code) pair cannot be redeemed elsewhere (also prevents login CSRF).
+    const browserBinding = randomToken(24);
     const expiresAt = new Date(tx.now.getTime() + SSO_STATE_MINUTES * 60_000);
     await db(tx)
       .insertInto('identity.sso_login_states')
@@ -434,6 +469,7 @@ export async function startSsoLogin(
         id,
         tenant_id: tx.tenantId,
         state_hash: sha256Hex(state),
+        binding_hash: sha256Hex(browserBinding),
         nonce,
         code_verifier_enc: cipher.encrypt(verifier, `sso:${id}`),
         redirect_uri: redirectUri,
@@ -452,7 +488,7 @@ export async function startSsoLogin(
       code_challenge: challenge,
       code_challenge_method: 'S256',
     }).toString();
-    return { authorizationUrl: url.toString(), expiresAt };
+    return { authorizationUrl: url.toString(), expiresAt, browserBinding };
   });
 }
 
@@ -475,7 +511,7 @@ async function jwksFor(
 
 async function verifyIdToken(
   ports: Pick<IdentityPorts, 'oidcHttp'>,
-  c: Connection,
+  c: { issuer: string; client_id: string; jwks_uri: string },
   idToken: string,
   nonce: string,
   now: Date,
@@ -486,6 +522,8 @@ async function verifyIdToken(
     algorithms: ['RS256', 'PS256', 'ES256', 'EdDSA'],
     clockTolerance: 60,
     currentDate: now,
+    // P1-8: these claims must be present (jose verifies exp/iat values; sub and nonce are checked below).
+    requiredClaims: ['exp', 'iat', 'sub', 'nonce'],
   };
   let payload: JWTPayload;
   try {
@@ -506,15 +544,47 @@ async function verifyIdToken(
 const SSO_FAILED =
   'Single sign-on did not complete. Start again from the sign-in page; if it keeps failing, ask your administrator.';
 
+/** P3-5: failure audits never store a non-member's email or groups — only the domain and a fingerprint. */
+function emailFingerprint(email: string | undefined) {
+  if (!email) return {};
+  return { emailDomain: email.split('@')[1] ?? null, emailHash: sha256Hex(email.toLowerCase()).slice(0, 16) };
+}
+
+async function auditFailure(
+  database: PorticoDatabase,
+  ctx: RequestContext,
+  reason: string,
+  details: Record<string, unknown> = {},
+) {
+  await withTenantTx(database, ctx, (tx) =>
+    tx.audit({
+      action: 'identity.sso.loginFailed',
+      target: { type: 'organization', id: tx.tenantId },
+      reason,
+      metadata: details,
+    }),
+  );
+}
+
 /**
- * Complete SSO (public): exchange the code (with the PKCE verifier and client secret), verify the ID token against
- * the provider's keys, check the email domain, provision or update the membership (JIT), reconcile group-mapped
- * roles and open a session. Every refusal is audited in the organization.
+ * Complete SSO (public). Three phases so no identity-provider call happens inside a database transaction (P2-2):
+ *  1. consume the login state (single use, bound to the starting browser — P2-3) and load the connection;
+ *  2. exchange the code (PKCE + client secret) and verify the ID token against the provider's keys;
+ *  3. bind the identity and open a session. ADR-0017 §5 / P1-8: sign-in matches on (issuer, sub) once linked;
+ *     `email_verified` must be true; a NEW link to an existing person who also works elsewhere requires that this
+ *     organization has verified the email domain (DNS TXT). JIT creates memberships only for mapped groups.
+ * Every refusal is audited in the organization (without the non-member's email).
  */
 export async function completeSsoLogin(
   database: PorticoDatabase,
   ports: Pick<IdentityPorts, 'cipher' | 'secrets' | 'oidcHttp' | 'geo'>,
-  input: { state: string; code: string; ip?: string | undefined; userAgent?: string | undefined },
+  input: {
+    state: string;
+    code: string;
+    browserBinding?: string | undefined;
+    ip?: string | undefined;
+    userAgent?: string | undefined;
+  },
 ) {
   const [tenantId] = input.state.split('.');
   if (!tenantId || !isUuid(tenantId)) throw new UnauthenticatedError(SSO_FAILED);
@@ -525,6 +595,68 @@ export async function completeSsoLogin(
   const ctx = await orgContext(database, tenantId).catch(() => {
     throw new UnauthenticatedError(SSO_FAILED);
   });
+
+  // Phase 1 — consume the state.
+  const prepared = await withTenantTx(database, ctx, async (tx) => {
+    const st = await db(tx)
+      .selectFrom('identity.sso_login_states')
+      .selectAll()
+      .where('state_hash', '=', sha256Hex(input.state))
+      .forUpdate()
+      .executeTakeFirst();
+    if (!st || st.consumed_at || st.expires_at <= tx.now)
+      return { ok: false as const, reason: 'invalid_or_expired_state' };
+    await db(tx)
+      .updateTable('identity.sso_login_states')
+      .set({ consumed_at: tx.now })
+      .where('id', '=', st.id)
+      .execute();
+    if (!input.browserBinding || sha256Hex(input.browserBinding) !== st.binding_hash)
+      return { ok: false as const, reason: 'browser_binding_mismatch' };
+    const c = await db(tx).selectFrom('identity.sso_connections').selectAll().executeTakeFirst();
+    if (c?.status !== 'active') return { ok: false as const, reason: 'sso_not_active' };
+    return {
+      ok: true as const,
+      c,
+      st,
+      verifier: cipher.decrypt(st.code_verifier_enc, `sso:${st.id}`),
+      secret: await secrets.get(tx, c.client_secret_ref),
+    };
+  });
+  if (!prepared.ok) {
+    await auditFailure(database, ctx, prepared.reason);
+    throw new UnauthenticatedError(SSO_FAILED);
+  }
+  const { c, st, verifier, secret } = prepared;
+
+  // Phase 2 — talk to the identity provider (no transaction open).
+  const form: Record<string, string> = {
+    grant_type: 'authorization_code',
+    code: input.code,
+    redirect_uri: st.redirect_uri,
+    code_verifier: verifier,
+    client_id: c.client_id,
+  };
+  const headers: Record<string, string> = {};
+  if (c.token_endpoint_auth_method === 'client_secret_post') form.client_secret = secret;
+  else
+    headers.authorization = `Basic ${Buffer.from(`${encodeURIComponent(c.client_id)}:${encodeURIComponent(secret)}`).toString('base64')}`;
+  let claims: JWTPayload;
+  try {
+    const tokenRes = await requireHttp(ports).postForm(c.token_endpoint, form, headers);
+    const idToken = (tokenRes.body as { id_token?: unknown } | null)?.id_token;
+    if (tokenRes.status !== 200 || typeof idToken !== 'string') {
+      await auditFailure(database, ctx, 'token_exchange_failed', { status: tokenRes.status });
+      throw new UnauthenticatedError(SSO_FAILED);
+    }
+    claims = await verifyIdToken(ports, c, idToken, st.nonce, database.clock.now());
+  } catch (err) {
+    if (err instanceof UnauthenticatedError) throw err;
+    await auditFailure(database, ctx, 'id_token_invalid', { error: (err as Error).message });
+    throw new UnauthenticatedError(SSO_FAILED);
+  }
+
+  // Phase 3 — bind the identity and open a session.
   const result = await withTenantTx(database, ctx, async (tx) => {
     const fail = async (reason: string, details: Record<string, unknown> = {}) => {
       await tx.audit({
@@ -535,53 +667,71 @@ export async function completeSsoLogin(
       });
       return { ok: false as const, reason };
     };
-    const st = await db(tx)
-      .selectFrom('identity.sso_login_states')
-      .selectAll()
-      .where('state_hash', '=', sha256Hex(input.state))
-      .forUpdate()
-      .executeTakeFirst();
-    if (!st || st.consumed_at || st.expires_at <= tx.now) return fail('invalid_or_expired_state');
-    await db(tx)
-      .updateTable('identity.sso_login_states')
-      .set({ consumed_at: tx.now })
-      .where('id', '=', st.id)
-      .execute();
-    const c = await db(tx).selectFrom('identity.sso_connections').selectAll().executeTakeFirst();
-    if (c?.status !== 'active') return fail('sso_not_active');
-    const verifier = cipher.decrypt(st.code_verifier_enc, `sso:${st.id}`);
-    const secret = await secrets.get(tx, c.client_secret_ref);
-    const form: Record<string, string> = {
-      grant_type: 'authorization_code',
-      code: input.code,
-      redirect_uri: st.redirect_uri,
-      code_verifier: verifier,
-      client_id: c.client_id,
-    };
-    const headers: Record<string, string> = {};
-    if (c.token_endpoint_auth_method === 'client_secret_post') form.client_secret = secret;
-    else
-      headers.authorization = `Basic ${Buffer.from(`${encodeURIComponent(c.client_id)}:${encodeURIComponent(secret)}`).toString('base64')}`;
-    const tokenRes = await requireHttp(ports).postForm(c.token_endpoint, form, headers);
-    const idToken = (tokenRes.body as { id_token?: unknown } | null)?.id_token;
-    if (tokenRes.status !== 200 || typeof idToken !== 'string')
-      return fail('token_exchange_failed', { status: tokenRes.status });
-    let claims: JWTPayload;
-    try {
-      claims = await verifyIdToken(ports, c, idToken, st.nonce, tx.now);
-    } catch (err) {
-      return fail('id_token_invalid', { error: (err as Error).message });
-    }
     const email = typeof claims.email === 'string' ? claims.email.toLowerCase() : undefined;
-    if (!email) return fail('email_claim_missing');
-    if (claims.email_verified === false) return fail('email_not_verified', { email });
+    const subject = typeof claims.sub === 'string' ? claims.sub : undefined;
+    if (!email || !subject) return fail('email_or_subject_missing');
+    if (claims.email_verified !== true) return fail('email_not_verified', emailFingerprint(email));
     if (!emailDomainAllowed(email, c.allowed_email_domains))
-      return fail('email_domain_not_allowed', { email });
+      return fail('email_domain_not_allowed', emailFingerprint(email));
     const groups = groupsFromClaim(claims[c.groups_claim]);
-    const { rows } = await sql<{
-      id: string;
-    }>`select identity.ensure_user(${newId()}::uuid, ${email}) as id`.execute(tx.db);
-    const userId = rows[0]?.id as string;
+    const { rows: found } = await sql<{ user_id: string }>`
+      select user_id from identity.login_lookup(${email})`.execute(tx.db);
+    const emailUserId = found[0]?.user_id;
+    const link = await db(tx)
+      .selectFrom('identity.sso_identities')
+      .selectAll()
+      .where('issuer', '=', c.issuer)
+      .where('subject', '=', subject)
+      .executeTakeFirst();
+    let userId: string;
+    if (link) {
+      if (emailUserId && emailUserId !== link.user_id)
+        return fail('email_belongs_to_another_person', emailFingerprint(email));
+      userId = link.user_id;
+    } else {
+      if (emailUserId) {
+        const elsewhere = await membershipsElsewhere(tx, emailUserId);
+        const domain = email.split('@')[1] ?? '';
+        const verified = await db(tx)
+          .selectFrom('identity.sso_domains')
+          .select('id')
+          .where('domain', '=', domain)
+          .where('verified_at', 'is not', null)
+          .executeTakeFirst();
+        if (elsewhere > 0 && !verified)
+          return fail('existing_account_requires_verified_domain', emailFingerprint(email));
+        const already = await db(tx)
+          .selectFrom('identity.sso_identities')
+          .select('id')
+          .where('issuer', '=', c.issuer)
+          .where('user_id', '=', emailUserId)
+          .executeTakeFirst();
+        if (already) return fail('person_linked_to_another_subject', emailFingerprint(email));
+        userId = emailUserId;
+      } else {
+        const candidate = newId();
+        const { rows } = await sql<{ id: string }>`
+          select identity.ensure_user(${candidate}::uuid, ${email}) as id`.execute(tx.db);
+        userId = rows[0]?.id as string;
+      }
+      await db(tx)
+        .insertInto('identity.sso_identities')
+        .values({
+          id: newId(),
+          tenant_id: tx.tenantId,
+          issuer: c.issuer,
+          subject,
+          user_id: userId,
+          email_at_link: email,
+          linked_at: tx.now,
+        })
+        .execute();
+      await tx.audit({
+        action: 'identity.sso.link',
+        target: { type: 'user', id: userId },
+        metadata: { issuer: c.issuer },
+      });
+    }
     const member = await db(tx)
       .selectFrom('identity.memberships')
       .select(['id', 'status'])
@@ -591,11 +741,11 @@ export async function completeSsoLogin(
       return fail('membership_not_active', { userId });
     const name = typeof claims.name === 'string' && claims.name.trim() ? claims.name.trim() : email;
     if (!member) {
-      if (!c.jit_provisioning) return fail('no_membership', { email });
+      if (!c.jit_provisioning) return fail('no_membership', emailFingerprint(email));
       const mappings = await db(tx).selectFrom('identity.group_role_mappings').select('group_name').execute();
       const lower = new Set(groups.map((g) => g.toLowerCase()));
       if (!mappings.some((m) => lower.has(m.group_name.toLowerCase())))
-        return fail('no_mapped_group', { email, groups });
+        return fail('no_mapped_group', emailFingerprint(email));
       await db(tx)
         .insertInto('identity.memberships')
         .values({
@@ -607,23 +757,20 @@ export async function completeSsoLogin(
           status: 'active',
           activated_at: tx.now,
           provisioned_by: 'sso',
-          external_id: typeof claims.sub === 'string' ? `oidc:${claims.sub}` : null,
+          external_id: `oidc:${subject}`,
           status_reason: null,
           removed_at: null,
           default_property_id: null,
         })
         .execute();
-      await tx.audit({
-        action: 'identity.user.jitProvision',
-        target: { type: 'user', id: userId },
-        after: { email, groups },
-      });
+      await tx.audit({ action: 'identity.user.jitProvision', target: { type: 'user', id: userId } });
       await tx.emit({
         type: 'identity.membership.activated',
         aggregate: { type: 'user', id: userId },
         payload: { userId, via: 'sso' },
       });
     } else if (member.status === 'invited') {
+      // The identity link above passed ADR-0017 §5, so the identity provider vouches for this person.
       await db(tx)
         .updateTable('identity.memberships')
         .set({ status: 'active', activated_at: tx.now, version: sql`version + 1` })
@@ -653,6 +800,98 @@ export async function completeSsoLogin(
     userId: result.userId,
     organization: { id: ctx.tenantId, name: ctx.orgName, environment: ctx.environment },
   };
+}
+
+// ───────────────────────────── Domain verification (ADR-0017 §5) ─────────────────────────────
+
+const DOMAIN_RE = /^[a-z0-9.-]+\.[a-z]{2,}$/;
+
+/** Claim an email domain: returns the DNS TXT record to publish. */
+export async function addSsoDomain(tx: TxContext, domain: string) {
+  requirePermission(tx, 'identity.sso.manage');
+  assertNotElevated(tx, 'Changing single sign-on domains');
+  const d = domain.toLowerCase().trim();
+  if (!DOMAIN_RE.test(d)) throw new ValidationError('invalid_domain', 'Enter a domain such as lagoon.mv.');
+  const existing = await db(tx)
+    .selectFrom('identity.sso_domains')
+    .selectAll()
+    .where('domain', '=', d)
+    .executeTakeFirst();
+  const row =
+    existing ??
+    (await db(tx)
+      .insertInto('identity.sso_domains')
+      .values({
+        id: newId(),
+        tenant_id: tx.tenantId,
+        domain: d,
+        verification_token: randomToken(24),
+        verified_at: null,
+        created_by: tx.actor.kind === 'user' ? `user:${tx.actor.userId}` : tx.actor.kind,
+      })
+      .returningAll()
+      .executeTakeFirstOrThrow());
+  if (!existing)
+    await tx.audit({
+      action: 'identity.sso.domainClaim',
+      target: { type: 'sso_domain', id: row.id },
+      after: { domain: d },
+    });
+  return domainView(row);
+}
+
+function domainView(r: { domain: string; verification_token: string; verified_at: Date | null }) {
+  return {
+    domain: r.domain,
+    verified: r.verified_at !== null,
+    verifiedAt: r.verified_at?.toISOString() ?? null,
+    txtRecord: { name: `_portico-verification.${r.domain}`, value: `portico-verify=${r.verification_token}` },
+  };
+}
+
+export async function listSsoDomains(tx: TxContext) {
+  requirePermission(tx, 'identity.sso.manage');
+  return (await db(tx).selectFrom('identity.sso_domains').selectAll().orderBy('domain').execute()).map(
+    domainView,
+  );
+}
+
+/** Check the DNS TXT record (outside any transaction) and mark the domain verified. */
+export async function verifySsoDomain(
+  database: PorticoDatabase,
+  ctx: RequestContext,
+  ports: Pick<IdentityPorts, 'dnsTxt'>,
+  domain: string,
+) {
+  if (!ports.dnsTxt) throw new NotConfiguredError('Domain verification', 'DNS lookups');
+  const d = domain.toLowerCase().trim();
+  const row = await withTenantTx(database, ctx, async (tx) => {
+    requirePermission(tx, 'identity.sso.manage');
+    assertNotElevated(tx, 'Changing single sign-on domains');
+    return db(tx).selectFrom('identity.sso_domains').selectAll().where('domain', '=', d).executeTakeFirst();
+  });
+  if (!row) throw new NotFoundError('sso_domain', d);
+  const records = await ports.dnsTxt(`_portico-verification.${d}`);
+  if (!records.includes(`portico-verify=${row.verification_token}`)) {
+    throw new BusinessRuleError(
+      'domain_not_verified',
+      `The TXT record was not found. Publish _portico-verification.${d} with the value shown, wait for DNS to update, then try again.`,
+    );
+  }
+  return withTenantTx(database, ctx, async (tx) => {
+    const updated = await db(tx)
+      .updateTable('identity.sso_domains')
+      .set({ verified_at: tx.now })
+      .where('id', '=', row.id)
+      .returningAll()
+      .executeTakeFirstOrThrow();
+    await tx.audit({
+      action: 'identity.sso.domainVerified',
+      target: { type: 'sso_domain', id: row.id },
+      after: { domain: d },
+    });
+    return domainView(updated);
+  });
 }
 
 /** For tests: forget cached provider keys. */
