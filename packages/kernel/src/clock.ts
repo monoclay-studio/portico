@@ -5,7 +5,9 @@ export interface Clock {
 
 export const systemClock: Clock = { now: () => new Date() };
 
-export function fixedClock(start: Date | string): Clock & { advance(ms: number): void; set(d: Date | string): void } {
+export function fixedClock(
+  start: Date | string,
+): Clock & { advance(ms: number): void; set(d: Date | string): void } {
   let current = new Date(start);
   return {
     now: () => new Date(current),

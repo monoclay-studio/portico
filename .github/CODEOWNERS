@@ -1,0 +1,10 @@
+# Ownership map for future teams. Until teams exist, everything is owned by the founder account.
+# Replace @monoclay-studio with team handles (e.g. @monoclay/finance-platform) as teams form.
+*                         @monoclay-studio
+/packages/kernel/         @monoclay-studio
+/packages/db/             @monoclay-studio
+/modules/finance/         @monoclay-studio
+/modules/payments/        @monoclay-studio
+/modules/identity/        @monoclay-studio
+/docs/product/brief.md    @monoclay-studio
+/docs/product/operational-readiness-brief.md @monoclay-studio

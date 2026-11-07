@@ -1,0 +1,37 @@
+{
+  "name": "@portico/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "dev": "tsx watch --env-file-if-exists=../../.env src/main.ts",
+    "start": "node dist/main.js",
+    "build": "esbuild src/main.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/main.js --packages=external",
+    "migrate": "tsx --env-file-if-exists=../../.env src/migrate-cli.ts",
+    "seed:demo": "tsx --env-file-if-exists=../../.env src/seed/demo-cli.ts",
+    "openapi": "tsx src/openapi-cli.ts",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@portico/db": "workspace:*",
+    "@portico/http": "workspace:*",
+    "@portico/identity": "workspace:*",
+    "@portico/kernel": "workspace:*",
+    "@portico/platform": "workspace:*",
+    "zod": "catalog:",
+    "pg": "catalog:"
+  },
+  "devDependencies": {
+    "@portico/testing": "workspace:*",
+    "@types/node": "catalog:",
+    "esbuild": "^0.25.0",
+    "tsx": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "@types/pg": "catalog:"
+  }
+}

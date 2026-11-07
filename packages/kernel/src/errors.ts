@@ -31,10 +31,16 @@ export class ValidationError extends DomainError {
 
 export class NotFoundError extends DomainError {
   constructor(entity: string, id?: string) {
-    super(`${entity}_not_found`, id ? `${humanize(entity)} ${id} was not found or you do not have access to it.` : `${humanize(entity)} was not found or you do not have access to it.`, {
-      status: 404,
-      details: id ? { entity, id } : { entity },
-    });
+    super(
+      `${entity}_not_found`,
+      id
+        ? `${humanize(entity)} ${id} was not found or you do not have access to it.`
+        : `${humanize(entity)} was not found or you do not have access to it.`,
+      {
+        status: 404,
+        details: id ? { entity, id } : { entity },
+      },
+    );
   }
 }
 
@@ -70,19 +76,27 @@ export class UnauthenticatedError extends DomainError {
 
 export class ForbiddenError extends DomainError {
   constructor(permission: string, scope?: Record<string, unknown>) {
-    super('forbidden', `You do not have permission to do this (${permission}). Ask a manager to grant access if you need it.`, {
-      status: 403,
-      details: { permission, ...(scope ? { scope } : {}) },
-    });
+    super(
+      'forbidden',
+      `You do not have permission to do this (${permission}). Ask a manager to grant access if you need it.`,
+      {
+        status: 403,
+        details: { permission, ...(scope ? { scope } : {}) },
+      },
+    );
   }
 }
 
 export class EntitlementError extends DomainError {
   constructor(feature: string) {
-    super('feature_not_enabled', `This feature (${feature}) is not part of your organization's plan. An administrator can enable it.`, {
-      status: 403,
-      details: { feature },
-    });
+    super(
+      'feature_not_enabled',
+      `This feature (${feature}) is not part of your organization's plan. An administrator can enable it.`,
+      {
+        status: 403,
+        details: { feature },
+      },
+    );
   }
 }
 
@@ -95,16 +109,24 @@ export class IdempotencyConflictError extends DomainError {
 /** The request is still being processed under the same idempotency key. Retry later. */
 export class InProgressError extends DomainError {
   constructor() {
-    super('request_in_progress', 'An identical request is still being processed. Wait a moment and check the result before trying again.', {
-      status: 409,
-      retryable: true,
-    });
+    super(
+      'request_in_progress',
+      'An identical request is still being processed. Wait a moment and check the result before trying again.',
+      {
+        status: 409,
+        retryable: true,
+      },
+    );
   }
 }
 
 /** An external system (payments, channel) failed or is unavailable. */
 export class ExternalServiceError extends DomainError {
-  constructor(service: string, message: string, opts: { retryable?: boolean; details?: Record<string, unknown>; cause?: unknown } = {}) {
+  constructor(
+    service: string,
+    message: string,
+    opts: { retryable?: boolean; details?: Record<string, unknown>; cause?: unknown } = {},
+  ) {
     super('external_service_error', message, {
       status: 502,
       retryable: opts.retryable ?? true,

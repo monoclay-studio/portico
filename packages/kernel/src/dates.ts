@@ -21,7 +21,11 @@ export function isLocalDate(value: unknown): value is LocalDate {
 }
 
 export function assertLocalDate(value: string, field = 'date'): LocalDate {
-  if (!isLocalDate(value)) throw new ValidationError('invalid_date', `${field} must be a valid date in YYYY-MM-DD format.`, { field, value });
+  if (!isLocalDate(value))
+    throw new ValidationError('invalid_date', `${field} must be a valid date in YYYY-MM-DD format.`, {
+      field,
+      value,
+    });
   return value;
 }
 
@@ -49,7 +53,12 @@ export function compareDates(a: LocalDate, b: LocalDate): -1 | 0 | 1 {
 export function dateRange(from: LocalDate, to: LocalDate): DateRange {
   assertLocalDate(from, 'from');
   assertLocalDate(to, 'to');
-  if (to <= from) throw new ValidationError('invalid_date_range', `The end date (${to}) must be after the start date (${from}).`, { from, to });
+  if (to <= from)
+    throw new ValidationError(
+      'invalid_date_range',
+      `The end date (${to}) must be after the start date (${from}).`,
+      { from, to },
+    );
   return Object.freeze({ from, to });
 }
 
@@ -74,7 +83,12 @@ export function rangeContains(range: DateRange, d: LocalDate): boolean {
 
 /** Calendar date of an instant in a given IANA time zone (e.g. 'Indian/Maldives'). */
 export function localDateIn(instant: Date, timeZone: string): LocalDate {
-  const parts = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(instant);
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(instant);
   return parts; // en-CA formats as YYYY-MM-DD
 }
 

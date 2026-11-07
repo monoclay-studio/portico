@@ -1,0 +1,191 @@
+/**
+ * System role templates seeded into every organization. Permissions use `<module>.<resource>.<action>` keys;
+ * `module.*` grants a whole module. Organizations can clone and customise these (custom roles).
+ * Module teams refine their entries as permissions are added (see docs/specs/identity.md).
+ */
+export interface RoleTemplate {
+  key: string;
+  name: string;
+  description: string;
+  permissions: readonly string[];
+}
+
+export const ROLE_TEMPLATES: readonly RoleTemplate[] = [
+  {
+    key: 'org_admin',
+    name: 'Organization administrator',
+    description: 'Full access to every property, setting and user in the organization.',
+    permissions: ['*'],
+  },
+  {
+    key: 'general_manager',
+    name: 'General manager',
+    description:
+      'Full operational and financial access for assigned properties; no user or organization administration.',
+    permissions: [
+      'platform.property.*',
+      'platform.department.*',
+      'platform.policy.override',
+      'platform.businessDate.advance',
+      'inventory.*',
+      'rates.*',
+      'guests.*',
+      'reservations.*',
+      'finance.*',
+      'payments.*',
+      'operations.*',
+      'dayClose.*',
+      'distribution.*',
+      'groups.*',
+      'comms.*',
+      'resort.*',
+      'analytics.*',
+      'ai.assistant.use',
+      'identity.user.read',
+    ],
+  },
+  {
+    key: 'front_desk',
+    name: 'Front desk agent',
+    description:
+      'Arrivals, departures, check-in/out, room moves, guest requests, charges and payments at the desk.',
+    permissions: [
+      'platform.property.read',
+      'inventory.availability.read',
+      'inventory.unit.read',
+      'inventory.assignment.manage',
+      'rates.quote.read',
+      'guests.profile.read',
+      'guests.profile.update',
+      'reservations.booking.read',
+      'reservations.booking.create',
+      'reservations.booking.update',
+      'reservations.stay.checkIn',
+      'reservations.stay.checkOut',
+      'reservations.stay.move',
+      'reservations.handover.manage',
+      'finance.folio.read',
+      'finance.posting.create',
+      'finance.cashier.operate',
+      'payments.payment.collect',
+      'payments.paymentRequest.create',
+      'operations.unit.read',
+      'operations.task.manage',
+      'comms.conversation.manage',
+      'ai.assistant.use',
+    ],
+  },
+  {
+    key: 'reservations_agent',
+    name: 'Reservations agent',
+    description: 'Quotes, bookings, modifications and cancellations.',
+    permissions: [
+      'platform.property.read',
+      'inventory.availability.read',
+      'rates.quote.read',
+      'guests.profile.read',
+      'guests.profile.update',
+      'reservations.booking.*',
+      'payments.paymentRequest.create',
+      'finance.folio.read',
+      'comms.conversation.manage',
+      'ai.assistant.use',
+    ],
+  },
+  {
+    key: 'night_auditor',
+    name: 'Night auditor',
+    description: 'Runs Day Close, resolves exceptions, posts and corrects charges.',
+    permissions: [
+      'platform.property.read',
+      'platform.businessDate.advance',
+      'dayClose.*',
+      'reservations.booking.read',
+      'reservations.stay.noShow',
+      'finance.folio.read',
+      'finance.posting.create',
+      'finance.posting.correct',
+      'finance.cashier.operate',
+      'payments.payment.read',
+      'inventory.availability.read',
+      'operations.unit.read',
+    ],
+  },
+  {
+    key: 'housekeeping_supervisor',
+    name: 'Housekeeping supervisor',
+    description: 'Plans and inspects cleaning, assigns attendants, manages lost & found.',
+    permissions: [
+      'platform.property.read',
+      'inventory.unit.read',
+      'operations.housekeeping.*',
+      'operations.task.manage',
+      'operations.unit.read',
+      'reservations.booking.read',
+    ],
+  },
+  {
+    key: 'housekeeping_attendant',
+    name: 'Housekeeping attendant',
+    description: 'Updates the status of assigned rooms and reports issues.',
+    permissions: [
+      'platform.property.read',
+      'operations.housekeeping.update',
+      'operations.task.update',
+      'operations.unit.read',
+    ],
+  },
+  {
+    key: 'engineer',
+    name: 'Engineering / maintenance',
+    description: 'Work orders, preventive maintenance, out-of-order requests.',
+    permissions: [
+      'platform.property.read',
+      'inventory.unit.read',
+      'operations.maintenance.*',
+      'operations.task.manage',
+      'operations.unit.read',
+    ],
+  },
+  {
+    key: 'finance',
+    name: 'Finance / accounts receivable',
+    description: 'Folios, invoices, receivables, cashier reconciliation, payouts and exports.',
+    permissions: [
+      'platform.property.read',
+      'finance.*',
+      'payments.*',
+      'reservations.booking.read',
+      'guests.profile.read',
+      'analytics.*',
+    ],
+  },
+  {
+    key: 'revenue_manager',
+    name: 'Revenue manager',
+    description: 'Rates, restrictions, availability controls, forecasts and channel performance.',
+    permissions: [
+      'platform.property.read',
+      'rates.*',
+      'inventory.availability.*',
+      'distribution.*',
+      'reservations.booking.read',
+      'analytics.*',
+    ],
+  },
+  {
+    key: 'read_only',
+    name: 'Read only',
+    description: 'View operational information without changing anything.',
+    permissions: [
+      'platform.property.read',
+      'inventory.availability.read',
+      'inventory.unit.read',
+      'reservations.booking.read',
+      'guests.profile.read',
+      'finance.folio.read',
+      'operations.unit.read',
+      'analytics.report.read',
+    ],
+  },
+];

@@ -11,6 +11,10 @@ Read this file fully before changing anything. The two owner briefs are the top-
 - `docs/product/operational-readiness-brief.md` — external dependencies, approvals, payments responsibility,
   compliance, costs, reliability, migration, launch gates. The owner calls these *recommendations applied with
   judgment*: preserve the outcomes, choose fitting implementations.
+- `docs/product/adoption-integration-brief.md` — the final product ambition: the easiest platform to evaluate,
+  integrate and adopt. Three adoption paths (connect alongside / replace selected capabilities / full migration),
+  staged evaluation (demo → trial → read-only connection → pilot → production), integration & migration as
+  core product capabilities with the same importance as reservations and finance.
 
 Then read `docs/product/decisions.md`, `docs/product/glossary.md`, `docs/architecture/overview.md`,
 `docs/architecture/domain-map.md` and the spec for the module you are touching (`docs/specs/<module>.md`).
@@ -102,7 +106,7 @@ named from `PORTICO_TEST_DB_PREFIX` (agents: set a unique prefix so parallel run
 10. **Contracts are Zod schemas** in `modules/<m>/src/contracts.ts` (no server imports there — the web apps
     import them). OpenAPI is generated from them. Public API is versioned under `/v1`.
 11. **Pure domain logic** lives in `src/domain/` with no IO, and is unit-tested exhaustively.
-12. **Environment safety (demo / training / sandbox).** Every adapter that causes an external effect (card
+12. **Environment safety (demo / trial / training / sandbox).** Every adapter that causes an external effect (card
     charges, guest messages, channel publication, government/fiscal submission, paid AI, production key issue)
     must call `assertExternalEffectAllowed(ctx, effect)` from `@portico/db` before acting. Non-live environments
     route effects to simulators/sandboxes or block them, and the UI labels results as *simulated* or *sandbox*.
@@ -111,6 +115,15 @@ named from `PORTICO_TEST_DB_PREFIX` (agents: set a unique prefix so parallel run
 14. **Two Monoclay money worlds never mix.** Monoclay's SaaS billing (`billing` module, Monoclay's own Stripe
     account, tagged with the product code) is fully separate from hotel guest money (`finance`/`payments`,
     the hotel legal entity's own merchant account). No code path moves guest funds through Monoclay.
+15. **Data authority (system of record).** For each property and data domain (`reservations`, `availability`,
+    `rates`, `guestProfiles`, `charges`, `payments`, `roomStatus`, `maintenance`, `accounting`) exactly one system
+    is authoritative: Portico or an external connection. Before writing in such a domain, call
+    `platform.assertWritable(tx, propertyId, domain)`; when an external system is authoritative, either reject with
+    a clear explanation or route the change through the integration (`write_mode = 'forward'`). Modules must work
+    in **connected mode** (mirroring an external system of record) wherever the adoption brief offers them
+    standalone — document each module's standalone dependencies in its spec.
+16. **Provenance is visible.** Data shown to users carries its provenance: `live`, `simulated`, `copied` (trial),
+    `delayed` (stale beyond SLA), `incomplete`, `external` (received from another system, with last-sync time).
 
 ## 5. Money, time and finance principles (non-negotiable)
 

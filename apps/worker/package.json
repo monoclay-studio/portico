@@ -1,0 +1,21 @@
+{
+  "name": "@portico/worker",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch --env-file-if-exists=../../.env src/main.ts",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@portico/api": "workspace:*",
+    "@portico/db": "workspace:*",
+    "@portico/kernel": "workspace:*",
+    "kysely": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "tsx": "catalog:",
+    "typescript": "catalog:"
+  }
+}
