@@ -1,8 +1,11 @@
 # Steward review 2: `feat/identity-platform-enterprise` (ADR-0017 fix round)
 
 Reviewer: architecture steward · 2026-11-07 · branch `feat/identity-platform-enterprise` @ `09d010c` (merge of `main`
-into the fix round). The worktree `/home/user/wt/identity-plus` was not modified. Experiments ran in a detached
-scratch copy (`git worktree add --detach … feat/identity-platform-enterprise`), which was removed afterwards.
+into the fix round). While this review ran, the branch moved to `cf913b2` ("test: adapt other modules' tests to
+identity-plus behaviour"). That commit changes no identity code; it makes platform's `getDataAuthority` and
+`setDataAuthority` generic and adapts other modules' tests. Every finding below was re-checked at `cf913b2` and still
+reproduces. The worktree `/home/user/wt/identity-plus` was not modified. Experiments ran in detached scratch copies
+(`git worktree add --detach …`), which were removed afterwards.
 
 ## Verdict: **do not merge**
 
@@ -17,35 +20,38 @@ later adds that email, the identity's holder accepts the invitation in-app (`GET
 `POST /v1/me/invitations/:id/accept`) and becomes the hotel's administrator. That includes the **first administrator of
 a newly provisioned live organization**.
 
-Four new P1s sit next to it:
+Three new P1s sit next to it:
 - an `identity.sso.manage` holder can impersonate the org admin;
 - any organization can permanently block a new person from joining;
-- a pre-created SSO link skips the verified-domain gate;
-- `pnpm typecheck` actually fails, and a stale turbo cache hides it.
+- a pre-created SSO link skips the verified-domain gate.
 
 The root cause of the P0 and of two of the P1s is the same: **orgs can mint global identities and credentials for
 emails whose ownership nobody has verified**. Like the first round, the fix needs a small ADR-0017 amendment
 (email-verified identities), not only patches. It therefore needs a third review.
 
-Counts (new findings): **P0 1 · P1 4 · P2 5 · P3 9**.
+There is also a gate-integrity problem (R2-P2-6). At `09d010c`, `pnpm typecheck` failed but reported a pass from a
+stale turbo cache. `cf913b2` fixes the type error; the cache problem remains.
+
+Counts (new findings): **P0 1 · P1 3 · P2 6 · P3 9**.
 
 ---
 
 ## 1. Command results
 
-Scratch copy of `09d010c`, `PORTICO_TEST_DB_PREFIX=review2_idplus`,
-`DATABASE_URL=postgres://postgres@127.0.0.1:5432/postgres`. Exit codes were captured directly, not through a pipe.
+Scratch copies, `PORTICO_TEST_DB_PREFIX=review2_idplus`, `DATABASE_URL=postgres://postgres@127.0.0.1:5432/postgres`.
+Exit codes were captured directly, not through a pipe.
 
-| Command | Result |
-|---|---|
-| `pnpm install --frozen-lockfile` | pass |
-| `pnpm lint` (biome + boundaries) | **pass** (exit 0): "Checked 625 files … Module boundaries OK (10 modules checked)" |
-| `pnpm typecheck` (first run) | exit 0, but `Cached: 16 cached, 16 total … FULL TURBO`, a **stale cache hit** (see R2-P1-4) |
-| `pnpm typecheck --force` | **FAIL** (exit 1): `@portico/integration` `test/harness.ts(102,55)` and `(103,42)` TS2322. Platform's `getDataAuthority`/`setDataAuthority` now return the 10-domain view (`guestCommunications`), which is not assignable to integration's 9-domain `DataAuthorityView`. With `--continue`: 15/16 succeed, only integration fails |
-| `pnpm --filter @portico/identity test` | **pass**: 13 files, 105 tests |
-| `pnpm --filter @portico/platform test` | **pass**: 7 files, 62 tests |
-| `pnpm --filter @portico/api test` | **FAIL**: 7 of 60. `payments.test.ts` 6 and `integration.test.ts` 1. Every failure comes from the intended "MFA before ⚑" change: the test administrators sign in with a password only, `POST /v1/legal-entities` answers 403 `mfa_enrollment_required`, and that cascades into a 400 on the next call. Known; being adapted in parallel. Not counted as a finding. `permission-catalog.test.ts` passes (P1-1) |
-| Test databases | each suite drops its own; `select count(*) from pg_database where datname like 'review2_idplus%'` → 0 afterwards |
+| Command | `09d010c` (reviewed) | `cf913b2` (current head) |
+|---|---|---|
+| `pnpm install --frozen-lockfile` | pass | pass |
+| `pnpm lint` (biome + boundaries) | **pass**: "Checked 625 files … Module boundaries OK (10 modules checked)" | **pass** |
+| `pnpm typecheck` | exit 0, but `Cached: 16 cached, 16 total … FULL TURBO`, a **stale cache hit** (R2-P2-6) | — |
+| `pnpm typecheck --force` | **FAIL** (exit 1): `@portico/integration` `test/harness.ts(102,55)` and `(103,42)` TS2322. Platform's data-authority view now has 10 domains (`guestCommunications`), which is not assignable to integration's 9-domain `DataAuthorityView`. With `--continue`: 15/16 succeed | **pass**: 16/16, `Cached: 0` |
+| `pnpm --filter @portico/identity test` | **pass**: 13 files, 105 tests | **pass**: 105 |
+| `pnpm --filter @portico/platform test` | **pass**: 7 files, 62 tests | **pass**: 62 |
+| `pnpm --filter @portico/api test` | **FAIL**: 7 of 60 (`payments.test.ts` 6, `integration.test.ts` 1). All come from the intended "MFA before ⚑" change: test admins sign in with a password only, `POST /v1/legal-entities` answers 403 `mfa_enrollment_required`, and that cascades into a 400. Not a finding. `permission-catalog.test.ts` passes (P1-1) | **pass**: 15 files, 60 tests |
+| Review-2 PoCs (below) | 9 new attacks work; 11 original attacks refused; HTTP PoC works | **same** |
+| Test databases | each suite drops its own; `select count(*) from pg_database where datname like 'review2_idplus%'` → 0 afterwards | 0 |
 
 ### Proof-of-concept files (kept in `docs/orchestration/reviews/identity-plus-poc/`)
 - `identity-zz-review2-poc.test.ts.txt`: 9 tests. **All pass, which means each new attack works.** N-1, N-1b, N-2,
@@ -65,7 +71,7 @@ Scratch copy of `09d010c`, `PORTICO_TEST_DB_PREFIX=review2_idplus`,
 |---|---|---|
 | **P0-1** admin sets another org's member's password | **Original paths closed; the P0 class is not.** | `sendPasswordResetForMember` refuses a person with any membership elsewhere (`guard.ts:24-38`, `lifecycle.ts:526-543`). `createUser` refuses `initialPassword` for an existing person and makes them `invited` (`service.ts:126-139`). Links never appear in responses (`routes.ts:496-521`; the notifier deposits them in the operator mailbox, `adapters.ts:52-80`). Re-run PoCs: "original P0-1 path A", "path B" and "wave-0 createUser" are refused. **But** R2-P0-1 reaches the same outcome, a live-org takeover by another org, through the brand-new-identity exception that ADR-0017 §2 itself grants |
 | **P0-2** another org strips or replaces global MFA | **Original paths closed; two residuals.** | `resetMemberMfa` requires sole membership with invitations counted (`mfa.ts:580-619`, `memberships_elsewhere` counts every status). Enrol, disable and regenerate need proof of the existing factor (`mfa.ts:213-267`), and an SSO session never counts. SSO linking of a person who works elsewhere needs a verified domain (`sso.ts:692-702`). Re-run: "original P0-2a" and "a session alone replaces the authenticator" are refused, and the original SSO PoC is refused. Residuals: R2-P1-3 (the domain gate is skipped for pre-created links) and R2-P0-1 (a pre-registered TOTP locks the real person out) |
-| **P1-1** merge break (doc comment, manifest conflict) | **Closed.** | Lint passes; `apps/api/test/permission-catalog.test.ts` passes. The gate still fails for a different reason (R2-P1-4) |
+| **P1-1** merge break (doc comment, manifest conflict) | **Closed.** | Lint passes; `apps/api/test/permission-catalog.test.ts` passes. At `09d010c` the forced typecheck still failed for a different reason (R2-P2-6), fixed at `cf913b2` |
 | **P1-2** grace lets ⚑ work without MFA | **Closed.** | `domain/step-up.ts:28-39`: ⚑ is never effective without enrolment. The grace is anchored to `users.first_activated_at` by a SECURITY DEFINER trigger (`migrations/0002…:478-487`) and capped by a check constraint at ≤ 72 h (`:106`). Re-run "original P1-2" is refused |
 | **P1-3** unbounded API keys | **Closed** (one P3 residual). | `api-clients.ts:19-70`: no `*` or `identity.*` except `scim.provision`, ⚑ keys need an expiry ≤ 90 days and a fresh step-up. `service.ts:749-751` calls `assertExternalEffectAllowed('credentials.production')`. Keys are revoked on suspension (`service.ts:358`), password reset (`revoke_sessions_everywhere`, `0002…:462-463`) and MFA reset (`mfa.ts:607`). Residual: R2-P3-7 |
 | **P1-4** SoD compares principals | **Closed** (P2 residual). | `platform/src/service.ts:43-62` (`responsiblePerson`, `assertHumanApprover`) is used by activation (`activation.ts:411-422`), transitions (`authority-transitions.ts:176-182`) and configuration (`configuration.ts:793-803`). Re-run "original P1-4" is refused with `human_approval_required`. Residual: R2-P2-4 (one admin, two identities) |
@@ -104,7 +110,6 @@ Scratch copy of `09d010c`, `PORTICO_TEST_DB_PREFIX=review2_idplus`,
 | **R2-P1-1** `identity.sso.manage` alone impersonates any member, the org admin included | `sso.ts:206-281` (`configureSso`: issuer, allow-list and `trustIdpMfa` change with only `identity.sso.manage`, no power check); `sso.ts:686-716` (a new issuer has no links, so a sole-organization member is linked without proof, and a member who works elsewhere is linked through the org's verified domain, which survives the issuer change); `sso.ts:781-787` (IdP-asserted MFA makes the session ⚑-capable); `sso.ts:346-413` (the same person can then require SSO with themselves exempt) | (1) An admin delegates SSO to IT with a custom role `['identity.sso.manage','identity.user.read']`. (2) The IT user enrols MFA and repoints the connection to an issuer they control, with `allowedEmailDomains` covering the admin's domain. (3) Their IdP asserts the admin's email with `amr: ['mfa']` → a session **as the org admin** with every ⚑ permission (`identity.role.assign`, `platform.dataAuthority.manage`, …). The same lever reaches "people who work elsewhere" through the old domain verification (in-org access only; their global credentials stay safe thanks to proof-of-factor). PoC N-2. This breaks IDN-R14's no-escalation guardrail and ADR-0017 §6, and unlike SCIM (P2-16) it is not documented. | Treat the issuer, the allow-list, `trustIdpMfa` and SSO-required as root changes. Either require the editor to hold `*` org-wide (`assertCanGrantRole(tx, ['*'], org)`), or require a second administrator's approval. On an issuer change, reset domain verification to "re-confirm". Never link an existing member who has a password or factor through a new issuer without that member proving it once (or an admin pre-linking them). Alert all admins on every issuer change. Document `identity.sso.manage` as administrator-equivalent until then. |
 | **R2-P1-2** Any organization permanently blocks a new person from joining another organization | `lifecycle.ts:340-349` (the link path refuses `sign_in_to_accept` when the person has **no credential at all** but has any other membership, including an `invited` one); `lifecycle.ts:486-489` with `0001…:130-139` (`login_lookup` counts only **active** memberships, so "forgot password" silently sends nothing); `guard.ts:24-38` (the hotel's admin cannot help either) | (1) Before or after the hotel invites `newhire@hotel.mv`, any org (a free trial) invites the same email; the membership stays `invited` forever. (2) The real person opens the hotel's link and chooses a password → `sign_in_to_accept: Sign in there…`, but they have no sign-in anywhere. (3) "Forgot password" → nothing is sent. (4) The hotel admin's reset → `person_shared_with_other_organization`. No recovery path exists apart from the griefer. PoC N-5. This blocks onboarding at will, at any scale, during pilots. | Decide on credentials, not memberships: a person with **no** password, no active factor and no SSO link may set their first password through an emailed link of any org, because the link proves email control. That sets `email_verified_at` (R2-P0-1). Ignore never-accepted `invited` memberships in `membershipsElsewhere` for this decision. `requestPasswordReset` should reach people who only have invitations, through the inviting live org. Expire `invited` memberships with their invitation. |
 | **R2-P1-3** An SSO link created before the person exists bypasses the verified-domain gate (ADR-0017 §5); a failed JIT commits the user and the link | `sso.ts:686-734` (the elsewhere/verified check runs only when **no** link exists); `sso.ts:661-669, 743-748` (`fail()` returns, so phase 3 **commits** the `ensure_user` row and the `sso_identities` link even when sign-in is refused); `sso.ts:712-716` | (1) The attacker org's IdP (allow-list = the victim's domain, never verified) signs in as `gm@hotel.mv` with an unmapped group. The sign-in "fails" `no_mapped_group`, but the global user and the `(attacker-issuer, sub)` link are committed. (2) The real GM later joins the real hotel through its invitation. (3) The attacker's IdP signs in again with a mapped group: the existing link skips the domain gate, JIT makes the GM an **active member of the attacker's org** without consent, and the attacker gets a session as the GM's global identity. With that session they can list the GM's pending invitations (organization names) and accept them. PoC N-7. The README invariant "an IdP cannot assert a person of an unverified domain who works elsewhere" is false. | Run the `elsewhere > 0 && !verified` check whenever SSO would **create or activate** a membership, not only for new links. Write the user and the link only after every membership check passes; audit failures in a separate transaction, as `auditFailure` already does. Purge links whose user has no membership in the linking org. Regression test for the pre-link order. |
-| **R2-P1-4** The merge gate's typecheck fails, and the turbo cache hides it | `turbo.json:5-6` (`typecheck` and `test` have `"dependsOn": []`, so a package's cache key ignores changes in its workspace dependencies); `modules/integration/test/harness.ts:102-103` (TS2322 against the platform view with 10 domains) | `pnpm typecheck` printed "FULL TURBO, 16 cached" and exit 0 on a fresh worktree; `--force` fails. Any reviewer or CI that trusts the cache merges a red build. `pnpm test` through turbo has the same blind spot. | Integration: import `DATA_DOMAINS` / `DataDomain` from platform contracts (first review §5) or map the view in the harness. Gate: make the tasks depend on their dependencies (`"dependsOn": ["^typecheck"]` / `["^test"]`, or `inputs` that include workspace sources), and run `--force` in the merge checklist until then. |
 
 ### P2: tests, robustness, consistency
 
@@ -115,6 +120,7 @@ Scratch copy of `09d010c`, `PORTICO_TEST_DB_PREFIX=review2_idplus`,
 | **R2-P2-3** Group reconciliation removes the last administrator | `mapped-roles.ts:34-90` (revokes with no `assertAdministratorRemains`), called from `sso.ts:780` and `scim.ts:454-462` (SCIM group patch, delete and rename) | An SSO sign-in without the admin group (or a SCIM group change) revokes the only org-wide `org_admin` → 0 administrators. PoC N-8. The README's "the last administrator cannot be deprovisioned" holds only for SCIM *user* deactivation and deletion. | In reconciliation, skip revoking an assignment that `assertAdministratorRemains` would refuse, keep it, and raise a high alert. Test both SSO and SCIM group paths. |
 | **R2-P2-4** One administrator satisfies SoD with an account they created | `service.ts:153-159` + `platform/src/services/activation.ts:411-422` | The admin calls `createUser` with an `initialPassword` they know and `org_admin`, enrols that account's TOTP and approves their own activation request. PoC N-9. This is inherent to two identities, but `initialPassword` makes it free and invisible. | R2-P0-1 (1) removes the cheap path. Add defence in depth: refuse an approval when the approver's membership or roles were created or granted by the requester (`role_assignments.granted_by`, a new `memberships.created_by`), or when the approver has been active for less than 24 h; flag it in the audit. |
 | **R2-P2-5** Live provisioning silently creates an `invited` first admin | `apps/api/src/provisioning.ts:50-56` | When the first admin's email already exists, the result hides `invited` and no invitation is sent. The operator believes the org has an active admin, and the real person learns nothing. This is the delivery half of R2-P0-1 C. | Return `adminStatus`, call `sendInvitation`, and have the operator console show "pending acceptance". |
+| **R2-P2-6** The turbo cache hides typecheck and test failures | `turbo.json:5-6` (`typecheck` and `test` have `"dependsOn": []`, so a package's cache key ignores changes in its workspace dependencies) | At `09d010c`, `pnpm typecheck` printed "FULL TURBO, 16 cached" and exit 0 on a fresh worktree, while `--force` failed in `@portico/integration` (`test/harness.ts:102-103`, TS2322 against platform's 10-domain view). `cf913b2` fixes that error, but any reviewer or CI that trusts the cache can still merge a red build; `pnpm test` through turbo has the same blind spot. | Make the tasks depend on their workspace dependencies (`"dependsOn": ["^typecheck"]` / `["^test"]`, or `inputs` that include workspace sources). Until then, run the merge gates with `--force`. |
 
 ### P3: nits
 
@@ -173,7 +179,7 @@ Scratch copy of `09d010c`, `PORTICO_TEST_DB_PREFIX=review2_idplus`,
 1. The P0 and two of the P1s share one design fix: an **email-verified identity** and a **credential wipe on first
    verification**. Record it as an ADR-0017 amendment before the fix round, then re-run this review's PoCs: they must
    all fail after the fix, and the 11 "original" ones must keep passing.
-2. R2-P1-4 affects every merge: until `turbo.json` makes tasks depend on their workspace dependencies, run gates with
+2. R2-P2-6 affects every merge: until `turbo.json` makes tasks depend on their workspace dependencies, run gates with
    `--force` (`pnpm typecheck --force`, `turbo run test --force`).
-3. The integration harness (R2-P1-4) and the 7 API test failures belong to the parallel adaptation work. Add the
-   typecheck error to that engineer's list.
+3. The integration-harness type error and the 7 API test failures at `09d010c` were the parallel adaptation work;
+   `cf913b2` resolves both (forced typecheck 16/16, API 60/60). The new attacks still reproduce at `cf913b2`.
