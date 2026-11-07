@@ -26,6 +26,7 @@ import type {
   TaxLine,
   TaxPointPolicy,
   TaxRuleDefinition,
+  VerificationStatus,
 } from '../contracts';
 import { TaxConfigurationError } from './errors';
 
@@ -44,7 +45,7 @@ export interface TaxRuleVersionData {
   effectiveFrom: LocalDate | null;
   effectiveTo: LocalDate | null;
   definition: TaxRuleDefinition;
-  verificationStatus: 'unverified' | 'verified';
+  verificationStatus: VerificationStatus;
 }
 
 export interface LoadedTaxRule {
@@ -59,6 +60,7 @@ export interface TaxEngineContext {
   occupancy?: Occupancy | undefined;
   stayContext?: { stayNights: number; arrival?: LocalDate | undefined; bookingDate?: LocalDate | undefined } | undefined;
   invoiceDate?: LocalDate | undefined;
+  paymentDate?: LocalDate | undefined;
   fxRates?: readonly FxRate[];
   exemptionCertificates?: ReadonlyArray<{ ruleCode: string; reference: string; validFrom: LocalDate; validTo: LocalDate }>;
 }
@@ -73,13 +75,23 @@ export function versionEffectiveOn(versions: readonly TaxRuleVersionData[], date
   );
 }
 
+/**
+ * The date that selects a rule's version. A line's fixed `taxPointDate` wins (amount already taxed, e.g. a
+ * deposit at payment). Otherwise by policy; when the deciding date is not known yet (a quote has no invoice or
+ * payment), the service date is used as the estimate and reported on the tax line.
+ */
 export function taxPointDate(
   policy: TaxPointPolicy,
-  line: Pick<ChargeLine, 'serviceDate'>,
-  ctx: Pick<TaxEngineContext, 'stayContext' | 'invoiceDate'>,
+  line: Pick<ChargeLine, 'serviceDate' | 'taxPointDate'>,
+  ctx: Pick<TaxEngineContext, 'stayContext' | 'invoiceDate' | 'paymentDate'>,
 ): LocalDate {
+  if (line.taxPointDate) return line.taxPointDate;
   if (policy === 'booking_date') return ctx.stayContext?.bookingDate ?? line.serviceDate;
   if (policy === 'invoice_date') return ctx.invoiceDate ?? line.serviceDate;
+  if (policy === 'time_of_supply') {
+    const known = [ctx.invoiceDate, ctx.paymentDate].filter((d): d is LocalDate => !!d).sort();
+    return known[0] ?? line.serviceDate;
+  }
   return line.serviceDate;
 }
 
@@ -145,6 +157,7 @@ function applicableRules(
     if (!def.appliesTo.taxCategories.includes(line.taxCategory)) continue;
     if (def.appliesTo.outletKinds && (!line.outletKind || !def.appliesTo.outletKinds.includes(line.outletKind)))
       continue;
+    if (line.outletKind && def.appliesTo.excludeOutletKinds?.includes(line.outletKind)) continue;
     const cls = evalClassification(def.appliesTo.classification, ctx.classification);
     if (cls.result === 'unknown') {
       throw new TaxConfigurationError(

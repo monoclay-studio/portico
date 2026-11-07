@@ -170,7 +170,59 @@ describe('tax engine — effective dating and tax point', () => {
   });
 });
 
+describe('tax engine — time of supply (Maldives TGST: earlier of invoice or payment)', () => {
+  const tosRules = () =>
+    maldivesLikeRules().map((r) =>
+      r.rule.code === 'TGST' ? { ...r, rule: { ...r.rule, taxPointPolicy: 'time_of_supply' as const } } : r,
+    );
+  const tgst = (r: ReturnType<typeof computeLine>) => r.taxes.find((t) => t.ruleCode === 'TGST');
+
+  it('uses the earlier of invoice and payment dates', () => {
+    const l = line({ amountMinor: 10_000, serviceDate: '2025-07-10', occupancy: adults2 });
+    const paidEarly = computeLine(tosRules(), l, { classification: RESORT, paymentDate: '2025-06-15', invoiceDate: '2025-07-11' });
+    expect(tgst(paidEarly)?.amount.amountMinor).toBe(1_760);
+    expect(tgst(paidEarly)?.taxPointDate).toBe('2025-06-15');
+    const invoicedFirst = computeLine(tosRules(), l, { classification: RESORT, paymentDate: '2025-07-12', invoiceDate: '2025-07-02' });
+    expect(tgst(invoicedFirst)?.amount.amountMinor).toBe(1_870);
+  });
+
+  it('estimates with the service date when neither date is known yet (quotes)', () => {
+    const r = computeLine(tosRules(), line({ amountMinor: 10_000, serviceDate: '2025-07-10', occupancy: adults2 }), {
+      classification: RESORT,
+    });
+    expect(tgst(r)?.taxPointDate).toBe('2025-07-10');
+  });
+
+  it("never re-taxes an amount whose tax point is already fixed (a deposit taxed at payment)", () => {
+    const deposit = line({
+      amountMinor: 12_870,
+      serviceDate: '2025-08-01',
+      taxPointDate: '2025-06-20',
+      taxInclusion: { mode: 'rules', includedRuleCodes: ['SC', 'TGST'] },
+      occupancy: adults2,
+    });
+    const r = computeLine(tosRules(), deposit, { classification: RESORT, invoiceDate: '2025-08-02' });
+    expect(tgst(r)?.ratePercent).toBe('16');
+    expect(tgst(r)?.taxPointDate).toBe('2025-06-20');
+  });
+});
+
 describe('tax engine — applicability, exemptions and caps', () => {
+  it('excludes outlet kinds outside a rule (general-sector outlet not under tourism GST)', () => {
+    const rules = [
+      rule({ code: 'TGST' }, [
+        { def: { kind: 'percentage', ratePercent: '17', appliesTo: { taxCategories: ['food_beverage'], excludeOutletKinds: ['general_sector'] } } },
+      ]),
+      rule({ code: 'GST' }, [
+        { def: { kind: 'percentage', ratePercent: '8', appliesTo: { taxCategories: ['food_beverage'], outletKinds: ['general_sector'] } } },
+      ]),
+    ];
+    const resortBar = computeLine(rules, line({ amountMinor: 1_000, taxCategory: 'food_beverage', outletKind: 'restaurant' }), { classification: {} });
+    expect(resortBar.taxes.map((t) => t.ruleCode)).toEqual(['TGST']);
+    const shop = computeLine(rules, line({ amountMinor: 1_000, taxCategory: 'food_beverage', outletKind: 'general_sector' }), { classification: {} });
+    expect(shop.taxes.map((t) => t.ruleCode)).toEqual(['GST']);
+  });
+
   it('refuses to guess when a classification the rule depends on is missing', () => {
     expect(() =>
       computeLine(maldivesLikeRules(), line({ amountMinor: 10_000, occupancy: adults2 }), {

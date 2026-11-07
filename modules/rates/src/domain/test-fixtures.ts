@@ -33,7 +33,7 @@ export function rule(
         effectiveFrom: v.from ?? null,
         effectiveTo: v.to ?? null,
         definition: taxRuleDefinition.parse(v.def) as TaxRuleDefinition,
-        verificationStatus: v.verified ? 'verified' : 'unverified',
+        verificationStatus: v.verified ? 'verified_official_source' : 'unverified',
       }),
     ),
   };
@@ -88,7 +88,7 @@ export function maldivesLikeRules(): LoadedTaxRule[] {
             classification: {
               any: [
                 { key: 'mv.inhabitedIsland', equals: false },
-                { key: 'mv.roomCount', min: 51 },
+                { key: 'mv.registeredRooms', min: 51 },
               ],
             },
           },
@@ -106,7 +106,7 @@ export function maldivesLikeRules(): LoadedTaxRule[] {
             classification: {
               all: [
                 { key: 'mv.inhabitedIsland', equals: true },
-                { key: 'mv.roomCount', max: 50 },
+                { key: 'mv.registeredRooms', max: 50 },
               ],
             },
           },
@@ -116,8 +116,8 @@ export function maldivesLikeRules(): LoadedTaxRule[] {
   ];
 }
 
-export const RESORT = { 'mv.establishmentType': 'resort', 'mv.inhabitedIsland': false, 'mv.roomCount': 120 };
-export const GUESTHOUSE = { 'mv.establishmentType': 'guesthouse', 'mv.inhabitedIsland': true, 'mv.roomCount': 12 };
+export const RESORT = { 'mv.establishmentType': 'resort', 'mv.inhabitedIsland': false, 'mv.registeredRooms': 120 };
+export const GUESTHOUSE = { 'mv.establishmentType': 'guesthouse', 'mv.inhabitedIsland': true, 'mv.registeredRooms': 12 };
 
 /** Deterministic PRNG (mulberry32) for property-based-style tests. */
 export function prng(seed: number) {

@@ -235,6 +235,7 @@ const m = (amountMinor: number, currency: string) => ({ amountMinor, currency })
 export function assemble(input: AssembleInput): Assembled {
   const cur = input.plan.currency;
   const nights = input.drafts;
+  const occ = { adults: input.occupancy.adults, childrenAges: [...input.occupancy.childrenAges] };
   const stayNights = diffDays(input.arrival, input.departure);
   const nightIndex = new Map(eachNight({ from: input.arrival, to: input.departure }).map((d, i) => [d, i]));
   const inc = computeInclusions({
@@ -285,7 +286,7 @@ export function assemble(input: AssembleInput): Assembled {
         taxInclusion: input.plan.taxInclusion,
         nights: 1,
         units: 1,
-        occupancy: input.occupancy,
+        occupancy: occ,
         nightIndex: nightIndex.get(n.date) ?? 0,
       });
     }
@@ -304,7 +305,7 @@ export function assemble(input: AssembleInput): Assembled {
       taxInclusion: input.plan.taxInclusion,
       nights: 1,
       units: 1,
-      occupancy: input.occupancy,
+      occupancy: occ,
       nightIndex: nightIndex.get(o.nightDate) ?? 0,
     });
   });

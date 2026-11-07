@@ -102,6 +102,8 @@ export const taxRuleDefinition = z
       /** Tax categories of charge lines (e.g. accommodation, food_beverage, transfer, spa, activity). */
       taxCategories: z.array(z.string().min(1)).min(1),
       outletKinds: z.array(z.string()).optional(),
+      /** Outlet kinds this rule never applies to (e.g. a general-sector outlet outside tourism GST). */
+      excludeOutletKinds: z.array(z.string()).optional(),
       classification: classificationPredicate.optional(),
       stayNights: z.object({ min: z.number().int().optional(), max: z.number().int().optional() }).optional(),
     }),
@@ -139,8 +141,14 @@ export const sourceCitation = z.object({
   title: z.string().min(1).max(300),
   retrievedOn: localDate.optional(),
 });
+/**
+ * unverified: not checked against an official source · verified_official_source: read from the authority's own
+ * published text (still not legal advice) · verified: confirmed by a qualified adviser for production use.
+ */
+export const verificationStatus = z.enum(['unverified', 'verified_official_source', 'verified']);
+export type VerificationStatus = z.infer<typeof verificationStatus>;
 export const verification = z.object({
-  status: z.enum(['unverified', 'verified']),
+  status: verificationStatus,
   verifiedBy: z.string().max(200).optional(),
   verifiedOn: localDate.optional(),
   note: z.string().max(2000).optional(),
@@ -161,7 +169,12 @@ export const taxRuleVersionInput = z
   });
 export type TaxRuleVersionInput = z.output<typeof taxRuleVersionInput>;
 
-export const taxPointPolicy = z.enum(['service_date', 'booking_date', 'invoice_date']);
+/**
+ * Which date selects the rule version: the service date (default), the booking date, the invoice date, or the
+ * time of supply = the earlier of invoice issue or payment (Maldives TGST). A line's explicit `taxPointDate`
+ * (e.g. a deposit already taxed at payment) always wins, so later rule changes never re-tax fixed amounts.
+ */
+export const taxPointPolicy = z.enum(['service_date', 'booking_date', 'invoice_date', 'time_of_supply']);
 export type TaxPointPolicy = z.infer<typeof taxPointPolicy>;
 
 export const taxRuleInput = z.object({
@@ -242,6 +255,8 @@ export const chargeLine = z.object({
   occupancy: occupancy.optional(),
   /** Position in a stay (0 = first night) for per-stay rules and night caps. */
   nightIndex: z.number().int().min(0).optional(),
+  /** Tax point already fixed for this amount (e.g. deposit taxed at payment). Overrides each rule's policy. */
+  taxPointDate: localDate.optional(),
 });
 export type ChargeLineInput = z.input<typeof chargeLine>;
 export type ChargeLine = z.output<typeof chargeLine>;
@@ -253,7 +268,14 @@ export const exemptionCertificate = z.object({
   validTo: localDate,
 });
 
-export const fxRate = z.object({ from: currencyCode, to: currencyCode, rate: nonNegativeDecimal });
+export const fxRate = z.object({
+  from: currencyCode,
+  to: currencyCode,
+  rate: nonNegativeDecimal,
+  /** Where the rate comes from (e.g. MMA) and its date — recorded for tax evidence. */
+  source: z.string().max(100).optional(),
+  asOf: localDate.optional(),
+});
 export type FxRate = z.infer<typeof fxRate>;
 
 export const computeTaxesInput = z.object({
@@ -267,8 +289,10 @@ export const computeTaxesInput = z.object({
       bookingDate: localDate.optional(),
     })
     .optional(),
-  /** Used by rules with taxPointPolicy invoice_date. */
+  /** Used by rules with taxPointPolicy invoice_date / time_of_supply. */
   invoiceDate: localDate.optional(),
+  /** Used by rules with taxPointPolicy time_of_supply (earlier of invoice or payment). */
+  paymentDate: localDate.optional(),
   /** Pin exact rule versions (audit recompute): only these versions are used. */
   ruleVersionIds: z.array(uuid).optional(),
   fxRates: z.array(fxRate).default([]),
@@ -291,7 +315,7 @@ export const taxLine = z.object({
   quantity: z.object({ persons: z.number(), nights: z.number(), units: z.number() }).nullable(),
   amount: money,
   ledgerMappingKey: z.string(),
-  verificationStatus: z.enum(['unverified', 'verified']),
+  verificationStatus,
   taxPointDate: localDate,
 });
 export type TaxLine = z.infer<typeof taxLine>;
@@ -1034,7 +1058,7 @@ export const taxSummaryLine = z.object({
   inclusive: z.boolean(),
   ruleVersionIds: z.array(uuid),
   amount: money,
-  verificationStatus: z.enum(['unverified', 'verified']),
+  verificationStatus,
 });
 export type TaxSummaryLine = z.infer<typeof taxSummaryLine>;
 
@@ -1149,6 +1173,7 @@ export const offer = z.object({
   commission: commissionTerms,
   restrictionViolations: z.array(violation),
   overriddenViolations: z.array(violation),
+  /** Codes of applied rules not yet confirmed by a qualified adviser (status other than `verified`). */
   unverifiedTaxRules: z.array(z.string()),
   terms: termsSnapshot,
 });
