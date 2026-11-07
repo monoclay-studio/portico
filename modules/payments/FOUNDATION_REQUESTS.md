@@ -1,7 +1,7 @@
 # Foundation requests from payments (wave 1, after steward review)
 
 The earlier §1 (teardown race in `@portico/testing`) was fixed on main (`b484de3`); the local harness guard is
-removed. The parity matrix now lives at `docs/parity/payments.md`.
+removed. The module draft `PARITY.md` is deleted; main's `docs/parity/payments.md` supersedes it (re-verified).
 
 ## 1. Role templates (identity, `modules/identity/src/domain/role-templates.ts`)
 

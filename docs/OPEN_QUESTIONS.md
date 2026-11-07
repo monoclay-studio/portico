@@ -176,6 +176,14 @@ billing is not activated for live customers until this is answered.
 **Blocks:** live SaaS billing. Nothing in development.
 **Raised by / date:** product strategy, 2026-11-07
 
+### Q48 — Tax treatment of package allowances and breakage on Maldives tax invoices    Status: open
+**Context:** All-inclusive and dining-credit packages include allowances (e.g. USD 100/day dining credit). Finance found that counting both the package and the food paid by the credit overstates value-before-tax, and breakage (unused credit) currently carries no separate tax.
+**Question:** For the Maldives adviser — how must a TGST tax invoice present a package with an allowance, consumption against it, and breakage?
+**Default we are proceeding with:** package price invoiced once; consumption shown as information only; breakage follows the tax already charged on the package (ADR-0016 §5), configurable.
+**If the answer differs:** rule-pack configuration change; invoices regenerated only for future documents.
+**Blocks:** live tax invoices for packages with allowances. Nothing in development.
+**Raised by / date:** orchestrator (finance review), 2026-11-07
+
 ### Q60 — Packaging and pricing for standalone modules and migration services    Status: open
 **Context:** The adoption brief lets hotels keep their PMS and use selected Portico capabilities (housekeeping, guest messaging, reporting, transfers — `docs/adoption/adoption-paths.md` §4). Every edition in `modules/platform/src/domain/plans.ts` is built on the full PMS core, and Essentials allows only 1 property, so a 3-property group adopting only housekeeping and messaging cannot be represented. Migration effort (rehearsals, OPERA imports) is also a cost: competitors sell reservation import separately (Cloudbeds) or include it.
 **Question:** (a) Do you approve selling standalone modules as separate "connected" packages (per property or per unit, with their own limits), independent of the PMS editions? (b) Is migration of future reservations, profiles and open balances included in onboarding, or a paid service?
@@ -400,3 +408,75 @@ billing is not activated for live customers until this is answered.
 **Blocks:** live channel activation (already gated by Q23); nothing in development.
 **Raised by / date:** parity researcher (front cluster), 2026-11-07
 
+### Q130 — Maldives foreign-exchange rules for tourism businesses          Status: open
+**Context:** Resorts price in USD, take USD and MVR cash, and settle cards and bank transfers in either currency. Finance converts with a business-date rate and checks MVR conversions against the MMA reference rate (±2%, from `docs/readiness/maldives-tax-rules.md`). We have not verified whether Maldivian law or Maldives Monetary Authority rules oblige tourism businesses to convert or deposit a share of foreign-currency receipts through local banks, which rate is authoritative for accounting (MMA mid rate, bank buy/sell), or whether cash change may be given in USD.
+**Question:** With the Maldivian adviser (Q20/Q106 scope): what foreign-currency obligations apply to tourism establishments (conversion/deposit duties, rate source for accounting, limits on USD cash handling and change)?
+**Default we are proceeding with:** no conversion or deposit duty is modelled; FX rates are data per business date with source; MMA ±2% check marked `unverified`; cash exchange at the desk allowed with configurable limits; a rate older than the business date is used only with a visible stale-rate warning.
+**If the answer differs:** policy/data changes in finance FX (FIN-R40/R41) and accounting cash management (ACC-R25); possibly a reporting export.
+**Blocks:** nothing in development; live Maldives FX configuration.
+**Raised by / date:** finance-cluster parity research, 2026-11-07
+
+### Q131 — Liability for offline card and room-charge acceptance            Status: open
+**Context:** Island connectivity drops. `fnb-pos` allows room charges offline up to an exposure limit (default USD 200 per stay, FNB-R20) and record-only card tenders; some acquirers offer store-and-forward offline card authorisation where the merchant carries the decline risk. These are the hotel's commercial risks, but the defaults Portico ships shape them.
+**Question:** Are you comfortable shipping the default offline exposure limit (USD 200 per stay, hotel-configurable, 0 allowed) and keeping acquirer store-and-forward card acceptance off by default, enabled only by a hotel admin who acknowledges the risk in-product?
+**Default we are proceeding with:** yes as described; acknowledgement recorded in the audit log; never enabled in demo/trial.
+**If the answer differs:** policy default changes only.
+**Blocks:** nothing in development; live POS pilot configuration.
+**Raised by / date:** finance-cluster parity research, 2026-11-07
+
+### Q132 — Unclaimed guest credits and expired deposits                      Status: open
+**Context:** Finance can keep a cancelled booking's deposit "as guest credit" (FIN-R24) and folios can end with credit balances that guests never claim; receivables accounts can hold unallocated payments. Whether a hotel may recognise unclaimed balances as income after a period, must refund them, or must hold them indefinitely is a legal/tax question per market (Q83 covers vouchers only).
+**Question:** What rule should the Maldives pack apply to unclaimed guest credits, retained deposits kept as credit, and unallocated receivables payments?
+**Default we are proceeding with:** balances remain liabilities indefinitely; an aging report lists them with owners; release to income only by an explicit, approved journal with reason (no automatic breakage).
+**If the answer differs:** a configurable expiry/breakage policy per balance type (data change plus a small Day Close/period task).
+**Blocks:** nothing.
+**Raised by / date:** finance-cluster parity research, 2026-11-07
+
+
+### Q140 — Enrol as an Oracle OHIP partner to test OPERA Cloud extraction (extends Q61)    Status: open
+**Context:** One-button migration from OPERA Cloud runs through Oracle's API platform (OHIP). Its limits shape the migration: standard searches cap at 1,000 records, bulk export uses asynchronous jobs, and 50 requests/second are shared with the hotel's live interfaces. Our estimate is about US$100 in API fees to extract a 100-room resort, but that is unverified. Only a partner sandbox can measure the real time and cost (`docs/research/05-market-deep-dive/11-one-button-migration.md`).
+**Question:** May Monoclay apply to Oracle's partner programme now, accepting partner terms, with a sandbox/pilot usage budget (suggested ≤ US$500)?
+**Default we are proceeding with:** no application, agreement or paid usage. We build the OHIP extractor against public documentation and an OPERA-like simulator (R3) and prepare the application pack for you to approve.
+**If the answer differs:** if approved, we measure real extraction in the sandbox (R4) and recalibrate migration time and cost estimates.
+**Blocks:** OPERA Cloud migration beyond R3. Nothing else.
+**Raised by / date:** market deep dive, 2026-11-07
+
+### Q141 — May Portico act as an OPERA 5 OXI external system?                Status: open
+**Context:** OPERA 5 has an Oracle-documented "initial cutover resync" through OXI. It sends rates, profiles, blocks and reservations (including cancellations and no-shows) to an external system, which makes it the cleanest automated path off OPERA 5. Whether a non-partner may be the receiving system is unconfirmed.
+**Question:** May we ask Oracle whether Portico can be an OXI two-way external system without partnership or certification, and pursue it if needed?
+**Default we are proceeding with:** no contact with Oracle until you approve. We build the file-export pack path (hotel-run OPERA exports delivered over SFTP/HTTPS with unmasked data) and an OXI receiver tested against our own simulator only.
+**If the answer differs:** OXI becomes the primary OPERA 5 route; the file pack stays as fallback.
+**Blocks:** OXI-based OPERA 5 migration beyond R3.
+**Raised by / date:** market deep dive, 2026-11-07
+
+### Q142 — How stored guest cards move during a migration (pilot)            Status: open
+**Context:** Stored cards can only move from one payment provider to another, never through a file. Stripe requires a PCI Level 1 counterpart for the transfer, and wallet-saved cards cannot move. The payment provider for Maldivian hotels is still undecided (Q2).
+**Question:** For the pilot, do we re-collect cards from guests rather than arrange a provider-to-provider transfer?
+**Default we are proceeding with:** re-collect. The migration checklist lists future stays whose guarantee needs a new card and sends collection requests (simulated until live); no card data is ever handled by Portico.
+**If the answer differs:** add a provider-to-provider transfer step to the migration checklist once a provider is chosen.
+**Blocks:** nothing in development.
+**Raised by / date:** market deep dive, 2026-11-07
+
+### Q143 — Is migration included in the price? (extends Q60)                Status: open
+**Context:** Competitors charge for imports (Cloudbeds charges, and does not import cancelled or no-show bookings) or run paid projects. "One button" is our differentiator, but some steps have usage costs, such as OHIP calls.
+**Question:** Is automated migration included for pilot (and later all) customers, with any third-party usage costs shown and capped?
+**Default we are proceeding with:** included for planning purposes; usage costs estimated before start, shown to the hotel and capped; nothing published.
+**If the answer differs:** a priced migration package in configuration; no product rework.
+**Blocks:** pricing page and quotes only.
+**Raised by / date:** market deep dive, 2026-11-07
+
+### Q144 — Never read an OPERA 5 database without written rights              Status: open
+**Context:** Some vendors migrate by querying the OPERA 5 database directly. Whether a hotel's Oracle or ISV contract allows that is contract-specific.
+**Question:** Do you agree that Portico never extracts from an OPERA 5 database unless the hotel confirms in writing that its contract allows it?
+**Default we are proceeding with:** yes. The database route is disabled unless the hotel uploads a signed rights confirmation, which is recorded in the migration's audit trail.
+**If the answer differs:** policy change only.
+**Blocks:** nothing.
+**Raised by / date:** market deep dive, 2026-11-07
+
+### Q145 — Patent review: AI room assignment (Oracle US 11,514,374)           Status: open
+**Context:** Market research found an Oracle patent on AI-driven room assignment. Its legal status is unconfirmed. Portico plans optimized room assignment (inventory and reservations). This goes to counsel together with Q40.
+**Question:** Will you have counsel review this patent, together with the Q40 items, before we ship automated room assignment?
+**Default we are proceeding with:** room assignment ships as explainable rule-based suggestions with staff confirmation; no machine-learned assignment until counsel reviews.
+**If the answer differs:** none if cleared; design-around if counsel advises.
+**Blocks:** ML-based room assignment only.
+**Raised by / date:** market deep dive, 2026-11-07

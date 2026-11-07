@@ -75,3 +75,37 @@ describe('field crypto from env', () => {
     expect(prod.cipher.decrypt(prod.cipher.encrypt('secret', 'aad'), 'aad')).toBe('secret');
   });
 });
+
+describe('event ordering helper', () => {
+  it('ignores stale or duplicate versions and accepts unversioned events', async () => {
+    const { isNewerThan } = await import('./events');
+    expect(isNewerThan({ aggregateVersion: 5 }, 4)).toBe(true);
+    expect(isNewerThan({ aggregateVersion: 4 }, 4)).toBe(false);
+    expect(isNewerThan({ aggregateVersion: 3 }, 4)).toBe(false);
+    expect(isNewerThan({ aggregateVersion: null }, 9)).toBe(true);
+    expect(isNewerThan({ aggregateVersion: 1 }, null)).toBe(true);
+  });
+});
+
+describe('staticAuthorizer grant union', () => {
+  it('a property-scoped exact grant never shadows a broader wildcard grant', () => {
+    const a = staticAuthorizer([
+      { permission: 'platform.property.read', propertyIds: ['P1'] },
+      { permission: '*', propertyIds: 'all' },
+    ]);
+    expect(a.can('platform.property.read', { propertyId: 'P2' })).toBe(true);
+    expect(a.propertyScope('platform.property.read')).toBe('all');
+  });
+
+  it('unions property sets across exact and module wildcard grants', () => {
+    const a = staticAuthorizer([
+      { permission: 'finance.folio.read', propertyIds: ['P1'] },
+      { permission: 'finance.*', propertyIds: ['P2'] },
+    ]);
+    expect(a.can('finance.folio.read', { propertyId: 'P1' })).toBe(true);
+    expect(a.can('finance.folio.read', { propertyId: 'P2' })).toBe(true);
+    expect(a.can('finance.folio.read', { propertyId: 'P3' })).toBe(false);
+    expect(a.propertyScope('finance.folio.read')).toEqual(['P1', 'P2']);
+    expect(a.can('reservations.booking.read')).toBe(false);
+  });
+});

@@ -11,11 +11,14 @@ domain map § payments.
 
 - **Done:** wave-1 module, then the steward review fixes (`docs/orchestration/reviews/review-payments.md`, verdict
   "merge after fixes"): P0-1, P0-2, P0-3, P1-1…P1-11, P2-1/2/3/4/6/9/12/13, P3-1/3/4/7/10 — see § Steward review
-  fixes. Parity matrix moved to `docs/parity/payments.md` (gate passes, statuses corrected). Main merged.
+  fixes. The module draft `PARITY.md` is deleted: main's broader steward matrix `docs/parity/payments.md` supersedes
+it, now re-verified against the fixes (overclaims corrected, review rows and edge cases added). Its gate does not
+pass — 28 P0 rows/edge cases are not `tested` (mostly unbuilt MUSTs: collection plans, hosted card entry, PCI
+proxy, connected-mode forwarding — see § Spec MUSTs not built); that is the honest state. Main merged.
 - **In progress:** nothing.
 - **Next steps (orchestrator):** bind `LedgerPort` to finance (`FOUNDATION_REQUESTS.md` §5 — finance must re-check
   scope), apply the provider contract below to the domain map, role-template additions (§1).
-- **Known failing tests:** none (113 module tests, 26 API tests; `pnpm lint`, `pnpm typecheck` green).
+- **Known failing tests:** none (113 module tests, 7 payments API tests; full `pnpm test`, `pnpm lint`, `pnpm typecheck` green after merging main).
 
 ## What is built (wave 1)
 
@@ -53,16 +56,16 @@ domain map § payments.
 
 | Spec | Missing | Interim behavior | Parity row |
 |---|---|---|---|
-| PAY-R06 | Hosted card entry pages (PSP components, CSP/SRI) | Methods are saved from provider tokens only | PAR-PAY-016 |
-| PAY-R10 | Renewal task / automatic re-authorization | Warning exception before expiry; expired holds shown as expired | PAR-PAY-005 |
-| PAY-R11 | Cross-check of MIT against the booking's agreed-terms snapshot | Mandate (terms version + acceptance) on the saved card required | PAR-PAY-006 |
-| PAY-R12 | `requires_action` (3DS challenge) | Reported as a decline with "send a payment link" recovery | PAR-PAY-030 |
-| PAY-R16 | Daily provider balance-transaction reconciliation | Event backstop job (missed webhooks) + statement import | PAR-PAY-031 |
-| PAY-R17 | Refund approval above a threshold | `payments.payment.refund` (sensitive) required | PAR-PAY-019 |
-| PAY-R18 | Evidence-pack export; dispute fee | Evidence checklist; evidence submitted in the provider dashboard | PAR-PAY-010 |
-| PAY-R19 | Allowed methods, partial flag, language, delivery via comms (`message.guest`) | Link created; staff send it | PAR-PAY-008 |
-| PAY-R20–R22 | Collection plans, plan diffs, automation policies | A payment request owns its purpose on a reference (P1-2); one collection in flight per reference | PAR-PAY-015 |
-| PAY-R07 (real path) | PCI vault/proxy for OTA card data | VCC logic on the simulator; hotels charge VCCs on their own terminal and record them | PAR-PAY-032 |
+| PAY-R06 | Hosted card entry pages (PSP components, CSP/SRI) | Methods are saved from provider tokens only | PAR-PAY-021, 029, 046 |
+| PAY-R10 | Renewal task / automatic re-authorization | Warning exception before expiry; expired holds shown as expired | PAR-PAY-033, EC-PAY-011 |
+| PAY-R11 | Cross-check of MIT against the booking's agreed-terms snapshot | Mandate (terms version + acceptance) on the saved card required | PAR-PAY-037, EC-PAY-015 |
+| PAY-R12 | `requires_action` (3DS challenge) | Reported as a decline with "send a payment link" recovery | PAR-PAY-039 |
+| PAY-R16 | Daily provider balance-transaction reconciliation | Event backstop job (missed webhooks) + statement import | PAR-PAY-055, 058 |
+| PAY-R17 | Refund approval above a threshold | `payments.payment.refund` (sensitive) required | PAR-PAY-061 |
+| PAY-R18 | Evidence-pack export; dispute fee | Evidence checklist; evidence submitted in the provider dashboard | PAR-PAY-065 |
+| PAY-R19 | Allowed methods, partial flag, language, delivery via comms (`message.guest`) | Link created; staff send it | PAR-PAY-070, 081 |
+| PAY-R20–R22 | Collection plans, plan diffs, automation policies | A payment request owns its purpose on a reference (P1-2); one collection in flight per reference | PAR-PAY-072–074, 082 |
+| PAY-R07 (real path) | PCI vault/proxy for OTA card data | VCC logic on the simulator; hotels charge VCCs on their own terminal and record them | PAR-PAY-027 |
 
 Also not built: local Maldivian acquirer adapters (Q2), Adyen, integrated terminals, forwarding payments to an
 external folio in connected mode, journaling of payment-link creation as a provider operation (review P3-6 — Stripe
