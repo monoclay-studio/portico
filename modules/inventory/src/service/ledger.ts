@@ -478,6 +478,12 @@ export class LedgerSession {
           this.tx.db,
         );
         created.push(id);
+        await this.tx.audit({
+          action: 'inventory.conflict.detect',
+          target: { type: 'inventoryConflict', id },
+          propertyId: this.propertyId,
+          after: { unitTypeId: c.unitTypeId, night: c.night, shortfall, cause: causeJson },
+        });
         await this.tx.emit({
           type: INVENTORY_EVENTS.conflictDetected,
           propertyId: this.propertyId,
@@ -506,6 +512,12 @@ export class LedgerSession {
                  causes = causes || ${JSON.stringify([causeJson])}::jsonb, version = version + 1
            where id = ${existing.id}`.execute(this.tx.db);
         resolved.push(existing.id);
+        await this.tx.audit({
+          action: 'inventory.conflict.resolve',
+          target: { type: 'inventoryConflict', id: existing.id },
+          propertyId: this.propertyId,
+          after: { resolution, cause: causeJson },
+        });
         await this.tx.emit({
           type: INVENTORY_EVENTS.conflictResolved,
           propertyId: this.propertyId,

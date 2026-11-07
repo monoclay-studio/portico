@@ -6,6 +6,14 @@
 import type { PorticoDatabase, SearchProvider, TxEventSubscription } from '@portico/db';
 import type { Authenticator, HttpModule } from '@portico/http';
 import { type IdentityPorts, identityAuthenticator, identityHttp, identityManifest } from '@portico/identity';
+import {
+  createInventoryDemoSeed,
+  createInventoryService,
+  type InventoryService,
+  inventoryHttp,
+  inventoryManifest,
+  inventorySearch,
+} from '@portico/inventory';
 import type { ModuleManifest } from '@portico/kernel';
 import { platform, platformHttp, platformManifest, platformSearch } from '@portico/platform';
 import { recordsHttp } from './records-routes';
@@ -13,8 +21,24 @@ import { recordsHttp } from './records-routes';
 export const MANIFESTS: readonly ModuleManifest[] = [
   platformManifest,
   identityManifest,
+  inventoryManifest,
   // wave-1 modules register here
 ];
+
+// ── inventory ── bound once; inventory's only port is platform (exists on main), so nothing is stubbed.
+// Other modules (reservations, operations, groups, distribution, day-close) bind their inventory ports to this.
+export const inventoryService: InventoryService = createInventoryService({
+  platform: {
+    getBusinessDate: platform.getBusinessDate,
+    getDataAuthority: platform.getDataAuthority,
+    assertWritable: platform.assertWritable,
+    getLimit: platform.getLimit,
+  },
+});
+/** DemoSeedStep `run` for inventory (register as { name: 'inventory', run: inventoryDemoSeed }). */
+export const inventoryDemoSeed = createInventoryDemoSeed(inventoryService, {
+  businessDate: platform.getBusinessDate,
+});
 
 export interface Composition {
   authenticator: Authenticator;
@@ -31,13 +55,16 @@ export function compose(database: PorticoDatabase): Composition {
   const identityPorts: IdentityPorts = { propertyIdsInScope: platform.propertyIdsInScope };
   const identityModule = identityHttp({ database });
 
+  // ── inventory ──
+  const inventoryModule = inventoryHttp({ database, inventory: inventoryService });
+
   // ── cross-module experience: global search, summaries, record history ──
-  const searchProviders: SearchProvider[] = [platformSearch];
+  const searchProviders: SearchProvider[] = [platformSearch, inventorySearch];
   const recordsModule = recordsHttp({ database, manifests: MANIFESTS, searchProviders });
 
   return {
     authenticator: identityAuthenticator(database, identityPorts),
-    httpModules: [platformModule, identityModule, recordsModule],
+    httpModules: [platformModule, identityModule, inventoryModule, recordsModule],
     subscriptions: [],
     searchProviders,
   };

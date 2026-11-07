@@ -14,14 +14,19 @@ import type {
   FeatureInput,
   Hold,
   InventoryConflict,
+  InventoryConflictRecord,
   OverbookingAllowance,
   OverbookingAllowanceInput,
   Unit,
   UnitBlock,
+  UnitBlockPreview,
+  UnitBlockRecord,
   UnitCandidate,
   UnitInput,
+  UnitRecord,
   UnitType,
   UnitTypeInput,
+  UnitTypeRecord,
   UnitTypeUpdate,
   UnitUpdate,
 } from './contracts';
@@ -34,6 +39,7 @@ import type { ChangeOrigin, Deps } from './service/context';
 import * as holds from './service/holds';
 import * as overbooking from './service/overbooking';
 import * as reads from './service/reads';
+import * as records from './service/records';
 
 export type {
   AssignUnitInput,
@@ -97,6 +103,8 @@ export interface InventoryService {
     opts?: Origin,
   ): Promise<UnitBlock>;
   getBlock(tx: TxContext, blockId: string): Promise<UnitBlock>;
+  /** What placing the block would do (affected stays, oversold nights) — nothing is committed. */
+  previewBlock(tx: TxContext, input: blocks.BlockUnitInput): Promise<UnitBlockPreview>;
   listBlocks(
     tx: TxContext,
     filter: { propertyId: string; range: DateRange; unitId?: string; status?: 'active' | 'released' | 'all' },
@@ -179,6 +187,11 @@ export interface InventoryService {
     opts?: Origin,
   ): Promise<Unit>;
   getUnit(tx: TxContext, id: string): Promise<Unit>;
+  // ── universal record contract (GET of primary records) ──
+  getUnitRecord(tx: TxContext, id: string): Promise<UnitRecord>;
+  getUnitTypeRecord(tx: TxContext, id: string): Promise<UnitTypeRecord>;
+  getBlockRecord(tx: TxContext, id: string): Promise<UnitBlockRecord>;
+  getConflictRecord(tx: TxContext, id: string): Promise<InventoryConflictRecord>;
   listUnits(
     tx: TxContext,
     propertyId: string,
@@ -206,6 +219,7 @@ export function createInventoryService(ports: InventoryPorts): InventoryService 
     blockUnit: (tx, input, opts) => blocks.blockUnit(deps, tx, input, opts),
     releaseBlock: (tx, input, opts) => blocks.releaseBlock(deps, tx, input, opts),
     getBlock: (tx, blockId) => blocks.getBlock(tx, blockId),
+    previewBlock: (tx, input) => records.previewBlock(deps, tx, input),
     listBlocks: (tx, filter) => blocks.listBlocks(tx, filter),
     getAvailability: (tx, input) => reads.getAvailability(deps, tx, input),
     getAvailabilityGrid: (tx, input) => reads.getAvailabilityGrid(deps, tx, input),
@@ -230,5 +244,10 @@ export function createInventoryService(ports: InventoryPorts): InventoryService 
     updateUnit: (tx, id, v, patch, opts) => catalog.updateUnit(deps, tx, id, v, patch, opts),
     getUnit: (tx, id) => catalog.getUnit(tx, id),
     listUnits: (tx, propertyId, filter) => catalog.listUnits(tx, propertyId, filter),
+    getUnitRecord: async (tx, id) => records.unitRecord(deps, tx, await catalog.getUnit(tx, id)),
+    getUnitTypeRecord: async (tx, id) => records.unitTypeRecord(deps, tx, await catalog.getUnitType(tx, id)),
+    getBlockRecord: async (tx, id) => records.unitBlockRecord(deps, tx, await blocks.getBlock(tx, id)),
+    getConflictRecord: async (tx, id) =>
+      records.conflictRecord(deps, tx, await overbooking.getConflict(tx, id)),
   };
 }

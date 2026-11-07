@@ -26,6 +26,48 @@ export const dataAuthoritySummary = z.object({
   writeMode: z.enum(['exclusive', 'forward', 'read_only']),
 });
 
+// ───────────────────────────── Universal record contract ─────────────────────────────
+// Mirrors RecordAction / RecordIssue / RecordOwner / RecordLink in @portico/kernel (records.ts).
+
+export const recordAction = z.object({
+  action: z.string(),
+  label: z.string(),
+  enabled: z.boolean(),
+  reason: z.string().optional(),
+  previewRequired: z.boolean().optional(),
+});
+export const recordIssue = z.object({
+  code: z.string(),
+  severity: z.enum(['blocking', 'warning', 'info']),
+  message: z.string(),
+  owner: z
+    .object({ kind: z.enum(['user', 'department']), id: z.string(), name: z.string().optional() })
+    .optional(),
+  since: z.string().optional(),
+});
+export const recordOwner = z.object({
+  kind: z.enum(['user', 'department']),
+  id: z.string(),
+  name: z.string().optional(),
+});
+export const recordLink = z.object({
+  rel: z.string(),
+  type: z.string(),
+  id: z.string(),
+  title: z.string().optional(),
+});
+export const recordFields = {
+  /** One entry per status family — never merged into one field. */
+  status: z.record(z.string(), z.string()),
+  /** The business date the status families describe ("tonight"). */
+  statusAsOf: localDate.nullable(),
+  allowedActions: z.array(recordAction),
+  issues: z.array(recordIssue),
+  owner: recordOwner.nullable(),
+  links: z.array(recordLink),
+  provenance: provenance.optional(),
+};
+
 // ───────────────────────────── Features ─────────────────────────────
 
 export const featureCategory = z.enum(['view', 'location', 'layout', 'amenity', 'accessibility', 'general']);
@@ -511,3 +553,23 @@ export const unitsQuery = z.object({
   unitTypeId: z.uuid().optional(),
   status: z.enum(['active', 'inactive', 'retired', 'all']).default('all'),
 });
+
+// ───────────────────────────── Records (GET responses) ─────────────────────────────
+
+export const unitRecord = unit.extend(recordFields);
+export type UnitRecord = z.infer<typeof unitRecord>;
+export const unitTypeRecord = unitType.extend(recordFields);
+export type UnitTypeRecord = z.infer<typeof unitTypeRecord>;
+export const unitBlockRecord = unitBlock.extend(recordFields);
+export type UnitBlockRecord = z.infer<typeof unitBlockRecord>;
+export const inventoryConflictRecord = inventoryConflict.extend(recordFields);
+export type InventoryConflictRecord = z.infer<typeof inventoryConflictRecord>;
+
+/** What placing a block would do, computed by the same code path and rolled back (nothing is committed). */
+export const unitBlockPreview = z.object({
+  affectedAssignments: z.array(affectedAssignment),
+  /** Nights that would become oversold beyond authorization (inventory conflicts). */
+  oversoldNights: z.array(z.object({ unitTypeId: z.uuid(), night: localDate, shortfall: z.number().int() })),
+  availabilityAfter: z.array(availabilityCell),
+});
+export type UnitBlockPreview = z.infer<typeof unitBlockPreview>;

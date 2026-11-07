@@ -20,6 +20,39 @@ export const inventoryManifest: ModuleManifest = {
   name: 'inventory',
   schema: 'inventory',
   migrationsDir: join(dirname(fileURLToPath(import.meta.url)), '..', 'migrations'),
+  // Universal record contract: `type` equals the audit `target.type` used for the record.
+  recordTypes: [
+    {
+      type: 'unit',
+      label: 'Unit',
+      readPermission: INVENTORY_PERMISSIONS.unitRead,
+      route: '/inventory/units/:id',
+    },
+    {
+      type: 'unitType',
+      label: 'Unit type',
+      readPermission: INVENTORY_PERMISSIONS.unitRead,
+      route: '/inventory/unit-types/:id',
+    },
+    {
+      type: 'unitBlock',
+      label: 'Unit block (out of order / out of service / house use)',
+      readPermission: INVENTORY_PERMISSIONS.unitRead,
+      route: '/inventory/unit-blocks/:id',
+    },
+    {
+      type: 'inventoryConflict',
+      label: 'Inventory conflict',
+      readPermission: INVENTORY_PERMISSIONS.availabilityRead,
+      route: '/inventory/conflicts/:id',
+    },
+    {
+      type: 'unitFeature',
+      label: 'Unit feature',
+      readPermission: INVENTORY_PERMISSIONS.unitRead,
+      route: '/inventory/features/:id',
+    },
+  ],
   permissions: [
     {
       key: INVENTORY_PERMISSIONS.unitRead,

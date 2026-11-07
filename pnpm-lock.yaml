@@ -95,6 +95,9 @@ importers:
       '@portico/identity':
         specifier: workspace:*
         version: link:../../modules/identity
+      '@portico/inventory':
+        specifier: workspace:*
+        version: link:../../modules/inventory
       '@portico/kernel':
         specifier: workspace:*
         version: link:../../packages/kernel

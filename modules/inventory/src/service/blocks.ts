@@ -177,6 +177,8 @@ export interface BlockUnitInput {
   reason: string;
   /** What caused the block, e.g. { type: 'workOrder', id } from operations. */
   sourceRef?: EntityRef;
+  /** When given (HTTP routes), the unit must belong to this property. */
+  propertyId?: string;
 }
 
 export interface BlockUnitResult {
@@ -213,7 +215,8 @@ export async function blockUnit(
   }
   const sourceRef = input.sourceRef ? assertRef(input.sourceRef, 'sourceRef') : null;
   const [unit] = await loadUnits(tx, { ids: [assertUuid(input.unitId, 'unit')] });
-  if (!unit) throw new NotFoundError('unit', input.unitId);
+  if (!unit || (input.propertyId && unit.propertyId !== input.propertyId))
+    throw new NotFoundError('unit', input.unitId);
   requirePermission(tx, INVENTORY_PERMISSIONS.blockManage, { propertyId: unit.propertyId });
   if (input.kind === 'house_use') {
     requirePermission(tx, INVENTORY_PERMISSIONS.houseUseCreate, { propertyId: unit.propertyId });
@@ -288,18 +291,29 @@ export async function blockUnit(
     note: `Unit ${unit.number} ${KIND_LABEL[input.kind]}: ${reason}`,
   });
 
+  const blockAudit = {
+    blockId,
+    unitId: unit.id,
+    unitNumber: unit.number,
+    kind: input.kind,
+    nights: range,
+    affectedAssignments: affected,
+    conflictsCreated: conflicts.created,
+  };
+  // One entry on the block's own timeline and one on the unit's ("what happened to villa 214?").
+  await tx.audit({
+    action: 'inventory.unitBlock.create',
+    target: { type: 'unitBlock', id: blockId },
+    propertyId: unit.propertyId,
+    reason,
+    after: blockAudit,
+  });
   await tx.audit({
     action: `inventory.unit.block.${input.kind}`,
     target: { type: 'unit', id: unit.id },
     propertyId: unit.propertyId,
     reason,
-    after: {
-      blockId,
-      kind: input.kind,
-      nights: range,
-      affectedAssignments: affected,
-      conflictsCreated: conflicts.created,
-    },
+    after: blockAudit,
   });
   await tx.emit({
     type: INVENTORY_EVENTS.unitBlocked,
@@ -411,14 +425,19 @@ export async function releaseBlock(
   for (const t of compositeTypes) session.touchComposite(t, released);
   const conflicts = await session.finish({ kind: 'block_released', ref: { type: 'unitBlock', id: row.id } });
   const releasedRange = released.length > 0 ? { from: released[0] as string, to: effTo } : null;
-  await tx.audit({
-    action: 'inventory.unit.unblock',
-    target: { type: 'unit', id: row.unit_id },
-    propertyId: row.property_id,
-    reason: input.reason ?? null,
-    before: { blockId: row.id, kind: row.kind, nights: { from: effFrom, to: effTo } },
-    after: { releasedNights: releasedRange, conflictsResolved: conflicts.resolved },
-  });
+  for (const target of [
+    { type: 'unitBlock', id: row.id, action: 'inventory.unitBlock.release' },
+    { type: 'unit', id: row.unit_id, action: 'inventory.unit.unblock' },
+  ]) {
+    await tx.audit({
+      action: target.action,
+      target: { type: target.type, id: target.id },
+      propertyId: row.property_id,
+      reason: input.reason ?? null,
+      before: { blockId: row.id, kind: row.kind, nights: { from: effFrom, to: effTo } },
+      after: { releasedNights: releasedRange, conflictsResolved: conflicts.resolved },
+    });
+  }
   await tx.emit({
     type: INVENTORY_EVENTS.unitUnblocked,
     propertyId: row.property_id,

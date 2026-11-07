@@ -4,5 +4,8 @@ export { InventoryUnavailableError, UnitAssignmentConflictError } from './errors
 export * from './events';
 export * from './manifest';
 export type { DataAuthorityView, InventoryDataDomain, InventoryPorts, PlatformPort } from './ports';
+export * from './routes';
+export { inventorySearch } from './search';
+export { createInventoryDemoSeed, type SeededInventory, seedPropertyInventory } from './seed';
 export * from './service';
 export type { InventoryDB } from './tables';
