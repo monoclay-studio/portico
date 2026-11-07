@@ -40,6 +40,55 @@ describe('booking lifecycle', () => {
     ).rejects.toThrow();
   });
 
+  it('booking and stay events carry per-stay facts for housekeeping and readiness (payload version 2)', async () => {
+    const org = await setupOrg(t);
+    const b = created<Booking>(
+      await org.run((tx) =>
+        org.svc.createBooking(
+          tx,
+          org.booking(
+            { tags: ['vip:gold'], specialRequests: ['Honeymoon'] },
+            {
+              unitId: org.units.V101,
+              eta: '15:40',
+              occupancy: { adults: 2, childrenAges: [6] },
+              requests: ['Baby cot'],
+            },
+          ),
+        ),
+      ),
+    );
+    const { rows } = await org.run((tx) =>
+      sql<{
+        type: string;
+        version: number;
+        payload: { bookingId: string; code: string; stays: Array<Record<string, unknown>> };
+      }>`
+        select type, version, payload from core.outbox where type = 'reservations.booking.confirmed'`.execute(
+        tx.db,
+      ),
+    );
+    expect(rows[0]?.version).toBe(2);
+    expect(rows[0]?.payload).toMatchObject({ bookingId: b.id, code: b.code });
+    expect(rows[0]?.payload.stays).toEqual([
+      expect.objectContaining({
+        stayId: b.stays[0]?.id,
+        propertyId: org.propertyId,
+        unitTypeId: org.types.beach,
+        unitId: org.units.V101,
+        arrival: BUSINESS_DATE,
+        departure: '2026-12-13',
+        eta: '15:40',
+        earlyCheckIn: null,
+        vipLevel: 'gold',
+        occupants: { adults: 2, children: 1, childrenAges: [6] },
+        requests: { open: 1, total: 1, bookingSpecialRequests: 1 },
+      }),
+    ]);
+    // No personal data in event payloads.
+    expect(JSON.stringify(rows[0]?.payload)).not.toMatch(/Hoffmann|Baby cot|Honeymoon/);
+  });
+
   it('quote → hold → confirm keeps the held price and converts the hold', async () => {
     const org = await setupOrg(t);
     const quoted = created<Booking>(

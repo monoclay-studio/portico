@@ -36,6 +36,7 @@ import { RESERVATIONS_PERMISSIONS as P } from '../manifest';
 import type { GuaranteeKind, KeyKind, KeyOperationResult, UnitCondition } from '../ports';
 import { guardAuthority } from './authority';
 import { actorKey, actorName, type Deps, db, isModuleUnavailable, json, policy } from './context';
+import { emitReservationEvent } from './event-payload';
 import { resolveGuest } from './guests';
 import { raiseIssue } from './issues';
 import {
@@ -727,7 +728,7 @@ async function confirmCheckIn(
     before: { status: 'expected' },
     after: { status: 'in_house', unitId, runId: run.id },
   });
-  await tx.emit({
+  await emitReservationEvent(tx, {
     type: E.stayCheckedIn,
     propertyId: stay.row.property_id,
     aggregate: { type: 'stay', id: stay.row.id },
@@ -847,14 +848,14 @@ async function confirmCheckOut(
     before: { status: 'in_house', departure: fresh.row.departure },
     after: { status: 'departed', earlyDeparture: early, runId: run.id },
   });
-  await tx.emit({
+  await emitReservationEvent(tx, {
     type: E.stayCheckedOut,
     propertyId: stay.row.property_id,
     aggregate: { type: 'stay', id: stay.row.id },
     payload: { stayId: stay.row.id, bookingId: booking.id, unitId, businessDate, earlyDeparture: early },
   });
   if (early) {
-    await tx.emit({
+    await emitReservationEvent(tx, {
       type: E.stayShortened,
       propertyId: stay.row.property_id,
       aggregate: { type: 'stay', id: stay.row.id },
@@ -948,7 +949,7 @@ export async function runStep(
   const completed = input.step === 'confirm' && outcome.status === 'done';
   const saved = await saveSteps(tx, run, next, completed ? 'completed' : undefined);
   if (outcome.status === 'failed') {
-    await tx.emit({
+    await emitReservationEvent(tx, {
       type: E.checkInStepFailed,
       propertyId: stay.row.property_id,
       aggregate: { type: 'stay', id: stay.row.id },

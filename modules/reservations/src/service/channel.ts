@@ -24,6 +24,7 @@ import type { TermsSnapshot } from '../ports';
 import { createBookingInternal, insertStayWithInventory, type PricedStay, priceStay } from './bookings';
 import { applyChangeDirect } from './changes';
 import { type Deps, db, json, propertyInfo } from './context';
+import { emitReservationEvent } from './event-payload';
 import { resolveGuest } from './guests';
 import { openRelocationCase, raiseIssue } from './issues';
 import {
@@ -244,7 +245,7 @@ async function flagIssues(
       message: `Channel revision ${input.revision} of booking ${input.code} dropped information the guest gave earlier (${input.fieldLosses.length} item(s)). Review before acting on it.`,
       details: { fieldLosses: input.fieldLosses, externalId: input.externalId },
     });
-    await tx.emit({
+    await emitReservationEvent(tx, {
       type: E.channelFieldLoss,
       propertyId: input.propertyId,
       aggregate: { type: 'booking', id: input.bookingId },
@@ -709,7 +710,7 @@ export async function ingestChannelBooking(
     propertyId: payload.propertyId,
     after: { revision: input.revision, changes: diff?.length ?? 0, fieldLosses: fieldLosses.length },
   });
-  await tx.emit({
+  await emitReservationEvent(tx, {
     type: E.bookingModified,
     propertyId: payload.propertyId,
     aggregate: { type: 'booking', id: rec.row.id },

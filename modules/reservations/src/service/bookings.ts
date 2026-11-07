@@ -47,6 +47,7 @@ import {
   policy,
   propertyInfo,
 } from './context';
+import { emitReservationEvent } from './event-payload';
 import { resolveGuest } from './guests';
 import { raiseIssue } from './issues';
 import { keyOperation } from './keys';
@@ -336,14 +337,14 @@ export async function createBookingInternal(
     },
   });
   const payload = { bookingId, code, status, stayIds: rec.stays.map((s) => s.row.id), source: input.source };
-  await tx.emit({
+  await emitReservationEvent(tx, {
     type: E.bookingCreated,
     propertyId: input.propertyId,
     aggregate: { type: 'booking', id: bookingId },
     payload,
   });
   if (status === 'confirmed') {
-    await tx.emit({
+    await emitReservationEvent(tx, {
       type: E.bookingConfirmed,
       propertyId: input.propertyId,
       aggregate: { type: 'booking', id: bookingId },
@@ -774,14 +775,14 @@ export async function transitionBooking(
     to: input.to,
     stayIds: rec.stays.map((s) => s.row.id),
   };
-  await tx.emit({
+  await emitReservationEvent(tx, {
     type: E.bookingStatusChanged,
     propertyId: row.property_id,
     aggregate: { type: 'booking', id: row.id },
     payload,
   });
   if (input.to === 'confirmed') {
-    await tx.emit({
+    await emitReservationEvent(tx, {
       type: E.bookingConfirmed,
       propertyId: row.property_id,
       aggregate: { type: 'booking', id: row.id },
@@ -827,7 +828,7 @@ export async function expireBookings(
       target: { type: 'booking', id },
       propertyId: input.propertyId,
     });
-    await tx.emit({
+    await emitReservationEvent(tx, {
       type: E.bookingStatusChanged,
       propertyId: input.propertyId,
       aggregate: { type: 'booking', id },
@@ -923,7 +924,7 @@ export async function patchBooking(
     ),
     after: auditSafePatch(p as Record<string, unknown>, Object.keys(p)),
   });
-  await tx.emit({
+  await emitReservationEvent(tx, {
     type: E.bookingModified,
     propertyId: row.property_id,
     aggregate: { type: 'booking', id: row.id },
@@ -1145,7 +1146,7 @@ export async function markNoShow(
     after: result,
     metadata: { idempotencyKey: input.idempotencyKey },
   });
-  await tx.emit({
+  await emitReservationEvent(tx, {
     type: E.stayNoShow,
     propertyId: row.property_id,
     aggregate: { type: 'stay', id: stay.row.id },
@@ -1202,7 +1203,7 @@ export async function confirmWaitlistedStay(
     before: { status: 'waitlisted' },
     after: { status: 'expected' },
   });
-  await tx.emit({
+  await emitReservationEvent(tx, {
     type: E.bookingModified,
     propertyId: row.property_id,
     aggregate: { type: 'booking', id: row.id },

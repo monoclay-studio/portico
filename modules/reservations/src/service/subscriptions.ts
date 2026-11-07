@@ -2,6 +2,7 @@ import type { TxContext, TxEventSubscription } from '@portico/db';
 import { type DateRange, DomainError, type DomainEvent, eachNight } from '@portico/kernel';
 import { CONSUMED_EVENTS as C, RESERVATIONS_EVENTS as E } from '../events';
 import { type Deps, db, parseNights } from './context';
+import { emitReservationEvent } from './event-payload';
 import { openRelocationCase, raiseIssue } from './issues';
 import { loadStay } from './repo';
 
@@ -106,7 +107,7 @@ async function waitlistMatches(deps: Deps, tx: TxContext, event: DomainEvent): P
       message: `Waitlisted stay on booking ${b.code} can now be confirmed (${nights.from} to ${nights.to}).`,
       ownerId: b.owner_id,
     });
-    await tx.emit({
+    await emitReservationEvent(tx, {
       type: E.stayWaitlistAvailable,
       propertyId,
       aggregate: { type: 'stay', id: w.id },

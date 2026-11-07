@@ -79,6 +79,7 @@ import {
   policy,
   propertyInfo,
 } from './context';
+import { emitReservationEvent } from './event-payload';
 import { raiseIssue } from './issues';
 import { keyOperation } from './keys';
 import { bookingRecord } from './record';
@@ -1735,7 +1736,7 @@ async function applyPlan(
     metadata: { previewToken: token, request },
   });
   for (const ev of events) {
-    await tx.emit({
+    await emitReservationEvent(tx, {
       type: ev.type,
       propertyId: plan.propertyId,
       aggregate: { type: 'stay', id: String(ev.payload.stayId) },
@@ -1807,7 +1808,7 @@ async function applyPlan(
     previewToken: token,
   };
   if (status === 'cancelled' || status === 'declined') {
-    await tx.emit({
+    await emitReservationEvent(tx, {
       type: E.bookingCancelled,
       propertyId: plan.propertyId,
       aggregate: { type: 'booking', id: booking.row.id },
@@ -1819,7 +1820,7 @@ async function applyPlan(
       },
     });
   } else {
-    await tx.emit({
+    await emitReservationEvent(tx, {
       type: E.bookingModified,
       propertyId: plan.propertyId,
       aggregate: { type: 'booking', id: booking.row.id },

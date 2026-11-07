@@ -2,12 +2,14 @@
 
 ## Checkpoint
 
-- **Done:** everything below; 125 module tests (75 unit + 50 integration/scenario/HTTP) and 13 API tests green;
-  `pnpm lint`, `pnpm typecheck`, boundary check clean. Wired in `apps/api/src/composition.ts`.
+- **Done:** everything below; 129 module tests (75 unit + 54 integration/scenario/HTTP) and 13 API tests green;
+  `pnpm lint`, `pnpm typecheck`, boundary check clean. Wired in `apps/api/src/composition.ts` (routes,
+  subscriptions, search provider, `reservations.expireBookings` job).
 - **In progress:** nothing.
 - **Next steps (orchestrator):** bind inventory/rates/guests/finance/payments/operations/access providers in the
   composition root; re-run `test/scenario-s01-last-unit.test.ts` against the real inventory (see "Integration
-  notes"); register `reservationsDemoSeed(service)` in `DEMO_SEED_STEPS`.
+  notes"); register `reservationsDemoSeed(service)` in `DEMO_SEED_STEPS`; `docs/parity/reservations.md` does not
+  exist yet (parity researcher), so `node tools/parity-report.mjs --gate reservations` cannot pass from here.
 - **Known failing tests:** none.
 
 Bookings, stays and the front desk: where what a booker asked for (booking) meets where a guest sleeps (stay).
@@ -30,7 +32,7 @@ environment-safe fallback adapter (no lock vendor), i.e. R1 for real door locks.
 | RES-R05 | Complimentary / house-use stays with permission + reason, consume inventory, zero agreed price (original totals kept) | Built |
 | RES-R06 | Guarantee kinds; non-guaranteed release time | Guarantee built; automatic release at release time **not built** (gap) |
 | RES-R07/R08 | Separate booking/stay status machines; inventory follows status in the same tx (hold / consume / release) | Built |
-| RES-R09 | Tentative option date; `expireBookings` raises an option-date issue (auto-expire only by policy) | Built (no scheduler wired: worker must call it) |
+| RES-R09 | Tentative option date; job `reservations.expireBookings` (every 60 s) expires lapsed holds and raises an option-date issue (auto-expire only by policy) | Built |
 | RES-R10 | Reinstatement / reverse check-in | **Not built** (state machine allows the transitions; commands missing) |
 | RES-R11/R12 | Two-step `previewChange` → `commitChange(previewToken)`; token binds booking version + fingerprint of every amount, availability and penalty; 409 `preview_stale` with fresh preview and diff | Built |
 | RES-R13 | Optimistic concurrency with field-level diff and who changed it | Built |
@@ -109,7 +111,7 @@ Also: universal record contract (status families, server-computed `allowedAction
 | `PlatformPort` | getProperty (read with system authorizer: time zone/currency for computation), getBusinessDate, assertWritable, getDataAuthority, resolvePolicy | **Real platform** |
 | `InventoryPort` | consume (+`onShortfall`), release, changeConsumption, createHold, convertHold, assignUnit, unassignUnit, findAssignableUnits, getAvailability, explainAvailability, getUnit, listUnits, listUnitTypes | `unavailablePort('inventory')` → 503 `module_not_available` |
 | `RatesPort` | quote, priceChange | stub |
-| `GuestsPort` | resolveProfile, recordStayHistory | stub |
+| `GuestsPort` | resolveProfile (guests' `ProfileInput`: propertyId, givenName/familyName, contactPoints with `source: 'channel'` for OTA data), recordStayHistory (bookingId, role), recordReferenceRepoints | stub |
 | `FinancePort` | openFolio, postCharge, recordDeposit, applyDeposits, getFolioBalance, listFolios, setBillingRules, getDepositBalance | stub |
 | `PaymentsPort` | getPaymentStatus, createPaymentRequest, authorize | stub |
 | `OperationsPort` | getUnitCondition, createTask | stub |
@@ -153,6 +155,10 @@ concurrency fidelity; rates/guests/payments/operations/access in memory with scr
 8. Payments: `authorize` (domain map) used for the check-in guarantee step with key
    `checkin:{runId}:guarantee:{declinedAttempts}`.
 9. AccessPort (new, per orchestrator) as above.
+10. GuestsPort follows the guests provider (its README "Contract changes"): `ProfileInput` with `propertyId`;
+    `recordStayHistory` with `bookingId`/`role`; `recordReferenceRepoints`. Reservations' own HTTP contract keeps
+    simple booking-form fields (firstName/lastName/email/phone…) and maps them in `src/service/guests.ts`.
+11. Booking and stay events: payload version 2 with `stays[]` (see Events).
 
 ## Events
 
@@ -160,8 +166,19 @@ Emitted: `reservations.booking.created|statusChanged|confirmed|modified|cancelle
 `reservations.stay.checkedIn|checkedOut|moved|extended|shortened|noShow|relocationRequired|waitlistAvailable`,
 `reservations.checkIn.stepFailed`, `reservations.handover.published|acknowledged`,
 `reservations.channelRevision.fieldLoss`, `reservations.forwardedChange.created`.
+Payload version 2 (all v1 fields kept) for booking events (`created|statusChanged|confirmed|modified|cancelled`)
+and stay events (`checkedIn|checkedOut|moved|extended|shortened|noShow|relocationRequired|waitlistAvailable`):
+`stays[]` with, per stay, stayId, bookingId, propertyId, status, commercialType, unitTypeId, unitId, arrival,
+departure, eta/etd, earlyCheckIn/lateCheckOut ({time}|null), vipLevel (from booking tags `vip` / `vip:<level>`;
+guests owns full recognition), occupants {adults, children, childrenAges}, requests {open, total,
+bookingSpecialRequests}. Ids, dates, counts and flags only — no names, contacts or request texts.
+
 Consumed (`service.subscriptions()`): `inventory.unit.blocked` (relocation cases), `inventory.availability.changed`
-(waitlist), `guests.profile.merged|unmerged` (re-point booker/occupant refs).
+(waitlist), `guests.profile.merged` (re-point booker/occupant references to the survivor and report them with
+`guests.recordReferenceRepoints`; skipped when the merge is no longer active), `guests.profile.unmerged` (restore
+exactly `referencesToRestore.reservations` still pointing at the survivor, and `reassigned` stays/bookings/occupants).
+Jobs: `reservationsJobs(service)` → `reservations.expireBookings` (tenants found via the SECURITY DEFINER routing
+function `reservations.due_booking_expiries`, work inside each tenant's RLS transaction).
 
 ## Permissions
 
@@ -199,6 +216,7 @@ Reinstatement and reverse check-in (RES-R10); channel-owned field lock (RES-R14)
 (RES-R06); upgrade offers (RES-R23); waiting-guests list; handover escalation; `listExceptions` common shape;
 payment schedule / collection plans (payments proposal 1) — deposits are previewed from agreed terms only;
 cancellation deposit treatment execution (finance/payments react to `booking.cancelled`); no-show MIT charge;
+booker-role stay history (only occupants are recorded);
 connected (mirror) mode; quote re-validation when confirming an old quote without a hold; relocation completion
 does not itself execute the move; segment-level keys for a future-dated move (keys re-encoded only when the move
 starts from the current night); the waitlist consumer raises an issue rather than an operations task.

@@ -10,6 +10,7 @@ import {
 import { RESERVATIONS_EVENTS as E } from '../events';
 import { RESERVATIONS_PERMISSIONS as P } from '../manifest';
 import { actorKey, type Deps, db, json, parseNights } from './context';
+import { emitReservationEvent } from './event-payload';
 import type { StayRecord } from './repo';
 
 export interface IssueInput {
@@ -213,7 +214,7 @@ export async function openRelocationCase(
     propertyId: stay.row.property_id,
     after: { stayId: stay.row.id, cause: input.cause, nights: input.nights, options: options.length },
   });
-  await tx.emit({
+  await emitReservationEvent(tx, {
     type: E.stayRelocationRequired,
     propertyId: stay.row.property_id,
     aggregate: { type: 'stay', id: stay.row.id },
