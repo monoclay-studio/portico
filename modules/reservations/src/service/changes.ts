@@ -44,10 +44,8 @@ import {
 } from '../domain/status';
 import {
   addTotals,
-  cancellationPenalty,
   describeCancellationPolicy,
   nightlyGross,
-  penaltyAmount,
   rangeTotals,
   requiredDeposit,
   termsDigest,
@@ -86,6 +84,7 @@ import {
 import { emitReservationEvent } from './event-payload';
 import { raiseIssue } from './issues';
 import { keyOperation } from './keys';
+import { agreedPenalty } from './penalties';
 import { syncPlanSales } from './plan-sales';
 import { bookingRecord } from './record';
 import {
@@ -412,22 +411,14 @@ function removalPenalty(
   if (removed.length === 0 || stay.row.commercial_type !== 'standard') return null;
   const first = before[0];
   if (!first) return null;
-  const nets = removed
-    .sort()
-    .map((d) => nightNet(before, d))
-    .filter((m): m is Money => m !== null);
   const inHouse = stay.row.status === 'in_house';
-  const policyDoc = first.terms.policies.cancellation;
-  const amount = inHouse
-    ? penaltyAmount(policyDoc.earlyDeparture ?? { kind: 'none' }, nets, c.currency)
-    : cancellationPenalty({
-        policy: policyDoc,
-        arrival: stay.row.arrival,
-        timeZone: c.timezone,
-        at: c.tx.now,
-        nightlyNet: nets,
-        currency: c.currency,
-      }).amount;
+  const nights = [...removed].sort();
+  const { amount } = agreedPenalty(c.deps, {
+    event: inHouse ? 'early_departure' : 'cancellation',
+    at: c.tx.now,
+    currency: c.currency,
+    parts: before.map((t) => ({ terms: t.terms, nights: nights.filter((d) => d >= t.from && d < t.to) })),
+  });
   if (amount.amountMinor === 0) return null;
   const kind = inHouse ? 'early_departure' : 'partial_cancellation';
   return {
@@ -710,16 +701,15 @@ async function planCancellation(
     ) {
       const first = before[0];
       if (first) {
-        const nets = eachNight({ from: stay.row.arrival, to: stay.row.departure })
-          .map((d) => nightNet(before, d))
-          .filter((m): m is Money => m !== null);
-        const outcome = cancellationPenalty({
-          policy: first.terms.policies.cancellation,
-          arrival: stay.row.arrival,
-          timeZone: c.timezone,
+        const nights = eachNight({ from: stay.row.arrival, to: stay.row.departure });
+        const outcome = agreedPenalty(c.deps, {
+          event: 'cancellation',
           at: c.tx.now,
-          nightlyNet: nets,
           currency: c.currency,
+          parts: before.map((t) => ({
+            terms: t.terms,
+            nights: nights.filter((d) => d >= t.from && d < t.to),
+          })),
         });
         if (outcome.amount.amountMinor > 0) {
           charges.push({

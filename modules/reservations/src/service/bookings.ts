@@ -30,7 +30,7 @@ import {
   bookingShouldComplete,
   type StayStatus,
 } from '../domain/status';
-import { complimentarySnapshot, penaltyAmount, rangeTotals } from '../domain/terms';
+import { rangeTotals } from '../domain/terms';
 import { RESERVATIONS_EVENTS as E } from '../events';
 import { RESERVATIONS_PERMISSIONS as P } from '../manifest';
 import type { KeyOperationResult, Offer, PayerRef, TermsSnapshot } from '../ports';
@@ -52,6 +52,7 @@ import { emitReservationEvent } from './event-payload';
 import { resolveGuest } from './guests';
 import { raiseIssue } from './issues';
 import { keyOperation } from './keys';
+import { agreedPenalty } from './penalties';
 import { syncPlanSales } from './plan-sales';
 import { bookingRecord } from './record';
 import {
@@ -119,10 +120,11 @@ export async function priceStay(
   }
   let terms = offer.terms;
   if (s.commercialType !== 'standard') {
-    terms = complimentarySnapshot(terms, {
+    // Rates builds the complimentary / house-use agreement (Green Tax kept, re-sealed): never rewritten here (R-02).
+    terms = await deps.ports.rates.complimentaryTerms(tx, {
+      terms,
       kind: s.commercialType,
       reason: s.commercialReason ?? '',
-      approvedBy: actorName(tx),
     });
   }
   return { input: s, offer, terms };
@@ -1103,14 +1105,16 @@ export async function markNoShow(
     tx,
     stay.segments.map((s) => s.termsSnapshotId),
   );
-  const first = snapshotOf(snapshots, (stay.segments[0] ?? { termsSnapshotId: '' }).termsSnapshotId);
-  const nightlyNet = stay.segments.flatMap((s) =>
-    snapshotOf(snapshots, s.termsSnapshotId)
-      .nights.filter((n) => n.date >= s.from && n.date < s.to)
-      .sort((a, b) => (a.date < b.date ? -1 : 1))
-      .map((n) => n.net),
-  );
-  const penalty = penaltyAmount(first.policies.cancellation.noShow, nightlyNet, row.currency);
+  // The agreed no-show charge, evaluated by rates (R-03) at the moment the no-show is recorded.
+  const { amount: penalty } = agreedPenalty(deps, {
+    event: 'no_show',
+    at: tx.now,
+    currency: row.currency,
+    parts: stay.segments.map((s) => ({
+      terms: snapshotOf(snapshots, s.termsSnapshotId),
+      nights: eachNight({ from: s.from, to: s.to }),
+    })),
+  });
   let penaltyPostingIds: string[] = [];
   if (penalty.amountMinor > 0 && stay.row.commercial_type === 'standard') {
     const posted = await deps.ports.finance.postCharge(tx, {

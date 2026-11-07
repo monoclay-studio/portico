@@ -51,6 +51,11 @@ export interface CancellationPolicy {
   tiers: CancellationTier[];
   noShow: Penalty;
   earlyDeparture?: Penalty;
+  /**
+   * What a penalty is a share of (rates `structure.basis`): `gross` (rates' default) = night price + value-based
+   * hotel fees such as a service charge, without statutory taxes or per-person levies; `net` = night price only.
+   */
+  basis?: 'gross' | 'net';
   text?: string;
 }
 
@@ -77,7 +82,15 @@ export interface TermsSnapshot {
   unitTypeId: string;
   occupancy: Occupancy;
   currency: string;
-  priceSource: 'portico' | 'channel' | 'override';
+  /** Rates' canonical names (`portico_quote`, `manual_override`, `complimentary`, `house_use`) are accepted too. */
+  priceSource:
+    | 'portico'
+    | 'portico_quote'
+    | 'channel'
+    | 'override'
+    | 'manual_override'
+    | 'complimentary'
+    | 'house_use';
   nights: Array<{
     date: LocalDate;
     net: Money;
@@ -261,8 +274,42 @@ export interface RepricingResult {
   terms: TermsSnapshot;
 }
 
+export type PenaltyEvent = 'cancellation' | 'no_show' | 'early_departure';
+
+/** Rates' `PenaltyEvaluation`: the ONE implementation of the agreed penalty rule (review R-03). */
+export interface PenaltyEvaluation {
+  event: PenaltyEvent;
+  at: string;
+  nights: LocalDate[];
+  /** The tier in force at `at` (null: free cancellation / no tier). */
+  tier: { fromInstant: string | null; description: string } | null;
+  penalty: Penalty;
+  basisAmount: Money;
+  amount: Money;
+  description: string;
+}
+
 export interface RatesPort {
   quote(tx: TxContext, input: QuoteRequest): Promise<Offer[]>;
+  /**
+   * Pure (no IO): the agreed cancellation / no-show / early-departure charge for `nights` of these terms at the
+   * instant `at` (tiers resolved in the property time zone, basis per the terms). Reservations never computes
+   * penalties itself.
+   */
+  evaluateCancellationPenalty(
+    terms: TermsSnapshot,
+    at: Date,
+    opts: { event: PenaltyEvent; nights: LocalDate[] },
+  ): PenaltyEvaluation;
+  /**
+   * Complimentary / house-use agreement built by rates from priced terms (re-sealed, superseding them): room price
+   * zero, value-based taxes follow the zero value, quantity-based levies (Maldives Green Tax per person-night) are
+   * kept. Reservations never rewrites agreed terms.
+   */
+  complimentaryTerms(
+    tx: TxContext,
+    input: { terms: TermsSnapshot; kind: 'complimentary' | 'house_use'; reason: string },
+  ): Promise<TermsSnapshot>;
   /**
    * Agreed terms for prices received from a channel (RES-R33; rates README gap "termsFromChannelPrice"). Rates owns
    * the tax engine: it decomposes tax-inclusive amounts and computes every tax and levy (incl. per-person Green Tax)

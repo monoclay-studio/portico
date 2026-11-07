@@ -1,5 +1,6 @@
 import { sql, type TxContext } from '@portico/db';
 import {
+  addDays,
   BusinessRuleError,
   type DateRange,
   type EntityRef,
@@ -15,6 +16,8 @@ import type {
   DepositItem,
   GuaranteeKind,
   Offer,
+  PenaltyEvaluation,
+  PenaltyEvent,
   QuoteRequest,
   RatesPort,
   RepricingResult,
@@ -22,6 +25,7 @@ import type {
   TaxLine,
   TermsSnapshot,
 } from '../../src/ports';
+import { complimentary, evaluatePenalty } from './rates-terms';
 
 export interface FakeRatePlan {
   id: string;
@@ -59,9 +63,35 @@ export class FakeRates implements RatesPort {
   currency = 'USD';
   quoteCalls = 0;
 
-  configure(propertyId: string, plans: FakeRatePlan[], taxes: FakeTaxConfig): void {
+  timezones = new Map<string, string>();
+
+  configure(
+    propertyId: string,
+    plans: FakeRatePlan[],
+    taxes: FakeTaxConfig,
+    timezone = 'Indian/Maldives',
+  ): void {
     this.plans.set(propertyId, plans);
     this.taxes.set(propertyId, taxes);
+    this.timezones.set(propertyId, timezone);
+  }
+
+  evaluateCancellationPenalty(
+    terms: TermsSnapshot,
+    at: Date,
+    opts: { event: PenaltyEvent; nights: LocalDate[] },
+  ): PenaltyEvaluation {
+    return evaluatePenalty(terms, at, opts);
+  }
+
+  async complimentaryTerms(
+    tx: TxContext,
+    input: { terms: TermsSnapshot; kind: 'complimentary' | 'house_use'; reason: string },
+  ): Promise<TermsSnapshot> {
+    if (!input.reason.trim())
+      throw new BusinessRuleError('override_reason_required', 'Say why the stay is complimentary.');
+    const by = tx.actor.kind === 'user' ? tx.actor.displayName : tx.actor.kind;
+    return complimentary(input.terms, { ...input, by: by ?? 'unknown', at: tx.now.toISOString() });
   }
 
   /** A sales limit (RAT-R08) for a plan on some nights. */
@@ -222,6 +252,11 @@ export class FakeRates implements RatesPort {
       unitTypeId,
       occupancy: { adults: occ.adults, childrenAges: [...occ.childrenAges] },
       currency: c,
+      propertyTimezone: this.timezones.get(propertyId) ?? 'Indian/Maldives',
+      stay: {
+        arrival: nights[0]?.date,
+        departure: nights.length ? addDays((nights[nights.length - 1] as { date: LocalDate }).date, 1) : null,
+      },
       priceSource: 'portico',
       nights: lines,
       inclusions: plan.inclusions ?? [],

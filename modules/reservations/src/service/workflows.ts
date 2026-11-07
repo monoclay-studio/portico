@@ -3,6 +3,7 @@ import {
   BusinessRuleError,
   DomainError,
   type EntityRef,
+  eachNight,
   type Money,
   NotFoundError,
   newId,
@@ -18,7 +19,6 @@ import {
   bookingShouldComplete,
   type StayStatus,
 } from '../domain/status';
-import { penaltyAmount } from '../domain/terms';
 import {
   blockingSteps,
   canConfirm,
@@ -57,6 +57,7 @@ import {
 import { emitReservationEvent } from './event-payload';
 import { resolveGuest } from './guests';
 import { raiseIssue } from './issues';
+import { agreedPenalty } from './penalties';
 import {
   bumpBooking,
   currentUnit,
@@ -913,18 +914,17 @@ async function confirmCheckOut(
       tx,
       fresh.segments.map((s) => s.termsSnapshotId),
     );
-    const removedNets = fresh.segments.flatMap((s) =>
-      snapshotOf(snaps, s.termsSnapshotId)
-        .nights.filter((n) => n.date >= releasedFrom && n.date >= s.from && n.date < s.to)
-        .map((n) => n.net),
-    );
-    const policyDoc = snapshotOf(snaps, (fresh.segments[0] as { termsSnapshotId: string }).termsSnapshotId)
-      .policies.cancellation;
-    const penalty = penaltyAmount(
-      policyDoc.earlyDeparture ?? { kind: 'none' },
-      removedNets,
-      booking.currency,
-    );
+    // The agreed early-departure charge for the nights not stayed, evaluated by rates (R-03).
+    const notStayed = eachNight({ from: releasedFrom, to: fresh.row.departure });
+    const { amount: penalty } = agreedPenalty(deps, {
+      event: 'early_departure',
+      at: tx.now,
+      currency: booking.currency,
+      parts: fresh.segments.map((s) => ({
+        terms: snapshotOf(snaps, s.termsSnapshotId),
+        nights: notStayed.filter((d) => d >= s.from && d < s.to),
+      })),
+    });
     if (penalty.amountMinor > 0 && fresh.row.commercial_type === 'standard') {
       await deps.ports.finance.postCharge(tx, {
         propertyId: stay.row.property_id,

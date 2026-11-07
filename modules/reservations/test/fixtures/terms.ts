@@ -33,6 +33,7 @@ export function makeSnapshot(spec: SnapshotSpec): TermsSnapshot {
         name: 'TGST',
         kind: 'tax',
         amount: money(Math.round((netMinor * spec.taxBp) / 10_000), currency),
+        basis: 'percentage',
       });
     }
     if (spec.feePerPersonNight) {
@@ -42,6 +43,7 @@ export function makeSnapshot(spec: SnapshotSpec): TermsSnapshot {
         name: 'Green Tax',
         kind: 'fee',
         amount: money(spec.feePerPersonNight * persons, currency),
+        basis: 'per_person_night',
       });
     }
     return { date, net: money(netMinor, currency), taxes };
@@ -65,6 +67,7 @@ export function makeSnapshot(spec: SnapshotSpec): TermsSnapshot {
     unitTypeId: spec.unitTypeId ?? 'ut-beach',
     occupancy: { adults, childrenAges: children },
     currency,
+    propertyTimezone: 'Indian/Maldives',
     priceSource: 'portico',
     nights,
     inclusions: [{ code: 'BRK', name: 'Breakfast' }],
