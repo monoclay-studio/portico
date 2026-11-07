@@ -12,7 +12,6 @@ import {
   applied,
   assertGlobalConsistency,
   bookingInput,
-  cardOnFile,
   guestWithCard,
   kandu,
   organization,
