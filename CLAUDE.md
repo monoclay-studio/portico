@@ -1,7 +1,6 @@
 # Portico — engineering operating manual
 
-**Portico** (working name — the final product name is not decided) is a cloud hospitality management platform
-built by **Monoclay LLC**. It must support everything from a 6-room guesthouse to a 400-villa resort and
+**Portico** is a cloud hospitality management platform built by **Monoclay LLC** (Delaware). It must support everything from a 6-room guesthouse to a 400-villa resort and
 multi-brand hotel groups, with the operational depth of OPERA Cloud and the clarity of the best modern systems.
 First market: **Maldives / Indian Ocean**. No hotel has agreed to a pilot yet.
 
