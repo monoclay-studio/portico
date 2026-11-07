@@ -432,3 +432,51 @@ billing is not activated for live customers until this is answered.
 **Blocks:** nothing.
 **Raised by / date:** finance-cluster parity research, 2026-11-07
 
+
+### Q140 — Enrol as an Oracle OHIP partner to test OPERA Cloud extraction (extends Q61)    Status: open
+**Context:** One-button migration from OPERA Cloud runs through Oracle's API platform (OHIP). Its limits shape the migration: standard searches cap at 1,000 records, bulk export uses asynchronous jobs, and 50 requests/second are shared with the hotel's live interfaces. Our estimate is about US$100 in API fees to extract a 100-room resort, but that is unverified. Only a partner sandbox can measure the real time and cost (`docs/research/05-market-deep-dive/11-one-button-migration.md`).
+**Question:** May Monoclay apply to Oracle's partner programme now, accepting partner terms, with a sandbox/pilot usage budget (suggested ≤ US$500)?
+**Default we are proceeding with:** no application, agreement or paid usage. We build the OHIP extractor against public documentation and an OPERA-like simulator (R3) and prepare the application pack for you to approve.
+**If the answer differs:** if approved, we measure real extraction in the sandbox (R4) and recalibrate migration time and cost estimates.
+**Blocks:** OPERA Cloud migration beyond R3. Nothing else.
+**Raised by / date:** market deep dive, 2026-11-07
+
+### Q141 — May Portico act as an OPERA 5 OXI external system?                Status: open
+**Context:** OPERA 5 has an Oracle-documented "initial cutover resync" through OXI. It sends rates, profiles, blocks and reservations (including cancellations and no-shows) to an external system, which makes it the cleanest automated path off OPERA 5. Whether a non-partner may be the receiving system is unconfirmed.
+**Question:** May we ask Oracle whether Portico can be an OXI two-way external system without partnership or certification, and pursue it if needed?
+**Default we are proceeding with:** no contact with Oracle until you approve. We build the file-export pack path (hotel-run OPERA exports delivered over SFTP/HTTPS with unmasked data) and an OXI receiver tested against our own simulator only.
+**If the answer differs:** OXI becomes the primary OPERA 5 route; the file pack stays as fallback.
+**Blocks:** OXI-based OPERA 5 migration beyond R3.
+**Raised by / date:** market deep dive, 2026-11-07
+
+### Q142 — How stored guest cards move during a migration (pilot)            Status: open
+**Context:** Stored cards can only move from one payment provider to another, never through a file. Stripe requires a PCI Level 1 counterpart for the transfer, and wallet-saved cards cannot move. The payment provider for Maldivian hotels is still undecided (Q2).
+**Question:** For the pilot, do we re-collect cards from guests rather than arrange a provider-to-provider transfer?
+**Default we are proceeding with:** re-collect. The migration checklist lists future stays whose guarantee needs a new card and sends collection requests (simulated until live); no card data is ever handled by Portico.
+**If the answer differs:** add a provider-to-provider transfer step to the migration checklist once a provider is chosen.
+**Blocks:** nothing in development.
+**Raised by / date:** market deep dive, 2026-11-07
+
+### Q143 — Is migration included in the price? (extends Q60)                Status: open
+**Context:** Competitors charge for imports (Cloudbeds charges, and does not import cancelled or no-show bookings) or run paid projects. "One button" is our differentiator, but some steps have usage costs, such as OHIP calls.
+**Question:** Is automated migration included for pilot (and later all) customers, with any third-party usage costs shown and capped?
+**Default we are proceeding with:** included for planning purposes; usage costs estimated before start, shown to the hotel and capped; nothing published.
+**If the answer differs:** a priced migration package in configuration; no product rework.
+**Blocks:** pricing page and quotes only.
+**Raised by / date:** market deep dive, 2026-11-07
+
+### Q144 — Never read an OPERA 5 database without written rights              Status: open
+**Context:** Some vendors migrate by querying the OPERA 5 database directly. Whether a hotel's Oracle or ISV contract allows that is contract-specific.
+**Question:** Do you agree that Portico never extracts from an OPERA 5 database unless the hotel confirms in writing that its contract allows it?
+**Default we are proceeding with:** yes. The database route is disabled unless the hotel uploads a signed rights confirmation, which is recorded in the migration's audit trail.
+**If the answer differs:** policy change only.
+**Blocks:** nothing.
+**Raised by / date:** market deep dive, 2026-11-07
+
+### Q145 — Patent review: AI room assignment (Oracle US 11,514,374)           Status: open
+**Context:** Market research found an Oracle patent on AI-driven room assignment. Its legal status is unconfirmed. Portico plans optimized room assignment (inventory and reservations). This goes to counsel together with Q40.
+**Question:** Will you have counsel review this patent, together with the Q40 items, before we ship automated room assignment?
+**Default we are proceeding with:** room assignment ships as explainable rule-based suggestions with staff confirmation; no machine-learned assignment until counsel reviews.
+**If the answer differs:** none if cleared; design-around if counsel advises.
+**Blocks:** ML-based room assignment only.
+**Raised by / date:** market deep dive, 2026-11-07
