@@ -306,6 +306,21 @@ describe('a guesthouse moved to Portico the same day', () => {
       for (const e of post) if (await migration.journalEvent(tx, e)) n++;
       // the same event twice is journaled once
       await migration.journalEvent(tx, post[0] as DomainEvent);
+      // events raised by the migration's own cutover run (its correlation id) are the migration, not activity
+      const runs = (
+        await db(tx)
+          .selectFrom('migration.jobs')
+          .select('run_correlations')
+          .where('id', '=', jobId)
+          .executeTakeFirstOrThrow()
+      ).run_correlations;
+      expect(runs.length).toBeGreaterThan(0);
+      const own = {
+        ...(post[0] as DomainEvent),
+        id: newId(),
+        correlationId: runs[runs.length - 1] as string,
+      };
+      expect(await migration.journalEvent(tx, own)).toBe(false);
       return n;
     });
     expect(journaled).toBe(4);
