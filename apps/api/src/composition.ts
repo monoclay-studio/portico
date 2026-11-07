@@ -43,6 +43,16 @@ import {
   operationsSubscriptions,
 } from '@portico/operations';
 import { platform, platformHttp, platformManifest, platformSearch } from '@portico/platform';
+import {
+  createRatesDemoSeed,
+  type RatesPorts,
+  type RatesService,
+  ratesHttp,
+  ratesManifest,
+  ratesSearch,
+  ratesService,
+  termsSealKeyFromEnv,
+} from '@portico/rates';
 import { recordsHttp } from './records-routes';
 import type { DemoSeedStep } from './seed/demo';
 
@@ -52,6 +62,7 @@ export const MANIFESTS: readonly ModuleManifest[] = [
   inventoryManifest,
   guestsManifest,
   operationsManifest,
+  ratesManifest,
   // wave-1 modules register here
 ];
 
@@ -79,7 +90,12 @@ export interface Composition {
   /** Periodic background jobs run by apps/worker (each module contributes its own). */
   jobs: ScheduledJob[];
   /** Provider services other modules' ports bind to (domain map). */
-  services: { guests: GuestsService; inventory: InventoryService; operations: OperationsService };
+  services: {
+    guests: GuestsService;
+    inventory: InventoryService;
+    operations: OperationsService;
+    rates: RatesService;
+  };
   /** Demo data contributed by each module, run in order inside each demo organization (apps/api/src/seed). */
   demoSeedSteps: DemoSeedStep[];
 }
@@ -166,12 +182,51 @@ export function compose(database: PorticoDatabase): Composition {
   const operationsService = createOperationsService(operationsPorts);
   const operationsModule = operationsHttp({ database, service: operationsService });
 
+  // ── rates ── (pricing contract provider: quote, agreed terms, priceChange, penalties, computeTaxes)
+  const ratesPorts: RatesPorts = {
+    // Property facts and unit types are read as the system: rates checks its own permissions (a channel or desk
+    // agent quoting holds rates.quote.read, not platform.property.read or inventory read).
+    async getProperty(tx, propertyId) {
+      const p = await platform.getProperty(asSystem(tx), propertyId);
+      return {
+        id: p.id,
+        countryCode: p.countryCode,
+        timezone: p.timezone,
+        baseCurrency: p.baseCurrency,
+        checkInTime: p.checkInTime,
+        classification: p.classification,
+      };
+    },
+    assertWritable: (tx, propertyId, domain) => platform.assertWritable(tx, propertyId, domain),
+    resolvePolicy: (tx, propertyId, key, defaultValue) =>
+      platform.resolvePolicy(tx, propertyId, key, defaultValue),
+    getBusinessDate: (tx, propertyId) => platform.getBusinessDate(tx, propertyId),
+    listUnitTypes: async (tx, propertyId) =>
+      (await inventoryService.listUnitTypes(asSystem(tx), propertyId)).map((u) => ({
+        id: u.id,
+        code: u.code,
+        name: u.name,
+      })),
+    // Negotiated-rate eligibility: the company must exist in this organization and not be inactive.
+    companyExists: (tx, companyId) =>
+      guestsService.getCompany(asSystem(tx), companyId).then(
+        (c) => c.status.company !== 'inactive',
+        () => false,
+      ),
+    // channelForApiClient (distribution) and affectedAgreements (reservations/finance) are bound when those
+    // modules merge; until then API clients sell as `api_client:<id>` and the tax activation report says so.
+  };
+  // Agreed terms are sealed with a server key (PORTICO_TERMS_SEAL_KEY; required in production).
+  const rates = ratesService(ratesPorts, { termsSealKey: termsSealKeyFromEnv().key });
+  const ratesModule = ratesHttp({ database, rates });
+
   // ── cross-module experience: global search, summaries, record history ──
   const searchProviders: SearchProvider[] = [
     platformSearch,
     inventorySearch,
     guestsSearchProvider(guestsService),
     operationsSearch,
+    ratesSearch,
   ];
   const recordsModule = recordsHttp({ database, manifests: MANIFESTS, searchProviders });
 
@@ -183,6 +238,7 @@ export function compose(database: PorticoDatabase): Composition {
       inventoryModule,
       guestsModule,
       operationsModule,
+      ratesModule,
       recordsModule,
     ],
     subscriptions: [...operationsSubscriptions(operationsPorts)],
@@ -204,11 +260,13 @@ export function compose(database: PorticoDatabase): Composition {
           ),
       }),
     ],
-    services: { guests: guestsService, inventory: inventoryService, operations: operationsService },
+    services: { guests: guestsService, inventory: inventoryService, operations: operationsService, rates },
     demoSeedSteps: [
       { name: 'inventory', run: inventoryDemoSeed },
       createGuestsDemoSeed(guestsService),
       createOperationsDemoSeed(operationsService),
+      // After inventory: prices the demo properties' unit types by profile (resort vs guesthouse).
+      { name: 'rates', run: createRatesDemoSeed(rates, ratesPorts) },
     ],
   };
 }
