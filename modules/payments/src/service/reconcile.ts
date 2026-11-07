@@ -229,7 +229,7 @@ export async function runReconciliation(
         propertyId: a.property_id,
         kind: 'authorization_expiring',
         severity: 'routine',
-        problem: `A card hold of ${a.currency} ${a.amount_minor - a.captured_minor} (minor units) expires at ${expires.toISOString()}.`,
+        problem: `A card hold of ${formatMoney(money(a.amount_minor - a.captured_minor, a.currency))} expires at ${expires.toISOString()}.`,
         businessImpact: 'After expiry the hold no longer guarantees payment for this stay.',
         nextStep:
           'Collect what is due now, or take a new authorization (with the guest’s agreement) before it expires.',

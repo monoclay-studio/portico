@@ -261,6 +261,19 @@ describe('statement CSV parsing', () => {
     ).toThrow(/card number/);
     expect(() => parseStatementCsv('date,amount,currency\n')).toThrow(/no lines/);
   });
+  it('keeps only the last 4 digits of long bank numbers that are not card numbers (DB checks refuse 12+ digits)', () => {
+    // 13-digit account number and a 16-digit transfer reference that fails the Luhn check.
+    const [line] = parseStatementCsv(
+      'date,amount,currency,reference,description\n2026-11-07,10.00,USD,2026110712345678,From acct 7730000123456\n',
+    );
+    expect(line?.reference).toBe('[number ending 5678]');
+    expect(line?.description).toBe('From acct [number ending 3456]');
+    expect(containsLongDigitRun(`${line?.reference} ${line?.description}`)).toBe(false);
+    // A card-number-shaped value (Luhn-valid) still refuses the whole file.
+    expect(() =>
+      parseStatementCsv('date,amount,currency,description\n2026-11-07,10.00,USD,card 4242 4242 4242 4242\n'),
+    ).toThrow(/card number/);
+  });
 });
 
 describe('settlement matching (Route D reconciliation)', () => {

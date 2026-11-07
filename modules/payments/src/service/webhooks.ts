@@ -8,7 +8,9 @@ import { sql, type TxContext, withTenantTx } from '@portico/db';
 import {
   BusinessRuleError,
   DomainError,
+  formatMoney,
   isUuid,
+  money,
   newId,
   type RequestContext,
   requirePermission,
@@ -451,7 +453,7 @@ async function reconcileAuthorizationSnapshot(
       severity: 'urgent',
       problem:
         o.amountReceivedMinor > a.captured_minor
-          ? `The provider shows ${o.currency} ${o.amountReceivedMinor} (minor units) collected on this hold, but Portico recorded ${a.captured_minor}. It was collected outside Portico (e.g. in the provider dashboard).`
+          ? `The provider shows ${formatMoney(money(o.amountReceivedMinor, o.currency))} collected on this hold, but Portico recorded ${formatMoney(money(a.captured_minor, o.currency))}. It was collected outside Portico (e.g. in the provider dashboard).`
           : `The provider reports this hold as ${implied}, Portico has ${a.status}.`,
       businessImpact: 'The bill may not show money that was collected, or show a hold that no longer exists.',
       nextStep: 'Check the transaction in the provider dashboard and record or refund the difference.',
@@ -610,7 +612,7 @@ async function applyDispute(
       propertyId: payment.property_id,
       kind: 'dispute_opened',
       severity: 'urgent',
-      problem: `The guest's bank disputed a payment of ${o.currency} ${o.amountMinor} (minor units), reason: ${o.reason}.`,
+      problem: `The guest's bank disputed a payment of ${formatMoney(money(o.amountMinor, o.currency))}, reason: ${o.reason}.`,
       businessImpact:
         'The amount (and a dispute fee) is debited from the hotel unless evidence wins the case.',
       nextStep: `Collect the evidence checklist${o.evidenceDueBy ? ` before ${o.evidenceDueBy.toISOString()}` : ''} and submit it in the provider dashboard.`,
@@ -783,7 +785,7 @@ export async function payoutFollowUp(
       propertyId: null,
       kind: 'payout_failed',
       severity: 'urgent',
-      problem: `Payout ${p.provider_payout_id} of ${p.currency} ${p.net_minor} (minor units) to the hotel's bank failed${failureCode ? ` (${failureCode})` : ''}.${ledgerPosted ? ' It had already been recorded as paid in the ledger.' : ''}`,
+      problem: `Payout ${p.provider_payout_id} of ${formatMoney(money(p.net_minor, p.currency))} to the hotel's bank failed${failureCode ? ` (${failureCode})` : ''}.${ledgerPosted ? ' It had already been recorded as paid in the ledger.' : ''}`,
       businessImpact: 'The money stays at the provider and has not reached the hotel bank account.',
       nextStep: ledgerPosted
         ? 'Check the bank details with the provider; finance reverses the payout entry in the ledger.'
@@ -805,7 +807,7 @@ export async function payoutFollowUp(
         propertyId: null,
         kind: 'payout_breakdown_missing',
         severity: 'routine',
-        problem: `Payout ${p.provider_payout_id} (net ${p.currency} ${p.net_minor} minor units) arrived without its gross/fees breakdown.`,
+        problem: `Payout ${p.provider_payout_id} (net ${formatMoney(money(p.net_minor, p.currency))}) arrived without its gross/fees breakdown.`,
         businessImpact:
           'The payout cannot be reconciled to payments and fees, so it is not yet in the ledger.',
         nextStep:

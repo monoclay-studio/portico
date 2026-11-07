@@ -13,7 +13,7 @@ export const anyRef = z.object({ type: z.string().min(1).max(40), id: z.uuid() }
 
 const noLongDigits = (field: string) =>
   z.string().refine((v) => !/\d(?:[ -]?\d){11,}/.test(v), {
-    message: `${field} must never contain a card number. Use the provider's token instead.`,
+    message: `${field} must not contain a run of 12 or more digits: it could be a card number, which Portico never stores. Use the provider's token for cards; for a long bank reference enter only its last digits.`,
   });
 /** Free text anywhere in payments (names, notes, reasons, references): never a card number (PAY-I05). */
 const text = (max: number, min = 0) => noLongDigits('This field').pipe(z.string().min(min).max(max));

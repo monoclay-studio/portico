@@ -8,7 +8,7 @@
  *  2. otherwise amount + currency + card last 4 (if both present) + date within ±1 day, only if unique.
  * A record is matched at most once; already-verified records are never matched again.
  */
-import { addDays, type LocalDate } from '@portico/kernel';
+import { addDays, formatMoney, type LocalDate, money } from '@portico/kernel';
 import { withinPeriod } from './schedule';
 
 export interface RecordedItem {
@@ -187,7 +187,7 @@ export function matchSettlement(input: {
           lineNo: line.lineNo,
           itemId: first.id,
           itemKind: first.kind,
-          detail: `Recorded ${first.amountMinor} but the statement shows ${line.amountMinor} (${line.currency} minor units) for the same reference.`,
+          detail: `Recorded ${formatMoney(money(first.amountMinor, line.currency))} but the statement shows ${formatMoney(money(line.amountMinor, line.currency))} for the same reference.`,
         });
         continue;
       }

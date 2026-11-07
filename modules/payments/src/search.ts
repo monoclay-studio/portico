@@ -4,7 +4,7 @@
  * ("4242 840.00"). Permission- and property-scope-aware. Never returns or matches tokens or card data.
  */
 import { normalizeQuery, type SearchProvider, type TxContext, typed } from '@portico/db';
-import type { RecordSummary, SearchHit } from '@portico/kernel';
+import { formatMoney, money as kernelMoney, type RecordSummary, type SearchHit } from '@portico/kernel';
 import { presentAuthorization, presentPayment, presentRefund, presentRequest } from './domain/presentation';
 import type { PaymentsDB } from './tables';
 
@@ -18,7 +18,7 @@ function scope(tx: TxContext): readonly string[] | 'all' {
 }
 
 function money(amountMinor: number, currency: string): string {
-  return `${currency} ${(amountMinor / 100).toFixed(2)}`;
+  return formatMoney(kernelMoney(amountMinor, currency));
 }
 
 /** Candidate minor-unit values for a typed major amount (exponent 0, 2 or 3). */

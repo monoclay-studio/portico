@@ -1017,7 +1017,7 @@ export async function creditPaymentRequest(tx: TxContext, requestId: string, amo
       propertyId: r.property_id,
       kind: 'payment_request_overpaid',
       severity: 'routine',
-      problem: `A payment arrived on a ${r.status} payment request (paid ${paid} of ${r.amount_minor} ${r.currency} minor units).`,
+      problem: `A payment arrived on a ${r.status} payment request (paid ${formatMoney(money(paid, r.currency))} of ${formatMoney(money(r.amount_minor, r.currency))}).`,
       businessImpact: 'The guest may have paid more than requested or after cancellation.',
       nextStep: 'Keep it as a credit on the bill or refund the difference.',
       ownerRole: 'finance',
@@ -1311,7 +1311,7 @@ export async function verifyOperation(
         propertyId: op.property_id,
         kind: 'pending_verification_overdue',
         severity: 'urgent',
-        problem: `A ${op.kind} of ${op.currency} ${op.amount_minor} (minor units) has been pending verification for more than a day.`,
+        problem: `A ${op.kind} of ${formatMoney(money(op.amount_minor, op.currency))} has been pending verification for more than a day.`,
         businessImpact: 'Portico cannot tell whether money moved; the bill shows it as pending.',
         nextStep:
           'Look the transaction up in the provider dashboard and confirm with the guest; contact provider support if needed.',

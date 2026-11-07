@@ -87,6 +87,20 @@ export function majorToMinor(value: string, currency: string): number {
 
 const REQUIRED = ['date', 'currency'] as const;
 
+/**
+ * Bank statements carry long numbers that are not card numbers (account numbers, 13–16 digit transfer
+ * references). Card-number-shaped values were refused above; any other run of 12+ digits is stored only as its
+ * last 4 digits, so no column ever holds a number that could be a card (DB checks enforce the same rule). Staff
+ * cannot record such long references either, so no match is lost.
+ */
+function maskLongNumbers<T extends string | null | undefined>(v: T): T {
+  if (!v) return v;
+  return v.replace(
+    /\d(?:[ -]?\d){11,}/g,
+    (run) => `[number ending ${run.replace(/[ -]/g, '').slice(-4)}]`,
+  ) as T;
+}
+
 export function parseStatementCsv(text: string, opts: { maxLines?: number } = {}): ParsedStatementLine[] {
   const records = parseCsvRecords(text);
   const header = records[0]?.map((h) =>
@@ -200,10 +214,10 @@ export function parseStatementCsv(text: string, opts: { maxLines?: number } = {}
       amountMinor,
       feeMinor,
       netMinor,
-      reference: get('reference'),
-      approvalCode: get('approval_code'),
+      reference: maskLongNumbers(get('reference')),
+      approvalCode: maskLongNumbers(get('approval_code')),
       cardLast4: last4,
-      description: get('description'),
+      description: maskLongNumbers(get('description')),
     });
   }
   if (out.length === 0)
