@@ -332,7 +332,7 @@ export async function setSsoEnforcement(
 ) {
   requirePermission(tx, 'identity.sso.manage');
   const c = await db(tx).selectFrom('identity.sso_connections').selectAll().executeTakeFirst();
-  if (!c || c.status !== 'active')
+  if (c?.status !== 'active')
     throw new BusinessRuleError('sso_not_configured', 'Configure and activate SSO first.');
   if (input.exemptUserIds.length > 3)
     throw new ValidationError('too_many_exemptions', 'At most 3 accounts may keep password sign-in.');
@@ -389,7 +389,7 @@ async function orgContext(
     database.kysely,
   );
   const org = rows[0];
-  if (!org || org.status !== 'active') throw new NotFoundError('organization', organizationId);
+  if (org?.status !== 'active') throw new NotFoundError('organization', organizationId);
   return {
     tenantId: org.id,
     environment: org.environment as TenantEnvironment,
@@ -417,7 +417,7 @@ export async function startSsoLogin(
   const cipher = ports.cipher;
   return withTenantTx(database, ctx, async (tx) => {
     const c = await db(tx).selectFrom('identity.sso_connections').selectAll().executeTakeFirst();
-    if (!c || c.status !== 'active')
+    if (c?.status !== 'active')
       throw new BusinessRuleError(
         'sso_not_configured',
         'This organization does not use single sign-on. Sign in with your password.',
@@ -548,7 +548,7 @@ export async function completeSsoLogin(
       .where('id', '=', st.id)
       .execute();
     const c = await db(tx).selectFrom('identity.sso_connections').selectAll().executeTakeFirst();
-    if (!c || c.status !== 'active') return fail('sso_not_active');
+    if (c?.status !== 'active') return fail('sso_not_active');
     const verifier = cipher.decrypt(st.code_verifier_enc, `sso:${st.id}`);
     const secret = await secrets.get(tx, c.client_secret_ref);
     const form: Record<string, string> = {

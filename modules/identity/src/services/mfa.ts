@@ -464,7 +464,7 @@ export async function completeMfaChallenge(
     database.kysely,
   );
   const org = rows[0];
-  if (!org || org.status !== 'active') throw new UnauthenticatedError(CHALLENGE_ERROR);
+  if (org?.status !== 'active') throw new UnauthenticatedError(CHALLENGE_ERROR);
   const ctx: RequestContext = {
     tenantId,
     environment: org.environment as TenantEnvironment,

@@ -204,7 +204,7 @@ async function tokenContext(database: PorticoDatabase, token: string, prefix: 'i
     database.kysely,
   );
   const org = rows[0];
-  if (!org || org.status !== 'active') return null;
+  if (org?.status !== 'active') return null;
   const ctx: RequestContext = {
     tenantId,
     environment: org.environment as TenantEnvironment,

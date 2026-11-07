@@ -421,14 +421,7 @@ export async function authenticateSupportToken(
     .selectAll()
     .where('token_hash', '=', sha256Hex(token))
     .executeTakeFirst();
-  if (
-    !r ||
-    r.status !== 'active' ||
-    !r.starts_at ||
-    !r.ends_at ||
-    r.starts_at > tx.now ||
-    r.ends_at <= tx.now
-  )
+  if (r?.status !== 'active' || !r.starts_at || !r.ends_at || r.starts_at > tx.now || r.ends_at <= tx.now)
     return null;
   if (request) {
     await db(tx)

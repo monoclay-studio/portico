@@ -15,7 +15,6 @@ import {
   fetchOidcHttp,
   fieldEncryptedSecretStore,
   type IdentityPorts,
-  identity,
   identityAuthenticator,
   identityHttp,
   identityManifest,
