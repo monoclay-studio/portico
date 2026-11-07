@@ -34,8 +34,9 @@ begin
         raise notice 'directory table without RLS, not accessible to portico_app: %.%', r.s, r.t;
       end if;
     elsif not r.forced and format('%I.%I', r.s, r.t) not in (
-      -- Reviewed exceptions: owner-run SECURITY DEFINER dispatcher functions must fan out across tenants.
-      'core.outbox', 'core.event_deliveries'
+      -- Reviewed exceptions: owner-run SECURITY DEFINER dispatcher/scheduler functions must scan across tenants.
+      -- RLS still applies to portico_app on these tables (only the owner is exempt).
+      'core.outbox', 'core.event_deliveries', 'integration.tenant_schedule'
     ) then
       bad := bad || format(' %I.%I(rls not forced)', r.s, r.t);
     end if;
@@ -83,18 +84,56 @@ begin
   end if;
 end $$;
 
-\echo '== check 6: financial integrity hook (finance module contract)'
--- The finance module must provide finance.verify_trial_balance(): raises if any tenant's ledger does not sum to
--- zero or a folio balance differs from its ledger projection. Until that module exists this check is SKIPPED and
--- the drill report says so — it is never reported as passed.
+\echo '== check 6: financial integrity (every journal entry balances, per currency and in functional currency)'
+-- Preferred: a finance-owned finance.verify_trial_balance() (requested from the finance module; it can also prove
+-- folio balances = ledger projection). Until it exists, the drill checks the ledger invariant finance enforces at
+-- commit (finance.assert_entry_balanced): Σ amount_minor per (entry, currency) = 0 and Σ functional_amount_minor per
+-- entry = 0. A per-entry balance implies every tenant's trial balance sums to zero.
 do $$
+declare
+  entries bigint;
+  bad text;
 begin
-  if to_regprocedure('finance.verify_trial_balance()') is null then
-    raise notice 'SKIPPED: finance.verify_trial_balance() not present (finance module not built yet)';
-  else
+  if to_regprocedure('finance.verify_trial_balance()') is not null then
     perform finance.verify_trial_balance();
-    raise notice 'trial balance verified';
+    raise notice 'trial balance verified by finance.verify_trial_balance()';
+  elsif to_regclass('finance.journal_lines') is null then
+    raise notice 'SKIPPED: no finance ledger in this database';
+  else
+    select count(distinct entry_id) into entries from finance.journal_lines;
+    select string_agg(format('%s (%s)', entry_id, why), ', ') into bad from (
+      select entry_id, 'currency ' || currency || ' off by ' || sum(amount_minor) as why
+        from finance.journal_lines group by entry_id, currency having sum(amount_minor) <> 0
+      union all
+      select entry_id, 'functional off by ' || sum(functional_amount_minor)
+        from finance.journal_lines group by entry_id having sum(functional_amount_minor) <> 0
+      limit 20) x;
+    if bad is not null then raise exception 'DRILL FAIL: unbalanced journal entries: %', bad; end if;
+    raise notice 'ledger balanced: % journal entries checked (folio projection check pending finance.verify_trial_balance())', entries;
   end if;
+end $$;
+
+\echo '== check 7: cross-tenant routing functions are not callable by request handlers (portico_app)'
+-- Reviewed SECURITY DEFINER functions portico_app may execute (sign-in, tenant lookups, the public payments webhook
+-- route). Keep in sync with APP_DEFINER_FUNCTIONS / ROUTING_FUNCTIONS.workerAndApp in infra/db/bootstrap-roles.mjs.
+do $$
+declare bad text;
+begin
+  if not exists (select 1 from pg_roles where rolname = 'portico_app') then
+    raise notice 'SKIPPED: no portico_app role'; return;
+  end if;
+  select string_agg(p.oid::regprocedure::text, ', ' order by 1) into bad
+    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+   where p.prosecdef
+     and p.prorettype <> 'trigger'::regtype
+     and n.nspname not in ('pg_catalog', 'information_schema', 'public') and n.nspname not like 'pg\_%'
+     and has_function_privilege('portico_app', p.oid, 'execute')
+     and p.oid::regprocedure::text not in (
+       'identity.login_lookup(text)', 'identity.record_login_result(uuid,boolean)', 'identity.ensure_user(uuid,text)',
+       'platform.tenant_environment(uuid)', 'platform.tenant_summaries(uuid[])',
+       'payments.route_webhook(text,text,boolean)');
+  if bad is not null then raise exception 'DRILL FAIL: portico_app can execute unreviewed SECURITY DEFINER functions: %', bad; end if;
+  raise notice 'routing functions restricted to portico_worker';
 end $$;
 
 \echo '== evidence: latest committed activity (compare with the restore point to measure data loss)'

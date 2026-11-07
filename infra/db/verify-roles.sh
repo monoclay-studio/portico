@@ -10,7 +10,8 @@
 #   5. the real API (NODE_ENV=production, generated keys, TRUSTED_PROXY_CIDRS) as portico_app_blue: /health/ready,
 #      plus a negative start without PORTICO_TERMS_SEAL_KEY;
 #   6. the demo seed as portico_app_blue, then the real worker as portico_worker_blue (must run its jobs and outbox
-#      without a permission error) and as portico_app_blue (must be refused — proves the revocation bites).
+#      without a permission error) and as portico_app_blue (must be refused — proves the revocation bites);
+#   7. the restore drill's verify.sql on the seeded database, then with two planted defects it must catch.
 #
 # Usage (roles are CLUSTER-WIDE: this alters portico_app to NOLOGIN, so never point it at a shared dev server):
 #   PORTICO_VERIFY_THROWAWAY_CLUSTER=yes ADMIN_URL=postgres://postgres:…@127.0.0.1:55440/postgres \
@@ -178,6 +179,43 @@ run_worker "$APP_URL" "$WORK/worker-as-app.log" 8
 grep -q "permission denied for function" "$WORK/worker-as-app.log" \
   && ok "worker as portico_app_blue is refused the routing functions (revocation effective)" \
   || ko "worker as portico_app_blue was not refused: $(tail -3 "$WORK/worker-as-app.log")"
+
+echo "== 7. restore-drill verify.sql on this database (positive, then two planted defects)"
+if psql "$DBURL" -v ON_ERROR_STOP=1 -f "$ROOT/infra/restore-drill/verify.sql" >"$WORK/drill.log" 2>&1; then
+  ok "verify.sql passes ($(grep -oE 'ledger balanced: [0-9]+ journal entries|SKIPPED: no finance ledger' "$WORK/drill.log" | head -1))"
+else
+  ko "verify.sql failed on a correct database: $(grep -m1 'DRILL FAIL' "$WORK/drill.log")"
+fi
+psql "$DBURL" -qc "grant execute on function payments.tenants_for_jobs() to portico_app" >/dev/null
+if psql "$DBURL" -v ON_ERROR_STOP=1 -f "$ROOT/infra/restore-drill/verify.sql" >"$WORK/drill-neg1.log" 2>&1; then
+  ko "verify.sql missed a routing function granted to portico_app"
+else
+  grep -q "portico_app can execute unreviewed SECURITY DEFINER functions: payments.tenants_for_jobs()" "$WORK/drill-neg1.log" \
+    && ok "verify.sql catches a routing function re-granted to portico_app" || ko "routing negative: $(grep -m1 'DRILL FAIL' "$WORK/drill-neg1.log")"
+fi
+psql "$DBURL" -qc "revoke execute on function payments.tenants_for_jobs() from portico_app" >/dev/null
+# Ledger: plant one balanced and then one unbalanced synthetic entry (bypassing the deferred balance trigger with
+# session_replication_role = replica, as a corrupted restore would) — the drill must accept the first, refuse the second.
+plant() { # <entry-id> <second-line-amount>
+  psql "$DBURL" -v ON_ERROR_STOP=1 -qc "set session_replication_role = replica;
+    insert into finance.journal_lines (id, tenant_id, entry_id, legal_entity_id, line_no, account_id, amount_minor, currency,
+                                       functional_amount_minor, functional_currency)
+    values (gen_random_uuid(), gen_random_uuid(), '$1', gen_random_uuid(), 1, gen_random_uuid(), 1000, 'USD', 1000, 'USD'),
+           (gen_random_uuid(), gen_random_uuid(), '$1', gen_random_uuid(), 2, gen_random_uuid(), $2, 'USD', $2, 'USD')" >/dev/null
+}
+plant 00000000-0000-0000-0000-00000000000a -1000
+if psql "$DBURL" -v ON_ERROR_STOP=1 -f "$ROOT/infra/restore-drill/verify.sql" >"$WORK/drill-bal.log" 2>&1; then
+  ok "verify.sql accepts a balanced entry ($(grep -oE 'ledger balanced: [0-9]+ journal entries' "$WORK/drill-bal.log"))"
+else
+  ko "verify.sql refused a balanced entry: $(grep -m1 'DRILL FAIL' "$WORK/drill-bal.log")"
+fi
+plant 00000000-0000-0000-0000-00000000000b -999
+if psql "$DBURL" -v ON_ERROR_STOP=1 -f "$ROOT/infra/restore-drill/verify.sql" >"$WORK/drill-neg2.log" 2>&1; then
+  ko "verify.sql missed an unbalanced journal entry"
+else
+  grep -q "unbalanced journal entries: 00000000-0000-0000-0000-00000000000b" "$WORK/drill-neg2.log" && ok "verify.sql catches an unbalanced journal entry" \
+    || ko "ledger negative: $(grep -m1 'DRILL FAIL' "$WORK/drill-neg2.log")"
+fi
 
 psql "$ADMIN_URL" -qc "drop database $DB with (force)" >/dev/null 2>&1 || true
 echo "== result: $pass passed, $fail failed"
