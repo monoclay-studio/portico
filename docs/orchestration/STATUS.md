@@ -18,6 +18,13 @@
   module's actual code on main/branches) → `docs/strategy/gap-plan.md` + `docs/strategy/modules/<module>.md` 10x briefs;
   then hand each module agent its brief.
 
+- 2026-11-07 ~13:30 UTC: guests + inventory MERGED to main (steward-reviewed, fixes verified). UX refinement loop
+  started (`docs/ux/README.md`): UX lab worktree `wt/uxlab` (branch ux/lab = main + feat/backoffice-core; API :4300,
+  UI :5380, DB portico_ux, demo seeded via `pnpm --filter @portico/backoffice seed:dev`); black-box tester round 1
+  writes to the session scratchpad `ux-round1/`. **Next:** copy findings to `docs/ux/round-1/`, launch refining agent
+  (reads findings + code + vision/design/experience docs + specs + parity + market digest) → per-module refinements →
+  module agents decide/implement.
+
 ## 1. Owner, product and how to work with the owner
 
 - Owner: founder of **Monoclay LLC** (Delaware, Stripe Atlas), based in the Maldives. Product: **Portico** (final name).
