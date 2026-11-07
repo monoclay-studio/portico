@@ -498,6 +498,8 @@ export async function findAssignableUnits(
     const { rows } = await sql<{ id: string; unit_id: string }>`
       select id, unit_id from inventory.assignments where id = any(${parentIds}::uuid[])`.execute(tx.db);
     for (const r of rows) parentUnit.set(r.id, r.unit_id);
+    const missing = [...new Set(rows.map((r) => r.unit_id))].filter((id) => !unitsById.has(id));
+    for (const u of await loadUnits(tx, { ids: missing })) unitsById.set(u.id, u);
   }
 
   const exclusionsFor = (u: UnitLite, asComponentOf?: UnitLite): UnitCandidate['exclusions'] => {
