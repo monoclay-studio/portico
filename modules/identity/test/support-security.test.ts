@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { newId, randomToken } from '@portico/kernel';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { identity, operatorDirectoryFromConfig } from '../src';
+import { IDENTITY_JOBS, identity, operatorDirectoryFromConfig } from '../src';
 import { authenticate, type Harness, harness, org, PASSWORD, signIn } from './harness';
 
 let h: Harness;
@@ -266,5 +266,26 @@ describe('suspicious activity signals', () => {
     expect(
       (await o.tx((tx) => identity.listSecurityAlerts(tx))).find((a) => a.id === alert?.id)?.acknowledgedAt,
     ).not.toBeNull();
+  });
+});
+
+describe('retention of pre-authentication signals', () => {
+  it('purges sign-in attempts older than 48 hours', async () => {
+    await identity
+      .login(h.t.db, { email: `x-${newId()}@lagoon.mv`, password: 'nope', ip: '192.0.2.250' })
+      .catch(() => {});
+    await h.t.admin.kysely
+      .updateTable('identity.login_attempts')
+      .set({ occurred_at: new Date(Date.now() - 49 * 3600_000) })
+      .where('ip', '=', '192.0.2.250')
+      .execute();
+    const job = IDENTITY_JOBS.find((j) => j.name === 'identity.purgeLoginAttempts');
+    await job?.run(h.t.db, new Date());
+    const left = await h.t.admin.kysely
+      .selectFrom('identity.login_attempts')
+      .select('id')
+      .where('ip', '=', '192.0.2.250')
+      .execute();
+    expect(left).toHaveLength(0);
   });
 });

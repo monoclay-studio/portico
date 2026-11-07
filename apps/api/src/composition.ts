@@ -14,6 +14,7 @@ import type { Authenticator, HttpModule } from '@portico/http';
 import {
   fetchOidcHttp,
   fieldEncryptedSecretStore,
+  IDENTITY_JOBS,
   type IdentityPorts,
   identityAuthenticator,
   identityHttp,
@@ -111,7 +112,7 @@ export function compose(database: PorticoDatabase, options: CompositionOptions =
     httpModules: [platformModule, identityModule, provisioningModule, recordsModule],
     subscriptions: [],
     searchProviders,
-    jobs: [...CORE_JOBS],
+    jobs: [...CORE_JOBS, ...IDENTITY_JOBS],
     identityPorts,
     platformPorts,
   };

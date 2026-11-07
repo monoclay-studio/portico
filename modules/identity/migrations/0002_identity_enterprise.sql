@@ -432,6 +432,20 @@ create or replace function identity.active_membership_count(p_user_id uuid) retu
     select count(*)::int from identity.user_tenants where user_id = p_user_id and status = 'active'
 $$;
 
+-- Retention: pre-authentication sign-in attempts are only needed for the detection window (keep 48 h by default).
+create or replace function identity.purge_login_attempts(p_keep_hours int, p_batch int) returns int
+  language plpgsql security definer set search_path = identity, pg_temp as $$
+declare n int;
+begin
+  delete from identity.login_attempts
+   where id in (select id from identity.login_attempts
+                 where occurred_at < now() - make_interval(hours => p_keep_hours) limit p_batch);
+  get diagnostics n = row_count;
+  return n;
+end $$;
+revoke execute on function identity.purge_login_attempts(int, int) from public;
+grant execute on function identity.purge_login_attempts(int, int) to portico_app;
+
 revoke execute on function identity.active_membership_count(uuid) from public;
 grant execute on function identity.active_membership_count(uuid) to portico_app;
 

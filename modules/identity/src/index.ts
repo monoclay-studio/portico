@@ -5,6 +5,7 @@ export { indexCatalog, isReadPermission } from './domain/permissions';
 export { ROLE_TEMPLATES, type RoleTemplate } from './domain/role-templates';
 export { type ExplainingAuthorizer, isExplainingAuthorizer, type StepUpDenial } from './domain/step-up';
 export * from './errors';
+export { IDENTITY_JOBS } from './jobs';
 export * from './manifest';
 export type * from './ports';
 export * from './routes';
