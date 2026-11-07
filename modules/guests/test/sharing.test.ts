@@ -182,7 +182,9 @@ describe('cross-property sharing', () => {
   });
 
   it('the plan entitlement gates sharing (no portfolio.crossPropertyProfiles → never shared)', async () => {
-    const org = await setupOrg(t, { plan: 'professional' });
+    // Professional and Resort include cross-property profiles (editions.md §7); Essentials allows a single property,
+    // so Connect is the multi-property plan that really lacks the entitlement.
+    const org = await setupOrg(t, { plan: 'connect' });
     const [, B] = org.properties as [string, string];
     const id = await guestKnownAtA(org);
     const deskB = org.user([

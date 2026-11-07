@@ -1,7 +1,15 @@
+export * from './adapters';
+export * as identity from './api';
 export * from './contracts';
+export { indexCatalog, isReadPermission } from './domain/permissions';
 export { ROLE_TEMPLATES, type RoleTemplate } from './domain/role-templates';
+export { type ExplainingAuthorizer, isExplainingAuthorizer, type StepUpDenial } from './domain/step-up';
+export * from './errors';
+export { IDENTITY_JOBS } from './jobs';
 export * from './manifest';
+export type * from './ports';
 export * from './routes';
-export type { AuthenticatedPrincipal, IdentityPorts, LoginResult } from './service';
-export * as identity from './service';
+export type { AuthenticatedPrincipal, AuthorizerOptions, LoginResult } from './service';
+export { ssoDomainRecheckJob } from './services/sso';
+export { operatorDirectoryFromConfig } from './services/support';
 export type { IdentityDB } from './tables';

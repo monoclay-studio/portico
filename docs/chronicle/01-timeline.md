@@ -235,4 +235,22 @@ Each agent's brief and report are in `agents/`.
     regression test per sibling entry point.
 - **18:16 — Guests fix launched** (`fix/guests-erasure-idempotency`). The payments fix waits for the integration-step
   merge, because the two overlap. The rates, finance and backoffice P2s go to their next rounds.
+- **18:29 — Integration-step focused re-review: merge after fixes.** All 9 original PoCs are refused, but attacking each
+  fix found a new P1 one step beyond it (card guarantee by linking the cardholder; only one late charge collected; the
+  opening-deposit import skips ownership). ADR-0015 Amendment 1 defines the agreed card guarantee (supplied by the
+  cardholder, or a recorded mandate). Fix round 2 goes to the integration engineer, together with the payments
+  residuals from the sweep (same code).
+- **18:36 — Identity-plus MERGED to main** after 3 steward reviews, 4 fix rounds and the orchestrator's spot-check:
+  - the W-1..W-3 regression tests assert refusal;
+  - gates green on the merged copy (1,494 tests);
+  - Playwright 12/12 on default ports, and 11/12 on non-default ports with one flaky 409-toast test that passed twice
+    on rerun (logged for backoffice).
+  - It includes the staff-app sign-in code step and the demo second factor (ADR-0017 Amendment 2).
+- **18:37 — Guests erasure fix done** (replay plans store ids only; a redaction net; replays wait for an erasure). A
+  focused re-review launches before merge.
+- **18:43 — Heartbeat (5-hour 72%).**
+  - UX round 2 is deliberately deferred: round 1 is in its module-owner stage, and the refiner's plan re-runs the 34
+    tasks only once the UI uses real data. Re-testing simulated screens would waste a round.
+  - Quality steward meta-loop round 2 starts on the fix sweep, the integration re-review, the identity merge, the
+    parity-ops merge and the orchestrator's escapes.
 

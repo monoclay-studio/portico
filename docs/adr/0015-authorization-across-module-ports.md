@@ -37,3 +37,18 @@ Reviews found both failure modes of cross-module calls:
 
 Ports are exercised with real providers in integration tests; each provider adds tests that a call with a mismatched
 property/legal entity is refused. Implemented per module during the integration step (`docs/orchestration/pending-fixes.md`).
+
+## Amendment 1 — what makes a card the agreed guarantee (2026-11-07, integration-step re-review R2-P1-1)
+
+Staff linking a person to a booking (as booker, occupant or payer) never grants the right to use that person's
+saved card. A card counts as a booking's agreed guarantee only if one of these holds:
+- **(a)** the cardholder supplied it for this booking, through hosted entry, a payment link, a terminal, or the
+  guest's own self-service;
+- **(b)** a recorded mandate covers it: card-on-file consent with its scope (which hotel or legal entity, which
+  purposes, which amount limits), stored with evidence.
+
+Any other use of a saved card, or a different amount, is an explicit capability: the entry module checks
+`payments.payment.collect`, and the payments provider still verifies the card's property and legal entity (fix
+sweep SW-PAY-3). Whether the guest is present or the merchant initiates a charge is derived from server facts, never
+from a client field (SW-PAY-4).
+
