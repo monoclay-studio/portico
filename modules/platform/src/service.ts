@@ -345,6 +345,67 @@ export async function getProperty(tx: TxContext, id: string): Promise<Property> 
   return toProperty(row);
 }
 
+/** Facts other modules need about a property for their own calculations (no permission check). */
+export interface PropertyFacts {
+  id: string;
+  code: string;
+  name: string;
+  profile: Property['profile'];
+  status: Property['status'];
+  legalEntityId: string;
+  countryCode: string;
+  timezone: string;
+  baseCurrency: string;
+  classification: Property['classification'];
+  businessDate: LocalDate;
+  brandId: string | null;
+  regionId: string | null;
+}
+
+/**
+ * Property facts for MODULE-INTERNAL use (tax, rates, guests, scheduling): time zone, base currency, country,
+ * classification, legal entity, profile, status and business date. No permission check — callers have already
+ * authorized their own command — but still tenant-scoped by RLS. Never expose this directly over HTTP; user-facing
+ * reads go through `getProperty` (which requires `platform.property.read` for the property).
+ */
+export async function getPropertyFacts(tx: TxContext, propertyId: string): Promise<PropertyFacts> {
+  const r = await db(tx)
+    .selectFrom('platform.properties')
+    .select([
+      'id',
+      'code',
+      'name',
+      'profile',
+      'status',
+      'legal_entity_id',
+      'country_code',
+      'timezone',
+      'base_currency',
+      'classification',
+      'business_date',
+      'brand_id',
+      'region_id',
+    ])
+    .where('id', '=', propertyId)
+    .executeTakeFirst();
+  if (!r) throw new NotFoundError('property', propertyId);
+  return {
+    id: r.id,
+    code: r.code,
+    name: r.name,
+    profile: r.profile,
+    status: r.status,
+    legalEntityId: r.legal_entity_id,
+    countryCode: r.country_code,
+    timezone: r.timezone,
+    baseCurrency: r.base_currency,
+    classification: (r.classification ?? {}) as Property['classification'],
+    businessDate: r.business_date,
+    brandId: r.brand_id,
+    regionId: r.region_id,
+  };
+}
+
 /** Properties the actor may read. */
 export async function listProperties(tx: TxContext): Promise<Property[]> {
   const scope = tx.authz.propertyScope('platform.property.read');

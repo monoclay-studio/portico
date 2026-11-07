@@ -217,3 +217,31 @@ describe('property activation (adoption brief §3 stages 4–5, G-04)', () => {
     ).rejects.toMatchObject({ code: 'invalid_scope' });
   });
 });
+
+describe('property facts for module-internal use', () => {
+  it('returns facts without a permission check, but only inside the tenant', async () => {
+    const org = await makeOrg(t);
+    const p = await org.property('FACT', { classification: { 'mv.establishmentType': 'resort' } });
+    const noGrants = org.as(newId(), []);
+    const facts = await withTenantTx(t.db, noGrants, (tx) => platform.getPropertyFacts(tx, p.id));
+    expect(facts).toMatchObject({
+      id: p.id,
+      timezone: 'Indian/Maldives',
+      baseCurrency: 'USD',
+      countryCode: 'MV',
+      legalEntityId: org.le.id,
+      status: 'setup',
+      businessDate: '2026-11-07',
+      classification: { 'mv.establishmentType': 'resort' },
+    });
+    await expect(withTenantTx(t.db, noGrants, (tx) => platform.getProperty(tx, p.id))).rejects.toMatchObject({
+      code: 'forbidden',
+    });
+    const other = await makeOrg(t);
+    await expect(
+      withTenantTx(t.db, other.as(), (tx) => platform.getPropertyFacts(tx, p.id)),
+    ).rejects.toMatchObject({
+      code: 'property_not_found',
+    });
+  });
+});
