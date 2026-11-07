@@ -43,6 +43,7 @@ export const CONSUMED_EVENTS = [
   'reservations.stay.shortened',
   'inventory.unit.blocked',
   'inventory.unit.unblocked',
+  'inventory.assignment.changed',
 ] as const;
 
 // Tolerant payload schemas: reservations/inventory are built in parallel; unknown fields are ignored and only
@@ -73,6 +74,15 @@ const stayEventPayload = z.looseObject({
   unitId: uuid.nullish(),
   arrival: date.optional(),
   departure: date.optional(),
+  /** reservations' extended/shortened events carry the new dates as `to: { arrival, departure }`. */
+  to: z.looseObject({ arrival: date.optional(), departure: date.optional() }).optional(),
+});
+const assignmentPayload = z.looseObject({
+  ref: z.object({ type: z.string(), id: uuid }),
+  change: z.string().optional(),
+  unitId: uuid.nullish(),
+  previousUnitIds: z.array(uuid).optional(),
+  nights: z.object({ from: date, to: date }),
 });
 const movedPayload = z.looseObject({
   stayId: uuid,
@@ -355,15 +365,16 @@ async function onDatesChanged(d: Deps, tx: TxContext, event: DomainEvent) {
   const p = stayEventPayload.parse(event.payload);
   const prev = await projection(tx, p.stayId);
   if (!prev) return;
+  const departure = p.to?.departure ?? p.departure ?? prev.departure;
   await upsertStayProjection(d, tx, {
     stayId: p.stayId,
     propertyId,
-    arrival: p.arrival ?? prev.arrival,
-    departure: p.departure ?? prev.departure,
+    arrival: p.to?.arrival ?? p.arrival ?? prev.arrival,
+    departure,
     status: prev.status as 'in_house',
   });
   // A departure clean planned for the old departure date of a stay that is still in house is no longer due.
-  if (prev.unit_id && (p.departure ?? prev.departure) !== prev.departure && prev.status === 'in_house') {
+  if (prev.unit_id && departure !== prev.departure && prev.status === 'in_house') {
     const planned = await db(tx)
       .selectFrom('operations.tasks')
       .select('id')
@@ -384,6 +395,34 @@ async function onDatesChanged(d: Deps, tx: TxContext, event: DomainEvent) {
   }
   if (prev.unit_id && (await unitKnown(tx, prev.unit_id)))
     await rescoreUnitTasks(d, tx, propertyId, prev.unit_id);
+}
+
+/**
+ * Unit assignment of a stay changed in inventory: keeps the stay projection's unit current even when reservation
+ * events do not carry unit details (dates from reservations events win when known).
+ */
+async function onAssignmentChanged(d: Deps, tx: TxContext, event: DomainEvent) {
+  const propertyId = propertyOf(event);
+  const p = assignmentPayload.parse(event.payload);
+  if (p.ref.type !== 'stay') return;
+  const prev = await projection(tx, p.ref.id);
+  const unassigned = p.change === 'unassigned' || !p.unitId;
+  const unitId = unassigned
+    ? prev?.unit_id && (p.previousUnitIds ?? []).includes(prev.unit_id)
+      ? null
+      : (prev?.unit_id ?? null)
+    : (p.unitId ?? null);
+  await upsertStayProjection(d, tx, {
+    stayId: p.ref.id,
+    propertyId,
+    unitId,
+    arrival: prev?.arrival ?? p.nights.from,
+    departure: prev?.departure ?? p.nights.to,
+    status: (prev?.status ?? 'expected') as 'expected',
+  });
+  for (const u of new Set([unitId, prev?.unit_id].filter((x): x is string => !!x))) {
+    if (await unitKnown(tx, u)) await rescoreUnitTasks(d, tx, propertyId, u);
+  }
 }
 
 /** A block placed in inventory (by operations or directly there): mirror it and list affected stays. */
@@ -436,6 +475,7 @@ export function operationsSubscriptions(ports: OperationsPorts): TxEventSubscrip
   const inventoryHandlers: Record<string, (tx: TxContext, e: DomainEvent) => Promise<void>> = {
     'inventory.unit.blocked': (tx, e) => onUnitBlocked(d, tx, e),
     'inventory.unit.unblocked': (tx, e) => onUnitUnblocked(d, tx, e),
+    'inventory.assignment.changed': (tx, e) => onAssignmentChanged(d, tx, e),
   };
   return [
     {

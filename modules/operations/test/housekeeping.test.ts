@@ -318,3 +318,50 @@ describe('stay date changes', () => {
     expect((await org.tx(org.admin, (tx) => h.ops.getUnit(tx, unit.unitId))).occupancy).toBe('occupied');
   });
 });
+
+describe('payload shapes published by sibling modules', () => {
+  it('learns arrivals from inventory assignment events and new dates from `to` on extension events', async () => {
+    const org = await setupOrg(h);
+    const seeded = await org.tx(org.admin, (tx) =>
+      seedResortOperations(tx, h.ops, {
+        propertyId: org.propertyId,
+        villasPerSection: 1,
+        initialCondition: 'clean',
+      }),
+    );
+    const unit = seeded.units[0];
+    if (!unit) throw new Error('seed');
+    const stayId = newId();
+    await publish(h, org, {
+      type: 'inventory.assignment.changed',
+      aggregate: { type: 'stay', id: stayId },
+      payload: {
+        propertyId: org.propertyId,
+        ref: { type: 'stay', id: stayId },
+        change: 'assigned',
+        unitId: unit.unitId,
+        previousUnitIds: [],
+        nights: { from: BUSINESS_DATE, to: '2026-11-10' },
+      },
+    });
+    const arrivals = await org.tx(org.admin, (tx) => h.ops.arrivalReadiness(tx, org.propertyId));
+    expect(arrivals.items).toEqual([
+      expect.objectContaining({
+        stayId,
+        unitId: unit.unitId,
+        readiness: expect.objectContaining({ ready: false }),
+      }),
+    ]);
+    await publish(h, org, {
+      type: 'reservations.stay.extended',
+      aggregate: { type: 'stay', id: stayId },
+      payload: {
+        stayId,
+        from: { arrival: BUSINESS_DATE, departure: '2026-11-10' },
+        to: { arrival: BUSINESS_DATE, departure: '2026-11-12' },
+      },
+    });
+    const board = await org.tx(org.admin, (tx) => h.ops.board(tx, org.propertyId, { arrivalsOnly: true }));
+    expect(board.rows.map((r) => r.unit.unitId)).toEqual([unit.unitId]);
+  });
+});

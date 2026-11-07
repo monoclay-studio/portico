@@ -93,11 +93,19 @@ Emitted: `operations.unit.conditionChanged`, `operations.unit.discrepancyReporte
 `operations.statusForward.requested|acknowledged|rejected`, `operations.sync.conflict`, `operations.arrival.guestWaiting`.
 
 Consumed (`operations.stays`, `operations.unitBlocks` consumers): `reservations.booking.confirmed|modified|cancelled`,
-`reservations.stay.checkedIn|checkedOut|moved|noShow|extended|shortened`, `inventory.unit.blocked|unblocked`. Expected payload
+`reservations.stay.checkedIn|checkedOut|moved|noShow|extended|shortened`, `inventory.unit.blocked|unblocked`,
+`inventory.assignment.changed` (unit + nights of a stay). Expected payload
 fields (tolerant Zod, unknown fields ignored): booking events `{ bookingId, stays: [{ stayId, unitId?, arrival,
 departure, status?, vip?, earlyCheckIn?, eta?, guestProfileId?, guestLabel? }] }`; stay events `{ stayId, unitId?,
 arrival?, departure? }`; moved `{ stayId, fromUnitId?, toUnitId, effectiveDate? }`; blocked `{ unitId, blockId, kind,
-nights, reason?, affectedAssignments[], sourceRef? }`. **Reservations/inventory must include these fields.**
+nights, reason?, affectedAssignments[], sourceRef? }`.
+
+**Checked against the sibling worktrees (2026-11-07):** inventory's `unit.blocked` and `assignment.changed` and
+reservations' `checkedOut`, `moved` (`fromUnitId/toUnitId`) and `extended/shortened` (`to: { arrival, departure }`)
+match. **Gap:** reservations' `booking.confirmed|modified` currently carries only `stayIds`, so VIP, ETA, early
+check-in and guest label do not reach housekeeping priorities; operations still learns each stay's unit and dates from
+`inventory.assignment.changed`. Contract ask: add `stays: [{ stayId, unitId?, arrival, departure, vip?, earlyCheckIn?,
+eta?, guestLabel? }]` to those payloads (additive), or call `setGuestWaiting`/a future `updateArrivalDetails` provider.
 
 ## Ports and bindings
 
