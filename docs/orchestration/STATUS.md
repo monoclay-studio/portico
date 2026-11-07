@@ -5,6 +5,11 @@
 
 ## 0. Resume log
 
+> **Usage guardrail:** `docs/orchestration/usage-guardrail.md` — ≥80% start nothing new; ≥92% stop agents,
+> `tools/checkpoint.sh`, update this log, schedule resume at reset. Continuous UX loop heartbeat: scheduled task
+> "Portico continuous UX loop heartbeat" (every 3 h).
+
+
 - 2026-11-07 ~08:30 UTC checkpoint (usage limit). All branches pushed.
 - 2026-11-07 11:12 UTC resumed: Postgres restarted; all branches re-pushed; resumed module builders (reservations,
   finance, operations, integration, backoffice, identity-plus), steward reviews (guests, inventory, rates) and
