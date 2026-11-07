@@ -2,14 +2,16 @@
 
 ## Checkpoint
 
-- **Done:** everything below; 130 module tests (76 unit + 54 integration/scenario/HTTP) and 13 API tests green;
-  `pnpm lint`, `pnpm typecheck`, boundary check clean. Wired in `apps/api/src/composition.ts` (routes,
-  subscriptions, search provider, `reservations.expireBookings` job).
+- **Done (steward review round, @567dffe → now):** pre-merge fixes R-01, R-04, R-05/R-06, R-07/R-08/R-09, R-18,
+  R-19 with regression tests; contract work R-10 (charge codes from policy, `reason`, fees when the service
+  happens), R-11 (payments two-phase), R-12 (exported event payload schemas, v2 with `stays[]`, `aggregateVersion`),
+  R-13 (inventory adapter bound to the REAL inventory module; S01/S03 run against both), R-14 (reservations
+  authorizes; inventory called with system scope), R-15 (rate-plan sales limits), R-02/R-03 part 1 (penalties and
+  complimentary terms come from rates). Strict fakes: finance, payments, inventory (`ref` on candidates).
+  147 module tests and 33 API tests green; `pnpm lint`, `pnpm typecheck`, boundary check clean; main merged.
 - **In progress:** nothing.
-- **Next steps (orchestrator):** bind inventory/rates/guests/finance/payments/operations/access providers in the
-  composition root; re-run `test/scenario-s01-last-unit.test.ts` against the real inventory (see "Integration
-  notes"); register `reservationsDemoSeed(service)` in `DEMO_SEED_STEPS`; `docs/parity/reservations.md` does not
-  exist yet (parity researcher), so `node tools/parity-report.mjs --gate reservations` cannot pass from here.
+- **Next steps (integration step):** see "Known gaps → Next (integration)" below — chiefly binding the real rates
+  module (canonical sealed `TermsSnapshot` view adapter), payments, finance, guests and operations ports.
 - **Known failing tests:** none.
 
 Bookings, stays and the front desk: where what a booker asked for (booking) meets where a guest sleeps (stay).
@@ -20,9 +22,11 @@ Reservations orchestrates inventory, rates, guests, finance, payments, operation
 
 ## What is built (status per spec capability)
 
-Readiness: everything listed as built is **R3 — implemented and tested internally** (with high-fidelity fakes of
-the not-yet-merged provider modules; see "Ports"). Nothing here is R4+; the access/keys path has only the
-environment-safe fallback adapter (no lock vendor), i.e. R1 for real door locks.
+Readiness: everything listed as built is **R3 against fakes; provider integration unverified** (review R-28) —
+except the inventory path, which is also proven against the REAL inventory module (S01, S03). Rates, finance,
+payments, guests and operations are bound to fakes whose semantics follow each module's published contract; the
+known differences are listed under "Known gaps → Next (integration)". Nothing here is R4+; the access/keys path has
+only the environment-safe fallback adapter (no lock vendor), i.e. R1 for real door locks.
 
 | Spec | Capability | Status |
 |---|---|---|
@@ -82,38 +86,35 @@ Also: universal record contract (status families, server-computed `allowedAction
 
 | File | Demonstrates |
 |---|---|
-| `test/scenario-s01-last-unit.test.ts` | Both agents preview the last villa as available; exactly one commit wins; the other gets 409 `preview_stale` with a fresh preview, "sold N seconds ago by <name>, booking <code>", and previewed alternatives it can commit at once; 10-agent race on 3 units → exactly 3 |
+| `test/scenario-s01-last-unit.test.ts` (fake AND real inventory) | Both agents preview the last villa as available; exactly one commit wins; the other gets 409 `preview_stale` with a fresh preview, "sold N seconds ago by <name>, booking <code>", and previewed alternatives it can commit at once; 10-agent race on 3 units → exactly 3 |
 | `test/scenario-s02-channel-ingestion.test.ts` | Duplicate (incl. concurrent) deliveries → `duplicate`; full-replacement modification with field-loss review; late older revision → `stale` with note; cancellation charges 100% of AGREED price (rates changed meanwhile) once; sold-out channel booking committed with inventory conflict + relocation case + `relocationRequired` event; channel price is the agreed price + discrepancy issue |
-| `test/scenario-s03-extension-conflict.test.ts` | Extension into nights where the assigned villa is taken: preview shows the conflict and five fully previewed alternatives; option (a) commits atomically (segments, consumption, assignments, keys extended); complimentary upgrade; waitlisted extension |
+| `test/scenario-s03-extension-conflict.test.ts` (fake AND real inventory) | Extension into nights where the assigned villa is taken: preview shows the conflict and five fully previewed alternatives; option (a) commits atomically (segments, consumption, assignments, keys extended); complimentary upgrade; waitlisted extension |
 | `test/scenario-s04-family-company.test.ts` | One booking, three stays, child ages drive price and Green Tax (infant exempt by rule data); billing instructions to finance: incidentals folio (default, occupant) + accommodation folio (company) + routing rule; add a stay with one preview |
 | `test/scenario-s14-concurrent-edits.test.ts` | Second writer gets 409 with field diff and who changed it; re-apply keeps both edits; stale preview after a concurrent edit; concurrent commits on one booking serialize |
-| `test/check-in-resume.test.ts` | Payment timeout interrupts check-in → run shows succeeded/remaining; resume never authorizes twice; arrivals board shows "pending verification" as the blocker; lock outage needs a recorded manual fallback; failed-inspection unit; skip needs permission; check-out with balance, early departure, keys cancelled |
+| `test/check-in-resume.test.ts` | Interrupted check-in → run shows succeeded/remaining; payments answers after commit (two-phase): pending verification stays pending, resume never authorizes twice; a non-retryable decline is not re-sent, another card gets a new key; arrivals board shows "pending verification" as the blocker; lock outage needs a recorded manual fallback; failed-inspection unit; skip needs permission; check-out with balance, early departure, keys cancelled |
 | `test/change-preview.test.ts` | Stale on price change (agreed nights kept), expiry, replay refusal, split stay supersedes terms, cancellation tier in Malé time, no-show idempotency, room move emits event and re-encodes keys, key outage raises a manual-action issue |
 | `test/front-desk-handover.test.ts` | Readiness with one blocker per arrival; departures with balances; Day Close feed from agreed terms; handover publish/acknowledge/persist; S08 relocation on unit block (idempotent consumer); waitlist availability consumer; global search |
+| `test/plan-sales.test.ts` | Rate-plan sales limit: a full offer is refused atomically; shortening and cancellation give nights back |
 | `test/isolation-permissions.test.ts`, `test/data-authority.test.ts`, `test/http.test.ts`, `test/bookings.test.ts` | S17 isolation (incl. raw SQL under RLS), deny-by-default, property scope, disabled actions with reasons; read_only / forward authority; HTTP ETag/If-Match/Idempotency-Key/problem+json; lifecycle |
 
 ### Integration notes (for the orchestrator)
 
-- **S01 with the real inventory:** the fake inventory (`test/fakes/inventory.ts`) is Postgres-backed in a
-  test-only schema and implements the specified concurrency pattern (FOR UPDATE in `(unit type, night)` order,
-  guarded counters, exclusion constraint on assignments). That is not proof for the real module: re-run
-  `scenario-s01-last-unit.test.ts` with `InventoryPort` bound to `@portico/inventory` (replace
-  `fakes.inventory` in `test/helpers.ts`; keep the assertions). Also run the 10-agent race.
+- **Inventory is proven with the real module:** `startDb({ realInventory: true })` + `setupOrg(t, { inventory:
+  'real' })` bind `InventoryPort` to `@portico/inventory` through `inventoryPortFrom` (`src/adapters/inventory.ts`).
+  S01 (incl. the 10-agent race) and S03 run against both the fake and the real module.
 - Reservations recognises inventory errors by **code**: `inventory_unavailable` with `details.shortNights`, and
-  `unit_assignment_conflict` with `details.conflicts`; `convertHold` on an expired hold should throw a
-  `BusinessRuleError`. If the inventory module uses other codes, adjust `inventoryShortfall` /
-  `assignmentConflicts` in `src/ports.ts`.
+  `unit_assignment_conflict` (instance `.conflicts` or `details.conflicts[].ref`).
 
 ## Ports (src/ports.ts) and binding status
 
 | Port | Functions used | Binding in composition |
 |---|---|---|
 | `PlatformPort` | getProperty (read with system authorizer: time zone/currency for computation), getBusinessDate, assertWritable, getDataAuthority, resolvePolicy | **Real platform** |
-| `InventoryPort` | consume (+`onShortfall`), release, changeConsumption, createHold, convertHold, assignUnit, unassignUnit, findAssignableUnits, getAvailability, explainAvailability, getUnit, listUnits, listUnitTypes | `unavailablePort('inventory')` → 503 `module_not_available` |
-| `RatesPort` | quote, priceChange | stub |
+| `InventoryPort` | consume (+`onShortfall`), release, changeConsumption, createHold, convertHold, assignUnit, unassignUnit, findAssignableUnits (+`ref`), getAvailability, explainAvailability (`sold[]`), getUnit, listUnits, listUnitTypes | **Real inventory** via `inventoryPortFrom(inventoryService, { scope: asSystem })` (structural adapter: unit `name ?? number`, candidate `exclusions` → `reason`/`conflictingRefs`, `score` → `fitScore`, `(tx, propertyId)` list signatures). ADR-0015: reservations authorizes the intent; inventory runs with system scope and still enforces integrity and data authority |
+| `RatesPort` | quote, priceChange, termsFromChannelPrices, evaluateCancellationPenalty, complimentaryTerms, recordPlanSale, releasePlanSale | stub (rates is on main; binding needs the canonical-terms adapter — see Known gaps) |
 | `GuestsPort` | resolveProfile (guests' `ProfileInput`: propertyId, givenName/familyName, contactPoints with `source: 'channel'` for OTA data), recordStayHistory (bookingId, role), recordReferenceRepoints | stub |
 | `FinancePort` | openFolio, postCharge, recordDeposit, applyDeposits, getFolioBalance, listFolios, setBillingRules, getDepositBalance | stub |
-| `PaymentsPort` | getPaymentStatus, createPaymentRequest, authorize | stub |
+| `PaymentsPort` | getPaymentStatus (payments' summary + authorizations), createPaymentRequest, authorize (`propertyId`; returns the Authorization view, `processing` until the provider answers after commit) — shapes are payments' own | stub |
 | `OperationsPort` | getUnitCondition, createTask | stub |
 | `AccessPort` (keys) | issueKeys({stayId, unitId, validFrom, validTo, count, kind: card/wristband/mobile, idempotencyKey}) → {status: issued/pending/unavailable/simulated, keyRefs}; extendKeys (extension/shortening), moveKeys (room move), cancelKeys (check-out / no-show / cancellation) | `environmentAccessAdapter()`: `simulated` in non-live environments (calls `assertExternalEffectAllowed(ctx,'access.key')`), `unavailable` in live until the `access` module is bound |
 
@@ -123,7 +124,11 @@ moves, extensions and check-out call move/extend/cancel and return/show the resu
 outside the workflow raises an urgent `keys_manual_action` issue (shown in handover and on the stay).
 
 Tests bind every port to fakes in `test/fakes/` (inventory and finance Postgres-backed for transactional and
-concurrency fidelity; rates/guests/payments/operations/access in memory with scripted outcomes).
+concurrency fidelity; rates' plan sales Postgres-backed; guests/payments/operations/access in memory with scripted
+outcomes). Fakes are strict: finance refuses unknown charge codes, future service dates and late postings without a
+reason; payments is two-phase (provider answer after commit), journals by key, refuses a reused key with a
+different request and a second in-flight authorization per reference, needs registered methods; rates' penalty and
+complimentary rules live only in the fake (`test/fakes/rates-terms.ts`, with fidelity tests).
 
 ## Provider API (domain map "reservations (provider)")
 
@@ -140,27 +145,35 @@ concurrency fidelity; rates/guests/payments/operations/access in memory with scr
 4. `listExceptions` is provided as `listIssues` (own shape) — the common exception shape is not yet defined.
 5. Inventory: `consume(..., onShortfall?)` returns `{ conflictIds? }` (inventory spec proposal 1);
    `changeConsumption` shape is `{ ref, from: { unitTypeId, nights }, to: { unitTypeId, nights } }`;
-   `UnitTypeSummary` needs `rank` and `maxOccupancy`; `UnitCandidate` carries `assignable`, `reason`,
-   `conflictingRefs`; `explainAvailability` returns `consumers: [{ ref, quantity, consumedAt }]` (used to say
-   who sold the last unit); `listUnits` is used by search.
+   inventory's real shapes are mapped by `inventoryPortFrom` (R-13). "Who sold the last unit" reads
+   `explainAvailability.sold[]` stay refs and reservations' OWN `booking_versions` (actor, time, code) — no
+   `consumedAt` is needed from inventory.
 6. Rates: reservations reads only these `TermsSnapshot` fields: per-night `net` + `taxes` (kind tax/fee), `totals`,
    `inclusions`, `policies.cancellation` (`tiers[{deadline:{daysBeforeArrival,time}, penalty}]`, `nonRefundable`,
    `noShow`, `earlyDeparture`), `policies.guarantee.required`, `policies.deposit.items`, `currency`, `priceSource`.
    `priceChange(terms, change)` takes the TARGET state of one segment and returns a candidate snapshot covering
-   exactly `change.nights`. **Penalties are computed by reservations from the agreed snapshot** (single place);
-   `RepricingResult.penalties` is ignored to avoid double charging.
+   exactly `change.nights`. **Penalties come from rates** (`evaluateCancellationPenalty(terms, at, { event, nights })`,
+   one call per agreement, summed; a no-show is governed by the arrival night's agreement) and **complimentary /
+   house-use terms from `rates.complimentaryTerms`** — reservations neither computes penalties nor rewrites terms
+   (R-02/R-03). Channel prices: `termsFromChannelPrices` (rates computes every tax; rates does not provide it yet).
+   Sales limits: `recordPlanSale`/`releasePlanSale` in the same transaction (`service/plan-sales.ts`; channel
+   ingestion records an urgent `sales_limit_exceeded` issue instead of refusing).
 7. Finance: `setBillingRules` (finance proposal 3), new `getDepositBalance(bookingId)`; `applyDeposits` returns
    `{ applied }`; `listFolios` returns balance + `isDefault`; assumption: the first folio opened for an owner is
    its default folio.
-8. Payments: `authorize` (domain map) used for the check-in guarantee step with key
-   `checkin:{runId}:guarantee:{declinedAttempts}`.
+8. Payments (R-11): two-phase. The guarantee step ALWAYS reads `getPaymentStatus` first; `processing` /
+   `pending_verification` keep the step pending (performWorkflow polls once after commit; never re-authorizes);
+   the attempt key is `checkin:{runId}:guarantee:{n}` with `n` = declined authorizations counted from payments'
+   own records; a non-retryable decline is not re-sent with the same card. Payments' provider functions still
+   re-check `payments.payment.collect` on the caller (ADR-0015 pending in payments).
 9. AccessPort (new, per orchestrator) as above.
 10. GuestsPort follows the guests provider (its README "Contract changes"): `ProfileInput` with `propertyId`;
     `recordStayHistory` with `bookingId`/`role`; `recordReferenceRepoints`. Reservations' own HTTP contract keeps
     simple booking-form fields (firstName/lastName/email/phone…) and maps them in `src/service/guests.ts`.
 11. Booking and stay events: payload version 2 with `stays[]` (see Events).
-12. `TaxLine.basis` (`percentage | banded | per_person_night | per_unit_night | per_stay | fixed_per_charge`, rates
-    RAT-R22 kinds) is read to decide which lines survive on complimentary terms — rates should always send it.
+12. Finance (R-10): charge codes come from policy `reservations.chargeCodes` (default `CXL` for cancellation,
+    no-show, early departure; `MISC` for early check-in / late check-out); `postCharge` carries `reason` for late
+    service dates; time-request fees are posted when the service happens (check-in / check-out confirm).
 
 ## Events
 
@@ -222,6 +235,21 @@ booker-role stay history (only occupants are recorded);
 connected (mirror) mode; quote re-validation when confirming an old quote without a hold; relocation completion
 does not itself execute the move; segment-level keys for a future-dated move (keys re-encoded only when the move
 starts from the current night); the waitlist consumer raises an issue rather than an operations task.
+
+### Next (integration) — known incompatibilities with providers now on main
+
+1. **Rates canonical terms (R-02 rest):** bind the real rates module through a `ratesPortFrom` adapter that maps
+   rates' sealed `TermsSnapshot` v1 / `Offer` / `RepricingResult` to the view reservations reads (`ratePlan.id`,
+   tax line `category`→`kind`, `structure.tiers`/resolved `tiers[].fromInstant`, `guarantee.structure.accepted`,
+   commission `model`), persists rates' document **verbatim** (never re-hashed) and passes it back unmodified to
+   `priceChange` / `evaluateCancellationPenalty` / `complimentaryTerms`. `priceChange` input: `typeChange`,
+   `asOf` (business date or instant), `ratePlanId` are supported as named by rates; output `nightly`/`terms`.
+2. **Channel-price terms:** rates does not construct `priceSource: 'channel'` terms yet (rates README gap); channel
+   ingestion needs it (R-01 contract `termsFromChannelPrices`).
+3. **Deposits (R-03 rest):** use `rates.instantiatePaymentSchedule(terms)` instead of reservations' `requiredDeposit`.
+4. Bind payments, finance, guests and operations ports in the composition root (shapes already follow each
+   provider's README); payments/inventory permission re-checks per ADR-0015.
+5. Persist inventory's `assignedUnitId` for composite types (R-25) and consume `inventory.assignment.changed`.
 
 ## Owner questions
 
