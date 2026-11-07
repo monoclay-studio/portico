@@ -58,7 +58,7 @@ export function splitComponents(
     other[j] = (other[j] ?? 0) + 1;
     other[0] = (other[0] ?? 0) - 1;
   }
-  return rows.map((r) => r.map((v) => v * sign));
+  return rows.map((r) => r.map((v) => v * sign + 0)); // `+ 0` normalizes -0
 }
 
 /**
@@ -76,5 +76,5 @@ export function proportional(total: number, weights: readonly number[]): number[
   const abs = weights.map((w) => Math.abs(w));
   if (abs.every((w) => w === 0)) return weights.map((_, i) => (i === 0 ? total : 0));
   const sign = total < 0 ? -1 : 1;
-  return allocate(money(Math.abs(total), 'XXX'), abs).map((p) => p.amountMinor * sign);
+  return allocate(money(Math.abs(total), 'XXX'), abs).map((p) => p.amountMinor * sign + 0);
 }

@@ -102,6 +102,9 @@ export class FakeTax {
 
 export async function startHarness(): Promise<Harness> {
   const t = await createTestDatabase(sourcesFromManifests([platformManifest, financeManifest]));
+  // Teardown race in the shared harness: pool.end() resolves before clients finish closing, then the forced
+  // DROP DATABASE terminates them and the orphaned client emits an unhandled 'error' (FOUNDATION_REQUESTS.md).
+  for (const pool of [t.db.pool, t.admin.pool]) pool.on('connect', (client) => client.on('error', () => {}));
   const collections: CollectionRequest[] = [];
   const tax = new FakeTax();
   const asSystem = (tx: TxContext): TxContext => ({ ...tx, authz: systemAuthorizer });

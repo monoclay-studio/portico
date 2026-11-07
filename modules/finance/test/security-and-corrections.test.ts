@@ -14,6 +14,7 @@ import {
 } from './helpers';
 
 let h: Harness;
+const summarize = financeSearch.summarize as NonNullable<typeof financeSearch.summarize>;
 beforeAll(async () => {
   h = await startHarness();
 });
@@ -54,7 +55,7 @@ describe('tenant isolation (S17) and permissions', () => {
     ).rejects.toThrow(/not found/);
     const hits = await attacker.run((tx) => financeSearch.search(tx, 'Private Guest', { limit: 10 }));
     expect(hits).toEqual([]);
-    expect(await attacker.run((tx) => financeSearch.summarize?.(tx, 'folio', s.guestFolioId))).toBeNull();
+    expect(await attacker.run((tx) => summarize(tx, 'folio', s.guestFolioId))).toBeNull();
     // The victim still sees it, via search too.
     const own = await victim.run((tx) => financeSearch.search(tx, 'Private Guest', { limit: 10 }));
     expect(own.map((x) => x.id)).toContain(s.guestFolioId);
@@ -286,7 +287,7 @@ describe('transfers and corrections', () => {
     );
     const hits = await org.run((tx) => financeSearch.search(tx, inv.documentNumber, { limit: 5 }));
     expect(hits[0]).toMatchObject({ type: 'fiscal_document', id: inv.id, title: inv.documentNumber });
-    const summary = await org.run((tx) => financeSearch.summarize?.(tx, 'folio', s.guestFolioId));
+    const summary = await org.run((tx) => summarize(tx, 'folio', s.guestFolioId));
     expect(summary).toMatchObject({ title: 'Searchable Person', status: { folio: 'open' } });
     const noPerm = { ...org.ctx, authz: testContext({ grants: [] }).authz };
     expect(await org.run((tx) => financeSearch.search(tx, 'Searchable', { limit: 5 }), noPerm)).toEqual([]);
