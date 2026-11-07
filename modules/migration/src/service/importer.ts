@@ -6,7 +6,14 @@
  * except opening balances, which are posted once and never re-posted (corrections go through finance).
  */
 import { type PorticoDatabase, type TxContext, withSavepoint, withTenantTx } from '@portico/db';
-import { canonicalJson, DomainError, newId, type RequestContext, sha256Hex } from '@portico/kernel';
+import {
+  canonicalJson,
+  DomainError,
+  ModuleUnavailableError,
+  newId,
+  type RequestContext,
+  sha256Hex,
+} from '@portico/kernel';
 import {
   type ArOpenItemRecord,
   CONSUMING_STATUSES,
@@ -70,10 +77,7 @@ const emptySummary = (): ImportSummary => ({
 });
 
 function isUnavailable(err: unknown): boolean {
-  return (
-    err instanceof ProviderUnavailableError ||
-    (err instanceof DomainError && (err.code === 'module_not_available' || err.code === 'module_unavailable'))
-  );
+  return err instanceof ProviderUnavailableError || err instanceof ModuleUnavailableError;
 }
 
 interface LockedLedger {

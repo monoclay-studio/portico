@@ -4,7 +4,7 @@
  * owner. Differences are never "corrected" here.
  */
 import type { TxContext } from '@portico/db';
-import { addDays, DomainError, newId, requirePermission } from '@portico/kernel';
+import { addDays, ModuleUnavailableError, newId, requirePermission } from '@portico/kernel';
 import { type PorticoReadBack, type ReconciliationResult, reconcile } from '../domain/reconcile';
 import { type DataClass, FINANCIAL_CLASSES } from '../domain/records';
 import { ProviderUnavailableError } from '../ports';
@@ -15,10 +15,7 @@ import { closeCorrected, ledgerNamespace, loadLedger, loadSourceRecords, raiseEx
 export type ReportContext = 'rehearsal' | 'certification' | 'verify' | 'sweep';
 
 function unavailableErr(err: unknown): boolean {
-  return (
-    err instanceof ProviderUnavailableError ||
-    (err instanceof DomainError && (err.code === 'module_not_available' || err.code === 'module_unavailable'))
-  );
+  return err instanceof ProviderUnavailableError || err instanceof ModuleUnavailableError;
 }
 
 /** The classes a job reconciles: its scope, plus unit types whenever reservations are migrated. */
