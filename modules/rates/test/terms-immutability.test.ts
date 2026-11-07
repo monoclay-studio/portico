@@ -280,5 +280,18 @@ describe('agreed terms survive every later configuration change (E08)', () => {
     const preview = await o.run((tx, r) => r.priceChange(tx, { terms: reloaded, change: {} }));
     expect(preview.nightly.every((n) => n.source === 'agreed' && n.difference.amountMinor === 0)).toBe(true);
     expect(preview.after.net.amountMinor).toBe(reloaded.totals.net.amountMinor);
+
+    // ── Pausing the plan the stay was booked on changes nothing agreed (PAR-RAT-022) ──
+    await o.run(async (tx, r) => {
+      const ai = await r.getRatePlan(tx, seeded.ratePlans.AI as string);
+      await r.changeRatePlanStatus(tx, ai.id, ai.version, { status: 'paused', reason: 'test: pause' });
+    });
+    expect(o.rates.verifyTerms(JSON.parse(persisted))).toBe(true);
+    const shortened = await o.run((tx, r) =>
+      r.priceChange(tx, { terms: reloaded, change: { nights: { from: '2027-02-10', to: '2027-02-13' } } }),
+    );
+    const kept = shortened.nightly.filter((n) => n.source === 'agreed');
+    expect(kept).toHaveLength(3);
+    expect(kept.every((n) => n.difference.amountMinor === 0)).toBe(true);
   });
 });
