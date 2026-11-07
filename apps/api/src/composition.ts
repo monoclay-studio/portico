@@ -245,7 +245,9 @@ export function compose(database: PorticoDatabase): Composition {
       async describePayer(tx, input) {
         try {
           if (input.type === 'guest') {
-            const p = await guestsService.getProfile(asSystem(tx), input.id, { propertyId: input.propertyId });
+            const p = await guestsService.getProfile(asSystem(tx), input.id, {
+              propertyId: input.propertyId,
+            });
             return { name: p.displayName };
           }
           const c = await guestsService.getCompany(asSystem(tx), input.id);

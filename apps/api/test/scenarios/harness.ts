@@ -313,7 +313,7 @@ export function applied<T extends object>(v: T | { forwarded: true }): T {
  * data authority in scenarios (identity-plus will require an authority transition with a second approver).
  */
 export async function makeExternal(
-  s: Scenario,
+  _s: Scenario,
   org: ScenarioOrg,
   propertyId: string,
   domain:
