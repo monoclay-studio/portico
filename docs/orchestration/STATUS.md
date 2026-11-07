@@ -82,7 +82,7 @@ direction, experience architecture, parity framework, this orchestration folder.
 | `feat/reservations-core` | wt/reservations | bookings/stays/front desk | steward review: P0 (1-cent channel diff drops taxes) → **fix round running** | merge after rates/finance/payments |
 | `feat/finance-core` | wt/finance | ledger, folios, billing rules, AR, invoices, cashier | steward review: 2 P0 (concurrent corrections, credit notes); ADR-0016 → **fix round running** | merge after rates |
 | `feat/payments-core` | wt/payments | payments (simulator, Stripe Connect, Route D) | steward review: 3 P0 → **fix round running** | merge after finance |
-| `feat/operations-core` | wt/operations | housekeeping, maintenance, tasks, offline sync | steward review: 2 P0 → **fix round running** | merge after rates |
+| `feat/operations-core` | wt/operations | housekeeping, maintenance, tasks, offline sync | **MERGED** to main (9296305) — both P0 + most P1 fixed; P1-5/6/8 deferred with reasons (README) | — |
 | `feat/integration-core` | wt/integration | connector framework, setup, health, webhooks | steward review: P0 SSRF → **fix round running** | merge after rates |
 | `feat/backoffice-core` | wt/backoffice | packages/ui + apps/backoffice | **steward review running** | fix round → merge |
 | `feat/identity-platform-enterprise` | wt/identity-plus | MFA, SSO, SCIM, custom roles, break-glass, trials, activation | steward review: **do not merge** (2 P0 cross-org takeover, 8 P1) → ADR-0017 → **fix round running** (sent 11:55Z) | second steward review → merge |
