@@ -23,3 +23,5 @@
 - decision needed at integration step: composite units (inventory) in operations' unit mirror — excluded for now (operations review P1-8)
 - infra: set `PORTICO_TERMS_SEAL_KEY` (secret, Secrets Manager) for the API — rates seals booking terms with it; required in production
 - reservations + finance (rates merged 4aec0d5): adopt the breaking renames in docs/architecture/domain-map.md § rates (TaxLine.basis, fullPaymentDate + taxPointSplits, nightly/terms, seal, taxCategory/taxInclusion)
+- finance (payments merged 872e45b): implement payments' `LedgerPort` (describeTarget, scoped postings with clearing account per provider, markPaymentVerified, recordSettlementFees) and bind `financeLedgerForPayments` in composition — until then folio collections answer 503
+- foundation/infra: `portico_worker` DB role for apps/worker and the public webhook route; grant SECURITY DEFINER routing functions (`payments.route_webhook`, `payments.tenants_for_jobs`, other modules' job routing) to it only (payments review P3-5)
