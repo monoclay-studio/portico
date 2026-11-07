@@ -14,7 +14,15 @@ import {
   shouldReopenDismissed,
 } from '../domain/duplicates';
 import type { GuestsPorts } from '../ports';
-import { actorKey, db, iso, requireVisibleProfile, resolveAccess, visibilitySql } from './internal';
+import {
+  actorKey,
+  db,
+  iso,
+  requireVisibleProfile,
+  resolveAccess,
+  scrubReason,
+  visibilitySql,
+} from './internal';
 
 export type DuplicateCandidate = z.infer<typeof duplicateCandidateView>;
 
@@ -283,13 +291,14 @@ export async function dismissDuplicate(
       { status: existing.status },
     );
   }
+  const why = await scrubReason(tx, reason, [existing.profile_a_id, existing.profile_b_id]);
   const row = await db(tx)
     .updateTable('guests.duplicate_candidates')
     .set({
       status: 'dismissed',
       resolved_at: tx.now,
       resolved_by: actorKey(tx),
-      resolution_reason: reason,
+      resolution_reason: why,
       version: sql`version + 1`,
     })
     .where('id', '=', candidateId)
@@ -298,7 +307,7 @@ export async function dismissDuplicate(
   await tx.audit({
     action: 'guests.duplicate.dismiss',
     target: { type: 'duplicate_candidate', id: candidateId },
-    reason,
+    reason: why,
     metadata: { profileIds: [existing.profile_a_id, existing.profile_b_id], score: Number(existing.score) },
   });
   return toCandidate(row);

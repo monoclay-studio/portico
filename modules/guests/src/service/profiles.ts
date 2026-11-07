@@ -41,6 +41,7 @@ import {
   requireVisibleProfile,
   requireWritableProfile,
   resolveAccess,
+  scrubReason,
   visibilityOf,
 } from './internal';
 import { buildProfileView } from './view';
@@ -533,13 +534,14 @@ export async function removeContactPoint(
   const cp = await loadChild(tx, 'guests.contact_points', contactPointId);
   const vp = await requireWritableProfile(tx, ports, cp.profile_id, 'guests.profile.update', opts.propertyId);
   await assertIdentityWritable(tx, ports, vp.row);
+  const why = await scrubReason(tx, opts.reason ?? null, [vp.row.id]);
   await db(tx).deleteFrom('guests.contact_points').where('id', '=', contactPointId).execute();
   await bumpVersion(tx, vp.row.id);
   await tx.audit({
     action: 'guests.contactPoint.remove',
     target: { type: 'guest_profile', id: vp.row.id },
     propertyId: vp.actingPropertyId,
-    reason: opts.reason ?? null,
+    reason: why,
     metadata: { contactPointId },
   });
   return getProfile(tx, ports, vp.row.id);
@@ -765,6 +767,7 @@ export async function resolveAlert(
     'guests.alert.manage',
     alert.property_id ?? opts.propertyId,
   );
+  const why = await scrubReason(tx, opts.reason ?? null, [vp.row.id]);
   const row = await db(tx)
     .updateTable('guests.alerts')
     .set({ status: 'resolved', version: sql`version + 1` })
@@ -786,7 +789,7 @@ export async function resolveAlert(
     action: 'guests.alert.resolve',
     target: { type: 'guest_profile', id: vp.row.id },
     propertyId: vp.actingPropertyId,
-    reason: opts.reason ?? null,
+    reason: why,
     metadata: { alertId },
   });
   return getProfile(tx, ports, vp.row.id);
@@ -981,12 +984,13 @@ export async function readSpecialNeed(
     throw new NotFoundError('special_need', specialNeedId);
   });
   requirePermission(tx, 'guests.sensitive.read', { propertyId: row.property_id });
+  const why = await scrubReason(tx, reason, [row.profile_id]);
   const detail = ports.crypto.cipher.decrypt(row.enc_detail, `guests.special_need:${tx.tenantId}:${row.id}`);
   await tx.audit({
     action: 'guests.sensitive.read',
     target: { type: 'special_need', id: row.id },
     propertyId: row.property_id,
-    reason,
+    reason: why,
     metadata: { profileId: row.profile_id, category: row.category },
   });
   return { id: row.id, category: row.category, detail };
@@ -1001,6 +1005,7 @@ export async function setLegalHold(
   input: { hold: boolean; reason: string },
 ): Promise<GuestProfile> {
   const vp = await requireWritableProfile(tx, ports, profileId, 'guests.privacy.erase');
+  const why = await scrubReason(tx, input.reason, [vp.row.id]);
   await db(tx)
     .updateTable('guests.profiles')
     .set({ legal_hold: input.hold, version: sql`version + 1` })
@@ -1009,7 +1014,7 @@ export async function setLegalHold(
   await tx.audit({
     action: input.hold ? 'guests.legalHold.set' : 'guests.legalHold.release',
     target: { type: 'guest_profile', id: vp.row.id },
-    reason: input.reason,
+    reason: why,
     before: { legalHold: vp.row.legal_hold },
     after: { legalHold: input.hold },
   });

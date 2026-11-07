@@ -3,9 +3,10 @@
  * operations; withdrawal never deletes legally retained financial references; export is complete and audited;
  * erasure anonymizes personal data, keeps pseudonymous financial references and is blocked by legal hold.
  */
-import { sql } from '@portico/db';
+import { runIdempotent, sql } from '@portico/db';
 import type { TestDatabase } from '@portico/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { guestsReplayPlans } from '../src/replay';
 import { auditRows, makeService, outboxRows, setupOrg, startDb, type TestOrg } from './helpers';
 
 let t: TestDatabase;
@@ -64,6 +65,21 @@ async function returningGuest(org: TestOrg) {
   });
   return { profileId, stayId, bookingId, A };
 }
+
+describe('staff-typed reasons (append-only audit log)', () => {
+  it('a reason never carries the subject’s own name, contact or date of birth into the audit log', async () => {
+    const org = await setupOrg(t);
+    const { profileId } = await returningGuest(org);
+    await org.sys((tx) =>
+      org.svc.setLegalHold(tx, profileId, {
+        hold: true,
+        reason: 'Priya SHARMA (priya.sharma@guest.example, born 1989-01-26) disputes a charge',
+      }),
+    );
+    const audit = await auditRows(t, org.tenantId, { action: 'guests.legalHold.set' });
+    expect(audit[0]?.reason).toBe('[guest] [guest] ([guest], born [guest]) disputes a charge');
+  });
+});
 
 describe('consent', () => {
   it('a grant needs evidence; marketing requires an explicit grant; operations never depend on consent', async () => {
@@ -310,6 +326,8 @@ const GUESTS_TABLES = [
   'stay_history',
 ];
 
+const CORE_TENANT_TABLES = ['audit_log', 'event_deliveries', 'idempotency_keys', 'outbox'];
+
 /** JSON of every row of every guests table (plus the tenant's outbox and audit log) for one organization. */
 async function tenantDump(tenantId: string): Promise<string> {
   const { rows } = await sql<{ table_name: string }>`
@@ -317,7 +335,16 @@ async function tenantDump(tenantId: string): Promise<string> {
     where table_schema = 'guests' and table_type = 'BASE TABLE' order by table_name`.execute(t.admin.kysely);
   expect(rows.map((r) => r.table_name)).toEqual(GUESTS_TABLES);
   const parts: string[] = [];
-  for (const table of [...GUESTS_TABLES.map((x) => `guests.${x}`), 'core.outbox', 'core.audit_log']) {
+  // Every tenant-scoped store in schema `core` too (outbox, deliveries, audit, idempotency responses): a new one
+  // must be added here to pass.
+  const core = await sql<{ table_name: string }>`
+    select table_name from information_schema.columns
+    where table_schema = 'core' and column_name = 'tenant_id' order by table_name`.execute(t.admin.kysely);
+  expect(core.rows.map((r) => r.table_name)).toEqual(CORE_TENANT_TABLES);
+  for (const table of [
+    ...GUESTS_TABLES.map((x) => `guests.${x}`),
+    ...CORE_TENANT_TABLES.map((x) => `core.${x}`),
+  ]) {
     const data = await t.admin.kysely
       .selectFrom(table)
       .selectAll()
@@ -329,6 +356,56 @@ async function tenantDump(tenantId: string): Promise<string> {
 }
 
 describe('data-subject erasure with retention', () => {
+  it('an erasure racing a replay: the replay waits, then answers 410 — never the erased data', async () => {
+    const org = await setupOrg(t);
+    const [A] = org.properties as [string];
+    const plans = guestsReplayPlans(org.svc);
+    const key = crypto.randomUUID();
+    const replay = () =>
+      runIdempotent(
+        t.db,
+        org.admin,
+        { scope: 'POST /guests/profiles', key, request: { n: 1 } },
+        async (tx) => ({
+          status: 201,
+          body: await org.svc.createProfile(tx, {
+            propertyId: A,
+            givenName: 'Quilla',
+            familyName: 'Racecondition',
+            dateOfBirth: '1981-02-03',
+            matchStrategy: 'create_new',
+          }),
+        }),
+        { replay: plans.createProfile(A) },
+      );
+    const created = await replay();
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    let erased: () => void = () => {};
+    const didErase = new Promise<void>((r) => {
+      erased = r;
+    });
+    const erasure = org.sys(async (tx) => {
+      await org.svc.eraseProfile(tx, { kind: 'erasure', profileId: created.body.profile.id, reason: 'race' });
+      erased();
+      await gate;
+    });
+    await didErase;
+    let settled = false;
+    const racing = replay().finally(() => {
+      settled = true;
+    });
+    await new Promise((r) => setTimeout(r, 300));
+    expect(settled).toBe(false);
+    release();
+    await erasure;
+    const err = await racing.catch((e: unknown) => e);
+    expect(err).toMatchObject({ status: 410 });
+    expect(JSON.stringify(err)).not.toMatch(/Racecondition|1981-02-03/);
+  });
+
   it('GUE-I06: no personal data remains in ANY guests table after erasing a merged, duplicated, consented guest', async () => {
     const org = await setupOrg(t);
     const [A, B] = org.properties as [string, string];
@@ -419,6 +496,41 @@ describe('data-subject erasure with retention', () => {
       });
     });
     await org.sys((tx) => svc.exportProfile(tx, { kind: 'export', profileId: p, reason: 'Access request' }));
+    // Stored idempotent responses: guests' own create (replay plan: ids only) and another module's response that
+    // embeds the guest (e.g. a booking with its booker) — the store erasure must also reach (SW-GUE-1).
+    const plans = guestsReplayPlans(svc);
+    const createKey = crypto.randomUUID();
+    const replayCreate = () =>
+      runIdempotent(
+        t.db,
+        org.admin,
+        { scope: `POST /guests/profiles/${p}/preferences`, key: createKey, request: { n: 'pillow' } },
+        async (tx) => ({
+          status: 201,
+          body: await svc.addPreference(tx, p, { category: 'pillow', value: 'Buckwheat' }),
+        }),
+        { replay: plans.profile },
+      );
+    const first = await replayCreate();
+    expect(first.body.givenName).toBe('Zanele'); // the response names the guest; the store must not
+    const stored = await t.admin.kysely
+      .selectFrom('core.idempotency_keys')
+      .select(sql<string>`response_body::text`.as('body'))
+      .where('key', '=', createKey)
+      .executeTakeFirstOrThrow();
+    expect(stored.body).not.toMatch(/Zanele|Mokoena|1977/);
+    const bookingKey = crypto.randomUUID();
+    const foreignResponse = () =>
+      runIdempotent(
+        t.db,
+        org.admin,
+        { scope: 'POST /reservations/bookings', key: bookingKey, request: {} },
+        async () => ({
+          status: 201,
+          body: { bookingId: crypto.randomUUID(), booker: { profileId: dup, name: 'Zanelle Mokoena' } },
+        }),
+      );
+    await foreignResponse();
     await org.sys((tx) => svc.mergeProfiles(tx, { survivorId: p, mergedId: dup, reason: 'Same guest' }));
     // A mirrored profile of the same person from the external PMS (connected mode) is erased separately.
     const mirror = await org.sys((tx) =>
@@ -458,6 +570,9 @@ describe('data-subject erasure with retention', () => {
     );
     const after = await tenantDump(org.tenantId);
     expect(pii.filter((x) => after.includes(x))).toEqual([]);
+    // Replaying the stored requests now answers 410 instead of returning the erased person's data.
+    await expect(replayCreate()).rejects.toMatchObject({ code: 'idempotent_response_erased', status: 410 });
+    await expect(foreignResponse()).rejects.toMatchObject({ code: 'idempotent_response_erased' });
     // The other person (unmerged) keeps their data; the financial reference survives pseudonymously.
     expect(after).toContain('Thabo');
     const history = await org.sys((tx) => svc.getStayHistory(tx, p));
@@ -523,12 +638,20 @@ describe('data-subject erasure with retention', () => {
   it('a legal hold puts the request on hold (recorded) and changes nothing', async () => {
     const org = await setupOrg(t);
     const { profileId } = await returningGuest(org);
+    const foreign = () =>
+      runIdempotent(t.db, org.admin, { scope: 'POST /x', key: 'k-hold', request: {} }, async () => ({
+        status: 201,
+        body: { profileId },
+      }));
+    await foreign();
     await org.sys((tx) =>
       org.svc.setLegalHold(tx, profileId, { hold: true, reason: 'Chargeback dispute pending' }),
     );
     const { requestId } = await org.sys((tx) =>
       org.svc.eraseProfile(tx, { kind: 'erasure', profileId, reason: 'Erasure request' }),
     );
+    // Failure path: nothing was erased — stored responses included (the replay still answers).
+    expect((await foreign()).body).toEqual({ profileId });
     const req = await org.sys((tx) => org.svc.getPrivacyRequest(tx, requestId));
     expect(req).toMatchObject({ status: 'on_hold', rejectionReason: 'Legal hold' });
     const p = await org.sys((tx) => org.svc.getProfile(tx, profileId));

@@ -328,3 +328,66 @@ export function visibilitySql(access: AccessScope, alias = 'p') {
     : sql``;
   return sql<boolean>`(${own} or (${notWithdrawn} ${granted}))`;
 }
+
+/**
+ * Staff-typed reasons end up in the append-only audit log, which erasure cannot change (SW-GUE-1). Before a reason
+ * is stored anywhere, the subject's own identifiers — name parts in every script, contact values, date of birth —
+ * are replaced by "[guest]". The record itself is identified by the audit target, so nothing is lost.
+ * Residual (FOUNDATION_REQUESTS FR-8): a misspelled name or a differently formatted number is not recognised.
+ */
+export async function scrubReason<T extends string | null | undefined>(
+  tx: TxContext,
+  reason: T,
+  profileIds: readonly string[],
+): Promise<T> {
+  if (!reason || profileIds.length === 0) return reason;
+  const ids = [...profileIds];
+  const profiles = await db(tx)
+    .selectFrom('guests.profiles')
+    .select([
+      'given_name',
+      'middle_name',
+      'family_name',
+      'preferred_name',
+      'native_given_name',
+      'native_family_name',
+      'date_of_birth',
+    ])
+    .where('id', 'in', ids)
+    .execute();
+  const contacts = await db(tx)
+    .selectFrom('guests.contact_points')
+    .select(['value', 'normalized'])
+    .where('profile_id', 'in', ids)
+    .execute();
+  const tokens = new Set<string>();
+  const add = (v: string | null | undefined, split: boolean) => {
+    if (!v) return;
+    const t = v.trim();
+    if (t.length >= 3) tokens.add(t);
+    if (split) for (const part of t.split(/[\s\-'’.]+/u)) if (part.length >= 3) tokens.add(part);
+    // Han / Hangul / Kana names are short: keep two-character names too.
+    if (/^[\p{Script=Han}\p{Script=Hangul}\p{Script=Hiragana}\p{Script=Katakana}]{2}$/u.test(t))
+      tokens.add(t);
+  };
+  for (const p of profiles) {
+    add(p.given_name, true);
+    add(p.middle_name, true);
+    add(p.family_name, true);
+    add(p.preferred_name, true);
+    add(p.native_given_name, true);
+    add(p.native_family_name, true);
+    if (p.native_family_name && p.native_given_name)
+      add(`${p.native_family_name}${p.native_given_name}`, false);
+    add(p.date_of_birth, false);
+  }
+  for (const c of contacts) {
+    add(c.value, false);
+    add(c.normalized, false);
+  }
+  let out: string = reason;
+  for (const t of [...tokens].sort((a, b) => b.length - a.length)) {
+    out = out.replace(new RegExp(t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'giu'), '[guest]');
+  }
+  return out as T;
+}

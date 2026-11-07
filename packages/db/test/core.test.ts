@@ -237,6 +237,125 @@ describe('idempotency is bound to the caller', () => {
   });
 });
 
+describe('idempotency without personal data (SW-GUE-1)', () => {
+  const plan = {
+    store: (b: { id: string; name: string }) => ({ id: b.id }),
+    rebuild: async (tx: Parameters<Parameters<typeof withTenantTx>[2]>[0], s: { id: string }) => {
+      const row = await tx.db
+        .selectFrom('demo.notes')
+        .select(['id', 'body'])
+        .where('id', '=', s.id)
+        .executeTakeFirst();
+      if (!row) throw new Error('gone');
+      return { id: row.id as string, name: row.body as string };
+    },
+  };
+
+  it('a replay plan stores ids only and rebuilds the response from the current record', async () => {
+    const ctx = testContext();
+    const id = newId();
+    const run = () =>
+      runIdempotent(
+        t.db,
+        ctx,
+        { scope: 'POST /people', key: 'k-plan', request: { n: 1 } },
+        async (tx) => {
+          await tx.db
+            .insertInto('demo.notes')
+            .values({ id, tenant_id: ctx.tenantId, body: 'Quilla Person' })
+            .execute();
+          return { status: 201, body: { id, name: 'Quilla Person' } };
+        },
+        { replay: plan },
+      );
+    expect((await run()).body).toEqual({ id, name: 'Quilla Person' });
+    const { rows } = await sql<{ body: string }>`
+      select response_body::text as body from core.idempotency_keys where key = 'k-plan'`.execute(
+      t.admin.kysely,
+    );
+    expect(rows[0]?.body).not.toContain('Quilla');
+    expect(JSON.parse(rows[0]?.body ?? '{}')).toEqual({ $replay: 1, ref: { id } });
+    // The record changed since: the replay shows the current state, never a stored copy.
+    await withTenantTx(t.db, ctx, (tx) =>
+      tx.db.updateTable('demo.notes').set({ body: 'Renamed' }).where('id', '=', id).execute(),
+    );
+    const replay = await run();
+    expect(replay).toMatchObject({ replayed: true, status: 201, body: { id, name: 'Renamed' } });
+  });
+
+  it('erasure redaction: responses mentioning the subject answer 410; short values never match', async () => {
+    const { redactIdempotencyResponses } = await import('../src');
+    const ctx = testContext();
+    const subject = newId();
+    const store = (key: string, body: unknown) =>
+      runIdempotent(t.db, ctx, { scope: 'POST /x', key, request: {} }, async () => ({ status: 201, body }));
+    await store('k-a', { bookerProfileId: subject, booker: 'Quilla Person' });
+    await store('k-b', { email: 'quilla@guest.example' });
+    await store('k-c', { other: 'unrelated record Ali' });
+    const n = await withTenantTx(t.db, ctx, (tx) =>
+      redactIdempotencyResponses(tx, { mentions: [subject, 'quilla@guest.example', 'Ali'] }),
+    );
+    expect(n).toBe(2);
+    await expect(store('k-a', {})).rejects.toMatchObject({ code: 'idempotent_response_erased', status: 410 });
+    await expect(store('k-b', {})).rejects.toMatchObject({ status: 410 });
+    expect((await store('k-c', {})).body).toEqual({ other: 'unrelated record Ali' });
+    // Another tenant's records are never touched.
+    const other = testContext();
+    const kept = await runIdempotent(
+      t.db,
+      other,
+      { scope: 'POST /x', key: 'k-a', request: {} },
+      async () => ({
+        status: 201,
+        body: { bookerProfileId: subject },
+      }),
+    );
+    expect(kept.replayed).toBe(false);
+  });
+
+  it('a replay racing an erasure waits for it and then answers 410 (never the erased data)', async () => {
+    const { redactIdempotencyResponses } = await import('../src');
+    const ctx = testContext();
+    const subject = newId();
+    const replay = () =>
+      runIdempotent(t.db, ctx, { scope: 'POST /race', key: 'k-race', request: {} }, async () => ({
+        status: 201,
+        body: { profileId: subject, name: 'Quilla Person' },
+      }));
+    await replay();
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    let redacted: () => void = () => {};
+    const didRedact = new Promise<void>((r) => {
+      redacted = r;
+    });
+    const erasure = withTenantTx(t.db, ctx, async (tx) => {
+      await redactIdempotencyResponses(tx, { mentions: [subject] });
+      redacted();
+      await gate; // erasure transaction still open
+    });
+    await didRedact;
+    let settled = false;
+    const racing = replay().then(
+      (r) => {
+        settled = true;
+        return r;
+      },
+      (e: unknown) => {
+        settled = true;
+        throw e;
+      },
+    );
+    await new Promise((r) => setTimeout(r, 300));
+    expect(settled).toBe(false); // waits on the erasure's row lock instead of reading the old body
+    release();
+    await erasure;
+    await expect(racing).rejects.toMatchObject({ status: 410 });
+  });
+});
+
 describe('savepoints', () => {
   it('rolls back only the failed part and keeps the transaction usable', async () => {
     const { withSavepoint, pgCode } = await import('../src');
