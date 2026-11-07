@@ -32,7 +32,7 @@ Same session: resume each stopped agent with "the usage limit has reset — cont
 relaunch agents from `workstream-briefs.md` + their README "Checkpoint" sections). Resume in priority order and keep
 total concurrency moderate so the next window lasts.
 
-## Seven-day window (added 2026-11-07 16:20 UTC)
+## Seven-day window (added 2026-11-07 16:20 UTC; **retired by owner direction 2026-11-07 18:00 UTC: checks use the 5-hour window only**)
 
 The account also has a **seven-day** limit (`unifiedWindows.seven_day`). Running out of it would stall all work for
 days, so pace against it as well:

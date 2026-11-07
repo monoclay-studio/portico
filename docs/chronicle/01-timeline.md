@@ -208,4 +208,6 @@ Each agent's brief and report are in `agents/`.
     still estimated. Both were corrected.
 - **17:59 — Fix re-attack sweep launched** over every merged P0 and money/security P1 fix, strictly from steward
   playbook v2.1. It is the first run that measures v2.
+- **18:00 — Owner: "only check 5hour window on checks".** The seven-day pacing rule is retired; the guardrail checks
+  and the heartbeat now read only the 5-hour window.
 
