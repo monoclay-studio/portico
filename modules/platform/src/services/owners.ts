@@ -43,6 +43,31 @@ function toOwner(r: Selectable<OwnersTable>): Owner {
   };
 }
 
+/** Owner fields that are personal data: never copied into the append-only audit log (P2-11). */
+const OWNER_PERSONAL_FIELDS = [
+  'legalName',
+  'taxId',
+  'email',
+  'phone',
+  'payoutAccountRef',
+  'payoutHint',
+] as const;
+
+/** Audit view of an owner: identifying, non-personal fields plus which personal fields are filled. */
+function auditOwner(o: Owner) {
+  const personal = Object.fromEntries(
+    OWNER_PERSONAL_FIELDS.map((f) => [f, o[f] === undefined ? 'empty' : 'set']),
+  );
+  return {
+    reference: o.reference,
+    kind: o.kind,
+    displayName: o.displayName,
+    ...(o.countryCode ? { countryCode: o.countryCode } : {}),
+    status: o.status,
+    personalFields: personal,
+  };
+}
+
 function assertNoBankData(input: Partial<OwnerInput>) {
   for (const [field, v] of [
     ['payoutAccountRef', input.payoutAccountRef],
@@ -82,7 +107,11 @@ export async function createOwner(tx: TxContext, input: OwnerInput): Promise<Own
       })
       .returningAll()
       .executeTakeFirstOrThrow();
-    await tx.audit({ action: 'platform.owner.create', target: { type: 'owner', id }, after: toOwner(row) });
+    await tx.audit({
+      action: 'platform.owner.create',
+      target: { type: 'owner', id },
+      after: auditOwner(toOwner(row)),
+    });
     await tx.emit({
       type: 'platform.owner.created',
       aggregate: { type: 'owner', id },
@@ -143,7 +172,14 @@ export async function updateOwner(
   if (!row)
     return explainVersionMiss('owner', id, expectedVersion, async () => (await getOwner(tx, id)).version);
   const after = toOwner(row);
-  await tx.audit({ action: 'platform.owner.update', target: { type: 'owner', id }, before, after });
+  const changed = (Object.keys(patch) as Array<keyof typeof patch>).filter((k) => patch[k] !== undefined);
+  await tx.audit({
+    action: 'platform.owner.update',
+    target: { type: 'owner', id },
+    before: auditOwner(before),
+    after: auditOwner(after),
+    metadata: { changedFields: changed },
+  });
   return after;
 }
 

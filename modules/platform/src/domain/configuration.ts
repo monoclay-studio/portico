@@ -134,9 +134,44 @@ export const NEVER_CARRIED_FORWARD = [
   'simulatedMessages',
 ] as const;
 
+/**
+ * Words that mark operational data, money or secrets wherever they appear in a section key (P3-9: `guestProfiles`,
+ * `reservations.bookings`, `finance.cardTokens`…). Matched per camelCase word, singular or plural, so configuration
+ * such as `rates.chargeCodes` or `rates.minStayRules` still moves.
+ */
+const NEVER_CARRIED_WORDS = new Set([
+  'reservation',
+  'booking',
+  'guest',
+  'folio',
+  'payment',
+  'deposit',
+  'invoice',
+  'ledger',
+  'journal',
+  'refund',
+  'payout',
+  'card',
+  'credential',
+  'secret',
+  'token',
+  'password',
+  'user',
+  'member',
+  'simulated',
+]);
+
+function keyWords(sectionKey: string): string[] {
+  return sectionKey
+    .split(/[.\-_]|(?=[A-Z])/)
+    .filter(Boolean)
+    .map((w) => w.toLowerCase().replace(/s$/, ''));
+}
+
 export function isCarryForwardAllowed(sectionKey: string, providerAllows: boolean): boolean {
   const lower = sectionKey.toLowerCase();
   if (NEVER_CARRIED_FORWARD.some((n) => lower.split('.').includes(n.toLowerCase()))) return false;
+  if (keyWords(sectionKey).some((w) => NEVER_CARRIED_WORDS.has(w))) return false;
   return providerAllows;
 }
 

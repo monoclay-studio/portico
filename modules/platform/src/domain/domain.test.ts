@@ -299,6 +299,13 @@ describe('configuration plans', () => {
     expect(isCarryForwardAllowed('reservations.bookings', true)).toBe(false);
     expect(isCarryForwardAllowed('identity.credentials', true)).toBe(false);
     expect(isCarryForwardAllowed('platform.policies', false)).toBe(false);
+    // P3-9: data classes are recognised inside compound keys, not only as exact segments.
+    expect(isCarryForwardAllowed('guests.guestProfiles', true)).toBe(false);
+    expect(isCarryForwardAllowed('crm.guestProfiles', true)).toBe(false);
+    expect(isCarryForwardAllowed('finance.cardTokens', true)).toBe(false);
+    expect(isCarryForwardAllowed('identity.apiClientSecrets', true)).toBe(false);
+    expect(isCarryForwardAllowed('rates.chargeCodes', true)).toBe(true);
+    expect(isCarryForwardAllowed('rates.minStayRules', true)).toBe(true);
   });
 
   it('requires a separate approver according to policy', () => {

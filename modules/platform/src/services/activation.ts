@@ -1,13 +1,15 @@
-import { sql, type TxContext, typed } from '@portico/db';
+import { type PorticoDatabase, sql, type TxContext, typed, withTenantTx } from '@portico/db';
 import {
   assertExternalEffectAllowed,
   BusinessRuleError,
+  ConflictError,
   DomainError,
   type EffectMode,
   type ExternalEffect,
   localDateIn,
   NotFoundError,
   newId,
+  type RequestContext,
   requirePermission,
   ValidationError,
 } from '@portico/kernel';
@@ -24,7 +26,7 @@ import {
   validateScope,
 } from '../domain/activation';
 import type { PlatformPorts } from '../ports';
-import { actorKey, getLimit } from '../service';
+import { actorKey, assertHumanApprover, getLimit, responsiblePerson } from '../service';
 import type { ActivationRequestsTable, PlatformDB } from '../tables';
 
 /**
@@ -273,7 +275,7 @@ export async function requestStatusChange(
     reason: input.reason,
     checklist: items,
     status: 'pending',
-    requested_by: actorKey(tx),
+    requested_by: responsiblePerson(tx.actor),
     requested_at: tx.now,
     decided_by: null,
     decided_at: null,
@@ -309,7 +311,7 @@ export async function requestScopeChange(
     reason: input.reason,
     checklist: [],
     status: 'pending',
-    requested_by: actorKey(tx),
+    requested_by: responsiblePerson(tx.actor),
     requested_at: tx.now,
     decided_by: null,
     decided_at: null,
@@ -351,12 +353,18 @@ async function recordStatusChange(
     reason: string;
   },
 ) {
-  await db(tx)
+  const res = await db(tx)
     .updateTable('platform.properties')
     .set({ status: input.to, version: sql`version + 1` })
     .where('id', '=', input.propertyId)
     .where('status', '=', input.from as PropertyStatus)
-    .execute();
+    .executeTakeFirst();
+  // P3-7: never record a status change that did not happen (the property moved concurrently).
+  if (Number(res.numUpdatedRows) !== 1)
+    throw new ConflictError(
+      'property_status_changed',
+      `The property is no longer ${input.from}; someone changed it at the same time. Reload and try again.`,
+    );
   await db(tx)
     .insertInto('platform.property_status_history')
     .values({
@@ -400,7 +408,12 @@ export async function approveActivationRequest(
 ) {
   const r = await loadPending(tx, requestId);
   requirePermission(tx, 'platform.property.activate', { propertyId: r.property_id });
-  if (r.requested_by === actorKey(tx)) {
+  assertHumanApprover(tx, 'A property status or scope change');
+  // P2-8: one approval at a time per organization, so two concurrent approvals cannot exceed the property limit.
+  await sql`select pg_advisory_xact_lock(hashtextextended(${`platform.activation:${tx.tenantId}`}, 0))`.execute(
+    tx.db,
+  );
+  if (r.requested_by === responsiblePerson(tx.actor) || r.requested_by === actorKey(tx)) {
     throw new BusinessRuleError(
       'segregation_of_duties',
       'The person who requested an activation cannot approve it. Ask another manager with activation rights.',
@@ -509,7 +522,7 @@ export async function cancelActivationRequest(
   input: { note?: string | undefined },
 ) {
   const r = await loadPending(tx, requestId);
-  if (r.requested_by !== actorKey(tx))
+  if (r.requested_by !== responsiblePerson(tx.actor))
     requirePermission(tx, 'platform.property.activate', { propertyId: r.property_id });
   return closeRequest(tx, r.id, r.property_id, 'cancelled', input.note);
 }
@@ -566,7 +579,7 @@ export async function changePropertyStatusDirect(
     from,
     to: input.toStatus,
     requestId: null,
-    requestedBy: actorKey(tx),
+    requestedBy: responsiblePerson(tx.actor),
     approvedBy: null,
     reason: input.reason,
   });
@@ -575,14 +588,16 @@ export async function changePropertyStatusDirect(
 
 /**
  * Activation-scope check for adapters, in addition to the kernel environment check (which it performs first).
- * Returns the effect mode to use. In non-live modes (simulate/sandbox) the scope adds nothing. A refusal is
- * audited before throwing — callers that convert the refusal into a recorded "blocked" outcome keep the audit row.
+ * Returns the effect mode to use. In non-live modes (simulate/sandbox) the scope adds nothing.
+ * A refusal is always audited (EV-05). Pass `database` so the audit row is written in its own committed
+ * transaction and survives the caller's rollback (P2-6); without it the row is part of the caller's transaction,
+ * which is right only for callers that record a "blocked" outcome and commit.
  */
 export async function assertEffectInScope(
   tx: TxContext,
   propertyId: string,
   effect: ExternalEffect,
-  opts: { connectionId?: string; workflow?: string } = {},
+  opts: { connectionId?: string; workflow?: string; database?: PorticoDatabase } = {},
 ): Promise<Exclude<EffectMode, 'blocked'>> {
   const mode = assertExternalEffectAllowed(tx, effect);
   if (mode !== 'live') return mode;
@@ -601,13 +616,25 @@ export async function assertEffectInScope(
   });
   if (decision.allowed) return mode;
   const scopeRef = scope ? `${stage} scope v${scope.version}` : `${status} status`;
-  await tx.audit({
+  const refusal = {
     action: 'platform.activationScope.refuse',
     target: { type: 'property', id: propertyId },
     propertyId,
     reason: decision.reason,
     metadata: { effect, connectionId: opts.connectionId ?? null, workflow: opts.workflow ?? null, scopeRef },
-  });
+  };
+  if (opts.database) {
+    const ctx: RequestContext = {
+      tenantId: tx.tenantId,
+      environment: tx.environment,
+      actor: tx.actor,
+      authz: tx.authz,
+      correlationId: tx.correlationId,
+    };
+    await withTenantTx(opts.database, ctx, (audit) => audit.audit(refusal));
+  } else {
+    await tx.audit(refusal);
+  }
   throw new DomainError(
     'effect_outside_activation_scope',
     `${p.name} is in ${status}; its approved ${scopeRef} does not allow "${effect}"${opts.workflow ? ` for ${opts.workflow}` : ''} (${decision.reason.replace(/_/g, ' ')}). Nothing was sent. Change the scope through an approved activation request if this should be live.`,

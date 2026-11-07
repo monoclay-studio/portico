@@ -64,8 +64,18 @@ export interface TrialInput {
   /** Otherwise the prospect's name (trial before any contract). */
   prospectName?: string;
   planCode: string;
-  admin: { email: string; displayName: string; password?: string };
+  /**
+   * The trial administrator. `selfUserId`: the signed-in person who asked for the trial joins it directly (their
+   * request is their consent). Otherwise an email: a new person is created; an existing person is INVITED and
+   * accepts while signed in as themselves (ADR-0017 §2).
+   */
+  admin:
+    | { selfUserId: string; displayName: string }
+    | { email: string; displayName: string; password?: string };
 }
+
+/** A live organization may run at most this many open trials at once (P3-10; plans may set their own later). */
+export const MAX_OPEN_TRIALS_PER_ORGANIZATION = 3;
 
 /**
  * Create an isolated trial organization (adoption brief §3 stage 2): environment `trial` (effects simulated or
@@ -77,7 +87,8 @@ export async function provisionTrialOrganization(
   database: PorticoDatabase,
   input: TrialInput,
   operator = 'operator',
-): Promise<{ tenantId: string; adminUserId: string }> {
+  ports: Pick<IdentityPorts, 'notifier' | 'config' | 'organizationName'> = {},
+): Promise<{ tenantId: string; adminUserId: string; adminStatus: 'active' | 'invited' }> {
   if (!input.liveTenantId && !input.prospectName)
     throw new BusinessRuleError(
       'trial_owner_required',
@@ -105,13 +116,28 @@ export async function provisionTrialOrganization(
       prospectName: input.prospectName,
     });
     await identity.seedSystemRoles(tx);
-    const { userId } = await identity.createUser(tx, {
-      email: input.admin.email,
-      displayName: input.admin.displayName,
-      ...(input.admin.password ? { initialPassword: input.admin.password } : {}),
+    const admin = input.admin;
+    if ('selfUserId' in admin) {
+      await identity.addSelfToOrganization(tx, {
+        userId: admin.selfUserId,
+        displayName: admin.displayName,
+        roleKey: 'org_admin',
+      });
+      return { tenantId, adminUserId: admin.selfUserId, adminStatus: 'active' as const };
+    }
+    const { userId, status } = await identity.createUser(tx, {
+      email: admin.email,
+      displayName: admin.displayName,
+      ...(admin.password ? { initialPassword: admin.password } : {}),
       roles: [{ roleKey: 'org_admin', scopeType: 'organization' }],
     });
-    return { tenantId, adminUserId: userId };
+    if (status === 'invited')
+      await identity.sendInvitation(tx, ports, {
+        userId,
+        email: admin.email,
+        displayName: admin.displayName,
+      });
+    return { tenantId, adminUserId: userId, adminStatus: status };
   });
   if (input.liveTenantId) {
     // Separate transaction (another tenant). Idempotent: re-running only re-links.
@@ -152,17 +178,25 @@ export async function createTrialForOrganization(
   if (ctx.actor.kind !== 'user' || ctx.actor.impersonatedBy)
     throw new BusinessRuleError('not_a_user', 'A trial is created by a signed-in staff member.');
   const userId = ctx.actor.userId;
-  const { me, org } = await withTenantTx(database, ctx, async (tx) => ({
-    me: await identity.getMe(tx, userId),
-    org: await platform.getOrganization(tx),
-  }));
+  const { me, org } = await withTenantTx(database, ctx, async (tx) => {
+    const open = (await platform.listLinkedEnvironments(tx)).filter(
+      (e) => e.environment === 'trial' && e.status !== 'closed',
+    );
+    if (open.length >= MAX_OPEN_TRIALS_PER_ORGANIZATION)
+      throw new BusinessRuleError(
+        'trial_limit_reached',
+        `Your organization already has ${open.length} open trials (the limit is ${MAX_OPEN_TRIALS_PER_ORGANIZATION}). Delete a trial you no longer need, then try again.`,
+        { limit: MAX_OPEN_TRIALS_PER_ORGANIZATION },
+      );
+    return { me: await identity.getMe(tx, userId), org: await platform.getOrganization(tx) };
+  });
   const { tenantId } = await provisionTrialOrganization(
     database,
     {
       name: input.name,
       liveTenantId: ctx.tenantId,
       planCode: org.planCode,
-      admin: { email: me.email, displayName: me.displayName },
+      admin: { selfUserId: userId, displayName: me.displayName },
     },
     `user:${userId}`,
   );
@@ -188,7 +222,14 @@ export function provisioningHttp(deps: { database: PorticoDatabase; ports: Ident
                 .default('resort'),
               admin: z.object({ email: z.email(), displayName: z.string().min(1).max(200) }),
             }),
-            response: { 201: z.object({ organizationId: z.uuid(), adminUserId: z.uuid() }) },
+            response: {
+              201: z.object({
+                organizationId: z.uuid(),
+                adminUserId: z.uuid(),
+                /** `invited`: the person already uses Portico and accepts the trial from their own account. */
+                adminStatus: z.enum(['active', 'invited']),
+              }),
+            },
           },
         },
         async (req, reply) => {
@@ -202,8 +243,13 @@ export function provisioningHttp(deps: { database: PorticoDatabase; ports: Ident
               admin: req.body.admin,
             },
             `operator:${op.id}`,
+            deps.ports,
           );
-          return reply.status(201).send({ organizationId: res.tenantId, adminUserId: res.adminUserId });
+          return reply.status(201).send({
+            organizationId: res.tenantId,
+            adminUserId: res.adminUserId,
+            adminStatus: res.adminStatus,
+          });
         },
       );
     },

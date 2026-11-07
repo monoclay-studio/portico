@@ -442,8 +442,10 @@ export function registerEnterpriseRoutes(
       },
     },
     async (req, reply) => {
-      requireIdempotencyKey(req);
-      const b = await svc.pullTrialConfiguration(database, req.ctx, ports, req.body);
+      // P2-7: the bundle is written inside the idempotent transaction, so a retry replays it instead of copying again.
+      const b = await create(database, req, 'POST /configuration-bundles/from-trial', req.body, (tx) =>
+        svc.pullTrialConfiguration(database, req.ctx, ports, req.body, tx),
+      );
       return reply.status(201).send(b);
     },
   );
@@ -553,14 +555,17 @@ export function registerEnterpriseRoutes(
       },
     },
     async (req, reply) => {
-      requireIdempotencyKey(req);
       const provisioner = ports.trialProvisioner;
       if (!provisioner)
         throw new ExternalServiceError('provisioning', 'Trial creation is not configured on this server.', {
           retryable: false,
         });
-      await withTenantTx(database, req.ctx, async (tx) => requirePermission(tx, 'platform.trial.manage'));
-      const created = await provisioner.createTrial(database, req.ctx, req.body);
+      // P2-7: the idempotency record is held (locked) while the trial organization is created in its own
+      // transactions; a retry or a concurrent duplicate with the same key waits and replays the first result.
+      const created = await create(database, req, 'POST /environments/trials', req.body, async (tx) => {
+        requirePermission(tx, 'platform.trial.manage');
+        return provisioner.createTrial(database, req.ctx, req.body);
+      });
       return reply.status(201).send(created);
     },
   );

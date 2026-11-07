@@ -16,7 +16,13 @@ import {
   type TransitionStatus,
 } from '../domain/data-authority';
 import type { PlatformPorts } from '../ports';
-import { actorKey, writeAuthorityVersion } from '../service';
+import {
+  actorKey,
+  assertHumanApprover,
+  getDataAuthority,
+  responsiblePerson,
+  writeAuthorityVersion,
+} from '../service';
 import type { DataAuthorityTransitionsTable, PlatformDB } from '../tables';
 
 /**
@@ -97,7 +103,7 @@ export async function planAuthorityTransition(
       planned_start_at: input.plannedStartAt ?? null,
       freeze_minutes: input.freezeMinutes,
       approval_required: needsSecondApprover(domains as Domain[]),
-      planned_by: actorKey(tx),
+      planned_by: responsiblePerson(tx.actor),
       planned_at: tx.now,
       approved_by: null,
       approved_at: null,
@@ -167,7 +173,8 @@ export async function approveAuthorityTransition(tx: TxContext, id: string, note
   const r = await load(tx, id);
   if (r.status !== 'planned')
     throw new BusinessRuleError('invalid_transition_step', 'Only a planned transition can be approved.');
-  if (r.planned_by === actorKey(tx)) {
+  assertHumanApprover(tx, 'A change of system of record');
+  if (r.planned_by === responsiblePerson(tx.actor) || r.planned_by === actorKey(tx)) {
     throw new BusinessRuleError(
       'segregation_of_duties',
       'The person who planned a change of system of record cannot approve it. Ask another manager with data-authority rights.',
@@ -234,6 +241,19 @@ export async function completeAuthorityTransition(tx: TxContext, ports: Platform
   const r = await load(tx, id);
   assertMove(r.status, 'effective');
   const changes = r.changes as Change[];
+  if (!ports.transitionGuard) {
+    // P2-5: without the integration's guard nobody can tell whether forwarded changes are still waiting, so a
+    // domain that currently forwards writes cannot move (fail closed).
+    for (const c of changes) {
+      const current = await getDataAuthority(tx, r.property_id, c.domain);
+      if (current.writeMode === 'forward' && c.writeMode !== 'forward')
+        throw new BusinessRuleError(
+          'pending_operations_unknown',
+          `Portico cannot check for forwarded ${c.domain} changes still waiting for the other system (the integration check is not available on this server). Try again when it is, or contact support.`,
+          { domain: c.domain },
+        );
+    }
+  }
   const pending = ports.transitionGuard
     ? await ports.transitionGuard.pendingOperations(
         tx,

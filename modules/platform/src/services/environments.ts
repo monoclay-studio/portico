@@ -351,8 +351,12 @@ export async function pullTrialConfiguration(
     bundleName: string;
     sections?: string[] | undefined;
   },
+  /** The live organization's (idempotent) transaction for the final write; one is opened when omitted. */
+  liveTx?: TxContext,
 ) {
-  await withTenantTx(database, ctx, async (tx) => {
+  const inLive = <T>(fn: (tx: TxContext) => Promise<T>) =>
+    liveTx ? fn(liveTx) : withTenantTx(database, ctx, fn);
+  await inLive(async (tx) => {
     requirePermission(tx, 'platform.trial.manage');
     requirePermission(tx, 'platform.configuration.manage');
     const link = await db(tx)
@@ -387,7 +391,7 @@ export async function pullTrialConfiguration(
     });
     return bundle;
   });
-  return withTenantTx(database, ctx, (tx) =>
+  return inLive((tx) =>
     importConfigurationBundle(tx, {
       name: input.bundleName,
       description: `Carried forward from trial ${input.trialOrganizationId}`,

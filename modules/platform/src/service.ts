@@ -1,5 +1,6 @@
 import { explainVersionMiss, type Selectable, sql, type TxContext, typed } from '@portico/db';
 import {
+  type Actor,
   actorId,
   addDays,
   assertCurrency,
@@ -29,9 +30,35 @@ import type { LegalEntitiesTable, PlatformDB, PropertiesTable } from './tables';
 
 const db = (tx: TxContext) => typed<PlatformDB>(tx.db);
 
-/** Stable actor reference stored on records and compared for separation of duties. */
+/** Stable actor reference (the principal) stored on records. */
 export function actorKey(tx: Pick<TxContext, 'actor'>): string {
   return `${tx.actor.kind}:${actorId(tx.actor)}`;
+}
+
+/**
+ * ADR-0017 §7: the PERSON responsible for an action, used for separation of duties. An API client resolves to the
+ * user who issued it (identity puts `createdBy` on the actor), a support session to its Monoclay operator. Stored on
+ * requests (`requested_by`, `planned_by`, `prepared_by`) so "a different person" means a different person.
+ */
+export function responsiblePerson(actor: Actor): string {
+  if (actor.kind === 'user') return actor.impersonatedBy ? actor.impersonatedBy : `user:${actor.userId}`;
+  if (actor.kind === 'api_client') {
+    const createdBy = (actor as Actor & { createdBy?: string }).createdBy;
+    return createdBy && /^[0-9a-f-]{36}$/i.test(createdBy)
+      ? `user:${createdBy}`
+      : `api_client:${actor.clientId}`;
+  }
+  return `${actor.kind}:${actorId(actor)}`;
+}
+
+/** Approvals governed by separation of duties are human acts (ADR-0017 §7). */
+export function assertHumanApprover(tx: Pick<TxContext, 'actor'>, what: string): void {
+  if (tx.actor.kind !== 'user' || tx.actor.impersonatedBy) {
+    throw new BusinessRuleError(
+      'human_approval_required',
+      `${what} must be approved by a person signed in as themselves, not by an API client, a system process or a support session.`,
+    );
+  }
 }
 
 /** Organization-level policy value (scope_type organization, scope_id = tenant id), or the default. */
@@ -273,23 +300,8 @@ export async function createProperty(tx: TxContext, input: PropertyInput): Promi
       `"${input.timezone}" is not a recognised time zone. Use an IANA name such as Indian/Maldives.`,
     );
   }
-  const limit = await getLimit(tx, 'limits.properties');
-  if (limit !== null) {
-    const count = await db(tx)
-      .selectFrom('platform.properties')
-      .select(sql<number>`count(*)::int`.as('n'))
-      .executeTakeFirstOrThrow();
-    if (count.n >= limit) {
-      throw new BusinessRuleError(
-        'plan_limit_reached',
-        `Your plan allows ${limit} propert${limit === 1 ? 'y' : 'ies'}. Upgrade the plan to add more.`,
-        {
-          limit: 'limits.properties',
-          value: limit,
-        },
-      );
-    }
-  }
+  // PLT-R10 / P2-8: `limits.properties` counts pilot and active properties and is enforced at activation (the
+  // activation checklist, under a tenant lock). A new property starts in setup, so creation is not limited by it.
   await getLegalEntity(tx, input.legalEntityId);
   const id = newId();
   try {

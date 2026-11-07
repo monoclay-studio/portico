@@ -30,6 +30,7 @@ import {
   identityManifest,
   operatorDirectoryFromConfig,
   outboxNotifier,
+  systemTxtResolver,
   unknownGeo,
 } from '@portico/identity';
 import {
@@ -118,13 +119,16 @@ export function compose(database: PorticoDatabase, options: CompositionOptions =
   // Field encryption (TOTP secrets, PKCE verifiers, SSO client secrets) from the single kernel key source.
   const { cipher } = fieldCryptoFromEnv(env);
   const appBaseUrl = env.PORTICO_APP_BASE_URL ?? 'http://localhost:5173';
+  const production = env.NODE_ENV === 'production';
   const identityPorts: IdentityPorts = {
     propertyIdsInScope: platform.propertyIdsInScope,
     permissionCatalog,
     cipher,
     secrets: fieldEncryptedSecretStore(cipher),
     notifier: outboxNotifier(cipher),
-    oidcHttp: fetchOidcHttp(),
+    // SSRF-safe (public https only, pinned DNS, no redirects); a local http IdP only outside production (P2-2).
+    oidcHttp: fetchOidcHttp({ allowLocalDevelopment: !production }),
+    dnsTxt: systemTxtResolver,
     geo: unknownGeo,
     operators: operatorDirectoryFromConfig(env.PORTICO_OPERATORS),
     hasEntitlement: (tx, feature) => platform.hasEntitlement(tx, feature),
@@ -136,6 +140,9 @@ export function compose(database: PorticoDatabase, options: CompositionOptions =
       appBaseUrl,
       ssoRedirectUri: env.PORTICO_SSO_REDIRECT_URI ?? `${appBaseUrl}/auth/sso/callback`,
       totpIssuer: 'Portico',
+      allowLocalIdentityProvider: !production,
+      // P2-17: static operator tokens (no expiry, no MFA) are refused in production until IAM Identity Center.
+      operatorConsoleEnabled: !production,
     },
     ...options.identity,
   };

@@ -23,7 +23,13 @@ import {
 } from '../domain/configuration';
 import type { OpeningInterval } from '../domain/opening-hours';
 import type { ConfigurationSectionProvider, PlatformPorts } from '../ports';
-import { actorKey, organizationPolicy, requireEntitlement } from '../service';
+import {
+  actorKey,
+  assertHumanApprover,
+  organizationPolicy,
+  requireEntitlement,
+  responsiblePerson,
+} from '../service';
 import type { PlatformDB } from '../tables';
 
 /**
@@ -729,7 +735,7 @@ export async function prepareConfigurationChange(
       plan: JSON.stringify(plan),
       plan_hash: planHash(plan),
       summary: JSON.stringify(summary),
-      prepared_by: actorKey(tx),
+      prepared_by: responsiblePerson(tx.actor),
       prepared_at: tx.now,
       approved_by: null,
       approved_at: null,
@@ -784,7 +790,11 @@ async function decide(
       `This configuration change is ${change.status.replace('_', ' ')}; it can no longer be ${decision}.`,
     );
   }
-  if (decision === 'approved' && change.prepared_by === actorKey(tx)) {
+  if (decision === 'approved') assertHumanApprover(tx, 'A portfolio configuration change');
+  if (
+    decision === 'approved' &&
+    (change.prepared_by === responsiblePerson(tx.actor) || change.prepared_by === actorKey(tx))
+  ) {
     throw new BusinessRuleError(
       'segregation_of_duties',
       'The person who prepared a portfolio configuration change cannot approve it. Ask another administrator with approval rights.',
