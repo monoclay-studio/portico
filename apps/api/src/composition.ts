@@ -70,6 +70,8 @@ import {
   inventorySearch,
 } from '@portico/inventory';
 import {
+  assertExternalEffectAllowed,
+  BusinessRuleError,
   DomainError,
   fieldCryptoFromEnv,
   type ModuleManifest,
@@ -78,6 +80,17 @@ import {
   randomToken,
   systemAuthorizer,
 } from '@portico/kernel';
+import {
+  createMigrationDemoSeed,
+  createRehearsalBridge,
+  type MigrationDeps,
+  migrationHttp,
+  migrationJobs,
+  migrationManifest,
+  migrationSearch,
+  migrationSubscriptions,
+  ProviderUnavailableError,
+} from '@portico/migration';
 import {
   createOperationsDemoSeed,
   createOperationsService,
@@ -147,6 +160,8 @@ export const MANIFESTS: readonly ModuleManifest[] = [
   integrationManifest,
   // wave-1 modules register here
   paymentsManifest,
+  // wave-2 modules
+  migrationManifest,
 ];
 
 /**
@@ -561,6 +576,241 @@ export function compose(database: PorticoDatabase, options: CompositionOptions =
     simulatorSigningSecret: process.env.PAYMENTS_SIMULATOR_SIGNING_SECRET ?? randomToken(),
   });
 
+  // ── migration ("Move to Portico", D13) ──
+  // Platform, inventory, guests, rates, finance (opening deposits) and the integration PMS simulator are real
+  // (ADR-0015: migration authorizes the user's intent at the property; providers run with system scope and still
+  // enforce integrity and data authority). The requested contracts that are not on main yet answer 503
+  // `migration_provider_unavailable` and the pipeline waits honestly: reservations' migration import (MIG-CR-1),
+  // finance's in-house and receivables opening balances (MIG-CR-3/4), payments' card re-collection (MIG-CR-5).
+  const migrationUnavailable = (provider: string, operation: string, request: string) => async () => {
+    throw new ProviderUnavailableError(provider, operation, request);
+  };
+  const asMigrationProcess = <T extends { actor: unknown; authz: unknown }>(tx: T): T => ({
+    ...tx,
+    actor: { kind: 'system', process: 'migration' },
+    authz: systemAuthorizer,
+  });
+  const transitionView = (t: Awaited<ReturnType<typeof platform.planAuthorityTransition>>) => ({
+    id: t.id,
+    status: t.status,
+    approvalRequired: t.approvalRequired,
+    approvedBy: t.approvedBy,
+    plannedBy: t.plannedBy,
+  });
+  const migrationDeps: MigrationDeps = {
+    ports: {
+      platform: {
+        async getProperty(tx, id) {
+          const p = await platform.getProperty(asSystem(tx), id);
+          return {
+            id: p.id,
+            name: p.name,
+            timezone: p.timezone,
+            baseCurrency: p.baseCurrency,
+            businessDate: p.businessDate,
+            status: p.status,
+          };
+        },
+        getDataAuthority: (tx, propertyId, domain) => platform.getDataAuthority(tx, propertyId, domain),
+        // Restricting (Portico read-only until the cutover): recorded as the migration process; moving back to
+        // Portico always needs the authority transition approved by a second person (CR-10).
+        async declareExternalAuthority(tx, i) {
+          await platform.setDataAuthority(asMigrationProcess(tx), {
+            propertyId: i.propertyId,
+            domain: i.domain,
+            authority: 'external',
+            connectionId: i.connectionId,
+            systemName: i.systemName,
+            writeMode: 'read_only',
+            reason: i.reason,
+          });
+        },
+        planTransition: async (tx, i) =>
+          transitionView(
+            await platform.planAuthorityTransition(asSystem(tx), i.propertyId, {
+              changes: i.changes,
+              reason: i.reason,
+              rollbackCriteria: i.rollbackCriteria,
+              freezeMinutes: i.freezeMinutes,
+              ...(i.plannedStartAt ? { plannedStartAt: i.plannedStartAt } : {}),
+            }),
+          ),
+        async getTransition(tx, propertyId, id) {
+          const t = (await platform.listAuthorityTransitions(asSystem(tx), propertyId)).find(
+            (x) => x.id === id,
+          );
+          return t ? transitionView(t) : null;
+        },
+        approveTransition: async (tx, id, note) =>
+          transitionView(await platform.approveAuthorityTransition(asSystem(tx), id, note)),
+        freezeTransition: async (tx, id) =>
+          transitionView(await platform.freezeAuthorityTransition(asSystem(tx), id)),
+        completeTransition: async (tx, id) =>
+          transitionView(await platform.completeAuthorityTransition(asSystem(tx), platformPorts, id)),
+        async cancelTransition(tx, id, reason) {
+          await platform.cancelAuthorityTransition(asSystem(tx), id, reason);
+        },
+        assertWorkflowInScope: (tx, propertyId, workflow) =>
+          platform.assertWorkflowInScope(tx, propertyId, workflow),
+        async trialSourceOrganization(tx) {
+          const info = await platform.getEnvironmentInfo(asSystem(tx));
+          return info.trial
+            ? { organizationId: info.trial.sourceOrganizationId, status: info.trial.status }
+            : null;
+        },
+        recordTrialImport: (tx, i) => platform.recordTrialImport(asSystem(tx), i),
+      },
+      inventory: {
+        listUnitTypes: async (tx, propertyId) =>
+          (await inventoryService.listUnitTypes(asSystem(tx), propertyId)).map((u) => ({
+            id: u.id,
+            code: u.code,
+            name: u.name,
+          })),
+        async createUnitType(tx, propertyId, i) {
+          const u = await inventoryService.createUnitType(asSystem(tx), propertyId, {
+            code: i.code,
+            name: i.name,
+            kind: 'room',
+            baseOccupancy: i.baseOccupancy,
+            maxAdults: i.maxOccupancy,
+            maxChildren: Math.max(0, i.maxOccupancy - 1),
+            maxOccupancy: i.maxOccupancy,
+          });
+          return { id: u.id };
+        },
+        listUnits: async (tx, propertyId) =>
+          (await inventoryService.listUnits(asSystem(tx), propertyId)).map((u) => ({
+            id: u.id,
+            number: u.number,
+            unitTypeId: u.unitTypeId,
+          })),
+        async createUnit(tx, propertyId, i) {
+          const u = await inventoryService.createUnit(asSystem(tx), propertyId, {
+            unitTypeId: i.unitTypeId,
+            number: i.number,
+            ...(i.name ? { name: i.name } : {}),
+            ...(i.inInventoryFrom ? { inInventoryFrom: i.inInventoryFrom } : {}),
+          });
+          return { id: u.id };
+        },
+        sold: async (tx, i) =>
+          (
+            await inventoryService.getAvailability(asSystem(tx), {
+              propertyId: i.propertyId,
+              range: { from: i.from, to: i.to },
+            })
+          ).map((c) => ({ unitTypeId: c.unitTypeId, date: c.date, sold: c.sold })),
+      },
+      rates: {
+        listRatePlans: async (tx, propertyId) =>
+          (await rates.listRatePlans(asSystem(tx), { propertyId })).map((r) => ({
+            id: r.id,
+            code: r.code,
+            name: r.name,
+          })),
+      },
+      guests: {
+        async importProfile(tx, i) {
+          const contactPoints = [
+            ...(i.email ? [{ kind: 'email' as const, value: i.email, source: 'migration' }] : []),
+            ...(i.phone ? [{ kind: 'phone' as const, value: i.phone, source: 'migration' }] : []),
+          ];
+          const r = await guestsService.resolveProfile(
+            asSystem(tx),
+            {
+              propertyId: i.propertyId,
+              familyName: i.familyName,
+              ...(i.givenName ? { givenName: i.givenName } : {}),
+              ...(i.nationality ? { nationality: i.nationality } : {}),
+              ...(i.dateOfBirth ? { dateOfBirth: i.dateOfBirth } : {}),
+              ...(contactPoints.length ? { contactPoints } : {}),
+              source: { kind: 'migration', ref: `${i.sourceSystem}:${i.sourceKey}`.slice(0, 200) },
+            },
+            { matchStrategy: 'suggest' },
+          );
+          return {
+            profileId: r.profileId,
+            created: r.created,
+            possibleDuplicates: r.suggestions.map((s) => ({
+              profileId: s.profileId,
+              score: s.score,
+              band: s.band,
+              reasons: s.reasons.map((x) => x.detail),
+            })),
+          };
+        },
+        existing: async (tx, i) => [
+          ...(await guestsService.visibleProfileIds(asSystem(tx), i.profileIds, {
+            propertyId: i.propertyId,
+          })),
+        ],
+      },
+      reservations: {
+        importBooking: migrationUnavailable('Reservations', 'import migrated bookings', 'MIG-CR-1'),
+        listImported: migrationUnavailable('Reservations', 'list migrated bookings', 'MIG-CR-1'),
+      },
+      finance: {
+        async importOpeningDeposits(tx, i) {
+          const r = await finance.importOpeningDeposits(asSystem(tx), { ...i, idempotencyKey: i.importRef });
+          return {
+            status: r.status,
+            importedCount: r.importedCount,
+            importedTotalMinor: r.importedTotalMinor,
+            differenceMinor: r.differenceMinor,
+            rejected: r.rejected,
+          };
+        },
+        async depositBalances(tx, i) {
+          const out: Array<{ bookingId: string; amountMinor: number; currency: string }> = [];
+          for (const id of i.bookingIds) {
+            const d = await finance.getDeposits(asSystem(tx), id);
+            if (d)
+              out.push({ bookingId: id, amountMinor: d.balance.amountMinor, currency: d.balance.currency });
+          }
+          return out;
+        },
+        async taxAccountKeys(tx, propertyId) {
+          const p = await platform.getProperty(asSystem(tx), propertyId);
+          return (await finance.listAccounts(asSystem(tx), p.legalEntityId))
+            .map((a) => a.systemKey ?? '')
+            .filter((k) => k.startsWith('tax:') && k !== 'tax:unmapped')
+            .map((k) => k.slice(4));
+        },
+        importOpeningFolioBalances: migrationUnavailable(
+          'Finance',
+          'import in-house folio balances',
+          'MIG-CR-3',
+        ),
+        folioOpeningBalances: migrationUnavailable('Finance', 'read in-house opening balances', 'MIG-CR-3'),
+        importOpeningReceivables: migrationUnavailable(
+          'Finance',
+          'import receivables open items',
+          'MIG-CR-4',
+        ),
+        receivableOpenItems: migrationUnavailable('Finance', 'read receivables opening items', 'MIG-CR-4'),
+      },
+      cards: { request: migrationUnavailable('Payments', 'send card re-collection requests', 'MIG-CR-5') },
+      simulator: {
+        async snapshot(tx, accountId) {
+          if (tx.environment === 'live')
+            throw new BusinessRuleError(
+              'simulator_not_in_live',
+              'The simulator is never read in a live organization.',
+            );
+          assertExternalEffectAllowed(tx, 'integration.read');
+          const st = await pmsSimulators.run(tx.tenantId, accountId, (a) => a.toState(), {
+            write: false,
+            tx,
+          });
+          return { accountId, property: st.property, reservations: st.reservations };
+        },
+      },
+      rehearsal: createRehearsalBridge(database, () => migrationDeps),
+    },
+  };
+  const migrationModule = migrationHttp({ database, migration: migrationDeps });
+
   // ── cross-module experience: global search, summaries, record history ──
   const searchProviders: SearchProvider[] = [
     platformSearch,
@@ -572,6 +822,7 @@ export function compose(database: PorticoDatabase, options: CompositionOptions =
     ratesSearch,
     integrationSearch,
     paymentsSearch,
+    migrationSearch,
   ];
   const recordsModule = recordsHttp({ database, manifests: MANIFESTS, searchProviders });
 
@@ -589,6 +840,7 @@ export function compose(database: PorticoDatabase, options: CompositionOptions =
       ratesModule,
       integrationModule,
       payments.http,
+      migrationModule,
       recordsModule,
     ],
     subscriptions: [
@@ -597,6 +849,7 @@ export function compose(database: PorticoDatabase, options: CompositionOptions =
       ...operationsSubscriptions(operationsPorts),
       ...integrationSubscriptions(integrationDeps),
       ...payments.subscriptions,
+      ...migrationSubscriptions(),
     ],
     searchProviders,
     jobs: [
@@ -620,6 +873,7 @@ export function compose(database: PorticoDatabase, options: CompositionOptions =
           ),
       }),
       ...integrationJobs(integrationDeps),
+      ...migrationJobs(),
     ],
     services: {
       guests: guestsService,
@@ -636,6 +890,8 @@ export function compose(database: PorticoDatabase, options: CompositionOptions =
       { name: 'rates', run: createRatesDemoSeed(rates, ratesPorts) },
       { name: 'payments', run: seedPaymentsDemo },
       { name: 'finance', run: (tx, org) => financeDemoSeed(tx, org) },
+      // After inventory and finance: stages the fictional "Coral Nest" spreadsheet pack in the demo guesthouse.
+      createMigrationDemoSeed(() => migrationDeps),
     ],
     identityPorts,
     platformPorts,

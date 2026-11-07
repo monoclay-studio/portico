@@ -2,7 +2,7 @@
  * Jobs: "Move to Portico" (create), the job record with the universal record contract, listing, linking the trial
  * organization for rehearsals.
  */
-import { pgCode, type TxContext } from '@portico/db';
+import { pgCode, type TxContext, withSavepoint } from '@portico/db';
 import {
   BusinessRuleError,
   ConflictError,
@@ -64,45 +64,48 @@ export async function createJob(tx: TxContext, deps: MigrationDeps, input: Creat
   ];
   const id = newId(tx.now.getTime());
   try {
-    const row = await db(tx)
-      .insertInto('migration.jobs')
-      .values({
-        id,
-        tenant_id: tx.tenantId,
-        property_id: input.propertyId,
-        purpose,
-        environment: tx.environment,
-        source_adapter: adapter.key,
-        source_system: input.sourceSystem,
-        source_ref: input.sourceRef ?? null,
-        source_identity: id,
-        state: 'draft',
-        steps: JSON.stringify(initialSteps()),
-        step_detail: '{}',
-        plan: JSON.stringify(emptyPlan(property.baseCurrency, scope)),
-        plan_fingerprint: null,
-        domains: [...DEFAULT_MIGRATED_DOMAINS],
-        rehearsal_link: input.rehearsal ? JSON.stringify(input.rehearsal) : null,
-        live_job_ref: null,
-        certificate: null,
-        transition_id: null,
-        rollback_transition_id: null,
-        cutover_planned_at: null,
-        frozen_at: null,
-        switched_at: null,
-        opened_at: null,
-        freeze_minutes: null,
-        rollback_window_ends_at: null,
-        rolled_back_at: null,
-        running_until: null,
-        running_by: null,
-        owner_user_id: tx.actor.kind === 'user' ? tx.actor.userId : null,
-        created_by: actorKey(tx),
-        created_at: tx.now,
-        updated_at: tx.now,
-      })
-      .returningAll()
-      .executeTakeFirstOrThrow();
+    // In a savepoint: a refused insert (one open migration per property) leaves the transaction usable.
+    const row = await withSavepoint(tx, 'mig_create_job', () =>
+      db(tx)
+        .insertInto('migration.jobs')
+        .values({
+          id,
+          tenant_id: tx.tenantId,
+          property_id: input.propertyId,
+          purpose,
+          environment: tx.environment,
+          source_adapter: adapter.key,
+          source_system: input.sourceSystem,
+          source_ref: input.sourceRef ?? null,
+          source_identity: id,
+          state: 'draft',
+          steps: JSON.stringify(initialSteps()),
+          step_detail: '{}',
+          plan: JSON.stringify(emptyPlan(property.baseCurrency, scope)),
+          plan_fingerprint: null,
+          domains: [...DEFAULT_MIGRATED_DOMAINS],
+          rehearsal_link: input.rehearsal ? JSON.stringify(input.rehearsal) : null,
+          live_job_ref: null,
+          certificate: null,
+          transition_id: null,
+          rollback_transition_id: null,
+          cutover_planned_at: null,
+          frozen_at: null,
+          switched_at: null,
+          opened_at: null,
+          freeze_minutes: null,
+          rollback_window_ends_at: null,
+          rolled_back_at: null,
+          running_until: null,
+          running_by: null,
+          owner_user_id: tx.actor.kind === 'user' ? tx.actor.userId : null,
+          created_by: actorKey(tx),
+          created_at: tx.now,
+          updated_at: tx.now,
+        })
+        .returningAll()
+        .executeTakeFirstOrThrow(),
+    );
     const job = toJob(row);
     await initChecklist(tx, job);
     await tx.audit({

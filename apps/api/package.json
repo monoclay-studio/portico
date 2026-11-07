@@ -25,6 +25,7 @@
     "@portico/integration": "workspace:*",
     "@portico/inventory": "workspace:*",
     "@portico/kernel": "workspace:*",
+    "@portico/migration": "workspace:*",
     "@portico/operations": "workspace:*",
     "@portico/payments": "workspace:*",
     "@portico/platform": "workspace:*",

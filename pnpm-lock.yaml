@@ -110,6 +110,9 @@ importers:
       '@portico/kernel':
         specifier: workspace:*
         version: link:../../packages/kernel
+      '@portico/migration':
+        specifier: workspace:*
+        version: link:../../modules/migration
       '@portico/operations':
         specifier: workspace:*
         version: link:../../modules/operations
