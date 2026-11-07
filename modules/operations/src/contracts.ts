@@ -11,12 +11,10 @@ import {
   DISPOSAL_METHODS,
   ESCALATION_TARGETS,
   INTERVAL_UNITS,
-  LOST_FOUND_STATUSES,
   OBSERVED_OCCUPANCIES,
   OCCUPANCIES,
   SECTION_KINDS,
   SERVICE_REQUEST_CHANNELS,
-  SERVICE_REQUEST_STATUSES,
   TASK_KINDS,
   TASK_PRIORITIES,
   TASK_STATUSES,
@@ -49,6 +47,40 @@ export const urgency = z.enum(URGENCIES);
 export const blockKind = z.enum(BLOCK_KINDS);
 export const provenance = z.enum(['live', 'external', 'copied', 'simulated']);
 export const entityRef = z.object({ type: z.string().min(1).max(60), id: uuid });
+
+// Universal record contract (domain-map § Universal record contract; types in @portico/kernel records.ts).
+export const recordAction = z.object({
+  action: z.string(),
+  label: z.string(),
+  enabled: z.boolean(),
+  reason: z.string().optional(),
+  previewRequired: z.boolean().optional(),
+});
+export const recordOwner = z.object({
+  kind: z.enum(['user', 'department']),
+  id: z.string(),
+  name: z.string().optional(),
+});
+export const recordIssue = z.object({
+  code: z.string(),
+  severity: z.enum(['blocking', 'warning', 'info']),
+  message: z.string(),
+  owner: recordOwner.optional(),
+  since: z.string().optional(),
+});
+export const recordLink = z.object({
+  rel: z.string(),
+  type: z.string(),
+  id: z.string(),
+  title: z.string().optional(),
+});
+const recordFacets = {
+  status: z.record(z.string(), z.string()),
+  allowedActions: z.array(recordAction),
+  issues: z.array(recordIssue),
+  owner: recordOwner.optional(),
+  links: z.array(recordLink),
+};
 
 export const propertyParams = z.object({ propertyId: uuid });
 export const idParams = z.object({ id: uuid });
@@ -117,6 +149,7 @@ export const unitStatus = z.object({
   provenance,
   externalSyncedAt: isoDateTime.nullable(),
   version: z.number().int(),
+  ...recordFacets,
 });
 export type UnitStatusView = z.infer<typeof unitStatus>;
 
@@ -287,7 +320,6 @@ export const task = z.object({
   kind: taskKind,
   title: z.string(),
   description: z.string().nullable(),
-  status: taskStatus,
   priority: taskPriority,
   priorityScore: z.number().int(),
   priorityReasons: z.array(z.string()),
@@ -315,6 +347,7 @@ export const task = z.object({
   createdAt: isoDateTime,
   updatedAt: isoDateTime,
   version: z.number().int(),
+  ...recordFacets,
 });
 export type TaskView = z.infer<typeof task>;
 
@@ -387,6 +420,8 @@ export const taskListQuery = z.object({
 export type TaskListQuery = z.infer<typeof taskListQuery>;
 
 export const escalationRunResult = z.object({
+  /** Welfare-check tasks created for units on do-not-disturb beyond the policy limit. */
+  welfareChecks: z.array(uuid),
   escalated: z.array(
     z.object({
       taskId: uuid,
@@ -418,7 +453,6 @@ export const serviceRequest = z.object({
   id: uuid,
   propertyId: uuid,
   number: z.string(),
-  status: z.enum(SERVICE_REQUEST_STATUSES),
   channel: z.enum(SERVICE_REQUEST_CHANNELS),
   category: z.string(),
   description: z.string(),
@@ -429,6 +463,7 @@ export const serviceRequest = z.object({
   fulfilledAt: isoDateTime.nullable(),
   task,
   version: z.number().int(),
+  ...recordFacets,
 });
 export type ServiceRequestView = z.infer<typeof serviceRequest>;
 
@@ -697,6 +732,7 @@ export const workOrder = z.object({
   task,
   resolutionItems: z.array(resolutionItem),
   version: z.number().int(),
+  ...recordFacets,
 });
 export type WorkOrderView = z.infer<typeof workOrder>;
 
@@ -784,6 +820,9 @@ export const lostFoundMatchInput = z.object({
   note: z.string().max(1000).optional(),
 });
 export const lostFoundReleaseInput = z.object({
+  /** Handed over in person, or shipped to the guest (common for guests already home abroad). */
+  method: z.enum(['handed_over', 'shipped']).default('handed_over'),
+  trackingRef: z.string().max(120).optional(),
   releasedTo: text(200),
   signatureRef: objectRef,
   note: z.string().max(1000).optional(),
@@ -806,16 +845,18 @@ export const lostFoundItem = z.object({
   finder: z.string(),
   storageLocation: z.string(),
   photos: z.array(photo),
-  status: z.enum(LOST_FOUND_STATUSES),
   matchedGuestProfileId: uuid.nullable(),
   matchedStayId: uuid.nullable(),
   releasedTo: z.string().nullable(),
+  releaseMethod: z.enum(['handed_over', 'shipped']).nullable(),
+  trackingRef: z.string().nullable(),
   releaseSignatureRef: z.string().nullable(),
   releasedAt: isoDateTime.nullable(),
   disposalMethod: z.string().nullable(),
   disposedAt: isoDateTime.nullable(),
   retentionUntil: localDate,
   version: z.number().int(),
+  ...recordFacets,
 });
 export type LostFoundView = z.infer<typeof lostFoundItem>;
 
@@ -938,6 +979,21 @@ export const syncBatchResult = z.object({
 });
 export type SyncBatchResult = z.infer<typeof syncBatchResult>;
 
+export const syncConflict = z.object({
+  clientMutationId: z.string(),
+  deviceId: z.string(),
+  actor: z.string(),
+  op: z.string(),
+  entity: z.object({ type: z.string(), id: uuid }).nullable(),
+  code: z.string().nullable(),
+  message: z.string().nullable(),
+  baseVersion: z.number().int().nullable(),
+  conflict: syncMutationResult.shape.conflict,
+  clientOccurredAt: isoDateTime,
+  processedAt: isoDateTime,
+});
+export type SyncConflictView = z.infer<typeof syncConflict>;
+
 export const changesQuery = z.object({
   propertyId: uuid,
   cursor: z.string().max(600).optional(),
@@ -989,3 +1045,30 @@ export const externalRoomStatusInput = z.object({
   observedAt: isoDateTime,
   connectionId: uuid,
 });
+
+// ───────────────────────────── My work (cross-module inbox feed) ─────────────────────────────
+
+export const myWorkQuery = z.object({
+  propertyId: uuid.optional(),
+  /** Also include unassigned work of these departments (e.g. housekeeping,engineering). */
+  departments: z
+    .string()
+    .optional()
+    .transform((v) => (v ? v.split(',') : undefined))
+    .pipe(z.array(departmentKind).optional()),
+  limit: z.coerce.number().int().min(1).max(500).default(100),
+});
+export const workItem = z.object({
+  type: z.literal('task'),
+  id: uuid,
+  propertyId: uuid,
+  title: z.string(),
+  kind: taskKind,
+  status: z.record(z.string(), z.string()),
+  priority: taskPriority,
+  dueAt: isoDateTime.nullable(),
+  owner: recordOwner,
+  issues: z.array(recordIssue),
+  links: z.array(recordLink),
+});
+export type WorkItem = z.infer<typeof workItem>;

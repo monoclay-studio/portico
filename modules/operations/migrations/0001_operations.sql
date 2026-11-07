@@ -206,6 +206,9 @@ select core.enable_tenant_isolation('operations.tasks');
 create index tasks_property_status_idx on operations.tasks (tenant_id, property_id, status, kind);
 create index tasks_unit_idx on operations.tasks (tenant_id, unit_id, status);
 create index tasks_assignee_idx on operations.tasks (tenant_id, assignee_user_id, status);
+-- "My work" inbox: unassigned work queued for a department.
+create index tasks_department_queue_idx on operations.tasks (tenant_id, department_kind, status, property_id)
+  where assignee_user_id is null;
 create index tasks_escalation_idx on operations.tasks (tenant_id, property_id, next_escalation_at)
   where next_escalation_at is not null;
 create index tasks_feed_idx on operations.tasks (tenant_id, property_id, feed_xid, id);
@@ -443,7 +446,9 @@ create table operations.lost_found_items (
   matched_stay_id          uuid,
   matched_note             text,
   released_to              text,
-  release_signature_ref    text,
+  release_method           text check (release_method in ('handed_over', 'shipped')),
+  tracking_ref             text,                      -- courier tracking number when shipped abroad
+  release_signature_ref    text,                      -- signature of the collector, or courier receipt (object ref)
   released_at              timestamptz,
   disposal_method          text check (disposal_method in ('donated', 'destroyed', 'handed_to_authorities', 'returned_to_finder')),
   disposal_signature_ref   text,

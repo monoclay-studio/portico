@@ -46,10 +46,12 @@ import {
   loadSettings,
   logUnit,
   propertyFacts,
+  requireAny,
   toUnitView,
+  UNIT_READ_PERMISSIONS,
   type UnitRow,
 } from './internal';
-import { setDndOnServiceTasks } from './tasks';
+import { insertTask, setDndOnServiceTasks } from './tasks';
 
 const P = {
   read: 'operations.unit.read',
@@ -82,10 +84,58 @@ async function sectionName(tx: TxContext, sectionId: string | null): Promise<str
   return s?.name ?? null;
 }
 
-export async function unitView(tx: TxContext, row: UnitRow, readiness?: Readiness): Promise<UnitStatusView> {
-  return toUnitView(row, {
+/** Work-order facts for blocked units (number, completion, return-to-service state). */
+export async function workOrderInfoFor(tx: TxContext, ids: ReadonlyArray<string | null>) {
+  const wanted = [...new Set(ids.filter((x): x is string => !!x))];
+  const out = new Map<string, { number: string; completed: boolean; returnToService: string }>();
+  if (!wanted.length) return out;
+  const rows = await db(tx)
+    .selectFrom('operations.work_orders')
+    .select(['id', 'number', 'completed_at', 'return_to_service_status'])
+    .where('id', 'in', wanted)
+    .execute();
+  for (const r of rows)
+    out.set(r.id, {
+      number: r.number,
+      completed: r.completed_at !== null,
+      returnToService: r.return_to_service_status,
+    });
+  return out;
+}
+
+/** Full unit record (universal record contract): status families, next actions, issues, owner, links. */
+export async function unitView(
+  d: Deps,
+  tx: TxContext,
+  row: UnitRow,
+  readiness?: Readiness,
+): Promise<UnitStatusView> {
+  const facts = await propertyFacts(d, tx, row.property_id);
+  const arrival = await db(tx)
+    .selectFrom('operations.stay_projection')
+    .select('id')
+    .where('unit_id', '=', row.id)
+    .where('status', '=', 'expected')
+    .where('arrival', '=', facts.businessDate)
+    .executeTakeFirst();
+  const openTask = await db(tx)
+    .selectFrom('operations.tasks')
+    .select(['assignee_user_id', 'assignee_name'])
+    .where('unit_id', '=', row.id)
+    .where('status', 'in', [...OPEN_TASK_STATUSES])
+    .where('kind', 'in', [...HOUSEKEEPING_KINDS])
+    .where('assignee_user_id', 'is not', null)
+    .orderBy('priority_score', 'desc')
+    .executeTakeFirst();
+  const wo = await workOrderInfoFor(tx, [row.block_work_order_id]);
+  return toUnitView(row, tx, {
     sectionName: await sectionName(tx, row.section_id),
     ...(readiness ? { readiness } : {}),
+    arrivalStayId: arrival?.id ?? null,
+    openTask: openTask
+      ? { assigneeUserId: openTask.assignee_user_id, assigneeName: openTask.assignee_name }
+      : null,
+    workOrder: wo.get(row.block_work_order_id ?? '') ?? null,
   });
 }
 
@@ -584,15 +634,37 @@ async function applyRoomStatus(
         stayId: row.occupancy_stay_id,
       },
     });
+    // OPS-R02: every discrepancy is a front-office exception with an owner until someone resolves it.
+    const settings = await loadSettings(d, tx, row.property_id);
+    await insertTask(d, tx, {
+      propertyId: row.property_id,
+      kind: 'general',
+      departmentKind: 'front_office',
+      title: `Verify occupancy (${discrepancy === 'occupied_no_luggage' ? 'no luggage' : discrepancy}) · ${row.unit_number}`,
+      description:
+        discrepancy === 'skip'
+          ? 'Housekeeping found the unit vacant while a guest is checked in. Contact the guest; check out or correct the stay.'
+          : discrepancy === 'sleep'
+            ? 'Housekeeping found the unit occupied while no guest is checked in. Investigate who is using the unit.'
+            : 'Guest checked in but no luggage found. Verify with the guest that they are still staying.',
+      priority: 'high',
+      unitId: row.id,
+      stayId: row.occupancy_stay_id,
+      dueAt: new Date(tx.now.getTime() + settings.resolutionMinutes.high * 60_000),
+      refs: [{ type: 'unit', id: row.id }],
+      source: 'system',
+      dedupeKey: `discrepancy:${row.id}:${tx.now.toISOString()}`,
+    });
   }
   return { row: refreshed, pending: false, forwardId: null };
 }
 
 async function changeResult(
+  d: Deps,
   tx: TxContext,
   r: { row: UnitRow; pending: boolean; forwardId: string | null },
 ): Promise<UnitChangeResult> {
-  return { unit: await unitView(tx, r.row), pending: r.pending, forwardId: r.forwardId };
+  return { unit: await unitView(d, tx, r.row), pending: r.pending, forwardId: r.forwardId };
 }
 
 export interface StaffChangeMeta {
@@ -624,7 +696,7 @@ export async function setCondition(
       expectedVersion: meta.expectedVersion,
     },
   );
-  return changeResult(tx, r);
+  return changeResult(d, tx, r);
 }
 
 export async function setDnd(
@@ -657,7 +729,7 @@ export async function setDnd(
   );
   // DND blocks in-room service: open stayover/turndown tasks for the unit are blocked (and unblocked again).
   if (!r.pending) await setDndOnServiceTasks(d, tx, row, input.dnd);
-  return changeResult(tx, r);
+  return changeResult(d, tx, r);
 }
 
 export async function reportOccupancy(
@@ -681,7 +753,7 @@ export async function reportOccupancy(
       expectedVersion: meta.expectedVersion,
     },
   );
-  return changeResult(tx, r);
+  return changeResult(d, tx, r);
 }
 
 export async function setTurndown(
@@ -704,7 +776,7 @@ export async function setTurndown(
       expectedVersion: meta.expectedVersion,
     },
   );
-  return changeResult(tx, r);
+  return changeResult(d, tx, r);
 }
 
 /**
@@ -733,17 +805,17 @@ export async function systemConditionChange(
 
 // ───────────────────────────── Reads ─────────────────────────────
 
-export async function getUnit(_d: Deps, tx: TxContext, unitId: string): Promise<UnitStatusView> {
+export async function getUnit(d: Deps, tx: TxContext, unitId: string): Promise<UnitStatusView> {
   const row = await loadUnit(tx, unitId);
-  requirePermission(tx, P.read, { propertyId: row.property_id });
-  return unitView(tx, row);
+  requireAny(tx, UNIT_READ_PERMISSIONS, row.property_id);
+  return unitView(d, tx, row);
 }
 
 /** Fresh readiness (computed now, not the stored snapshot). */
 export async function getUnitReadiness(d: Deps, tx: TxContext, unitId: string): Promise<UnitStatusView> {
   const row = await loadUnit(tx, unitId);
-  requirePermission(tx, P.read, { propertyId: row.property_id });
-  return unitView(tx, row, await computeReadiness(d, tx, row));
+  requireAny(tx, UNIT_READ_PERMISSIONS, row.property_id);
+  return unitView(d, tx, row, await computeReadiness(d, tx, row));
 }
 
 /** Provider contract (domain-map): condition for one unit. Internal provider: the calling module authorizes. */
@@ -775,7 +847,7 @@ export async function listUnitConditions(_d: Deps, tx: TxContext, input: { prope
     .orderBy('unit_number')
     .execute();
   return rows.map((r) => {
-    const v = toUnitView(r);
+    const v = toUnitView(r, tx);
     return {
       unitId: v.unitId,
       unitNumber: v.unitNumber,
@@ -794,7 +866,7 @@ export async function listUnitConditions(_d: Deps, tx: TxContext, input: { prope
 }
 
 export async function board(d: Deps, tx: TxContext, propertyId: string, q: BoardQuery): Promise<Board> {
-  requirePermission(tx, P.read, { propertyId });
+  requireAny(tx, UNIT_READ_PERMISSIONS, propertyId);
   const facts = await propertyFacts(d, tx, propertyId);
   const date = facts.businessDate;
   const [units, sections, stays, tasks] = await Promise.all([
@@ -852,6 +924,10 @@ export async function board(d: Deps, tx: TxContext, propertyId: string, q: Board
     list.push(t);
     tasksByUnit.set(t.unit_id, list);
   }
+  const workOrders = await workOrderInfoFor(
+    tx,
+    units.map((u) => u.block_work_order_id),
+  );
   const counts: Board['counts'] = {
     byCondition: {},
     byOccupancy: {},
@@ -861,8 +937,15 @@ export async function board(d: Deps, tx: TxContext, propertyId: string, q: Board
   };
   const rows: Board['rows'] = [];
   for (const u of units) {
-    const view = toUnitView(u, {
+    const open = tasksByUnit.get(u.id) ?? [];
+    const assigned = open.find((t) => t.assignee_user_id);
+    const view = toUnitView(u, tx, {
       sectionName: u.section_id ? (sectionById.get(u.section_id)?.name ?? null) : null,
+      arrivalStayId: arrivalByUnit.get(u.id)?.id ?? null,
+      openTask: assigned
+        ? { assigneeUserId: assigned.assignee_user_id, assigneeName: assigned.assignee_name }
+        : null,
+      workOrder: workOrders.get(u.block_work_order_id ?? '') ?? null,
     });
     counts.byCondition[u.condition] = (counts.byCondition[u.condition] ?? 0) + 1;
     counts.byOccupancy[u.occupancy] = (counts.byOccupancy[u.occupancy] ?? 0) + 1;
@@ -870,7 +953,6 @@ export async function board(d: Deps, tx: TxContext, propertyId: string, q: Board
     if (u.dnd) counts.dnd++;
     const arrival = arrivalByUnit.get(u.id);
     if (arrival && !view.readiness.ready) counts.arrivalsNotReady++;
-    const open = tasksByUnit.get(u.id) ?? [];
     let top: TaskPriority | null = null;
     const reasons = new Set<string>();
     for (const t of open) {
@@ -935,7 +1017,7 @@ export async function arrivalReadiness(
   propertyId: string,
   date?: LocalDate,
 ): Promise<ArrivalReadiness> {
-  requirePermission(tx, P.read, { propertyId });
+  requireAny(tx, UNIT_READ_PERMISSIONS, propertyId);
   const day = date ?? (await propertyFacts(d, tx, propertyId)).businessDate;
   const stays = await db(tx)
     .selectFrom('operations.stay_projection')
@@ -1144,7 +1226,7 @@ export async function listForwards(
   propertyId: string,
   status?: StatusForwardView['status'],
 ): Promise<StatusForwardView[]> {
-  requirePermission(tx, P.read, { propertyId });
+  requireAny(tx, UNIT_READ_PERMISSIONS, propertyId);
   let q = db(tx)
     .selectFrom('operations.status_forwards')
     .selectAll()
@@ -1268,7 +1350,7 @@ export async function applyExternalRoomStatus(
   }
   if (row.external_synced_at && new Date(row.external_synced_at) > input.observedAt) {
     // Out-of-order delivery: an older observation never overwrites a newer one.
-    return unitView(tx, row);
+    return unitView(d, tx, row);
   }
   const r = await applyRoomStatus(
     d,
@@ -1286,5 +1368,5 @@ export async function applyExternalRoomStatus(
       extra: { external_synced_at: input.observedAt },
     },
   );
-  return unitView(tx, r.row);
+  return unitView(d, tx, r.row);
 }

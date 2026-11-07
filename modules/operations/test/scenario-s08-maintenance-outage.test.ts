@@ -24,11 +24,14 @@ beforeAll(async () => {
 });
 afterAll(async () => h?.close());
 
-const ENGINEER = ['operations.maintenance.manage', 'operations.unit.read', 'operations.task.manage'].map(
-  (permission) => ({
-    permission,
-  }),
-);
+const ENGINEER = [
+  'operations.maintenance.manage',
+  'operations.maintenance.setInventoryImpact',
+  'operations.unit.read',
+  'operations.task.manage',
+].map((permission) => ({
+  permission,
+}));
 
 describe('scenario 8: a jetty water outage makes several assigned villas unavailable', () => {
   it('blocks the villas, lists every affected stay for front office, and gates return to service', async () => {
@@ -117,7 +120,7 @@ describe('scenario 8: a jetty water outage makes several assigned villas unavail
         affectedAssignments: [
           { ref: { type: 'stay', id: s1 }, nights: { from: '2026-11-07', to: '2026-11-10' } },
         ],
-        sourceRef: { type: 'workOrder', id: wo1.id },
+        sourceRef: { type: 'work_order', id: wo1.id },
       },
     });
     expect(
@@ -145,7 +148,10 @@ describe('scenario 8: a jetty water outage makes several assigned villas unavail
         parts: [{ name: 'PVC pipe 50mm', quantity: 2 }],
       }),
     );
-    expect(done).toMatchObject({ returnToService: 'awaiting_inspection', task: { status: 'done' } });
+    expect(done).toMatchObject({
+      returnToService: 'awaiting_inspection',
+      task: { status: { task: 'done' } },
+    });
     await expect(
       org.tx(engineer, (tx) => h.ops.returnToService(tx, wo1.id, done.version)),
     ).rejects.toMatchObject({

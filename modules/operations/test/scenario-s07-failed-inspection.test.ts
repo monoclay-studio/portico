@@ -111,7 +111,7 @@ describe('scenario 7: a villa fails inspection just before its arriving guest re
     ).find((t) => t.kind === 'departure_clean');
     expect(clean).toMatchObject({
       unitId: w101,
-      status: 'open',
+      status: { task: 'open' },
       priorityReasons: expect.arrayContaining(['arrival_due_soon', 'vip']),
     });
     if (!clean) throw new Error('departure clean');
@@ -225,7 +225,7 @@ describe('scenario 7: a villa fails inspection just before its arriving guest re
 
     // History: both cleanings verified/done, inspections append-only, audit trail present.
     const recleanDetail = await org.tx(supervisor, (tx) => h.ops.getTask(tx, reclean.id));
-    expect(recleanDetail.status).toBe('verified');
+    expect(recleanDetail.status.task).toBe('verified');
     const audit = await h.t.admin.kysely
       .selectFrom('core.audit_log')
       .select(['action'])

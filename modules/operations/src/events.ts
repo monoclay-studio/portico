@@ -352,7 +352,8 @@ async function onUnitBlocked(d: Deps, tx: TxContext, event: DomainEvent) {
   const propertyId = propertyOf(event);
   const p = blockedPayload.parse(event.payload);
   if (!(await unitKnown(tx, p.unitId))) return;
-  const workOrderId = p.sourceRef?.type === 'workOrder' ? p.sourceRef.id : null;
+  const workOrderId =
+    p.sourceRef && ['work_order', 'workOrder'].includes(p.sourceRef.type) ? p.sourceRef.id : null;
   await mirrorUnitBlock(d, tx, {
     unitId: p.unitId,
     blockId: p.blockId,

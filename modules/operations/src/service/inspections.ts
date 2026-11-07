@@ -20,7 +20,9 @@ import {
   iso,
   loadSettings,
   pgUniqueViolation,
+  requireAny,
   type TaskRow,
+  UNIT_READ_PERMISSIONS,
 } from './internal';
 import { arrivalContext, housekeepingPriorityFor, insertTask, taskView, transitionTask } from './tasks';
 import { loadUnit, unitView, writeRoomStatus } from './units';
@@ -104,7 +106,7 @@ export async function listChecklistTemplates(
   tx: TxContext,
   propertyId: string,
 ): Promise<ChecklistTemplateView[]> {
-  requirePermission(tx, 'operations.unit.read', { propertyId });
+  requireAny(tx, UNIT_READ_PERMISSIONS, propertyId);
   const rows = await db(tx)
     .selectFrom('operations.checklist_templates')
     .selectAll()
@@ -379,7 +381,7 @@ export async function recordInspection(
   });
   return {
     inspection: toInspectionView(row),
-    unit: await unitView(tx, current),
+    unit: await unitView(d, tx, current),
     recleanTask: reclean ? await taskView(tx, reclean) : null,
     pending: write.pending,
   };

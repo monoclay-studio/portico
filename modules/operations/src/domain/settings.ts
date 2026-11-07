@@ -13,9 +13,14 @@ import type {
  * defaults. Values are hotel configuration, never hard-coded behavior.
  */
 export interface EscalationStep {
-  /** Minutes after the task's due time at which this step fires. */
+  /** Minutes after the anchor at which this step fires. */
   afterMinutes: number;
   target: EscalationTarget;
+  /**
+   * Anchor: `due` (default) — the task is overdue; `created` — the task was not acknowledged (started) within
+   * `afterMinutes` of being created (OPS-R12).
+   */
+  from?: 'due' | 'created';
 }
 
 export interface OperationsSettings {
@@ -39,6 +44,8 @@ export interface OperationsSettings {
   autoDueKinds: TaskKind[];
   /** Escalation path per department, measured from the task's due time. */
   escalation: Partial<Record<DepartmentKind, EscalationStep[]>> & { default: EscalationStep[] };
+  /** Repeated do-not-disturb beyond this many hours creates a welfare-check task for the duty manager. */
+  dndWelfareCheckHours: number;
   /** Work-order resolution time by urgency (minutes). */
   workOrderResolutionMinutes: Record<Urgency, number>;
   returnToService: {
@@ -79,10 +86,12 @@ export const DEFAULT_SETTINGS: OperationsSettings = {
   autoDueKinds: ['service_request', 'guest_commitment', 'work_order'],
   escalation: {
     default: [
-      { afterMinutes: 0, target: 'supervisor' },
-      { afterMinutes: 30, target: 'department_head' },
+      { from: 'created', afterMinutes: 15, target: 'supervisor' },
+      { from: 'due', afterMinutes: 0, target: 'supervisor' },
+      { from: 'due', afterMinutes: 30, target: 'department_head' },
     ],
   },
+  dndWelfareCheckHours: 48,
   workOrderResolutionMinutes: { emergency: 60, high: 240, normal: 1440, low: 4320 },
   returnToService: { requireWorkOrderCompletion: true, requireInspection: true, requireCleaning: true },
   inspection: { maxMinorFailures: 0 },
@@ -118,5 +127,27 @@ export function creditsFor(settings: OperationsSettings, kind: TaskKind, unitTyp
 
 export function escalationPathFor(settings: OperationsSettings, department: string): EscalationStep[] {
   const path = (settings.escalation as Record<string, EscalationStep[] | undefined>)[department];
-  return [...(path ?? settings.escalation.default)].sort((a, b) => a.afterMinutes - b.afterMinutes);
+  // Acknowledgement steps first, then overdue steps in time order.
+  const rank = (st: EscalationStep) => (st.from === 'created' ? 0 : 1);
+  return [...(path ?? settings.escalation.default)].sort(
+    (a, b) => rank(a) - rank(b) || a.afterMinutes - b.afterMinutes,
+  );
+}
+
+/**
+ * Defaults by property profile (spec OPS-R05, §11): resorts and hotels plan turndown; a guesthouse collapses
+ * attendant/supervisor/inspector and defaults inspection off (clean is enough for arrival).
+ */
+export function defaultsForProfile(profile: string | null | undefined): OperationsSettings {
+  switch (profile) {
+    case 'resort':
+    case 'hotel':
+    case 'boutique_hotel':
+      return { ...DEFAULT_SETTINGS, turndownEnabled: true };
+    case 'guesthouse':
+    case 'hostel':
+      return { ...DEFAULT_SETTINGS, readinessCondition: 'clean', inspectionAfterCleaning: false };
+    default:
+      return DEFAULT_SETTINGS;
+  }
 }

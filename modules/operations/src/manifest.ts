@@ -16,6 +16,11 @@ export const OPERATIONS_PERMISSIONS = {
   maintenanceManage: 'operations.maintenance.manage',
   lostFoundManage: 'operations.lostFound.manage',
   externalSync: 'operations.external.sync',
+  housekeepingRead: 'operations.housekeeping.read',
+  maintenanceRead: 'operations.maintenance.read',
+  maintenanceSetInventoryImpact: 'operations.maintenance.setInventoryImpact',
+  assetManage: 'operations.asset.manage',
+  syncConflictResolve: 'operations.syncConflict.resolve',
 } as const;
 
 export const operationsManifest: ModuleManifest = {
@@ -86,6 +91,74 @@ export const operationsManifest: ModuleManifest = {
       scope: 'property',
       sensitive: true,
     },
+    {
+      key: OPERATIONS_PERMISSIONS.housekeepingRead,
+      description:
+        'View the housekeeping board, unit condition and readiness (alias of operations.unit.read)',
+      scope: 'property',
+    },
+    {
+      key: OPERATIONS_PERMISSIONS.maintenanceRead,
+      description: 'View work orders, assets, preventive schedules and their history',
+      scope: 'property',
+    },
+    {
+      key: OPERATIONS_PERMISSIONS.maintenanceSetInventoryImpact,
+      description: 'Take units out of order / out of service for maintenance and return them to sale',
+      scope: 'property',
+      sensitive: true,
+    },
+    {
+      key: OPERATIONS_PERMISSIONS.assetManage,
+      description: 'Maintain the asset register and preventive maintenance schedules',
+      scope: 'property',
+    },
+    {
+      key: OPERATIONS_PERMISSIONS.syncConflictResolve,
+      description: 'Review offline sync conflicts reported by staff devices',
+      scope: 'property',
+    },
   ],
   features: ['core.housekeeping', 'core.maintenance'],
+  // Room-status changes are audited under target type `unit` so they appear on the unit's cross-module timeline;
+  // the `unit` record type itself is declared by inventory (which owns the unit catalog).
+  recordTypes: [
+    { type: 'task', label: 'Task', readPermission: 'operations.task.read', route: '/operations/tasks/:id' },
+    {
+      type: 'service_request',
+      label: 'Service request',
+      readPermission: 'operations.task.read',
+      route: '/operations/service-requests/:id',
+    },
+    {
+      type: 'work_order',
+      label: 'Work order',
+      readPermission: 'operations.maintenance.read',
+      route: '/operations/work-orders/:id',
+    },
+    {
+      type: 'asset',
+      label: 'Asset',
+      readPermission: 'operations.maintenance.read',
+      route: '/operations/assets/:id',
+    },
+    {
+      type: 'preventive_schedule',
+      label: 'Preventive schedule',
+      readPermission: 'operations.maintenance.read',
+      route: '/operations/preventive-schedules/:id',
+    },
+    {
+      type: 'resolution_item',
+      label: 'Stay affected by maintenance',
+      readPermission: 'operations.unit.read',
+      route: '/operations/resolution-items/:id',
+    },
+    {
+      type: 'lost_found_item',
+      label: 'Lost & found item',
+      readPermission: 'operations.lostFound.manage',
+      route: '/operations/lost-found/:id',
+    },
+  ],
 };

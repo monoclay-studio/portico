@@ -352,6 +352,12 @@ export function operationsHttp(deps: { database: PorticoDatabase; service: Opera
         (req) => tx(req, (t) => ops.runEscalations(t, req.params.propertyId)),
       );
 
+      app.get(
+        '/operations/my-work',
+        { schema: { tags: T.tasks, querystring: c.myWorkQuery, response: { 200: items(c.workItem) } } },
+        async (req) => ({ items: await tx(req, (t) => ops.listMyWork(t, req.query)) }),
+      );
+
       // ───────────── Service requests ─────────────
       app.get(
         '/operations/service-requests',
@@ -598,6 +604,27 @@ export function operationsHttp(deps: { database: PorticoDatabase; service: Opera
         '/operations/sync/changes',
         { schema: { tags: T.sync, querystring: c.changesQuery, response: { 200: c.changes } } },
         (req) => tx(req, (t) => ops.pullChanges(t, req.query)),
+      );
+
+      app.get(
+        '/operations/properties/:propertyId/sync-conflicts',
+        {
+          schema: {
+            tags: T.sync,
+            params: c.propertyParams,
+            querystring: z.object({ since: z.iso.datetime({ offset: true }).optional() }),
+            response: { 200: items(c.syncConflict) },
+          },
+        },
+        async (req) => ({
+          items: await tx(req, (t) =>
+            ops.listSyncConflicts(
+              t,
+              req.params.propertyId,
+              req.query.since ? { since: new Date(req.query.since) } : {},
+            ),
+          ),
+        }),
       );
 
       // ───────────── Connected mode (external system of record) ─────────────

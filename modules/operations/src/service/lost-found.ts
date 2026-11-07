@@ -11,14 +11,15 @@ import {
 import type { LostFoundInput, LostFoundView } from '../contracts';
 import { assertDisposalAllowed, assertLostFoundTransition, retentionUntil } from '../domain/lost-found';
 import type { DisposalMethod, LostFoundStatus } from '../domain/model';
+import { lostFoundFacets } from '../domain/records';
 import type { LostFoundItemsTable } from '../tables';
-import { type Deps, db, iso, loadSettings, propertyFacts } from './internal';
+import { canFor, type Deps, db, iso, loadSettings, propertyFacts } from './internal';
 
 const PERM = 'operations.lostFound.manage';
 
 type Row = Selectable<LostFoundItemsTable>;
 
-function toView(r: Row): LostFoundView {
+function toView(r: Row, ctx: Pick<TxContext, 'authz'>, today: string): LostFoundView {
   return {
     id: r.id,
     propertyId: r.property_id,
@@ -32,16 +33,29 @@ function toView(r: Row): LostFoundView {
     finder: r.finder,
     storageLocation: r.storage_location,
     photos: (r.photos ?? []) as LostFoundView['photos'],
-    status: r.status as LostFoundStatus,
     matchedGuestProfileId: r.matched_guest_profile_id,
     matchedStayId: r.matched_stay_id,
     releasedTo: r.released_to,
+    releaseMethod: r.release_method as LostFoundView['releaseMethod'],
+    trackingRef: r.tracking_ref,
     releaseSignatureRef: r.release_signature_ref,
     releasedAt: iso(r.released_at),
     disposalMethod: r.disposal_method,
     disposedAt: iso(r.disposed_at),
     retentionUntil: r.retention_until,
     version: r.version,
+    ...lostFoundFacets(
+      {
+        status: r.status,
+        retentionUntil: r.retention_until,
+        today,
+        highValue: r.high_value,
+        matchedStayId: r.matched_stay_id,
+        matchedGuestProfileId: r.matched_guest_profile_id,
+        foundUnitId: r.found_unit_id,
+      },
+      canFor(ctx, r.property_id),
+    ),
   };
 }
 
@@ -95,6 +109,8 @@ export async function recordLostFound(
       matched_stay_id: null,
       matched_note: null,
       released_to: null,
+      release_method: null,
+      tracking_ref: null,
       release_signature_ref: null,
       released_at: null,
       disposal_method: null,
@@ -121,7 +137,7 @@ export async function recordLostFound(
       source: meta.source ?? 'staff',
     },
   });
-  return toView(row);
+  return toView(row, tx, facts.businessDate);
 }
 
 function requireAnyLostFound(tx: TxContext, propertyId: string) {
@@ -130,7 +146,7 @@ function requireAnyLostFound(tx: TxContext, propertyId: string) {
   requirePermission(tx, PERM, { propertyId });
 }
 
-export async function getLostFound(_d: Deps, tx: TxContext, id: string): Promise<LostFoundView> {
+export async function getLostFound(d: Deps, tx: TxContext, id: string): Promise<LostFoundView> {
   const r = await db(tx)
     .selectFrom('operations.lost_found_items')
     .selectAll()
@@ -138,11 +154,11 @@ export async function getLostFound(_d: Deps, tx: TxContext, id: string): Promise
     .executeTakeFirst();
   if (!r) throw new NotFoundError('lost_found_item', id);
   requirePermission(tx, PERM, { propertyId: r.property_id });
-  return toView(r);
+  return toView(r, tx, (await propertyFacts(d, tx, r.property_id)).businessDate);
 }
 
 export async function listLostFound(
-  _d: Deps,
+  d: Deps,
   tx: TxContext,
   q: { propertyId: string; status?: LostFoundStatus; stayId?: string },
 ): Promise<LostFoundView[]> {
@@ -155,10 +171,12 @@ export async function listLostFound(
     .limit(500);
   if (q.status) query = query.where('status', '=', q.status);
   if (q.stayId) query = query.where('matched_stay_id', '=', q.stayId);
-  return (await query.execute()).map(toView);
+  const today = (await propertyFacts(d, tx, q.propertyId)).businessDate;
+  return (await query.execute()).map((r) => toView(r, tx, today));
 }
 
 async function transition(
+  d: Deps,
   tx: TxContext,
   row: Row,
   expectedVersion: number,
@@ -192,11 +210,11 @@ async function transition(
     before: { status: row.status },
     after: { status: to, ...audit.after },
   });
-  return toView(updated);
+  return toView(updated, tx, (await propertyFacts(d, tx, row.property_id)).businessDate);
 }
 
 export async function matchLostFound(
-  _d: Deps,
+  d: Deps,
   tx: TxContext,
   id: string,
   expectedVersion: number,
@@ -206,6 +224,7 @@ export async function matchLostFound(
     throw new ValidationError('owner_required', 'Link the item to a guest profile or a stay.');
   const row = await load(tx, id);
   return transition(
+    d,
     tx,
     row,
     expectedVersion,
@@ -224,19 +243,32 @@ export async function matchLostFound(
 
 /** Hand the item over. A signature (object-store ref) is mandatory evidence of release. */
 export async function releaseLostFound(
-  _d: Deps,
+  d: Deps,
   tx: TxContext,
   id: string,
   expectedVersion: number,
-  input: { releasedTo: string; signatureRef: string; note?: string },
+  input: {
+    releasedTo: string;
+    signatureRef: string;
+    note?: string;
+    method?: 'handed_over' | 'shipped';
+    trackingRef?: string;
+  },
 ): Promise<LostFoundView> {
   const row = await load(tx, id);
   return transition(
+    d,
     tx,
     row,
     expectedVersion,
     'released',
-    { released_to: input.releasedTo, release_signature_ref: input.signatureRef, released_at: tx.now },
+    {
+      released_to: input.releasedTo,
+      release_method: input.method ?? 'handed_over',
+      tracking_ref: input.trackingRef ?? null,
+      release_signature_ref: input.signatureRef,
+      released_at: tx.now,
+    },
     { reason: input.note ?? null, after: { releasedTo: input.releasedTo, signatureRef: input.signatureRef } },
   );
 }
@@ -252,6 +284,7 @@ export async function disposeLostFound(
   const facts = await propertyFacts(d, tx, row.property_id);
   assertDisposalAllowed(facts.businessDate, row.retention_until, input.reason);
   return transition(
+    d,
     tx,
     row,
     expectedVersion,

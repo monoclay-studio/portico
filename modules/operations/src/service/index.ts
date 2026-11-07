@@ -67,6 +67,7 @@ export function createOperationsService(ports: OperationsPorts) {
       'createServiceRequest',
       'getServiceRequest',
       'listServiceRequests',
+      'listMyWork',
     ] as const),
     createGenericTask: (tx: TxContext, input: Parameters<typeof tasks.createTask>[2]) =>
       tasks.createTask(d, tx, input),
@@ -114,6 +115,8 @@ export function createOperationsService(ports: OperationsPorts) {
     ] as const),
     // ── offline sync ──
     pullChanges: (tx: TxContext, q: Parameters<typeof sync.pullChanges>[2]) => sync.pullChanges(d, tx, q),
+    listSyncConflicts: (tx: TxContext, propertyId: string, q: { since?: Date } = {}) =>
+      sync.listSyncConflicts(d, tx, propertyId, q),
     applySyncBatch: (database: PorticoDatabase, ctx: RequestContext, input: SyncBatchInput) =>
       sync.applySyncBatch(d, database, ctx, input),
   };

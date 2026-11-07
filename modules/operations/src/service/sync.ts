@@ -1,16 +1,10 @@
 import { type PorticoDatabase, sql, type TxContext, withTenantTx } from '@portico/db';
-import {
-  canonicalJson,
-  DomainError,
-  type RequestContext,
-  requirePermission,
-  sha256Hex,
-  ValidationError,
-} from '@portico/kernel';
+import { canonicalJson, DomainError, type RequestContext, sha256Hex, ValidationError } from '@portico/kernel';
 import type {
   Changes,
   SyncBatchInput,
   SyncBatchResult,
+  SyncConflictView,
   SyncMutation,
   SyncMutationResult,
   TaskView,
@@ -26,10 +20,28 @@ import {
   explainUnitConflict,
 } from '../domain/sync';
 import { recordInspection } from './inspections';
-import { actorKey, actorUserId, type Deps, db, loadSettings, toTaskView, toUnitView } from './internal';
+import {
+  actorKey,
+  actorUserId,
+  type Deps,
+  db,
+  loadSettings,
+  requireAny,
+  toTaskView,
+  toUnitView,
+  UNIT_READ_PERMISSIONS,
+} from './internal';
 import { recordLostFound } from './lost-found';
 import { commentTask, loadTask, taskView, transitionTask } from './tasks';
-import { loadUnit, reportOccupancy, setCondition, setDnd, setTurndown, unitView } from './units';
+import {
+  loadUnit,
+  reportOccupancy,
+  setCondition,
+  setDnd,
+  setTurndown,
+  unitView,
+  workOrderInfoFor,
+} from './units';
 
 type Outcome = 'applied' | 'pending' | 'conflict' | 'rejected';
 interface SideEffect {
@@ -129,7 +141,7 @@ export async function applySyncBatch(
         .selectAll()
         .where('id', '=', id)
         .executeTakeFirst();
-      if (row && row.property_id === input.propertyId) units.push(await unitView(tx, row));
+      if (row && row.property_id === input.propertyId) units.push(await unitView(d, tx, row));
     }
     const tasks: TaskView[] = [];
     for (const id of touchedTasks) {
@@ -265,6 +277,23 @@ async function processMutation(
       message: err.message,
     });
     if (err.status === 409 && entity) result.conflict = await conflictDetails(tx, entity, effectiveBase);
+  }
+  if (result.status === 'conflict') {
+    // OPS-R22: a sync conflict is shown to the attendant (this response) AND to supervisors (event + list).
+    await tx.emit({
+      type: 'operations.sync.conflict',
+      propertyId: input.propertyId,
+      aggregate: { type: entity?.type ?? 'unit', id: entity?.id ?? input.propertyId },
+      payload: {
+        clientMutationId: m.clientMutationId,
+        deviceId: input.deviceId,
+        op: m.op,
+        entity,
+        code: result.code,
+        message: result.message,
+        clientTimestamp: m.clientTimestamp,
+      },
+    });
   }
   await db(tx)
     .updateTable('operations.sync_mutations')
@@ -603,7 +632,7 @@ export async function pullChanges(
   tx: TxContext,
   q: { propertyId: string; cursor?: string; limit: number },
 ): Promise<Changes> {
-  requirePermission(tx, 'operations.unit.read', { propertyId: q.propertyId });
+  requireAny(tx, UNIT_READ_PERMISSIONS, q.propertyId);
   const prior = decodeCursor(q.cursor);
   const { rows } = await sql<{
     xmin: string;
@@ -666,6 +695,10 @@ export async function pullChanges(
     .where('property_id', '=', q.propertyId)
     .execute();
   const sectionName = new Map(sections.map((s) => [s.id, s.name]));
+  const workOrderInfo = await workOrderInfoFor(
+    tx,
+    u.map((r) => r.block_work_order_id),
+  );
   const taskUnitIds = [...new Set(t.map((r) => r.unit_id).filter((x): x is string => !!x))];
   const unitNumbers = new Map(
     taskUnitIds.length
@@ -680,9 +713,12 @@ export async function pullChanges(
   );
   return {
     units: u.map((r) =>
-      toUnitView(r, { sectionName: r.section_id ? (sectionName.get(r.section_id) ?? null) : null }),
+      toUnitView(r, tx, {
+        sectionName: r.section_id ? (sectionName.get(r.section_id) ?? null) : null,
+        workOrder: workOrderInfo.get(r.block_work_order_id ?? '') ?? null,
+      }),
     ),
-    tasks: t.map((r) => toTaskView(r, tx.now, r.unit_id ? (unitNumbers.get(r.unit_id) ?? null) : null)),
+    tasks: t.map((r) => toTaskView(r, tx, r.unit_id ? (unitNumbers.get(r.unit_id) ?? null) : null)),
     workOrders: w.map((r) => ({
       id: r.id,
       number: r.number,
@@ -694,4 +730,43 @@ export async function pullChanges(
     hasMore,
     serverTime: tx.now.toISOString(),
   };
+}
+
+/** Offline sync conflicts for supervisors (OPS-R22): what the device tried, why it was refused, current version. */
+export async function listSyncConflicts(
+  _d: Deps,
+  tx: TxContext,
+  propertyId: string,
+  q: { since?: Date } = {},
+): Promise<SyncConflictView[]> {
+  requireAny(
+    tx,
+    ['operations.syncConflict.resolve', 'operations.housekeeping.assign', 'operations.task.manage'],
+    propertyId,
+  );
+  let query = db(tx)
+    .selectFrom('operations.sync_mutations')
+    .selectAll()
+    .where('property_id', '=', propertyId)
+    .where('outcome', '=', 'conflict')
+    .orderBy('processed_at', 'desc')
+    .limit(200);
+  if (q.since) query = query.where('processed_at', '>=', q.since);
+  const rows = await query.execute();
+  return rows.map((r) => {
+    const res = r.result as SyncMutationResult;
+    return {
+      clientMutationId: r.client_mutation_id,
+      deviceId: r.device_id,
+      actor: r.actor_key,
+      op: r.op,
+      entity: r.entity_id ? { type: r.entity_type, id: r.entity_id } : null,
+      code: res.code,
+      message: res.message,
+      baseVersion: r.base_version,
+      conflict: res.conflict,
+      clientOccurredAt: new Date(r.client_occurred_at).toISOString(),
+      processedAt: new Date(r.processed_at).toISOString(),
+    };
+  });
 }

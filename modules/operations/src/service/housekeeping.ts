@@ -10,7 +10,15 @@ import {
   type UnitCondition,
 } from '../domain/model';
 import { suggestAssignments as suggest, type WorkloadAttendant, type WorkloadTask } from '../domain/workload';
-import { type Deps, db, loadSettings, pgUniqueViolation, propertyFacts } from './internal';
+import {
+  type Deps,
+  db,
+  loadSettings,
+  pgUniqueViolation,
+  propertyFacts,
+  requireAny,
+  UNIT_READ_PERMISSIONS,
+} from './internal';
 import { assignTask, housekeepingPriorityFor, insertTask, loadTask, taskView } from './tasks';
 
 const P = {
@@ -84,7 +92,7 @@ export async function createSection(
 }
 
 export async function listSections(_d: Deps, tx: TxContext, propertyId: string): Promise<Section[]> {
-  requirePermission(tx, P.read, { propertyId });
+  requireAny(tx, UNIT_READ_PERMISSIONS, propertyId);
   const rows = await db(tx)
     .selectFrom('operations.sections')
     .selectAll()
@@ -177,7 +185,7 @@ export async function upsertAttendant(
 }
 
 export async function listAttendants(_d: Deps, tx: TxContext, propertyId: string): Promise<Attendant[]> {
-  requirePermission(tx, P.read, { propertyId });
+  requireAny(tx, UNIT_READ_PERMISSIONS, propertyId);
   const rows = await db(tx)
     .selectFrom('operations.attendants')
     .selectAll()

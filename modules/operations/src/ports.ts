@@ -15,7 +15,7 @@ export interface PlatformPort {
   getProperty(
     tx: TxContext,
     propertyId: string,
-  ): Promise<{ id: string; timezone: string; businessDate: LocalDate; checkInTime: string }>;
+  ): Promise<{ id: string; timezone: string; businessDate: LocalDate; checkInTime: string; profile: string }>;
   /** platform.assertWritable — 'portico' (write now) | 'forward' (send to the external system of record). */
   assertWritable(
     tx: TxContext,

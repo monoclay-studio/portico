@@ -5,5 +5,6 @@ export * from './events';
 export * from './manifest';
 export type * from './ports';
 export * from './routes';
+export { operationsSearch } from './search';
 export { createOperationsService, type OperationsService } from './service';
 export type { OperationsDB } from './tables';

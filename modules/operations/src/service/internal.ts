@@ -10,7 +10,8 @@ import {
 import type { attachment, Readiness, TaskView, UnitStatusView } from '../contracts';
 import { slaState } from '../domain/escalation';
 import type { EntityRef, TaskKind, TaskPriority, TaskStatus } from '../domain/model';
-import { mergeSettings, type OperationsSettings } from '../domain/settings';
+import { taskFacets, unitFacets } from '../domain/records';
+import { defaultsForProfile, mergeSettings, type OperationsSettings } from '../domain/settings';
 import type { OperationsPorts } from '../ports';
 import type { OperationsDB, TasksTable, UnitStatusTable } from '../tables';
 
@@ -26,7 +27,7 @@ export const SETTINGS_POLICY_KEY = 'operations.settings';
 const settingsCache = new WeakMap<TxContext, Map<string, OperationsSettings>>();
 const propertyCache = new WeakMap<
   TxContext,
-  Map<string, { timezone: string; businessDate: LocalDate; checkInTime: string }>
+  Map<string, { timezone: string; businessDate: LocalDate; checkInTime: string; profile: string }>
 >();
 
 export async function loadSettings(d: Deps, tx: TxContext, propertyId: string): Promise<OperationsSettings> {
@@ -38,7 +39,8 @@ export async function loadSettings(d: Deps, tx: TxContext, propertyId: string): 
   const hit = m.get(propertyId);
   if (hit) return hit;
   const raw = await d.ports.platform.resolvePolicy(tx, propertyId, SETTINGS_POLICY_KEY);
-  const s = mergeSettings(raw);
+  const facts = await propertyFacts(d, tx, propertyId);
+  const s = mergeSettings(raw, defaultsForProfile(facts.profile));
   m.set(propertyId, s);
   return s;
 }
@@ -52,7 +54,12 @@ export async function propertyFacts(d: Deps, tx: TxContext, propertyId: string) 
   const hit = m.get(propertyId);
   if (hit) return hit;
   const p = await d.ports.platform.getProperty(tx, propertyId);
-  const facts = { timezone: p.timezone, businessDate: p.businessDate, checkInTime: p.checkInTime };
+  const facts = {
+    timezone: p.timezone,
+    businessDate: p.businessDate,
+    checkInTime: p.checkInTime,
+    profile: p.profile,
+  };
   m.set(propertyId, facts);
   return facts;
 }
@@ -110,6 +117,8 @@ export function requireAny(tx: TxContext, permissions: readonly string[], proper
   throw new ForbiddenError(permissions.join(' | '), { propertyId });
 }
 
+export const UNIT_READ_PERMISSIONS = ['operations.unit.read', 'operations.housekeeping.read'] as const;
+
 export const TASK_READ_PERMISSIONS = [
   'operations.task.read',
   'operations.task.update',
@@ -140,7 +149,22 @@ function pendingRequestedAt(change: unknown): string | null {
   return typeof v === 'string' ? v : null;
 }
 
-export function toUnitView(row: UnitRow, opts: { sectionName?: string | null; readiness?: Readiness } = {}) {
+export type ViewCtx = Pick<TxContext, 'now' | 'authz' | 'actor'>;
+
+/** Permission check bound to a record's property (for allowedActions). */
+export function canFor(ctx: Pick<TxContext, 'authz'>, propertyId: string) {
+  return (permission: string) => ctx.authz.can(permission, { propertyId });
+}
+
+export interface UnitViewExtras {
+  sectionName?: string | null;
+  readiness?: Readiness;
+  arrivalStayId?: string | null;
+  openTask?: { assigneeUserId: string | null; assigneeName: string | null } | null;
+  workOrder?: { number: string; completed: boolean; returnToService: string } | null;
+}
+
+export function toUnitView(row: UnitRow, ctx: ViewCtx, opts: UnitViewExtras = {}) {
   const stored = row.readiness as Partial<Readiness> | null;
   const readiness: Readiness =
     opts.readiness ??
@@ -192,12 +216,48 @@ export function toUnitView(row: UnitRow, opts: { sectionName?: string | null; re
     provenance: row.provenance as UnitStatusView['provenance'],
     externalSyncedAt: iso(row.external_synced_at),
     version: row.version,
+    ...unitFacets(
+      {
+        unitId: row.id,
+        unitNumber: row.unit_number,
+        condition: row.condition,
+        occupancy: row.occupancy,
+        occupancyStayId: row.occupancy_stay_id,
+        discrepancy: row.discrepancy,
+        dnd: row.dnd,
+        turndown: row.turndown,
+        ready: readiness.ready,
+        readinessReasons: readiness.reasons,
+        expectedReadyAt: readiness.expectedReadyAt,
+        block:
+          row.block_kind && row.block_to
+            ? { kind: row.block_kind, to: row.block_to, workOrderId: row.block_work_order_id }
+            : null,
+        workOrder: opts.workOrder ?? null,
+        pending: row.pending_forward_id !== null,
+        provenanceExternal: row.provenance === 'external',
+        arrivalStayId: opts.arrivalStayId ?? null,
+        openTask: opts.openTask ?? null,
+        housekeepingDepartment: { id: 'housekeeping', name: 'housekeeping' },
+      },
+      canFor(ctx, row.property_id),
+    ),
   };
   return view;
 }
 
-export function toTaskView(row: TaskRow, now: Date, unitNumber: string | null = null): TaskView {
+export function toTaskView(
+  row: TaskRow,
+  ctx: ViewCtx,
+  unitNumber: string | null = null,
+  backs: { type: 'service_request' | 'work_order'; id: string; number: string } | null = null,
+): TaskView {
+  const now = ctx.now;
   const open = row.status === 'open' || row.status === 'in_progress' || row.status === 'blocked';
+  const sla = open
+    ? slaState(now, row.due_at ? new Date(row.due_at) : null)
+    : { state: 'none' as const, minutes: 0 };
+  const refs = (row.refs ?? []) as EntityRef[];
   return {
     id: row.id,
     propertyId: row.property_id,
@@ -206,7 +266,6 @@ export function toTaskView(row: TaskRow, now: Date, unitNumber: string | null = 
     kind: row.kind as TaskKind,
     title: row.title,
     description: row.description,
-    status: row.status as TaskStatus,
     priority: row.priority as TaskPriority,
     priorityScore: row.priority_score,
     priorityReasons: row.priority_reasons ?? [],
@@ -215,12 +274,12 @@ export function toTaskView(row: TaskRow, now: Date, unitNumber: string | null = 
     stayId: row.stay_id,
     guestProfileId: row.guest_profile_id,
     parentTaskId: row.parent_task_id,
-    refs: (row.refs ?? []) as EntityRef[],
+    refs,
     assigneeUserId: row.assignee_user_id,
     assigneeName: row.assignee_name,
     serviceDate: row.service_date,
     dueAt: iso(row.due_at),
-    sla: open ? slaState(now, row.due_at ? new Date(row.due_at) : null) : { state: 'none', minutes: 0 },
+    sla,
     credits: row.credits,
     blockedReason: row.blocked_reason,
     cancelledReason: row.cancelled_reason,
@@ -234,6 +293,32 @@ export function toTaskView(row: TaskRow, now: Date, unitNumber: string | null = 
     createdAt: new Date(row.created_at).toISOString(),
     updatedAt: new Date(row.updated_at).toISOString(),
     version: row.version,
+    ...taskFacets(
+      {
+        id: row.id,
+        kind: row.kind as TaskKind,
+        status: row.status as TaskStatus,
+        priority: row.priority,
+        title: row.title,
+        assigneeUserId: row.assignee_user_id,
+        assigneeName: row.assignee_name,
+        departmentKind: row.department_kind,
+        departmentId: row.department_id,
+        blockedReason: row.blocked_reason,
+        slaState: sla.state,
+        slaMinutes: sla.minutes,
+        escalationLevel: row.escalation_level,
+        unitId: row.unit_id,
+        unitNumber,
+        stayId: row.stay_id,
+        guestProfileId: row.guest_profile_id,
+        parentTaskId: row.parent_task_id,
+        refs,
+        backs,
+      },
+      canFor(ctx, row.property_id),
+      ctx.actor.kind === 'user' ? ctx.actor.userId : null,
+    ),
   };
 }
 

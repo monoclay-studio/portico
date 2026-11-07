@@ -342,6 +342,8 @@ export interface LostFoundItemsTable {
   matched_stay_id: string | null;
   matched_note: string | null;
   released_to: string | null;
+  release_method: string | null;
+  tracking_ref: string | null;
   release_signature_ref: string | null;
   released_at: Date | null;
   disposal_method: string | null;

@@ -1,4 +1,4 @@
-import { explainVersionMiss, type Selectable, type TxContext, type Updateable } from '@portico/db';
+import { explainVersionMiss, type Selectable, sql, type TxContext, type Updateable } from '@portico/db';
 import {
   BusinessRuleError,
   NotFoundError,
@@ -15,6 +15,7 @@ import type {
   TaskDetail,
   TaskListQuery,
   TaskView,
+  WorkItem,
 } from '../contracts';
 import { defaultDueAt, evaluateEscalation, nextEscalationAt } from '../domain/escalation';
 import {
@@ -30,6 +31,7 @@ import {
   type UnitCondition,
 } from '../domain/model';
 import { type ArrivalContext, housekeepingPriority } from '../domain/priority';
+import { serviceRequestFacets } from '../domain/records';
 import { creditsFor, type EscalationStep, escalationPathFor } from '../domain/settings';
 import {
   assertTaskTransition,
@@ -182,7 +184,7 @@ export async function insertTask(
       verified_by: null,
       cancelled_at: null,
       escalation_path: JSON.stringify(path),
-      next_escalation_at: nextEscalationAt(dueAt, path, 0),
+      next_escalation_at: nextEscalationAt({ dueAt, createdAt: tx.now, started: false }, path, 0),
       last_escalated_at: null,
       source: t.source,
       dedupe_key: t.dedupeKey ?? null,
@@ -449,7 +451,23 @@ export async function taskView(tx: TxContext, row: TaskRow): Promise<TaskView> {
       .executeTakeFirst();
     unitNumber = u?.unit_number ?? null;
   }
-  return toTaskView(row, tx.now, unitNumber);
+  let backs: { type: 'service_request' | 'work_order'; id: string; number: string } | null = null;
+  if (row.kind === 'service_request') {
+    const sr = await db(tx)
+      .selectFrom('operations.service_requests')
+      .select(['id', 'number'])
+      .where('task_id', '=', row.id)
+      .executeTakeFirst();
+    if (sr) backs = { type: 'service_request', id: sr.id, number: sr.number };
+  } else if (row.kind === 'work_order') {
+    const wo = await db(tx)
+      .selectFrom('operations.work_orders')
+      .select(['id', 'number'])
+      .where('task_id', '=', row.id)
+      .executeTakeFirst();
+    if (wo) backs = { type: 'work_order', id: wo.id, number: wo.number };
+  }
+  return toTaskView(row, tx, unitNumber, backs);
 }
 
 export async function getTask(_d: Deps, tx: TxContext, id: string): Promise<TaskDetail> {
@@ -510,7 +528,7 @@ export async function listTasks(_d: Deps, tx: TxContext, q: TaskListQuery): Prom
   if (q.overdue)
     query = query.where('t.due_at', '<', tx.now).where('t.status', 'in', [...OPEN_TASK_STATUSES]);
   const rows = await query.execute();
-  return rows.map((r) => toTaskView(r, tx.now, r.unit_number ?? null));
+  return rows.map((r) => toTaskView(r, tx, r.unit_number ?? null));
 }
 
 // ───────────────────────────── Transitions ─────────────────────────────
@@ -580,11 +598,18 @@ export async function transitionTask(
   }
   const terminalOrDone = input.to === 'done' || input.to === 'verified' || input.to === 'cancelled';
   if (terminalOrDone) set.next_escalation_at = null;
-  else if (from === 'done') {
-    set.done_at = null;
-    set.done_by = null;
+  else {
+    if (from === 'done') {
+      set.done_at = null;
+      set.done_by = null;
+    }
+    // Acknowledgement steps stop applying once the task is started; overdue steps keep running.
     set.next_escalation_at = nextEscalationAt(
-      row.due_at ? new Date(row.due_at) : null,
+      {
+        dueAt: row.due_at ? new Date(row.due_at) : null,
+        createdAt: new Date(row.created_at),
+        started: input.to === 'in_progress' || !!row.started_at,
+      },
       row.escalation_path as EscalationStep[],
       row.escalation_level,
     );
@@ -739,7 +764,7 @@ async function applyTaskSideEffects(
           await tx.emit({
             type: 'operations.serviceRequest.completed',
             propertyId: sr.property_id,
-            aggregate: { type: 'serviceRequest', id: sr.id },
+            aggregate: { type: 'service_request', id: sr.id },
             payload: {
               serviceRequestId: sr.id,
               number: sr.number,
@@ -893,7 +918,7 @@ export async function commentTask(
  * callable on demand). Each step fires exactly once; firing is recorded in history and emitted as
  * `operations.task.escalated` for notifications.
  */
-export async function runEscalations(_d: Deps, tx: TxContext, propertyId: string) {
+export async function runEscalations(d: Deps, tx: TxContext, propertyId: string) {
   requirePermission(tx, 'operations.task.manage', { propertyId });
   const due = await db(tx)
     .selectFrom('operations.tasks')
@@ -915,13 +940,30 @@ export async function runEscalations(_d: Deps, tx: TxContext, propertyId: string
     const decision = evaluateEscalation({
       now: tx.now,
       dueAt: t.due_at ? new Date(t.due_at) : null,
+      createdAt: new Date(t.created_at),
+      started: t.started_at !== null,
       path: t.escalation_path as EscalationStep[],
       currentLevel: t.escalation_level,
     });
-    if (!decision) {
+    if (!decision?.fired.length) {
+      // Nothing fires (e.g. an acknowledgement step passed over because the task was started): move the clock on.
       await db(tx)
         .updateTable('operations.tasks')
-        .set({ next_escalation_at: null, feed_xid: feedMark() })
+        .set({
+          escalation_level: decision?.level ?? t.escalation_level,
+          next_escalation_at:
+            decision?.next ??
+            nextEscalationAt(
+              {
+                dueAt: t.due_at ? new Date(t.due_at) : null,
+                createdAt: new Date(t.created_at),
+                started: t.started_at !== null,
+              },
+              t.escalation_path as EscalationStep[],
+              t.escalation_level + 1,
+            ),
+          feed_xid: feedMark(),
+        })
         .where('id', '=', t.id)
         .execute();
       continue;
@@ -943,7 +985,10 @@ export async function runEscalations(_d: Deps, tx: TxContext, propertyId: string
         kind: 'escalated',
         from: String(f.level - 1),
         to: `${f.level}:${f.target}`,
-        comment: `Overdue by ${decision.minutesOverdue} min — escalated to ${f.target.replace('_', ' ')}.`,
+        comment:
+          f.reason === 'not_acknowledged'
+            ? `Not started in time — escalated to ${f.target.replace('_', ' ')}.`
+            : `Overdue by ${decision.minutesOverdue} min — escalated to ${f.target.replace('_', ' ')}.`,
         source: 'system',
       });
       await tx.emit({
@@ -963,6 +1008,7 @@ export async function runEscalations(_d: Deps, tx: TxContext, propertyId: string
           stayId: t.stay_id,
           dueAt: iso(t.due_at),
           minutesOverdue: decision.minutesOverdue,
+          reason: f.reason,
         },
       });
       escalated.push({
@@ -980,7 +1026,34 @@ export async function runEscalations(_d: Deps, tx: TxContext, propertyId: string
       after: { level: decision.level, targets: decision.fired.map((f) => f.target) },
     });
   }
-  return { escalated };
+  // OPS-R03: do-not-disturb held for too long becomes a welfare check for the duty manager (once per DND period).
+  const settings = await loadSettings(d, tx, propertyId);
+  const limit = new Date(tx.now.getTime() - settings.dndWelfareCheckHours * 3_600_000);
+  const longDnd = await db(tx)
+    .selectFrom('operations.unit_status')
+    .select(['id', 'unit_number', 'dnd_since', 'occupancy_stay_id'])
+    .where('property_id', '=', propertyId)
+    .where('dnd', '=', true)
+    .where('dnd_since', '<=', limit)
+    .execute();
+  const welfareChecks: string[] = [];
+  for (const u of longDnd) {
+    const r = await insertTask(d, tx, {
+      propertyId,
+      kind: 'general',
+      departmentKind: 'management',
+      title: `Welfare check: do not disturb for over ${settings.dndWelfareCheckHours} h · ${u.unit_number}`,
+      description: 'Do not disturb has been on for a long time. Check on the guest discreetly (policy).',
+      priority: 'high',
+      unitId: u.id,
+      stayId: u.occupancy_stay_id,
+      dueAt: new Date(tx.now.getTime() + settings.resolutionMinutes.high * 60_000),
+      source: 'system',
+      dedupeKey: `dnd_welfare:${u.id}:${new Date(u.dnd_since ?? tx.now).toISOString()}`,
+    });
+    if (r.created) welfareChecks.push(r.row.id);
+  }
+  return { escalated, welfareChecks };
 }
 
 // ───────────────────────────── Service requests ─────────────────────────────
@@ -990,7 +1063,6 @@ function toServiceRequestView(sr: Selectable<ServiceRequestsTable>, task: TaskVi
     id: sr.id,
     propertyId: sr.property_id,
     number: sr.number,
-    status: sr.status as ServiceRequestView['status'],
     channel: sr.channel as ServiceRequestChannel,
     category: sr.category,
     description: sr.description,
@@ -1001,6 +1073,16 @@ function toServiceRequestView(sr: Selectable<ServiceRequestsTable>, task: TaskVi
     fulfilledAt: iso(sr.fulfilled_at),
     task,
     version: sr.version,
+    ...serviceRequestFacets(
+      {
+        status: sr.status,
+        taskId: sr.task_id,
+        stayId: sr.stay_id,
+        guestProfileId: sr.guest_profile_id,
+        unitId: sr.unit_id,
+      },
+      task,
+    ),
   };
 }
 
@@ -1066,14 +1148,14 @@ export async function createServiceRequest(
     .executeTakeFirstOrThrow();
   await tx.audit({
     action: 'operations.serviceRequest.create',
-    target: { type: 'serviceRequest', id },
+    target: { type: 'service_request', id },
     propertyId: input.propertyId,
     after: { number: sr.number, category: input.category, channel: input.channel, taskId: task.id },
   });
   await tx.emit({
     type: 'operations.serviceRequest.created',
     propertyId: input.propertyId,
-    aggregate: { type: 'serviceRequest', id },
+    aggregate: { type: 'service_request', id },
     payload: {
       serviceRequestId: id,
       number: sr.number,
@@ -1118,4 +1200,58 @@ export async function listServiceRequests(
   for (const sr of rows)
     out.push(toServiceRequestView(sr, await taskView(tx, await loadTask(tx, sr.task_id))));
   return out;
+}
+
+// ───────────────────────────── My work ─────────────────────────────
+
+/**
+ * Feed for the cross-module "My work" inbox: open tasks assigned to me, plus unassigned tasks queued for the
+ * given departments — only at properties where I may see tasks. Uses the assignee and department-queue indexes.
+ */
+export async function listMyWork(
+  _d: Deps,
+  tx: TxContext,
+  q: { propertyId?: string; departments?: string[]; limit: number },
+): Promise<WorkItem[]> {
+  const me = actorUserId(tx);
+  const scopes = TASK_READ_PERMISSIONS.map((p) => tx.authz.propertyScope(p));
+  const all = scopes.includes('all');
+  const ids = all ? [] : [...new Set(scopes.flatMap((s) => (s === 'all' ? [] : [...s])))];
+  if (!all && !ids.length) return [];
+  if (q.propertyId && !all && !ids.includes(q.propertyId)) return [];
+  let query = db(tx)
+    .selectFrom('operations.tasks as t')
+    .leftJoin('operations.unit_status as u', 'u.id', 't.unit_id')
+    .selectAll('t')
+    .select('u.unit_number')
+    .where('t.status', 'in', [...OPEN_TASK_STATUSES])
+    .where((eb) => {
+      const mine = me ? [eb('t.assignee_user_id', '=', me)] : [];
+      const queue = q.departments?.length
+        ? [eb.and([eb('t.assignee_user_id', 'is', null), eb('t.department_kind', 'in', q.departments)])]
+        : [];
+      return eb.or([...mine, ...queue, ...(mine.length || queue.length ? [] : [eb.val(false)])]);
+    })
+    .orderBy('t.priority_score', 'desc')
+    .orderBy(sql`t.due_at nulls last`)
+    .limit(q.limit);
+  if (q.propertyId) query = query.where('t.property_id', '=', q.propertyId);
+  else if (!all) query = query.where('t.property_id', 'in', ids);
+  const rows = await query.execute();
+  return rows.map((r) => {
+    const v = toTaskView(r, tx, r.unit_number ?? null);
+    return {
+      type: 'task' as const,
+      id: v.id,
+      propertyId: v.propertyId,
+      title: v.unitNumber && !v.title.includes(v.unitNumber) ? `${v.title} · ${v.unitNumber}` : v.title,
+      kind: v.kind,
+      status: v.status,
+      priority: v.priority,
+      dueAt: v.dueAt,
+      owner: v.owner ?? { kind: 'department', id: r.department_kind, name: r.department_kind },
+      issues: v.issues,
+      links: v.links,
+    };
+  });
 }

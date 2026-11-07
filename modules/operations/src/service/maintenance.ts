@@ -18,14 +18,16 @@ import type {
   WorkOrderView,
 } from '../contracts';
 import { checkReturnToService } from '../domain/inspection';
-import type { IntervalUnit, Urgency } from '../domain/model';
+import type { IntervalUnit, TaskStatus, Urgency } from '../domain/model';
 import { dueOccurrences } from '../domain/preventive';
+import { workOrderFacets } from '../domain/records';
 import { priorityForUrgency } from '../domain/tasks';
 import type { AssetsTable, PreventiveSchedulesTable, ResolutionItemsTable, WorkOrdersTable } from '../tables';
 import { toInspectionView } from './inspections';
 import {
   actorKey,
   actorName,
+  canFor,
   type Deps,
   db,
   feedMark,
@@ -42,7 +44,10 @@ import { loadUnit, refreshReadiness, systemConditionChange } from './units';
 const P = {
   report: 'operations.maintenance.report',
   manage: 'operations.maintenance.manage',
-  read: 'operations.unit.read',
+  read: 'operations.maintenance.read',
+  unitRead: 'operations.unit.read',
+  impact: 'operations.maintenance.setInventoryImpact',
+  asset: 'operations.asset.manage',
 } as const;
 
 type Part = WorkOrderView['parts'][number];
@@ -114,7 +119,7 @@ export async function createAsset(
     installedOn?: LocalDate;
   },
 ): Promise<AssetView> {
-  requirePermission(tx, P.manage, { propertyId });
+  requireAny(tx, [P.asset, P.manage], propertyId);
   if (input.kind === 'unit' && !input.unitId)
     throw new ValidationError('unit_required', 'A unit asset must reference the unit it represents.');
   if (input.unitId) {
@@ -180,7 +185,7 @@ export async function updateAsset(
   },
 ): Promise<AssetView> {
   const before = await loadAsset(tx, id);
-  requirePermission(tx, P.manage, { propertyId: before.property_id });
+  requireAny(tx, [P.asset, P.manage], before.property_id);
   const row = await db(tx)
     .updateTable('operations.assets')
     .set({
@@ -225,7 +230,7 @@ async function loadAsset(tx: TxContext, id: string) {
 
 export async function getAsset(_d: Deps, tx: TxContext, id: string): Promise<AssetView> {
   const row = await loadAsset(tx, id);
-  requireAny(tx, [P.read, P.manage], row.property_id);
+  requireAny(tx, [P.read, P.manage, P.unitRead], row.property_id);
   return toAsset(row);
 }
 
@@ -235,7 +240,7 @@ export async function listAssets(
   propertyId: string,
   q: { category?: string; kind?: string } = {},
 ): Promise<AssetView[]> {
-  requireAny(tx, [P.read, P.manage], propertyId);
+  requireAny(tx, [P.read, P.manage, P.unitRead], propertyId);
   let query = db(tx)
     .selectFrom('operations.assets')
     .selectAll()
@@ -249,7 +254,7 @@ export async function listAssets(
 /** Work history of an asset: its work orders (and, for unit assets, the unit's inspections). */
 export async function assetHistory(_d: Deps, tx: TxContext, id: string) {
   const asset = await loadAsset(tx, id);
-  requireAny(tx, [P.read, P.manage], asset.property_id);
+  requireAny(tx, [P.read, P.manage, P.unitRead], asset.property_id);
   const orders = await db(tx)
     .selectFrom('operations.work_orders')
     .selectAll()
@@ -344,6 +349,24 @@ export async function workOrderView(tx: TxContext, row: Selectable<WorkOrdersTab
     task,
     resolutionItems: items.map((i) => toResolutionItem(i, task.unitNumber)),
     version: row.version,
+    ...workOrderFacets(
+      {
+        id: row.id,
+        number: row.number,
+        taskStatus: task.status.task as TaskStatus,
+        completed: row.completed_at !== null,
+        blockStatus: row.block_status,
+        returnToService: row.return_to_service_status,
+        authorityState: row.authority_state,
+        openResolutionItems: items.filter((i) => i.status === 'open').length,
+        unitId: row.unit_id,
+        assetId: row.asset_id,
+        taskId: row.task_id,
+        hasUnit: row.unit_id !== null,
+      },
+      task,
+      canFor(tx, row.property_id),
+    ),
   };
 }
 
@@ -518,7 +541,7 @@ async function insertWorkOrder(
   await tx.emit({
     type: 'operations.workOrder.created',
     propertyId: input.propertyId,
-    aggregate: { type: 'workOrder', id },
+    aggregate: { type: 'work_order', id },
     payload: {
       workOrderId: id,
       number: row.number,
@@ -540,7 +563,7 @@ export async function createWorkOrder(
   input: WorkOrderInput,
   meta: { source?: 'staff' | 'mobile_sync' } = {},
 ): Promise<WorkOrderView> {
-  if (input.block) requirePermission(tx, P.manage, { propertyId: input.propertyId });
+  if (input.block) requirePermission(tx, P.impact, { propertyId: input.propertyId });
   else requireAny(tx, [P.report, P.manage], input.propertyId);
   const { row } = await insertWorkOrder(d, tx, {
     propertyId: input.propertyId,
@@ -563,7 +586,7 @@ export async function createWorkOrder(
 
 export async function getWorkOrder(_d: Deps, tx: TxContext, id: string): Promise<WorkOrderView> {
   const row = await loadWorkOrder(tx, id);
-  requireAny(tx, [P.read, P.report, P.manage], row.property_id);
+  requireAny(tx, [P.read, P.report, P.manage, P.unitRead], row.property_id);
   return workOrderView(tx, row);
 }
 
@@ -572,7 +595,7 @@ export async function listWorkOrders(
   tx: TxContext,
   q: { propertyId: string; open?: boolean; assetId?: string; unitId?: string; limit: number },
 ): Promise<WorkOrderView[]> {
-  requireAny(tx, [P.read, P.report, P.manage], q.propertyId);
+  requireAny(tx, [P.read, P.report, P.manage, P.unitRead], q.propertyId);
   let query = db(tx)
     .selectFrom('operations.work_orders as w')
     .innerJoin('operations.tasks as t', 't.id', 'w.task_id')
@@ -607,7 +630,7 @@ export async function requestUnitBlock(
   meta: { expectedVersion?: number } = {},
 ): Promise<WorkOrderView> {
   const wo = await loadWorkOrder(tx, workOrderId, { forUpdate: true });
-  requirePermission(tx, P.manage, { propertyId: wo.property_id });
+  requirePermission(tx, P.impact, { propertyId: wo.property_id });
   assertWoVersion(wo, meta.expectedVersion);
   if (!wo.unit_id)
     throw new ValidationError(
@@ -663,7 +686,7 @@ export async function requestUnitBlock(
     nights: { from: input.from, to: input.to },
     kind: input.kind,
     reason: input.reason,
-    sourceRef: { type: 'workOrder', id: wo.id },
+    sourceRef: { type: 'work_order', id: wo.id },
   });
   const row = await db(tx)
     .updateTable('operations.work_orders')
@@ -707,7 +730,7 @@ export async function requestUnitBlock(
   await tx.emit({
     type: 'operations.workOrder.unitBlocked',
     propertyId: wo.property_id,
-    aggregate: { type: 'workOrder', id: wo.id },
+    aggregate: { type: 'work_order', id: wo.id },
     payload: {
       workOrderId: wo.id,
       unitId: wo.unit_id,
@@ -875,7 +898,7 @@ export async function listResolutionItems(
   propertyId: string,
   status: 'open' | 'resolved' | 'dismissed' | undefined,
 ): Promise<ResolutionItemView[]> {
-  requirePermission(tx, P.read, { propertyId });
+  requireAny(tx, [P.unitRead, P.read, 'operations.housekeeping.read'], propertyId);
   let q = db(tx)
     .selectFrom('operations.resolution_items as r')
     .leftJoin('operations.unit_status as u', 'u.id', 'r.unit_id')
@@ -1056,7 +1079,7 @@ export async function completeWorkOrder(
         title: `Clean after maintenance · ${unit.unit_number}`,
         unitId: unit.id,
         serviceDate: facts.businessDate,
-        refs: [{ type: 'workOrder', id: wo.id }],
+        refs: [{ type: 'work_order', id: wo.id }],
         source: 'work_order',
         dedupeKey: `vacant_clean:wo:${wo.id}`,
       });
@@ -1068,7 +1091,7 @@ export async function completeWorkOrder(
         title: `Return-to-service inspection · ${unit.unit_number}`,
         unitId: unit.id,
         serviceDate: facts.businessDate,
-        refs: [{ type: 'workOrder', id: wo.id }],
+        refs: [{ type: 'work_order', id: wo.id }],
         source: 'work_order',
         dedupeKey: `inspection:wo:${wo.id}`,
       });
@@ -1083,7 +1106,7 @@ export async function completeWorkOrder(
   await tx.emit({
     type: 'operations.workOrder.completed',
     propertyId: wo.property_id,
-    aggregate: { type: 'workOrder', id },
+    aggregate: { type: 'work_order', id },
     payload: {
       workOrderId: id,
       number: wo.number,
@@ -1107,7 +1130,7 @@ export async function returnToService(
   expectedVersion: number,
 ): Promise<WorkOrderView> {
   const wo = await loadWorkOrder(tx, id, { forUpdate: true });
-  requirePermission(tx, P.manage, { propertyId: wo.property_id });
+  requirePermission(tx, P.impact, { propertyId: wo.property_id });
   assertWoVersion(wo, expectedVersion);
   const settings = await loadSettings(d, tx, wo.property_id);
   const lastPass = wo.unit_id
@@ -1167,7 +1190,7 @@ export async function returnToService(
   await tx.emit({
     type: 'operations.workOrder.returnedToService',
     propertyId: wo.property_id,
-    aggregate: { type: 'workOrder', id },
+    aggregate: { type: 'work_order', id },
     payload: {
       workOrderId: id,
       unitId: wo.unit_id,
@@ -1219,7 +1242,7 @@ export async function createPreventiveSchedule(
     checklistCode?: string;
   },
 ): Promise<PreventiveScheduleView> {
-  requirePermission(tx, P.manage, { propertyId });
+  requireAny(tx, [P.asset, P.manage], propertyId);
   if (!!input.assetId === !!input.assetCategory) {
     throw new ValidationError(
       'schedule_target_required',
@@ -1277,7 +1300,7 @@ export async function listPreventiveSchedules(
   tx: TxContext,
   propertyId: string,
 ): Promise<PreventiveScheduleView[]> {
-  requireAny(tx, [P.read, P.manage], propertyId);
+  requireAny(tx, [P.read, P.manage, P.unitRead], propertyId);
   const rows = await db(tx)
     .selectFrom('operations.preventive_schedules')
     .selectAll()
@@ -1292,7 +1315,7 @@ export async function listPreventiveSchedules(
  * Idempotent per (schedule, asset, due date): a re-run never duplicates work orders.
  */
 export async function runPreventiveSchedules(d: Deps, tx: TxContext, propertyId: string, asOf?: LocalDate) {
-  requirePermission(tx, P.manage, { propertyId });
+  requireAny(tx, [P.asset, P.manage], propertyId);
   const day = asOf ?? (await propertyFacts(d, tx, propertyId)).businessDate;
   const schedules = await db(tx)
     .selectFrom('operations.preventive_schedules')

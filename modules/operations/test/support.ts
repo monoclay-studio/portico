@@ -36,7 +36,13 @@ export function platformPort(): PlatformPort {
   return {
     async getProperty(tx, propertyId) {
       const p = await platform.getProperty(asSystem(tx), propertyId);
-      return { id: p.id, timezone: p.timezone, businessDate: p.businessDate, checkInTime: p.checkInTime };
+      return {
+        id: p.id,
+        timezone: p.timezone,
+        businessDate: p.businessDate,
+        checkInTime: p.checkInTime,
+        profile: p.profile,
+      };
     },
     assertWritable: (tx, propertyId, domain) => platform.assertWritable(tx, propertyId, domain),
     async getDataAuthority(tx, propertyId, domain) {
