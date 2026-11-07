@@ -10,9 +10,9 @@ playwright-report
 test-results
 .git
 .github
-.env
-.env.*
-!.env.example
+**/.env
+**/.env.*
+!**/.env.example
 docs
 infra/terraform
 infra/ci

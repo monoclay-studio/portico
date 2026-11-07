@@ -3,7 +3,9 @@
 #   docker build -f infra/restore-drill/Dockerfile -t portico-restore-drill:$(git rev-parse --short HEAD) .
 # STATUS: written and reviewed, NOT built (no Docker daemon available when authored). The package names below are
 # the Amazon Linux 2023 names as understood on 2026-11-07 — verify on first build.
-ARG BASE_IMAGE=public.ecr.aws/amazonlinux/amazonlinux:2023
+# Pinned by index digest (tag 2023, resolved 2026-11-07). AL2023 locks its package repositories to the image's
+# release, so `dnf install` below resolves the same package versions for the same digest.
+ARG BASE_IMAGE=public.ecr.aws/amazonlinux/amazonlinux:2023@sha256:381352c430f36d8aa6b8b670de06e7e4e5642fe0cb9dbd463bb8d1e79aefc0c7
 FROM ${BASE_IMAGE}
 RUN dnf install -y awscli-2 postgresql16 jq openssl findutils \
  && dnf clean all && rm -rf /var/cache/dnf

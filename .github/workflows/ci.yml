@@ -12,13 +12,16 @@ concurrency:
 permissions:
   contents: read
 
+# Every action is pinned to a full commit SHA (tag in the comment; resolved 2026-11-07 with `git ls-remote`).
+# Dependabot (github-actions ecosystem) proposes updates. infra/ci/test/supply-chain.test.mjs enforces the pinning.
+
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     services:
       postgres:
-        image: postgres:16
+        image: postgres:16@sha256:f9a7b9ebf6f56201f949db745e47bc423c0f0f8294bafe991cc10bf74b029657
         env:
           POSTGRES_HOST_AUTH_METHOD: trust
         ports: ["5432:5432"]
@@ -28,9 +31,9 @@ jobs:
       DATABASE_URL: postgres://postgres@127.0.0.1:5432/postgres
       PORTICO_TEST_DB_PREFIX: ci
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: pnpm
@@ -44,14 +47,74 @@ jobs:
           DATABASE_URL: postgres://postgres@127.0.0.1:5432/portico_ci_migrate
           APP_DATABASE_URL: postgres://portico_app:ci_only@127.0.0.1:5432/portico_ci_migrate
 
+  # Infrastructure checks (review P3-6): Terraform fmt/validate/test with mocked providers, the deploy script's
+  # offline tests, the infra unit tests, and the database role model end to end on a SCRAM-auth Postgres.
+  infra:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16@sha256:f9a7b9ebf6f56201f949db745e47bc423c0f0f8294bafe991cc10bf74b029657
+        env:
+          POSTGRES_PASSWORD: ci-only-throwaway-cluster
+          POSTGRES_HOST_AUTH_METHOD: scram-sha-256
+          POSTGRES_INITDB_ARGS: --auth=scram-sha-256
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      TF_VERSION: 1.16.7
+      TF_SHA256: 5454efcf7fc87f0c2113111b9a5c7182f0ca1c6f0f23a1e110a50770a8fe473b
+      TF_IN_AUTOMATION: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install Terraform (checksum-verified)
+        run: |
+          set -euo pipefail
+          curl -sSfLo /tmp/tf.zip "https://releases.hashicorp.com/terraform/${TF_VERSION}/terraform_${TF_VERSION}_linux_amd64.zip"
+          echo "${TF_SHA256}  /tmp/tf.zip" | sha256sum -c -
+          sudo unzip -o -q /tmp/tf.zip -d /usr/local/bin terraform
+          terraform version
+      - name: terraform fmt
+        run: terraform fmt -check -recursive infra/terraform
+      - name: terraform validate (every env root and module)
+        run: |
+          set -euo pipefail
+          for d in infra/terraform/envs/* infra/terraform/modules/*; do
+            terraform -chdir="$d" init -backend=false -input=false -no-color >/dev/null
+            terraform -chdir="$d" validate -no-color
+          done
+      - name: terraform test (mocked providers; no credentials, no cost)
+        run: |
+          set -euo pipefail
+          for d in $(dirname $(find infra/terraform -path '*/tests/*.tftest.hcl') | sort -u); do
+            echo "== ${d%/tests}"
+            terraform -chdir="${d%/tests}" test -no-color
+          done
+      - name: Infra unit tests (env guard, definer lists, drill alarm pattern, supply chain)
+        run: node --test infra/ops/env-guard.test.mjs infra/db/definer-lists.test.mjs infra/restore-drill/test/event-pattern.test.mjs infra/ci/test/supply-chain.test.mjs
+      - name: Deploy script control flow (fake AWS)
+        run: infra/ci/test/deploy-cell.test.sh
+      - run: pnpm install --frozen-lockfile
+      - name: Database role model end to end (SCRAM Postgres 16)
+        env:
+          PORTICO_VERIFY_THROWAWAY_CLUSTER: "yes"
+          ADMIN_URL: postgres://postgres:ci-only-throwaway-cluster@127.0.0.1:5432/postgres
+        run: infra/db/verify-roles.sh
+
   dependency-review:
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/dependency-review-action@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
         with:
           fail-on-severity: high

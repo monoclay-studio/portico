@@ -19,15 +19,17 @@
 # target-group check on /health/ready (DB ping) plus the ECS deployment circuit breaker, which is what decides
 # rollback. A Docker HEALTHCHECK would also need curl/wget in the image (larger attack surface) for no benefit.
 
-# Pin by digest before the first real build: docker buildx imagetools inspect node:22.23.4-slim
-ARG NODE_IMAGE=node:22.23.4-slim
+# Pinned by index digest (resolved 2026-11-07 from Docker Hub). Dependabot (docker ecosystem) proposes updates; a
+# frozen digest stops receiving fixes, so those PRs are mandatory reading.
+ARG NODE_IMAGE=node:22.23.4-slim@sha256:5ec23b7c622b00547753bc6ffd78085dd868a68aeb41c8e0a1418f033e13d96d
 
 # ── base: Node + pnpm (build stages only) ─────────────────────────────────────────────────────────────────────
 FROM ${NODE_IMAGE} AS base
 ENV CI=true PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
-# Keep in sync with "packageManager" in the root package.json.
-RUN npm install --global --no-audit --no-fund pnpm@10.28.0
+# pnpm through corepack with the tarball's sha512 (npm registry integrity, 2026-11-07): corepack refuses a mismatch.
+# Keep the version in sync with "packageManager" in the root package.json.
+RUN corepack enable && corepack install --global pnpm@10.28.0+sha512.05df71d1421f21399e053fde567cea34d446fa02c76571441bfc1c7956e98e363088982d940465fd34480d4d90a0668bc12362f8aa88000a64e83d0b0e47be48
 WORKDIR /repo
 
 # ── deps: fetch the whole lockfile into the store (cached layer; only invalidated by lockfile changes) ────────
@@ -74,8 +76,11 @@ WORKDIR /app
 # Everything is owned by root and only readable by the runtime user: the process cannot modify its own code.
 COPY --from=tsx /opt/tsx /opt/tsx
 COPY --from=build /out /app
-COPY infra/db/bootstrap-roles.mjs /app/ops/bootstrap-roles.mjs
-RUN chmod -R a-w /app /opt/tsx
+COPY infra/db/bootstrap-roles.mjs infra/db/definer-registry.mjs infra/ops/env-guard.mjs /app/ops/
+# No package managers at runtime (smaller attack surface; review P3-8). Then make everything read-only.
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
+           /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
+ && chmod -R a-w /app /opt/tsx
 
 # Read-only root filesystem: TSX_DISABLE_CACHE=1 stops tsx writing its transform cache to /tmp, so the process
 # writes nothing to disk (verified outside Docker with no writable TMPDIR). Logs go to stdout.
@@ -84,7 +89,10 @@ EXPOSE 4000
 STOPSIGNAL SIGTERM
 
 # Exec form: node is the process that receives SIGTERM (ECS initProcessEnabled adds an init for zombie reaping).
-#   migrations:      ["node", "--import", "/opt/tsx/register.mjs", "src/migrate-cli.ts"]
-#   role bootstrap:  ["node", "/app/ops/bootstrap-roles.mjs"]            (RDS master; before the first migration)
-#   routing grants:  ["node", "/app/ops/bootstrap-roles.mjs", "grants"]  (portico_owner; after every migration)
-CMD ["node", "--import", "/opt/tsx/register.mjs", "src/main.ts"]
+# Every command starts behind the env guard (infra/ops/env-guard.mjs): PORTICO_DEPLOYMENT must be set, live keys are
+# refused outside production, app keys are mandatory for api/worker. Task definitions (Terraform) set:
+#   api:             [node --import /app/ops/env-guard.mjs --import /opt/tsx/register.mjs src/main.ts]
+#   migrate (init):  [… src/migrate-cli.ts]
+#   grants (init):   [node --import /app/ops/env-guard.mjs /app/ops/bootstrap-roles.mjs grants]
+#   role bootstrap:  [node --import /app/ops/env-guard.mjs /app/ops/bootstrap-roles.mjs]   (humans only, RDS master)
+CMD ["node", "--import", "/app/ops/env-guard.mjs", "--import", "/opt/tsx/register.mjs", "src/main.ts"]

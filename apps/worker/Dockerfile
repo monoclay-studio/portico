@@ -12,12 +12,12 @@
 # it if the process exits, and stalls are caught by the outbox backlog / worker-error alarms (observability
 # module). A container-level liveness check needs a heartbeat from the worker first (infra/README.md, Requests to other modules).
 
-ARG NODE_IMAGE=node:22.23.4-slim
+ARG NODE_IMAGE=node:22.23.4-slim@sha256:5ec23b7c622b00547753bc6ffd78085dd868a68aeb41c8e0a1418f033e13d96d
 
 FROM ${NODE_IMAGE} AS base
 ENV CI=true PNPM_HOME=/pnpm
 ENV PATH=$PNPM_HOME:$PATH
-RUN npm install --global --no-audit --no-fund pnpm@10.28.0
+RUN corepack enable && corepack install --global pnpm@10.28.0+sha512.05df71d1421f21399e053fde567cea34d446fa02c76571441bfc1c7956e98e363088982d940465fd34480d4d90a0668bc12362f8aa88000a64e83d0b0e47be48
 WORKDIR /repo
 
 FROM base AS deps
@@ -54,9 +54,12 @@ ENV NODE_ENV=production \
 WORKDIR /app
 COPY --from=tsx /opt/tsx /opt/tsx
 COPY --from=build /out /app
-RUN chmod -R a-w /app /opt/tsx
+COPY infra/ops/env-guard.mjs /app/ops/env-guard.mjs
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
+           /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack \
+ && chmod -R a-w /app /opt/tsx
 
 # Read-only root filesystem: nothing is written to disk (TSX_DISABLE_CACHE=1); logs go to stdout.
 USER 1000:1000
 STOPSIGNAL SIGTERM
-CMD ["node", "--import", "/opt/tsx/register.mjs", "src/main.ts"]
+CMD ["node", "--import", "/app/ops/env-guard.mjs", "--import", "/opt/tsx/register.mjs", "src/main.ts"]
