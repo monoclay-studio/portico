@@ -18,3 +18,11 @@ lint rule in `packages/db` that requires property-scoped effects to go through i
 Creating a trial touches two tenants (trial organization, live organization's environment link), today in two
 transactions (an orphan unlinked trial is possible if the second fails; it is harmless and re-linkable). A reviewed
 helper to run a short multi-tenant provisioning transaction would remove that window.
+
+## FR-3 — `responsiblePerson` / `assertHumanApprover` in the kernel
+Same as identity FR-6 (ADR-0017 §7). Platform has local copies in `src/service.ts` until the kernel provides them.
+
+## FR-4 — Durable refusal audits
+`assertEffectInScope` takes an optional `database` so its refusal audit is written in its own committed transaction
+(review P2-6). A kernel/db-level `ctx.auditDurable(entry)` (separate transaction or outbox) would let every module
+record refusals that survive the caller's rollback without passing the database around.
