@@ -301,6 +301,7 @@ export async function createUnitType(
     type: INVENTORY_EVENTS.unitTypeChanged,
     propertyId,
     aggregate: { type: 'unitType', id },
+    aggregateVersion: row.version,
     payload: { propertyId, unitTypeId: id, change: 'created' },
   });
   return dto as UnitType;
@@ -407,6 +408,7 @@ export async function updateUnitType(
     type: INVENTORY_EVENTS.unitTypeChanged,
     propertyId: before.property_id,
     aggregate: { type: 'unitType', id },
+    aggregateVersion: row.version,
     payload: { propertyId: before.property_id, unitTypeId: id, change: 'updated' },
   });
   return dto as UnitType;
@@ -586,6 +588,7 @@ export async function createUnit(
     type: INVENTORY_EVENTS.unitChanged,
     propertyId,
     aggregate: { type: 'unit', id: unit.id },
+    aggregateVersion: unit.version,
     payload: { propertyId, unitId: unit.id, unitTypeId: unit.unitTypeId, change: 'created' },
   });
   return unit;
@@ -692,6 +695,7 @@ export async function createCompositeUnit(
     type: INVENTORY_EVENTS.unitChanged,
     propertyId,
     aggregate: { type: 'unit', id: unit.id },
+    aggregateVersion: unit.version,
     payload: { propertyId, unitId: unit.id, unitTypeId: unit.unitTypeId, change: 'created' },
   });
   return unit;
@@ -922,6 +926,7 @@ export async function updateUnit(
     type: INVENTORY_EVENTS.unitChanged,
     propertyId: before.property_id,
     aggregate: { type: 'unit', id },
+    aggregateVersion: after.version,
     payload: {
       propertyId: before.property_id,
       unitId: id,
