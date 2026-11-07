@@ -141,6 +141,32 @@ account / travel agent / source profile* = Portico *company* (`kind=company|agen
 | EC-GUE-036 | Search "+960 777-1234" for a profile stored as "7771234" with country MV | Normalised E.164 matching finds it | P0 | tested | test/duplicates.test.ts:91 (formats normalised to E.164); test/profiles.test.ts:78 (national-format search) |
 | EC-GUE-037 | Search with a typo ("Mohamd") | Typo-tolerant match ranks "Mohamed" profiles first; only profiles the user may see | P1 | tested | test/profiles.test.ts:73 (typo-tolerant search) |
 
+## Edge cases from the failure-class sweep (playbook v2)
+
+Classes from `docs/quality/patterns.md` groups A–D that apply to this module and are not already covered by a
+row above; the class is named in brackets. Classes already covered by earlier rows, and classes that do not
+apply (with the reason), are listed in `gaps-ops.md` § Failure-class sweep.
+
+| ID | Situation | Expected Portico behavior | Priority | Status | Test |
+|---|---|---|---|---|---|
+| EC-GUE-038 | [AP-01 / AP-45] Staff at property B try to read or change property A's property-scoped preference or private alert by id | Not visible and not changeable; A's item unchanged | P0 | tested | test/sharing.test.ts:407 (not visible at B); test/sharing.test.ts:426 (unchanged after the attempt) |
+| EC-GUE-039 | [AP-02] A query forgets the tenant filter on any guests table | RLS hides every row of another tenant; the suite enumerates the schema's tables | P0 | tested | test/isolation.test.ts:143 (RLS hides every guests table); test/privacy.test.ts:318 (table list from information_schema) |
+| EC-GUE-040 | [AP-04] A channel, import or guest submission declares a contact point "verified" | The flag is honoured only for staff users; otherwise the contact is unverified and never an exact matching key | P0 | building | — partial: unverified email never exact (test/duplicates.test.ts); the non-staff flag path is not asserted |
+| EC-GUE-041 | [AP-05] Internal provider functions (snapshots, repoint recording) are called through the public service | Not exposed; consent reads need a guests permission | P0 | tested | test/isolation.test.ts:192 (no snapshot on the public service) |
+| EC-GUE-042 | [AP-06] Guests code checks a permission key that its manifest does not register | The catalogue test fails on the merged tree | P0 | tested | apps/api/test/permission-catalog.test.ts:28 (catalogue complete) |
+| EC-GUE-043 | [AP-08] Someone creates a profile with another person's email before that person ever books | The real guest's later booking never attaches to it (an unverified email is not an exact key); staff see a candidate pair | P0 | tested | test/duplicates.test.ts:73 (unverified email never an exact key) |
+| EC-GUE-044 | [AP-15] A different user of the organization replays the Idempotency-Key of a profile create | The stored response (with personal data) is not returned to them | P0 | tested | packages/db/test/core.test.ts:236 (replay refused for a different user) |
+| EC-GUE-045 | [AP-18] Sharing is off: links, known-at properties, duplicate issues and stay history are read at property B | Nothing from property A appears, not even ids | P0 | tested | test/sharing.test.ts:466 (no stay ids from A); test/sharing.test.ts:468 (no duplicate issue leak) |
+| EC-GUE-046 | [AP-19] A live organization runs without a production key-management binding | Identity documents and sensitive details refuse to be stored with a development key; the operator is told | P0 | building | — partial: kernel env/dev keys only (README); no assertion that a live org refuses them |
+| EC-GUE-047 | [AP-29] An alert's active period ended on the property's previous business date | Not critical on arrival screens and not an issue (judged on the viewing property's business date) | P1 | tested | test/profiles.test.ts:200 (only the active alert) |
+| EC-GUE-048 | [AP-31] A consumer processes `guests.profile.merged` after the merge was already reversed | `recordReferenceRepoints` answers `merge_not_active`; the consumer does not re-point | P1 | built | — README provider contract; no test |
+| EC-GUE-049 | [AP-35] A consent purpose or legal basis not in the registry is submitted | Refused; processing for unknown purposes is never allowed | P1 | specified | — (GUE-R06 registry; not asserted) |
+| EC-GUE-050 | [AP-38] Guest profiles are external (read-only or forward) and staff create or edit identity fields | Read-only: refused with the system name; forward: refused honestly ("forwarding not available"); nothing written | P0 | tested | test/profiles.test.ts:361 (read-only refusal); test/profiles.test.ts:409 (forward refused honestly) |
+| EC-GUE-051 | [AP-39] Two saves of the same pair run duplicate detection at the same moment | One candidate row; neither save aborts | P1 | missing | — (not asserted concurrently) |
+| EC-GUE-052 | [AP-40 / AP-43] Reservations calls `resolveProfile` with its old input shape (firstName/lastName, no propertyId) | Fails at compile time or with a validation error; never a silently created nameless profile | P0 | building | — partial: contract published (README "Provider contract"); reservations not yet aligned |
+| EC-GUE-053 | [AP-44] A retention policy is saved as 0 or a negative number of days | Refused at save with the valid range | P2 | missing | — |
+| EC-GUE-054 | [AP-46] A merge fails half-way through re-pointing child rows | Nothing changes: one transaction; both profiles as before | P1 | specified | — (CLAUDE.md §4.5; not asserted) |
+
 <!-- sources (generated from a verified registry; do not edit by hand) -->
 
 ## Sources

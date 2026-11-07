@@ -222,6 +222,30 @@ full-service/resort/group expectation, P2 differentiator or rare.
 | EC-INT-043 | A paused connection is resumed after three days | Treated as a reconnection: queued state commands coalesced; money and inventory commands need revalidation | P0 | tested | test/scenario-s20-integration-outage.test.ts:305 (risky command revalidated after resume); src/domain/exchange-rules.test.ts:223 (state commands coalesced) |
 | EC-INT-044 | Activation attempted with a passed validation from before the latest mapping change | Refused: validation and preview must follow the last mapping change (CL-03) | P0 | tested | test/setup-journey.test.ts:225 (activation refused with an outdated preview) |
 
+## Edge cases from the failure-class sweep (playbook v2)
+
+Classes from `docs/quality/patterns.md` groups A–D that apply to this module and are not already covered by a
+row above; the class is named in brackets. Classes already covered by earlier rows, and classes that do not
+apply (with the reason), are listed in `gaps-ops.md` § Failure-class sweep.
+
+| ID | Situation | Expected Portico behavior | Priority | Status | Test |
+|---|---|---|---|---|---|
+| EC-INT-045 | [AP-02] A query forgets the tenant filter on an integration table | RLS returns no row of another tenant for every integration table | P0 | building | test/isolation-permissions.test.ts:57 (raw query sees no other tenant) — partial: not driven by information_schema for every table |
+| EC-INT-046 | [AP-03] A second organization registers the same PMS account id, hotel code or webhook endpoint | Refused or proof of ownership required; inbound routing on that identifier resolves to exactly one tenant | P0 | missing | — |
+| EC-INT-047 | [AP-04] A caller supplies a weaker effect class than the connector declares for a write | The stricter class wins; callers can only make it stricter | P0 | tested | src/domain/exchange-rules.test.ts:182 (never weaker) |
+| EC-INT-048 | [AP-05] Every integration route is called by a user with no integration grants | Each refuses before reading | P0 | building | — partial: by-id and list refusals tested (test/isolation-permissions.test.ts); no enumeration of every route |
+| EC-INT-049 | [AP-06] Integration code checks a permission key its manifest does not register | The catalogue test fails | P0 | tested | apps/api/test/permission-catalog.test.ts:28 (catalogue complete) |
+| EC-INT-050 | [AP-10] The manager who planned a charges authority transition approves it, or approves through their own API key | Refused: a different human must approve | P0 | building | — built (feat/identity-platform-enterprise@abbd5e9): test/review-regressions.test.ts "P1-4" — platform approval path not on main |
+| EC-INT-051 | [AP-15] A webhook subscription create is replayed with the same Idempotency-Key | The signing secret is shown once; the replay returns the subscription without it | P0 | tested | apps/api/test/integration.test.ts:258 (secret not in the replay) |
+| EC-INT-052 | [AP-19] A trial organization becomes live while outbound commands are queued | Each command re-checks the environment at execution and is refused (`environment_changed`) until re-approved | P0 | missing | — |
+| EC-INT-053 | [AP-24] A PMS sends tax-inclusive charge amounts while the workflow assumes exclusive | Records held until the workflow declares its tax treatment; never posted with a guessed tax base | P0 | missing | — (tax-treatment declaration not built, INT-R20) |
+| EC-INT-054 | [AP-29] A setup journey sits idle for 90 days | A job marks it abandoned and tells the owner; no reminder depends on someone opening it | P2 | missing | — (README: abandonment not built) |
+| EC-INT-055 | [AP-32] The PMS sends a reservation that checked out last month (late or historical) | Applied or held with an exception; never a retry loop | P1 | specified | — (INT-I02; not asserted) |
+| EC-INT-056 | [AP-35] A connector performs an operation it never declared | Classified as money on money domains and inventory elsewhere (fails closed) | P0 | tested | src/connectors/registry.test.ts:48 (undeclared → money); src/connectors/registry.test.ts:51 (undeclared → inventory) |
+| EC-INT-057 | [AP-37] The database transaction rolls back after the vendor was called | Adapter calls run outside the transaction; the vendor is acknowledged only after commit; a rolled-back record is never reported as applied | P0 | building | test/concurrency.test.ts:476 (handler rejection never acknowledged as applied) — partial: rollback after an outbound call not asserted |
+| EC-INT-058 | [AP-40 / AP-41] A scope includes charges but finance catalogs are stubs in this deployment | Setup stops at mapping review with `provider_unavailable` explained; never guesses a mapping | P0 | tested | apps/api/test/integration.test.ts:211 (blocked with explanation) |
+| EC-INT-059 | [AP-44] A mapped unit type is archived after the mapping was confirmed | Records referencing it are held with an exception; never applied to an archived target | P1 | missing | — |
+
 <!-- sources (generated from a verified registry; do not edit by hand) -->
 
 ## Sources

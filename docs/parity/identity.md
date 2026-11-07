@@ -169,6 +169,31 @@ expectation, P2 differentiator or rare.
 | EC-IDN-033 | A person is removed from organization A but still works for organization B | Only A's sessions and tokens stop; B is unaffected (IDN-I07) | P0 | built | built (feat/identity-platform-enterprise@abbd5e9): test/roles-lifecycle.test.ts; test/isolation.test.ts |
 | EC-IDN-034 | An API client tries to approve its own issuer's activation request | Refused: separation of duties compares people, not principals | P1 | built | built (feat/identity-platform-enterprise@abbd5e9): test/review-regressions.test.ts "P1-4" |
 
+## Edge cases from the failure-class sweep (playbook v2)
+
+Classes from `docs/quality/patterns.md` groups A–D that apply to this module and are not already covered by a
+row above; the class is named in brackets. Classes already covered by earlier rows, and classes that do not
+apply (with the reason), are listed in `gaps-ops.md` § Failure-class sweep.
+
+| ID | Situation | Expected Portico behavior | Priority | Status | Test |
+|---|---|---|---|---|---|
+| EC-IDN-035 | [AP-01] A role assigner scoped to property Y "transfers" a manager of property X | Refused: the transfer needs power at both properties | P0 | built | built (feat/identity-platform-enterprise@abbd5e9): test/review2-regressions.test.ts "R2-P2-2 / N-6" |
+| EC-IDN-036 | [AP-02] Another organization requests members, roles, API clients, elevations, alerts, SSO connections, SCIM groups or MFA factors by id | Not found for every identity table | P0 | built | built (feat/identity-platform-enterprise@abbd5e9): test/isolation.test.ts "P2-13" |
+| EC-IDN-037 | [AP-03] Two organizations verify the same email domain for SSO | Verification is exclusive or re-checked; a stale or shared verification never acts as global email verification | P0 | building | on feat/identity-platform-enterprise@abbd5e9 — open review finding R3-P2-2 (non-exclusive, never re-checked) |
+| EC-IDN-038 | [AP-05] Every identity route is called by a member with no identity grants | Each refuses before reading | P0 | built | built (feat/identity-platform-enterprise@abbd5e9): HTTP tests (apps/api/test/identity-enterprise.test.ts) |
+| EC-IDN-039 | [AP-08 / AP-36] An attacker organization confirms a pending authenticator at the moment the real person verifies their email | The first-verification wipe is serialized against in-flight credential writes; the attacker's factor never survives | P0 | building | on feat/identity-platform-enterprise@abbd5e9 — open review finding R3-P1-1 (PoC W-1 succeeds) |
+| EC-IDN-040 | [AP-09] A holder of `identity.sso.manage` changes which IdP claim carries groups to make themselves `org_admin` | Treated as a root change (organization-wide `*`, alert); refused otherwise | P0 | building | on feat/identity-platform-enterprise@abbd5e9 — open review finding R3-P1-2 (PoC W-2 succeeds) |
+| EC-IDN-041 | [AP-13] An attacker rotates `X-Forwarded-For` to evade per-IP sign-in limits | Limits key on the client IP from the trusted proxy only; they still trigger | P1 | missing | — |
+| EC-IDN-042 | [AP-14] An SSO issuer is configured as `http://localhost` or a private address in production | Refused: public https only, pinned DNS, no redirects | P0 | built | built (feat/identity-platform-enterprise@abbd5e9): test/review-sso-regressions.test.ts "P2-2" |
+| EC-IDN-043 | [AP-15] An API key create is replayed with the same Idempotency-Key | The token is never stored with the idempotency record; the replay answers `already_issued` | P0 | built | built (feat/identity-platform-enterprise@abbd5e9): README API clients (no named test) |
+| EC-IDN-044 | [AP-17] A former employee asks for their staff identity to be erased | Personal fields removed; audit attribution kept under a pseudonym; memberships elsewhere unaffected | P1 | missing | — |
+| EC-IDN-045 | [AP-19] The operator console or simulated mailbox is reachable in production | Disabled when production; operator routes refuse | P0 | built | built (feat/identity-platform-enterprise@abbd5e9): README (config.operatorConsoleEnabled); no named test |
+| EC-IDN-046 | [AP-35] A custom role contains an unknown permission key or a wildcard that covers nothing | Refused at save with the unknown keys named | P1 | built | built (feat/identity-platform-enterprise@abbd5e9): test/roles-lifecycle.test.ts "validates keys and wildcards" |
+| EC-IDN-047 | [AP-37] The identity provider times out during the SSO callback | No database transaction is held during IdP calls; nothing persisted; the person can retry | P1 | built | built (feat/identity-platform-enterprise@abbd5e9): README (three-phase SSO); test/review2-regressions.test.ts "R2-P1-3" (refused sign-in persists nothing) |
+| EC-IDN-048 | [AP-39] Two administrators invite the same email at the same moment | One invitation; neither request fails with a database error | P1 | missing | — |
+| EC-IDN-049 | [AP-44] An SSO connection is edited while "SSO required" is on | A test sign-in must succeed before the change is saved (anti-lockout) | P1 | building | on feat/identity-platform-enterprise@abbd5e9 — README review P2-4: not yet test-signed-in before saving |
+| EC-IDN-050 | [AP-47] Another organization's earlier invitation would block a person's first password | Never blocks onboarding; the real link sets the first password | P0 | built | built (feat/identity-platform-enterprise@abbd5e9): test/review2-regressions.test.ts "R2-P1-2 / N-5" |
+
 <!-- sources (generated from a verified registry; do not edit by hand) -->
 
 ## Sources
