@@ -6,7 +6,11 @@ export interface StoredRate {
   fromCurrency: string;
   toCurrency: string;
   rate: string;
+  source?: string;
 }
+
+/** Central-bank reference rates (e.g. Maldives Monetary Authority) are recorded with a source starting "MMA". */
+export const isReferenceRate = (source: string | undefined) => !!source && /^mma\b/i.test(source);
 
 /** Maximum age of a rate used for conversion; older rates require a new entry. */
 export const MAX_RATE_AGE_DAYS = 7;
@@ -27,15 +31,16 @@ export function pickRate(
       (r) =>
         r.businessDate <= date &&
         r.businessDate >= minDate &&
-        ((r.fromCurrency === from && r.toCurrency === to) || (r.fromCurrency === to && r.toCurrency === from)),
+        ((r.fromCurrency === from && r.toCurrency === to) ||
+          (r.fromCurrency === to && r.toCurrency === from)),
     )
-    .sort((a, b) =>
-      a.businessDate === b.businessDate
-        ? Number(b.fromCurrency === from) - Number(a.fromCurrency === from)
-        : a.businessDate < b.businessDate
-          ? 1
-          : -1,
-    );
+    .sort((a, b) => {
+      if (a.businessDate !== b.businessDate) return a.businessDate < b.businessDate ? 1 : -1;
+      // Same date: the hotel's operational rate before the reference rate, then direct before inverse.
+      const ref = Number(isReferenceRate(a.source)) - Number(isReferenceRate(b.source));
+      if (ref !== 0) return ref;
+      return Number(b.fromCurrency === from) - Number(a.fromCurrency === from);
+    });
   const best = candidates[0];
   if (!best) {
     throw new BusinessRuleError(

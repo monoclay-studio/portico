@@ -10,8 +10,8 @@ import {
 } from '@portico/kernel';
 import type { Folio, FolioDetail, OpenFolioInput, OwnerRef, Posting } from '../contracts';
 import { assertCanClose, assertCanSettle, assertCanVoid, destinationAction } from '../domain/folio';
-import { folioInvoicing, folioRecord, type InvoicingState, invoicingState } from './records';
 import type { FolioOwnerType, PayerType } from '../domain/types';
+import { folioInvoicing, folioRecord, type InvoicingState, invoicingState } from './records';
 import {
   type Deps,
   db,
@@ -58,7 +58,11 @@ async function folioView(tx: TxContext, r: FolioRow, balanceMinor: number): Prom
 }
 
 /** Open a folio for a payer. The first folio of an owner becomes its default folio. */
-export async function openFolio(tx: TxContext, deps: Deps, input: OpenFolioInput): Promise<{ folioId: string }> {
+export async function openFolio(
+  tx: TxContext,
+  deps: Deps,
+  input: OpenFolioInput,
+): Promise<{ folioId: string }> {
   requirePermission(tx, 'finance.folio.manage', { propertyId: input.propertyId });
   await deps.ports.platform.assertWritable(tx, input.propertyId, 'charges');
   const property = await deps.ports.platform.getProperty(tx, input.propertyId);
@@ -81,7 +85,11 @@ export async function openFolio(tx: TxContext, deps: Deps, input: OpenFolioInput
   }
   const isDefault = !existingDefault || input.isDefault === true;
   if (existingDefault && input.isDefault) {
-    await db(tx).updateTable('finance.folios').set({ is_default: false, version: sql`version + 1` }).where('id', '=', existingDefault.id).execute();
+    await db(tx)
+      .updateTable('finance.folios')
+      .set({ is_default: false, version: sql`version + 1` })
+      .where('id', '=', existingDefault.id)
+      .execute();
   }
   const id = newId(tx.now.getTime());
   const currency = input.currency ?? property.baseCurrency;
@@ -160,7 +168,8 @@ export async function getFolio(tx: TxContext, folioId: string): Promise<FolioDet
     correctsPostingId: p.corrects_posting_id,
     billingRuleId: p.billing_rule_id,
     allowanceInstanceId: p.allowance_instance_id,
-    paymentRef: p.payment_ref_type && p.payment_ref_id ? { type: p.payment_ref_type, id: p.payment_ref_id } : null,
+    paymentRef:
+      p.payment_ref_type && p.payment_ref_id ? { type: p.payment_ref_type, id: p.payment_ref_id } : null,
     paymentMethod: p.payment_method,
     postDeparture: p.post_departure,
     invoicedOn: p.document_id ?? null,
@@ -224,7 +233,13 @@ async function changeStatus(
     .where('version', '=', expectedVersion)
     .returningAll()
     .executeTakeFirst();
-  if (!row) return explainVersionMiss('folio', f.id, expectedVersion, async () => (await loadFolio(tx, f.id)).version);
+  if (!row)
+    return explainVersionMiss(
+      'folio',
+      f.id,
+      expectedVersion,
+      async () => (await loadFolio(tx, f.id)).version,
+    );
   await tx.audit({
     action,
     target: { type: 'folio', id: f.id },
@@ -242,7 +257,13 @@ export async function settleFolio(tx: TxContext, folioId: string, expectedVersio
   requirePermission(tx, 'finance.folio.manage', { propertyId: f.property_id });
   const balance = await folioBalance(tx, folioId);
   assertCanSettle(f.status, balance, f.currency);
-  const row = await changeStatus(tx, f, expectedVersion, { status: 'settled', settled_at: tx.now }, 'finance.folio.settle');
+  const row = await changeStatus(
+    tx,
+    f,
+    expectedVersion,
+    { status: 'settled', settled_at: tx.now },
+    'finance.folio.settle',
+  );
   await tx.emit({
     type: 'finance.folio.settled',
     propertyId: f.property_id,
@@ -274,7 +295,12 @@ export async function closeFolio(tx: TxContext, folioId: string, expectedVersion
   return folioView(tx, row, await folioBalance(tx, folioId));
 }
 
-export async function voidFolio(tx: TxContext, folioId: string, expectedVersion: number, reason: string): Promise<Folio> {
+export async function voidFolio(
+  tx: TxContext,
+  folioId: string,
+  expectedVersion: number,
+  reason: string,
+): Promise<Folio> {
   const f = await loadFolio(tx, folioId, { forUpdate: true });
   requirePermission(tx, 'finance.folio.manage', { propertyId: f.property_id });
   const n = await db(tx)
@@ -295,7 +321,14 @@ export async function voidFolio(tx: TxContext, folioId: string, expectedVersion:
       'Active billing rules send charges to this folio. Change or deactivate those rules before voiding it.',
     );
   }
-  const row = await changeStatus(tx, f, expectedVersion, { status: 'voided', is_default: false }, 'finance.folio.void', reason);
+  const row = await changeStatus(
+    tx,
+    f,
+    expectedVersion,
+    { status: 'voided', is_default: false },
+    'finance.folio.void',
+    reason,
+  );
   return folioView(tx, row, 0);
 }
 
@@ -394,7 +427,13 @@ export async function reopenInPlace(tx: TxContext, f: FolioRow, reason: string):
   }
   const row = await db(tx)
     .updateTable('finance.folios')
-    .set({ status: 'open', settled_at: null, reopen_count: sql`reopen_count + 1`, reopened_reason: reason, version: sql`version + 1` })
+    .set({
+      status: 'open',
+      settled_at: null,
+      reopen_count: sql`reopen_count + 1`,
+      reopened_reason: reason,
+      version: sql`version + 1`,
+    })
     .where('id', '=', f.id)
     .returningAll()
     .executeTakeFirstOrThrow();
@@ -418,7 +457,11 @@ export async function reopenInPlace(tx: TxContext, f: FolioRow, reason: string):
 /** Record that a stay/booking departed (from reservations at check-out, directly or via event). Idempotent. */
 export async function markOwnerDeparted(
   tx: TxContext,
-  input: { propertyId: string; owner: { type: 'stay' | 'booking' | 'group'; id: string }; departedOn: LocalDate },
+  input: {
+    propertyId: string;
+    owner: { type: 'stay' | 'booking' | 'group'; id: string };
+    departedOn: LocalDate;
+  },
 ): Promise<void> {
   await db(tx)
     .insertInto('finance.owner_departures')
@@ -430,7 +473,9 @@ export async function markOwnerDeparted(
       departed_on: input.departedOn,
       recorded_at: tx.now,
     })
-    .onConflict((oc) => oc.columns(['tenant_id', 'owner_type', 'owner_id']).doUpdateSet({ departed_on: input.departedOn }))
+    .onConflict((oc) =>
+      oc.columns(['tenant_id', 'owner_type', 'owner_id']).doUpdateSet({ departed_on: input.departedOn }),
+    )
     .execute();
 }
 
@@ -472,4 +517,3 @@ export function assertSameProperty(f: FolioRow, propertyId: string): void {
     });
   }
 }
-

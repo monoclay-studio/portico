@@ -17,7 +17,10 @@ describe('S04: company pays accommodation, guests pay incidentals', () => {
   it('routes by specificity with a per-night limit, previews before saving, and settles each payer separately', async () => {
     const org = await setupOrg(h);
     const company = 'Maldivian Holidays Ltd';
-    const rooms = [await openStay(h, org, { guest: 'Mr Ivanov', company }), await openStay(h, org, { guest: 'Mrs Ivanova', company })];
+    const rooms = [
+      await openStay(h, org, { guest: 'Mr Ivanov', company }),
+      await openStay(h, org, { guest: 'Mrs Ivanova', company }),
+    ];
     const rule = (stay: (typeof rooms)[number]) => ({
       destinationFolioId: stay.companyFolioId as string,
       label: 'Company pays accommodation and breakfast',
@@ -49,14 +52,33 @@ describe('S04: company pays accommodation, guests pay incidentals', () => {
 
     // Save the rules; a second rule selecting exactly the same charges is a configuration error (no ranking).
     for (const r of rooms) {
-      await org.run((tx) => h.finance.createBillingRule(tx, { propertyId: org.propertyId, owner: { type: 'stay', id: r.stayId }, ...rule(r) }));
+      await org.run((tx) =>
+        h.finance.createBillingRule(tx, {
+          propertyId: org.propertyId,
+          owner: { type: 'stay', id: r.stayId },
+          ...rule(r),
+        }),
+      );
     }
     await expect(
-      org.run((tx) => h.finance.createBillingRule(tx, { propertyId: org.propertyId, owner: { type: 'stay', id: room.stayId }, ...rule(room), label: 'Duplicate' })),
+      org.run((tx) =>
+        h.finance.createBillingRule(tx, {
+          propertyId: org.propertyId,
+          owner: { type: 'stay', id: room.stayId },
+          ...rule(room),
+          label: 'Duplicate',
+        }),
+      ),
     ).rejects.toThrow(/selects exactly the same charges/);
 
     // Post the real charges for both rooms (room with Green Tax for 2 adults, breakfast, dinner, spa).
-    const post = (stayId: string, code: string, amount: number, key: string, occupancy?: { adults: number; childrenAges: number[] }) =>
+    const post = (
+      stayId: string,
+      code: string,
+      amount: number,
+      key: string,
+      occupancy?: { adults: number; childrenAges: number[] },
+    ) =>
       org.run((tx) =>
         h.finance.postCharge(tx, {
           propertyId: org.propertyId,
@@ -83,23 +105,58 @@ describe('S04: company pays accommodation, guests pay incidentals', () => {
     expect(companyFolio.balance.amountMinor).toBe(30000);
     // Guest: breakfast overflow (3861 − 1860) + dinner 102.96 + spa 154.44
     expect(guestFolio.balance.amountMinor).toBe(3861 - 1860 + 10296 + 15444);
-    expect(guestFolio.postings.filter((p) => p.kind === 'charge').map((p) => p.chargeCode).sort()).toEqual(['BRKF', 'FOOD', 'SPA']);
+    expect(
+      guestFolio.postings
+        .filter((p) => p.kind === 'charge')
+        .map((p) => p.chargeCode)
+        .sort(),
+    ).toEqual(['BRKF', 'FOOD', 'SPA']);
     // The company folio carries room taxes and Green Tax with the room.
-    expect(companyFolio.postings.filter((p) => p.kind === 'tax').map((p) => p.taxName).sort()).toEqual(['Green Tax', 'Service charge 10%', 'Service charge 10%', 'TGST 17%', 'TGST 17%']);
+    expect(
+      companyFolio.postings
+        .filter((p) => p.kind === 'tax')
+        .map((p) => p.taxName)
+        .sort(),
+    ).toEqual(['Green Tax', 'Service charge 10%', 'Service charge 10%', 'TGST 17%', 'TGST 17%']);
 
     // Check-out: the company folio is direct-billed (invoice issued automatically), guests pay by card.
     const ar = await org.run((tx) =>
-      h.finance.createReceivablesAccount(tx, { legalEntityId: org.legalEntityId, companyId: newId(), kind: 'agency', name: company, currency: 'USD', termsDays: 30, creditLimitMinor: 1_000_000 }),
+      h.finance.createReceivablesAccount(tx, {
+        legalEntityId: org.legalEntityId,
+        companyId: newId(),
+        kind: 'agency',
+        name: company,
+        currency: 'USD',
+        termsDays: 30,
+        creditLimitMinor: 1_000_000,
+      }),
     );
     for (const r of rooms) {
-      const t = await org.run((tx) => h.finance.transferToReceivables(tx, { folioId: r.companyFolioId as string, receivablesAccountId: ar.id, idempotencyKey: `ar:${r.stayId}` }));
+      const t = await org.run((tx) =>
+        h.finance.transferToReceivables(tx, {
+          folioId: r.companyFolioId as string,
+          receivablesAccountId: ar.id,
+          idempotencyKey: `ar:${r.stayId}`,
+        }),
+      );
       expect(t.amount.amountMinor).toBe(30000);
       const g = await org.run((tx) => h.finance.getFolio(tx, r.guestFolioId));
       await org.run((tx) =>
-        h.finance.recordPayment(tx, { folioId: r.guestFolioId, amount: g.balance, paymentRef: { type: 'payment', id: newId() }, method: 'card', provider: 'simulator', idempotencyKey: `pay:${r.stayId}` }),
+        h.finance.recordPayment(tx, {
+          folioId: r.guestFolioId,
+          amount: g.balance,
+          paymentRef: { type: 'payment', id: newId() },
+          method: 'card',
+          provider: 'simulator',
+          idempotencyKey: `pay:${r.stayId}`,
+        }),
       );
-      await org.run((tx) => h.finance.issueInvoice(tx, { folioId: r.guestFolioId, idempotencyKey: `inv:${r.stayId}` }));
-      const settled = await org.run(async (tx) => h.finance.settleFolio(tx, r.guestFolioId, (await h.finance.getFolio(tx, r.guestFolioId)).version));
+      await org.run((tx) =>
+        h.finance.issueInvoice(tx, { folioId: r.guestFolioId, idempotencyKey: `inv:${r.stayId}` }),
+      );
+      const settled = await org.run(async (tx) =>
+        h.finance.settleFolio(tx, r.guestFolioId, (await h.finance.getFolio(tx, r.guestFolioId)).version),
+      );
       expect(settled.status.folio).toBe('settled');
     }
     const companyAfter = await org.run((tx) => h.finance.getFolio(tx, room.companyFolioId as string));
@@ -121,23 +178,59 @@ describe('S04: company pays accommodation, guests pay incidentals', () => {
     const s = await openStay(h, org, { company: 'Coral Travel' });
     const owner = { type: 'stay' as const, id: s.stayId };
     await org.run((tx) =>
-      h.finance.createBillingRule(tx, { propertyId: org.propertyId, owner, destinationFolioId: s.companyFolioId as string, label: 'Company pays all food', selector: { chargeGroups: ['food', 'beverage'] } }),
+      h.finance.createBillingRule(tx, {
+        propertyId: org.propertyId,
+        owner,
+        destinationFolioId: s.companyFolioId as string,
+        label: 'Company pays all food',
+        selector: { chargeGroups: ['food', 'beverage'] },
+      }),
     );
     // Nested (more specific): breakfast only, back to the guest — allowed; it wins for BRKF.
     await org.run((tx) =>
-      h.finance.createBillingRule(tx, { propertyId: org.propertyId, owner, destinationFolioId: s.guestFolioId, label: 'Guest pays breakfast', selector: { chargeCodes: ['BRKF'] } }),
+      h.finance.createBillingRule(tx, {
+        propertyId: org.propertyId,
+        owner,
+        destinationFolioId: s.guestFolioId,
+        label: 'Guest pays breakfast',
+        selector: { chargeCodes: ['BRKF'] },
+      }),
     );
     // Partial overlap: food on weekends + spa — neither inside the other → rejected with explanation.
     await expect(
       org.run((tx) =>
-        h.finance.createBillingRule(tx, { propertyId: org.propertyId, owner, destinationFolioId: s.guestFolioId, label: 'Weekend food and spa', selector: { chargeGroups: ['food', 'spa'], daysOfWeek: [5, 6] } }),
+        h.finance.createBillingRule(tx, {
+          propertyId: org.propertyId,
+          owner,
+          destinationFolioId: s.guestFolioId,
+          label: 'Weekend food and spa',
+          selector: { chargeGroups: ['food', 'spa'], daysOfWeek: [5, 6] },
+        }),
       ),
     ).rejects.toThrow(/partly overlaps/);
     const brkf = await org.run((tx) =>
-      h.finance.postCharge(tx, { propertyId: org.propertyId, target: owner, chargeCode: 'BRKF', amount: usd(2000), serviceDate: '2026-11-07', description: 'Breakfast', sourceRef: { type: 't', id: '1' }, idempotencyKey: `b:${s.stayId}` }),
+      h.finance.postCharge(tx, {
+        propertyId: org.propertyId,
+        target: owner,
+        chargeCode: 'BRKF',
+        amount: usd(2000),
+        serviceDate: '2026-11-07',
+        description: 'Breakfast',
+        sourceRef: { type: 't', id: '1' },
+        idempotencyKey: `b:${s.stayId}`,
+      }),
     );
     const dinner = await org.run((tx) =>
-      h.finance.postCharge(tx, { propertyId: org.propertyId, target: owner, chargeCode: 'FOOD', amount: usd(2000), serviceDate: '2026-11-07', description: 'Dinner', sourceRef: { type: 't', id: '2' }, idempotencyKey: `d:${s.stayId}` }),
+      h.finance.postCharge(tx, {
+        propertyId: org.propertyId,
+        target: owner,
+        chargeCode: 'FOOD',
+        amount: usd(2000),
+        serviceDate: '2026-11-07',
+        description: 'Dinner',
+        sourceRef: { type: 't', id: '2' },
+        idempotencyKey: `d:${s.stayId}`,
+      }),
     );
     expect(brkf.folioId).toBe(s.guestFolioId);
     expect(dinner.folioId).toBe(s.companyFolioId);

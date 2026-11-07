@@ -1,5 +1,12 @@
 import { explainVersionMiss, type Selectable, sql, type TxContext } from '@portico/db';
-import { ConflictError, NotFoundError, newId, requirePermission, ValidationError } from '@portico/kernel';
+import {
+  ConflictError,
+  Decimal,
+  NotFoundError,
+  newId,
+  requirePermission,
+  ValidationError,
+} from '@portico/kernel';
 import type { z } from 'zod';
 import type {
   Account,
@@ -66,7 +73,11 @@ export async function createAccount(
       })
       .returningAll()
       .executeTakeFirstOrThrow();
-    await tx.audit({ action: 'finance.account.create', target: { type: 'account', id: row.id }, after: input });
+    await tx.audit({
+      action: 'finance.account.create',
+      target: { type: 'account', id: row.id },
+      after: input,
+    });
     return toAccount(row);
   } catch (err) {
     if (isUniqueViolation(err)) {
@@ -98,7 +109,12 @@ export function toChargeCode(r: Selectable<ChargeCodesTable>): ChargeCode {
   };
 }
 
-async function assertRevenueAccount(tx: TxContext, deps: Deps, propertyId: string, accountId: string): Promise<void> {
+async function assertRevenueAccount(
+  tx: TxContext,
+  deps: Deps,
+  propertyId: string,
+  accountId: string,
+): Promise<void> {
   const property = await deps.ports.platform.getProperty(tx, propertyId);
   const acct = await db(tx)
     .selectFrom('finance.accounts')
@@ -113,7 +129,11 @@ async function assertRevenueAccount(tx: TxContext, deps: Deps, propertyId: strin
   }
 }
 
-export async function createChargeCode(tx: TxContext, deps: Deps, input: ChargeCodeInput): Promise<ChargeCode> {
+export async function createChargeCode(
+  tx: TxContext,
+  deps: Deps,
+  input: ChargeCodeInput,
+): Promise<ChargeCode> {
   requirePermission(tx, 'finance.chargeCode.manage', { propertyId: input.propertyId });
   if (input.revenueAccountId) await assertRevenueAccount(tx, deps, input.propertyId, input.revenueAccountId);
   try {
@@ -143,7 +163,10 @@ export async function createChargeCode(tx: TxContext, deps: Deps, input: ChargeC
     return toChargeCode(row);
   } catch (err) {
     if (isUniqueViolation(err)) {
-      throw new ConflictError('charge_code_exists', `Charge code ${input.code} already exists at this property.`);
+      throw new ConflictError(
+        'charge_code_exists',
+        `Charge code ${input.code} already exists at this property.`,
+      );
     }
     throw err;
   }
@@ -156,10 +179,15 @@ export async function updateChargeCode(
   expectedVersion: number,
   patch: z.infer<typeof chargeCodeUpdate>,
 ): Promise<ChargeCode> {
-  const current = await db(tx).selectFrom('finance.charge_codes').selectAll().where('id', '=', id).executeTakeFirst();
+  const current = await db(tx)
+    .selectFrom('finance.charge_codes')
+    .selectAll()
+    .where('id', '=', id)
+    .executeTakeFirst();
   if (!current) throw new NotFoundError('charge_code', id);
   requirePermission(tx, 'finance.chargeCode.manage', { propertyId: current.property_id });
-  if (patch.revenueAccountId) await assertRevenueAccount(tx, deps, current.property_id, patch.revenueAccountId);
+  if (patch.revenueAccountId)
+    await assertRevenueAccount(tx, deps, current.property_id, patch.revenueAccountId);
   const row = await db(tx)
     .updateTable('finance.charge_codes')
     .set({
@@ -234,16 +262,48 @@ export const DEFAULT_CHARGE_CODES: ReadonlyArray<Omit<ChargeCodeInput, 'property
   { code: 'ROOM', name: 'Accommodation', group: 'room', taxGroup: 'accommodation', department: 'rooms' },
   { code: 'PKG', name: 'Package', group: 'package', taxGroup: 'accommodation', department: 'rooms' },
   { code: 'BRKF', name: 'Breakfast', group: 'food', taxGroup: 'food_beverage', department: 'fnb' },
-  { code: 'FOOD', name: 'Restaurant — food', group: 'food', taxGroup: 'food_beverage', department: 'fnb', allowanceTags: ['dining'] },
-  { code: 'BEV', name: 'Bar — beverages', group: 'beverage', taxGroup: 'food_beverage', department: 'fnb', allowanceTags: ['dining'] },
+  {
+    code: 'FOOD',
+    name: 'Restaurant — food',
+    group: 'food',
+    taxGroup: 'food_beverage',
+    department: 'fnb',
+    allowanceTags: ['dining'],
+  },
+  {
+    code: 'BEV',
+    name: 'Bar — beverages',
+    group: 'beverage',
+    taxGroup: 'food_beverage',
+    department: 'fnb',
+    allowanceTags: ['dining'],
+  },
   { code: 'MINIBAR', name: 'Minibar', group: 'minibar', taxGroup: 'food_beverage', department: 'rooms' },
   { code: 'SPA', name: 'Spa treatment', group: 'spa', taxGroup: 'services', department: 'spa' },
-  { code: 'DIVE', name: 'Diving and excursions', group: 'activity', taxGroup: 'services', department: 'recreation' },
-  { code: 'TRANSFER', name: 'Seaplane / speedboat transfer', group: 'transfer', taxGroup: 'transport', department: 'transport' },
+  {
+    code: 'DIVE',
+    name: 'Diving and excursions',
+    group: 'activity',
+    taxGroup: 'services',
+    department: 'recreation',
+  },
+  {
+    code: 'TRANSFER',
+    name: 'Seaplane / speedboat transfer',
+    group: 'transfer',
+    taxGroup: 'transport',
+    department: 'transport',
+  },
   { code: 'RETAIL', name: 'Boutique', group: 'retail', taxGroup: 'goods', department: 'retail' },
   { code: 'CXL', name: 'Cancellation / no-show fee', group: 'penalty', taxGroup: null, department: 'rooms' },
   { code: 'MISC', name: 'Miscellaneous', group: 'misc', taxGroup: 'services', department: 'other' },
-  { code: 'ALLOW', name: 'Package allowance (dining credit)', group: 'allowance', taxGroup: null, department: 'fnb' },
+  {
+    code: 'ALLOW',
+    name: 'Package allowance (dining credit)',
+    group: 'allowance',
+    taxGroup: null,
+    department: 'fnb',
+  },
 ];
 
 /** Seed default charge codes (idempotent: existing codes are left untouched). */
@@ -272,7 +332,11 @@ export async function seedDefaultChargeCodes(tx: TxContext, propertyId: string):
 
 // ───────────────────────────── FX rates ─────────────────────────────
 
-export async function recordFxRate(tx: TxContext, deps: Deps, input: z.infer<typeof fxRateInput>): Promise<FxRate> {
+export async function recordFxRate(
+  tx: TxContext,
+  deps: Deps,
+  input: z.infer<typeof fxRateInput>,
+): Promise<FxRate> {
   requirePermission(tx, 'finance.fx.manage');
   if (input.fromCurrency === input.toCurrency) {
     throw new ValidationError('invalid_fx_pair', 'An exchange rate needs two different currencies.');
@@ -298,7 +362,7 @@ export async function recordFxRate(tx: TxContext, deps: Deps, input: z.infer<typ
     if (isUniqueViolation(err)) {
       throw new ConflictError(
         'fx_rate_exists',
-        `A ${input.fromCurrency}→${input.toCurrency} rate for ${input.businessDate} is already recorded and may have been used for postings, so it cannot be replaced. Record the corrected rate for the next business date.`,
+        `A ${input.fromCurrency}→${input.toCurrency} rate from "${input.source}" for ${input.businessDate} is already recorded and may have been used for postings, so it cannot be replaced. Record the corrected rate for the next business date.`,
       );
     }
     throw err;
@@ -323,7 +387,7 @@ export async function listFxRates(tx: TxContext, legalEntityId: string, from?: s
     businessDate: r.business_date,
     fromCurrency: r.from_currency,
     toCurrency: r.to_currency,
-    rate: String(r.rate),
+    rate: new Decimal(String(r.rate)).toString(),
     source: r.source,
   }));
 }

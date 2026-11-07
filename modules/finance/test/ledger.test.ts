@@ -37,7 +37,9 @@ describe('journal', () => {
 
   it('keeps the journal balanced through a random sequence of postings, payments, transfers and corrections', async () => {
     const org = await setupOrg(h);
-    const { stayId, guestFolioId, companyFolioId } = await openStay(h, org, { company: 'Maldivian Holidays Ltd' });
+    const { guestFolioId, companyFolioId } = await openStay(h, org, {
+      company: 'Maldivian Holidays Ltd',
+    });
     const codes = ['FOOD', 'BEV', 'SPA', 'MINIBAR', 'DIVE', 'RETAIL', 'CXL'];
     let seed = 42;
     const rnd = (n: number) => {
@@ -76,11 +78,27 @@ describe('journal', () => {
       } else if (op === 3) {
         const postingId = charges[rnd(charges.length)] as string;
         await org
-          .run((tx) => h.finance.adjustPosting(tx, { postingId, amountMinor: 1 + rnd(500), reasonCode: 'goodwill', note: 'test', idempotencyKey: `adj:${i}:${org.tenantId}` }))
+          .run((tx) =>
+            h.finance.adjustPosting(tx, {
+              postingId,
+              amountMinor: 1 + rnd(500),
+              reasonCode: 'goodwill',
+              note: 'test',
+              idempotencyKey: `adj:${i}:${org.tenantId}`,
+            }),
+          )
           .catch((e: Error) => expect(e.message).toMatch(/at most|already been fully|corrected or moved/));
       } else {
         await org
-          .run((tx) => h.finance.transferPostings(tx, { fromFolioId: guestFolioId, toFolioId: companyFolioId as string, amountMinor: 1 + rnd(3000), reason: 'split', idempotencyKey: `tr:${i}:${org.tenantId}` }))
+          .run((tx) =>
+            h.finance.transferPostings(tx, {
+              fromFolioId: guestFolioId,
+              toFolioId: companyFolioId as string,
+              amountMinor: 1 + rnd(3000),
+              reason: 'split',
+              idempotencyKey: `tr:${i}:${org.tenantId}`,
+            }),
+          )
           .catch(() => undefined);
       }
     }
@@ -88,7 +106,9 @@ describe('journal', () => {
     expect(tb.balanced).toBe(true);
     expect(tb.totalDebitMinor).toBeGreaterThan(0);
     await assertLedgerIntegrity(h, org);
-    const items = await org.run((tx) => h.finance.getUnbalancedItems(tx, { propertyId: org.propertyId, businessDate: '2026-11-07' }));
+    const items = await org.run((tx) =>
+      h.finance.getUnbalancedItems(tx, { propertyId: org.propertyId, businessDate: '2026-11-07' }),
+    );
     expect(items.filter((i) => i.severity === 'blocking')).toEqual([]);
   });
 });
@@ -98,29 +118,59 @@ describe('append-only and balance enforcement in the database', () => {
     const org = await setupOrg(h);
     const { guestFolioId } = await openStay(h, org);
     await org.run((tx) =>
-      h.finance.postCharge(tx, { propertyId: org.propertyId, folioId: guestFolioId, chargeCode: 'SPA', amount: usd(5000), serviceDate: '2026-11-07', description: 'Massage', sourceRef: { type: 't', id: '1' }, idempotencyKey: `ao:${org.tenantId}` }),
+      h.finance.postCharge(tx, {
+        propertyId: org.propertyId,
+        folioId: guestFolioId,
+        chargeCode: 'SPA',
+        amount: usd(5000),
+        serviceDate: '2026-11-07',
+        description: 'Massage',
+        sourceRef: { type: 't', id: '1' },
+        idempotencyKey: `ao:${org.tenantId}`,
+      }),
     );
     for (const table of ['finance.journal_lines', 'finance.journal_entries', 'finance.postings']) {
-      await expect(org.run((tx) => sql`update ${sql.table(table)} set tenant_id = tenant_id`.execute(tx.db))).rejects.toThrow(/permission denied|append-only/);
-      await expect(org.run((tx) => sql`delete from ${sql.table(table)}`.execute(tx.db))).rejects.toThrow(/permission denied|append-only/);
+      await expect(
+        org.run((tx) => sql`update ${sql.table(table)} set tenant_id = tenant_id`.execute(tx.db)),
+      ).rejects.toThrow(/permission denied|append-only/);
+      await expect(org.run((tx) => sql`delete from ${sql.table(table)}`.execute(tx.db))).rejects.toThrow(
+        /permission denied|append-only/,
+      );
     }
     // Even the table owner (bypassing grants) hits the append-only trigger.
-    await expect(sql`update finance.postings set amount_minor = 1`.execute(h.t.admin.kysely)).rejects.toThrow(/append-only/);
+    await expect(sql`update finance.postings set amount_minor = 1`.execute(h.t.admin.kysely)).rejects.toThrow(
+      /append-only/,
+    );
   });
 
   it('rejects an unbalanced entry at commit and lines added later to an old entry', async () => {
     const org = await setupOrg(h);
     const { guestFolioId } = await openStay(h, org);
     const res = await org.run((tx) =>
-      h.finance.postCharge(tx, { propertyId: org.propertyId, folioId: guestFolioId, chargeCode: 'SPA', amount: usd(5000), serviceDate: '2026-11-07', description: 'Massage', sourceRef: { type: 't', id: '1' }, idempotencyKey: `ub:${org.tenantId}` }),
+      h.finance.postCharge(tx, {
+        propertyId: org.propertyId,
+        folioId: guestFolioId,
+        chargeCode: 'SPA',
+        amount: usd(5000),
+        serviceDate: '2026-11-07',
+        description: 'Massage',
+        sourceRef: { type: 't', id: '1' },
+        idempotencyKey: `ub:${org.tenantId}`,
+      }),
     );
-    const line = await sql<{ account_id: string }>`select account_id from finance.journal_lines where entry_id = ${res.entryId} limit 1`.execute(h.t.admin.kysely);
+    const line = await sql<{
+      account_id: string;
+    }>`select account_id from finance.journal_lines where entry_id = ${res.entryId} limit 1`.execute(
+      h.t.admin.kysely,
+    );
     const accountId = line.rows[0]?.account_id as string;
     // Late line on an existing entry.
     await expect(
       org.run((tx) =>
         sql`insert into finance.journal_lines (id, tenant_id, entry_id, legal_entity_id, line_no, account_id, amount_minor, currency, functional_amount_minor, functional_currency)
-            values (${newId()}, ${org.tenantId}, ${res.entryId}, ${org.legalEntityId}, 99, ${accountId}, 1, 'USD', 1, 'USD')`.execute(tx.db),
+            values (${newId()}, ${org.tenantId}, ${res.entryId}, ${org.legalEntityId}, 99, ${accountId}, 1, 'USD', 1, 'USD')`.execute(
+          tx.db,
+        ),
       ),
     ).rejects.toThrow(/in the transaction that created it/);
     // A brand-new entry whose lines do not balance.
@@ -128,10 +178,14 @@ describe('append-only and balance enforcement in the database', () => {
       org.run(async (tx) => {
         const id = newId();
         await sql`insert into finance.journal_entries (id, tenant_id, legal_entity_id, entry_type, business_date, occurred_at, idempotency_key, request_hash, description, actor, actor_key, correlation_id)
-          values (${id}, ${org.tenantId}, ${org.legalEntityId}, 'charge', '2026-11-07', now(), ${`bad:${id}`}, 'x', 'bad', '{}', 'x', 'x')`.execute(tx.db);
+          values (${id}, ${org.tenantId}, ${org.legalEntityId}, 'charge', '2026-11-07', now(), ${`bad:${id}`}, 'x', 'bad', '{}', 'x', 'x')`.execute(
+          tx.db,
+        );
         for (const amt of [100, -99]) {
           await sql`insert into finance.journal_lines (id, tenant_id, entry_id, legal_entity_id, line_no, account_id, amount_minor, currency, functional_amount_minor, functional_currency)
-            values (${newId()}, ${org.tenantId}, ${id}, ${org.legalEntityId}, ${amt > 0 ? 1 : 2}, ${accountId}, ${amt}, 'USD', ${amt}, 'USD')`.execute(tx.db);
+            values (${newId()}, ${org.tenantId}, ${id}, ${org.legalEntityId}, ${amt > 0 ? 1 : 2}, ${accountId}, ${amt}, 'USD', ${amt}, 'USD')`.execute(
+            tx.db,
+          );
         }
       }),
     ).rejects.toThrow(/unbalanced/);

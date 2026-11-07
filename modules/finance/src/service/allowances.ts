@@ -1,5 +1,13 @@
 import { type Selectable, sql, type TxContext } from '@portico/db';
-import { addDays, BusinessRuleError, ConflictError, type LocalDate, newId, requirePermission, ValidationError } from '@portico/kernel';
+import {
+  addDays,
+  BusinessRuleError,
+  ConflictError,
+  type LocalDate,
+  newId,
+  requirePermission,
+  ValidationError,
+} from '@portico/kernel';
 import type { AllowanceInstance, GrantAllowanceInput } from '../contracts';
 import { closeOutcome, type UnusedPolicy } from '../domain/allowance';
 import type { LineDraft } from '../domain/ledger';
@@ -51,13 +59,15 @@ export async function grantAllowance(
   input: GrantAllowanceInput & { idempotencyKey: string },
 ): Promise<{ instance: AllowanceInstance; entryId: string; replayed: boolean }> {
   requirePermission(tx, 'finance.posting.create', { propertyId: input.propertyId });
-  if (input.amount.amountMinor <= 0) throw new ValidationError('invalid_amount', 'An allowance must be positive.');
+  if (input.amount.amountMinor <= 0)
+    throw new ValidationError('invalid_amount', 'An allowance must be positive.');
   const { idempotencyKey, ...rest } = input;
   const hash = requestHash({ op: 'allowance', ...rest });
   const periodKey = 'night' in input.period ? input.period.night : 'stay';
   const validFrom = 'night' in input.period ? input.period.night : input.period.stay.from;
   const validTo = 'night' in input.period ? addDays(input.period.night, 1) : input.period.stay.to;
-  if (validTo <= validFrom) throw new ValidationError('invalid_period', 'The allowance period must end after it starts.');
+  if (validTo <= validFrom)
+    throw new ValidationError('invalid_period', 'The allowance period must end after it starts.');
   const find = () =>
     db(tx)
       .selectFrom('finance.allowance_instances')
@@ -67,16 +77,27 @@ export async function grantAllowance(
       .where('period_key', '=', periodKey)
       .executeTakeFirst();
   const prior = await findEntryByKey(tx, idempotencyKey, hash);
-  if (prior) return { instance: toInstance((await find()) as Selectable<AllowanceInstancesTable>), entryId: prior, replayed: true };
+  if (prior)
+    return {
+      instance: toInstance((await find()) as Selectable<AllowanceInstancesTable>),
+      entryId: prior,
+      replayed: true,
+    };
   await deps.ports.platform.assertWritable(tx, input.propertyId, 'charges');
   const f0 = await loadFolio(tx, input.folioId);
   assertSameProperty(f0, input.propertyId);
   if (input.amount.currency !== f0.currency) {
-    throw new ValidationError('allowance_currency_mismatch', `Allowances are granted in the folio currency (${f0.currency}).`);
+    throw new ValidationError(
+      'allowance_currency_mismatch',
+      `Allowances are granted in the folio currency (${f0.currency}).`,
+    );
   }
   const code = await chargeCodeByCode(tx, input.propertyId, input.chargeCode);
   if (code.charge_group !== 'allowance') {
-    throw new ValidationError('not_an_allowance_code', `Charge code ${code.code} is not an allowance code (group "allowance").`);
+    throw new ValidationError(
+      'not_an_allowance_code',
+      `Charge code ${code.code} is not an allowance code (group "allowance").`,
+    );
   }
   const businessDate = await deps.ports.platform.getBusinessDate(tx, input.propertyId);
   const claim = await claimEntry(tx, {
@@ -89,7 +110,12 @@ export async function grantAllowance(
     source: { type: 'stay', id: input.stayId },
     description: `${input.label} granted`,
   });
-  if (!claim.claimed) return { instance: toInstance((await find()) as Selectable<AllowanceInstancesTable>), entryId: claim.entryId, replayed: true };
+  if (!claim.claimed)
+    return {
+      instance: toInstance((await find()) as Selectable<AllowanceInstancesTable>),
+      entryId: claim.entryId,
+      replayed: true,
+    };
   const locked = (await lockFolios(tx, [f0.id])).get(f0.id) as FolioRow;
   const { folio } = await prepareDestination(tx, locked, 'new_charge');
   // Top up an instance created earlier for the same period (e.g. carried forward), otherwise create it.
@@ -104,12 +130,19 @@ export async function grantAllowance(
   let instanceId: string;
   if (existing) {
     if (existing.status === 'closed' || existing.status === 'cancelled') {
-      throw new BusinessRuleError('allowance_period_closed', `The allowance "${existing.label}" for this period is already closed.`);
+      throw new BusinessRuleError(
+        'allowance_period_closed',
+        `The allowance "${existing.label}" for this period is already closed.`,
+      );
     }
     instanceId = existing.id;
     await db(tx)
       .updateTable('finance.allowance_instances')
-      .set({ granted_minor: sql`granted_minor + ${input.amount.amountMinor}`, status: 'active', version: sql`version + 1` })
+      .set({
+        granted_minor: sql`granted_minor + ${input.amount.amountMinor}`,
+        status: 'active',
+        version: sql`version + 1`,
+      })
       .where('id', '=', existing.id)
       .execute();
   } else {
@@ -143,7 +176,8 @@ export async function grantAllowance(
         })
         .execute();
     } catch (err) {
-      if (isUniqueViolation(err)) throw new ConflictError('allowance_exists', 'This allowance was granted concurrently. Retry.');
+      if (isUniqueViolation(err))
+        throw new ConflictError('allowance_exists', 'This allowance was granted concurrently. Retry.');
       throw err;
     }
   }
@@ -157,7 +191,7 @@ export async function grantAllowance(
       description: input.label,
       chargeCodeId: code.id,
       chargeCode: code.code,
-      serviceDate: validFrom < businessDate ? validFrom : businessDate,
+      serviceDate: Math.min(validFrom, businessDate),
       revenueDate: validFrom,
       allowanceInstanceId: instanceId,
       counterAccountId: clearing,
@@ -165,10 +199,35 @@ export async function grantAllowance(
     },
   ];
   const lines: Array<LineDraft & { accountId?: string }> = [
-    { accountKey: 'guest_ledger', amountMinor: input.amount.amountMinor, currency: folio.currency, subLedger: { type: 'folio', id: folio.id }, postingIndex: 0, chargeCode: code.code },
-    { accountKey: '', accountId: clearing, amountMinor: -input.amount.amountMinor, currency: folio.currency, subLedger: { type: 'allowance', id: instanceId } },
+    {
+      accountKey: 'guest_ledger',
+      amountMinor: input.amount.amountMinor,
+      currency: folio.currency,
+      subLedger: { type: 'folio', id: folio.id },
+      postingIndex: 0,
+      chargeCode: code.code,
+    },
+    {
+      accountKey: '',
+      accountId: clearing,
+      amountMinor: -input.amount.amountMinor,
+      currency: folio.currency,
+      subLedger: { type: 'allowance', id: instanceId },
+    },
   ];
-  await writeEntryBody(tx, deps, claim.entryId, { legalEntityId: folio.legal_entity_id, propertyId: input.propertyId, businessDate, description: input.label }, postings, lines);
+  await writeEntryBody(
+    tx,
+    deps,
+    claim.entryId,
+    {
+      legalEntityId: folio.legal_entity_id,
+      propertyId: input.propertyId,
+      businessDate,
+      description: input.label,
+    },
+    postings,
+    lines,
+  );
   await tx.audit({
     action: 'finance.allowance.grant',
     target: { type: 'allowance', id: instanceId },
@@ -180,7 +239,13 @@ export async function grantAllowance(
 }
 
 export async function listAllowances(tx: TxContext, stayId: string): Promise<AllowanceInstance[]> {
-  const rows = await db(tx).selectFrom('finance.allowance_instances').selectAll().where('stay_id', '=', stayId).orderBy('valid_from').orderBy('id').execute();
+  const rows = await db(tx)
+    .selectFrom('finance.allowance_instances')
+    .selectAll()
+    .where('stay_id', '=', stayId)
+    .orderBy('valid_from')
+    .orderBy('id')
+    .execute();
   const first = rows[0];
   if (first) requirePermission(tx, 'finance.folio.read', { propertyId: first.property_id });
   return rows.map(toInstance);
@@ -211,14 +276,20 @@ export async function closeAllowances(
   for (const inst of rows) {
     requirePermission(tx, 'finance.posting.create', { propertyId: inst.property_id });
     const businessDate = await deps.ports.platform.getBusinessDate(tx, inst.property_id);
-    const hasNext = !!input.departureDate && inst.period_key !== 'stay' && inst.valid_to < input.departureDate;
-    const outcome = closeOutcome({ grantedMinor: Number(inst.granted_minor), usedMinor: Number(inst.used_minor) }, inst.unused_policy as UnusedPolicy, hasNext);
+    const hasNext =
+      !!input.departureDate && inst.period_key !== 'stay' && inst.valid_to < input.departureDate;
+    const outcome = closeOutcome(
+      { grantedMinor: Number(inst.granted_minor), usedMinor: Number(inst.used_minor) },
+      inst.unused_policy as UnusedPolicy,
+      hasNext,
+    );
     let closeEntryId: string | null = null;
     let carriedTo: string | null = null;
     if (outcome.kind !== 'none') {
       const r = outcome.amountMinor;
       const clearing = await accountId(tx, deps, inst.legal_entity_id, 'allowance_clearing');
-      const key = outcome.kind === 'carry_forward' ? `carry:${inst.id}` : `breakage:${inst.id}:${inst.period_key}`;
+      const key =
+        outcome.kind === 'carry_forward' ? `carry:${inst.id}` : `breakage:${inst.id}:${inst.period_key}`;
       const claim = await claimEntry(tx, {
         legalEntityId: inst.legal_entity_id,
         propertyId: inst.property_id,
@@ -233,15 +304,40 @@ export async function closeAllowances(
       closeEntryId = claim.entryId;
       const postings: PostingDraft[] = [];
       const lines: Array<LineDraft & { accountId?: string }> = [
-        { accountKey: '', accountId: clearing, amountMinor: r, currency: inst.currency, subLedger: { type: 'allowance', id: inst.id } },
+        {
+          accountKey: '',
+          accountId: clearing,
+          amountMinor: r,
+          currency: inst.currency,
+          subLedger: { type: 'allowance', id: inst.id },
+        },
       ];
       if (outcome.kind === 'forfeit') {
-        lines.push({ accountKey: 'revenue:breakage', amountMinor: -r, currency: inst.currency, memo: inst.label });
+        lines.push({
+          accountKey: 'revenue:breakage',
+          amountMinor: -r,
+          currency: inst.currency,
+          memo: inst.label,
+        });
       } else if (outcome.kind === 'credit_back') {
         const locked = (await lockFolios(tx, [inst.folio_id])).get(inst.folio_id) as FolioRow;
         const { folio } = await prepareDestination(tx, locked, 'correction');
-        postings.push({ folioId: folio.id, kind: 'allowance_return', amountMinor: -r, currency: inst.currency, description: `${inst.label} — unused allowance credited`, allowanceInstanceId: inst.id, counterAccountId: clearing });
-        lines.push({ accountKey: 'guest_ledger', amountMinor: -r, currency: inst.currency, subLedger: { type: 'folio', id: folio.id }, postingIndex: 0 });
+        postings.push({
+          folioId: folio.id,
+          kind: 'allowance_return',
+          amountMinor: -r,
+          currency: inst.currency,
+          description: `${inst.label} — unused allowance credited`,
+          allowanceInstanceId: inst.id,
+          counterAccountId: clearing,
+        });
+        lines.push({
+          accountKey: 'guest_ledger',
+          amountMinor: -r,
+          currency: inst.currency,
+          subLedger: { type: 'folio', id: folio.id },
+          postingIndex: 0,
+        });
       } else {
         const nextKey = inst.valid_to;
         const next = await db(tx)
@@ -254,7 +350,16 @@ export async function closeAllowances(
           .executeTakeFirst();
         if (next) {
           carriedTo = next.id;
-          await db(tx).updateTable('finance.allowance_instances').set({ granted_minor: sql`granted_minor + ${r}`, status: 'active', carried_from_id: inst.id, version: sql`version + 1` }).where('id', '=', next.id).execute();
+          await db(tx)
+            .updateTable('finance.allowance_instances')
+            .set({
+              granted_minor: sql`granted_minor + ${r}`,
+              status: 'active',
+              carried_from_id: inst.id,
+              version: sql`version + 1`,
+            })
+            .where('id', '=', next.id)
+            .execute();
         } else {
           carriedTo = newId(tx.now.getTime());
           await db(tx)
@@ -285,21 +390,50 @@ export async function closeAllowances(
             })
             .execute();
         }
-        lines.push({ accountKey: '', accountId: clearing, amountMinor: -r, currency: inst.currency, subLedger: { type: 'allowance', id: carriedTo } });
+        lines.push({
+          accountKey: '',
+          accountId: clearing,
+          amountMinor: -r,
+          currency: inst.currency,
+          subLedger: { type: 'allowance', id: carriedTo },
+        });
       }
-      await writeEntryBody(tx, deps, claim.entryId, { legalEntityId: inst.legal_entity_id, propertyId: inst.property_id, businessDate, description: 'Allowance close' }, postings, lines);
+      await writeEntryBody(
+        tx,
+        deps,
+        claim.entryId,
+        {
+          legalEntityId: inst.legal_entity_id,
+          propertyId: inst.property_id,
+          businessDate,
+          description: 'Allowance close',
+        },
+        postings,
+        lines,
+      );
       if (outcome.kind === 'forfeit') {
         await tx.emit({
           type: 'finance.allowance.breakagePosted',
           propertyId: inst.property_id,
           aggregate: { type: 'allowance', id: inst.id },
-          payload: { allowanceId: inst.id, stayId: inst.stay_id, amountMinor: r, currency: inst.currency, entryId: claim.entryId },
+          payload: {
+            allowanceId: inst.id,
+            stayId: inst.stay_id,
+            amountMinor: r,
+            currency: inst.currency,
+            entryId: claim.entryId,
+          },
         });
       }
     }
     const row = await db(tx)
       .updateTable('finance.allowance_instances')
-      .set({ status: 'closed', close_entry_id: closeEntryId, carried_to_id: carriedTo, version: sql`version + 1` })
+      .set({
+        status: 'closed',
+        close_entry_id: closeEntryId,
+        carried_to_id: carriedTo,
+        version: sql`version + 1`,
+      })
       .where('id', '=', inst.id)
       .returningAll()
       .executeTakeFirstOrThrow();

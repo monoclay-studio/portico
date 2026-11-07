@@ -4,7 +4,8 @@ import type { FinanceDB } from './tables';
 
 const db = (tx: TxContext) => typed<FinanceDB>(tx.db);
 
-const scopeOf = (tx: TxContext, permission: string): readonly string[] | 'all' => tx.authz.propertyScope(permission);
+const scopeOf = (tx: TxContext, permission: string): readonly string[] | 'all' =>
+  tx.authz.propertyScope(permission);
 
 /**
  * Global search + hover previews for finance records: folios (by payer or label), fiscal documents (by number)
@@ -20,8 +21,22 @@ export const financeSearch: SearchProvider = {
     if (folioScope === 'all' || folioScope.length > 0) {
       let fq = db(tx)
         .selectFrom('finance.folios')
-        .select(['id', 'payer_name', 'label', 'status', 'property_id', 'owner_type', sql<number>`similarity(payer_name, ${q})`.as('score')])
-        .where((eb) => eb.or([eb('payer_name', 'ilike', `%${q}%`), eb('label', 'ilike', `%${q}%`), sql<boolean>`similarity(payer_name, ${q}) > 0.3`]))
+        .select([
+          'id',
+          'payer_name',
+          'label',
+          'status',
+          'property_id',
+          'owner_type',
+          sql<number>`similarity(payer_name, ${q})`.as('score'),
+        ])
+        .where((eb) =>
+          eb.or([
+            eb('payer_name', 'ilike', `%${q}%`),
+            eb('label', 'ilike', `%${q}%`),
+            sql<boolean>`similarity(payer_name, ${q}) > 0.3`,
+          ]),
+        )
         .where('status', '<>', 'voided')
         .orderBy('score', 'desc')
         .limit(limit);
@@ -84,7 +99,11 @@ export const financeSearch: SearchProvider = {
     if (type === 'folio') {
       const r = await db(tx).selectFrom('finance.folios').selectAll().where('id', '=', id).executeTakeFirst();
       if (!r || !tx.authz.can('finance.folio.read', { propertyId: r.property_id })) return null;
-      const b = await db(tx).selectFrom('finance.postings').select(sql<number>`coalesce(sum(amount_minor),0)::bigint`.as('b')).where('folio_id', '=', id).executeTakeFirstOrThrow();
+      const b = await db(tx)
+        .selectFrom('finance.postings')
+        .select(sql<number>`coalesce(sum(amount_minor),0)::bigint`.as('b'))
+        .where('folio_id', '=', id)
+        .executeTakeFirstOrThrow();
       return {
         type,
         id,
@@ -95,7 +114,11 @@ export const financeSearch: SearchProvider = {
       };
     }
     if (type === 'fiscal_document') {
-      const r = await db(tx).selectFrom('finance.fiscal_documents').selectAll().where('id', '=', id).executeTakeFirst();
+      const r = await db(tx)
+        .selectFrom('finance.fiscal_documents')
+        .selectAll()
+        .where('id', '=', id)
+        .executeTakeFirst();
       if (!r || !tx.authz.can('finance.folio.read', { propertyId: r.property_id })) return null;
       return {
         type,
@@ -107,13 +130,37 @@ export const financeSearch: SearchProvider = {
     }
     if (type === 'receivables_account') {
       if (!tx.authz.can('finance.receivables.read')) return null;
-      const r = await db(tx).selectFrom('finance.receivables_accounts').selectAll().where('id', '=', id).executeTakeFirst();
-      return r ? { type, id, title: r.name, subtitle: `Receivables account · ${r.kind} · ${r.currency}`, status: { account: r.status }, propertyId: null } : null;
+      const r = await db(tx)
+        .selectFrom('finance.receivables_accounts')
+        .selectAll()
+        .where('id', '=', id)
+        .executeTakeFirst();
+      return r
+        ? {
+            type,
+            id,
+            title: r.name,
+            subtitle: `Receivables account · ${r.kind} · ${r.currency}`,
+            status: { account: r.status },
+            propertyId: null,
+          }
+        : null;
     }
     if (type === 'cashier_session') {
-      const r = await db(tx).selectFrom('finance.cashier_sessions').selectAll().where('id', '=', id).executeTakeFirst();
+      const r = await db(tx)
+        .selectFrom('finance.cashier_sessions')
+        .selectAll()
+        .where('id', '=', id)
+        .executeTakeFirst();
       if (!r || !tx.authz.can('finance.cashier.review', { propertyId: r.property_id })) return null;
-      return { type, id, title: `Cashier session — ${r.cashier_name}`, subtitle: `Opened ${r.opened_business_date}`, status: { session: r.status }, propertyId: r.property_id };
+      return {
+        type,
+        id,
+        title: `Cashier session — ${r.cashier_name}`,
+        subtitle: `Opened ${r.opened_business_date}`,
+        status: { session: r.status },
+        propertyId: r.property_id,
+      };
     }
     return null;
   },

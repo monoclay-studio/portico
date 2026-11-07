@@ -13,5 +13,5 @@ export {
   PROVIDER_DELEGATION,
 } from './service';
 export { DEFAULT_CHARGE_CODES } from './service/setup';
-export { financeDemoSeed, unavailableFinancePorts } from './wiring';
 export type { FinanceDB } from './tables';
+export { financeDemoSeed, unavailableFinancePorts } from './wiring';

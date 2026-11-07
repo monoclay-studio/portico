@@ -35,7 +35,12 @@ export const DEFAULT_CHART: readonly AccountTemplate[] = [
   { code: '2290', name: 'Taxes payable (unmapped — review)', type: 'liability', systemKey: 'tax:unmapped' },
   { code: '2300', name: 'Allowance clearing', type: 'liability', systemKey: 'allowance_clearing' },
   { code: '2400', name: 'Commissions payable', type: 'liability', systemKey: 'commissions_payable' },
-  { code: '2450', name: 'Gratuities payable to staff (outside the tax base)', type: 'liability', systemKey: 'gratuities_payable' },
+  {
+    code: '2450',
+    name: 'Gratuities payable to staff (outside the tax base)',
+    type: 'liability',
+    systemKey: 'gratuities_payable',
+  },
   { code: '2900', name: 'Migration suspense', type: 'liability', systemKey: 'migration_suspense' },
   { code: '2950', name: 'Suspense', type: 'liability', systemKey: 'suspense' },
   // Equity

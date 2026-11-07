@@ -11,7 +11,10 @@ export type DestinationAction = 'post' | 'reopen' | 'supplementary';
  *    invoices stay immutable;
  *  - voided → refused.
  */
-export function destinationAction(folio: { status: FolioStatus; hasActiveInvoice: boolean }): DestinationAction {
+export function destinationAction(folio: {
+  status: FolioStatus;
+  hasActiveInvoice: boolean;
+}): DestinationAction {
   switch (folio.status) {
     case 'open':
       return 'post';
@@ -30,7 +33,10 @@ export function destinationAction(folio: { status: FolioStatus; hasActiveInvoice
 /** A folio can be settled only at zero balance, and only from open. */
 export function assertCanSettle(status: FolioStatus, balanceMinor: number, currency: string): void {
   if (status !== 'open') {
-    throw new BusinessRuleError('folio_not_open', `Only an open folio can be settled (this one is ${status}).`);
+    throw new BusinessRuleError(
+      'folio_not_open',
+      `Only an open folio can be settled (this one is ${status}).`,
+    );
   }
   if (balanceMinor !== 0) {
     throw new BusinessRuleError(

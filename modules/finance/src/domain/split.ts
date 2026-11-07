@@ -8,7 +8,10 @@ import { allocate, BusinessRuleError, money } from '@portico/kernel';
  *  - the distribution is proportional up to one minor unit per cell.
  * Component 0 is the net amount (absorbs rounding). Amounts share one currency and one sign.
  */
-export function splitComponents(components: readonly number[], destinationGross: readonly number[]): number[][] {
+export function splitComponents(
+  components: readonly number[],
+  destinationGross: readonly number[],
+): number[][] {
   const gross = components.reduce((s, c) => s + c, 0);
   const destTotal = destinationGross.reduce((s, c) => s + c, 0);
   if (gross !== destTotal) {
@@ -65,7 +68,10 @@ export function splitComponents(components: readonly number[], destinationGross:
 export function proportional(total: number, weights: readonly number[]): number[] {
   if (weights.length === 0) return [];
   if (weights.some((w) => w > 0) && weights.some((w) => w < 0)) {
-    throw new BusinessRuleError('mixed_sign_split', 'Components with different signs cannot be converted together.');
+    throw new BusinessRuleError(
+      'mixed_sign_split',
+      'Components with different signs cannot be converted together.',
+    );
   }
   const abs = weights.map((w) => Math.abs(w));
   if (abs.every((w) => w === 0)) return weights.map((_, i) => (i === 0 ? total : 0));

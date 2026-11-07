@@ -58,7 +58,10 @@ function chargesAll(s: RuleSelector): boolean {
 export function validateSelector(s: RuleSelector): void {
   for (const d of s.daysOfWeek ?? []) {
     if (!Number.isInteger(d) || d < 0 || d > 6) {
-      throw new ValidationError('invalid_days_of_week', 'Days of week are numbers 0 (Sunday) to 6 (Saturday).');
+      throw new ValidationError(
+        'invalid_days_of_week',
+        'Days of week are numbers 0 (Sunday) to 6 (Saturday).',
+      );
     }
   }
   if (s.serviceDateFrom && s.serviceDateTo && s.serviceDateTo <= s.serviceDateFrom) {
@@ -107,7 +110,10 @@ function normalizedDates(s: RuleSelector): { from?: LocalDate; to?: LocalDate; d
   return { ...(from ? { from } : {}), ...(to ? { to } : {}), dows: effective };
 }
 
-export function selectorMatches(s: RuleSelector, charge: Pick<ChargeToRoute, 'chargeCode' | 'chargeGroup' | 'serviceDate'>): boolean {
+export function selectorMatches(
+  s: RuleSelector,
+  charge: Pick<ChargeToRoute, 'chargeCode' | 'chargeGroup' | 'serviceDate'>,
+): boolean {
   if (!chargesAll(s)) {
     const byCode = s.chargeCodes?.includes(charge.chargeCode) ?? false;
     const byGroup = s.chargeGroups?.includes(charge.chargeGroup) ?? false;
@@ -159,7 +165,10 @@ function dateOverlap(a: RuleSelector, b: RuleSelector): boolean {
   const na = normalizedDates(a);
   const nb = normalizedDates(b);
   if (!na || !nb) return false;
-  const from = [na.from, nb.from].filter((x): x is string => !!x).sort().pop();
+  const from = [na.from, nb.from]
+    .filter((x): x is string => !!x)
+    .sort()
+    .pop();
   const to = [na.to, nb.to].filter((x): x is string => !!x).sort()[0];
   if (from && to && to <= from) return false;
   const common = dows(a).filter((d) => dows(b).includes(d));
@@ -284,7 +293,12 @@ export function routeCharge(
   const winner = chain[0];
   if (!winner) {
     return [
-      { folioId: defaultFolioId, ruleId: null, grossMinor: charge.grossMinor, explanation: 'No billing rule matches — default folio' },
+      {
+        folioId: defaultFolioId,
+        ruleId: null,
+        grossMinor: charge.grossMinor,
+        explanation: 'No billing rule matches — default folio',
+      },
     ];
   }
   const cap = winner.cap;
@@ -301,7 +315,11 @@ export function routeCharge(
   let routed: number;
   let why: string;
   if (cap.kind === 'percent') {
-    routed = new Decimal(charge.grossMinor).mul(cap.percent).div(100).toDecimalPlaces(0, Decimal.ROUND_HALF_UP).toNumber();
+    routed = new Decimal(charge.grossMinor)
+      .mul(cap.percent)
+      .div(100)
+      .toDecimalPlaces(0, Decimal.ROUND_HALF_UP)
+      .toNumber();
     routed = Math.min(Math.max(routed, 0), charge.grossMinor);
     why = `Rule "${winner.label}" (${cap.percent}% of each charge)`;
   } else {
@@ -311,7 +329,8 @@ export function routeCharge(
     why = `Rule "${winner.label}" (limit ${cap.amountMinor} ${cap.currency} ${cap.kind === 'per_night' ? 'per night' : 'per stay'}, ${remaining} remaining)`;
   }
   const out: RouteAllocation[] = [];
-  if (routed > 0) out.push({ folioId: winner.destinationFolioId, ruleId: winner.id, grossMinor: routed, explanation: why });
+  if (routed > 0)
+    out.push({ folioId: winner.destinationFolioId, ruleId: winner.id, grossMinor: routed, explanation: why });
   const overflow = charge.grossMinor - routed;
   if (overflow > 0) {
     // Kept as a separate allocation (ruleId null) so cap usage only ever counts what the rule paid.
@@ -338,7 +357,8 @@ export function routeBatch(
   initialUsed: (ruleId: string, periodKey: string) => number,
 ): Array<{ charge: PreviewCharge; allocations: RouteAllocation[] }> {
   const extra = new Map<string, number>();
-  const used = (ruleId: string, key: string) => initialUsed(ruleId, key) + (extra.get(`${ruleId}|${key}`) ?? 0);
+  const used = (ruleId: string, key: string) =>
+    initialUsed(ruleId, key) + (extra.get(`${ruleId}|${key}`) ?? 0);
   return charges.map((charge) => {
     const allocations = routeCharge(rules, charge, defaultFolioId, groupOf, used);
     for (const a of allocations) {

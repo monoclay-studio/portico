@@ -46,14 +46,28 @@ describe('S18: imported deposits vs the previous system closing balance', () => 
     const deposits = await org.run((tx) => h.finance.getDeposits(tx, b1));
     expect(deposits?.balance.amountMinor).toBe(100000);
     const exceptions = await org.run((tx) => h.finance.listExceptions(tx, { propertyId: org.propertyId }));
-    expect(exceptions).toEqual([expect.objectContaining({ kind: 'opening_balance_difference', severity: 'urgent' })]);
-    const checks = await org.run((tx) => h.finance.getUnbalancedItems(tx, { propertyId: org.propertyId, businessDate: '2026-11-07' }));
-    expect(checks.map((c) => c.code)).toEqual(expect.arrayContaining(['exception:opening_balance_difference', 'suspense_balance']));
+    expect(exceptions).toEqual([
+      expect.objectContaining({ kind: 'opening_balance_difference', severity: 'urgent' }),
+    ]);
+    const checks = await org.run((tx) =>
+      h.finance.getUnbalancedItems(tx, { propertyId: org.propertyId, businessDate: '2026-11-07' }),
+    );
+    expect(checks.map((c) => c.code)).toEqual(
+      expect.arrayContaining(['exception:opening_balance_difference', 'suspense_balance']),
+    );
     await assertLedgerIntegrity(h, org);
 
     // Imported deposits behave like any deposit: applied at check-in.
-    const folio = await org.run((tx) => h.finance.openFolio(tx, { propertyId: org.propertyId, owner: { type: 'stay', id: newId() }, payer: { type: 'guest', name: 'Imported guest' } }));
-    const applied = await org.run((tx) => h.finance.applyDeposits(tx, { bookingId: b1, toFolioId: folio.folioId }));
+    const folio = await org.run((tx) =>
+      h.finance.openFolio(tx, {
+        propertyId: org.propertyId,
+        owner: { type: 'stay', id: newId() },
+        payer: { type: 'guest', name: 'Imported guest' },
+      }),
+    );
+    const applied = await org.run((tx) =>
+      h.finance.applyDeposits(tx, { bookingId: b1, toFolioId: folio.folioId }),
+    );
     expect(applied.applied.amountMinor).toBe(100000);
     await assertLedgerIntegrity(h, org);
   });
@@ -77,7 +91,15 @@ describe('S18: imported deposits vs the previous system closing balance', () => 
     const org = await setupOrg(h);
     await expect(
       org.run(
-        (tx) => h.finance.importOpeningDeposits(tx, { propertyId: org.propertyId, importRef: 'x', currency: 'USD', providedClosingMinor: 1, items: [{ bookingId: newId(), amountMinor: 1 }], idempotencyKey: 'k' }),
+        (tx) =>
+          h.finance.importOpeningDeposits(tx, {
+            propertyId: org.propertyId,
+            importRef: 'x',
+            currency: 'USD',
+            providedClosingMinor: 1,
+            items: [{ bookingId: newId(), amountMinor: 1 }],
+            idempotencyKey: 'k',
+          }),
         org.as(['finance.posting.create']),
       ),
     ).rejects.toThrow(/permission/);

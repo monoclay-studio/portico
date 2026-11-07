@@ -1,6 +1,11 @@
 import { allocate, BusinessRuleError, convert, type Decimal, type LocalDate, money } from '@portico/kernel';
 
-export type SubLedgerType = 'folio' | 'booking_deposit' | 'receivables_account' | 'cashier_session' | 'allowance';
+export type SubLedgerType =
+  | 'folio'
+  | 'booking_deposit'
+  | 'receivables_account'
+  | 'cashier_session'
+  | 'allowance';
 
 /** A journal line before persistence. Amounts are signed: positive = debit, negative = credit. */
 export interface LineDraft {
@@ -78,7 +83,9 @@ export function functionalize(
 }
 
 /** Imbalances per transaction currency and in functional currency (empty = balanced). */
-export function imbalances(lines: readonly FunctionalLine[]): Array<{ currency: string; difference: number }> {
+export function imbalances(
+  lines: readonly FunctionalLine[],
+): Array<{ currency: string; difference: number }> {
   const byCurrency = new Map<string, number>();
   let functional = 0;
   for (const l of lines) {

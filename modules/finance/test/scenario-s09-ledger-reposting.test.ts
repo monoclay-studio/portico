@@ -42,13 +42,21 @@ describe('S09: interrupted Day Close re-run never posts twice', () => {
     // Re-run over every stay.
     const rerun = [];
     for (const s of stays) rerun.push(await postRoom(s.stayId));
-    expect(rerun[0]).toMatchObject({ replayed: true, entryId: first[0]?.entryId, postingIds: first[0]?.postingIds });
+    expect(rerun[0]).toMatchObject({
+      replayed: true,
+      entryId: first[0]?.entryId,
+      postingIds: first[0]?.postingIds,
+    });
     expect(rerun[1]).toMatchObject({ replayed: true, entryId: first[1]?.entryId });
     expect(rerun[2]?.replayed).toBe(false);
 
     // Concurrent duplicates of the same night produce exactly one entry.
     const extra = await openStay(h, org);
-    const results = await Promise.all([postRoom(extra.stayId), postRoom(extra.stayId), postRoom(extra.stayId)]);
+    const results = await Promise.all([
+      postRoom(extra.stayId),
+      postRoom(extra.stayId),
+      postRoom(extra.stayId),
+    ]);
     expect(new Set(results.map((r) => r.entryId)).size).toBe(1);
     expect(results.filter((r) => !r.replayed)).toHaveLength(1);
 
@@ -76,7 +84,9 @@ describe('S09: interrupted Day Close re-run never posts twice', () => {
       ),
     ).rejects.toBeInstanceOf(IdempotencyConflictError);
     await assertLedgerIntegrity(h, org);
-    const checks = await org.run((tx) => h.finance.getUnbalancedItems(tx, { propertyId: org.propertyId, businessDate: night }));
+    const checks = await org.run((tx) =>
+      h.finance.getUnbalancedItems(tx, { propertyId: org.propertyId, businessDate: night }),
+    );
     expect(checks.filter((c) => c.severity === 'blocking')).toEqual([]);
   });
 });

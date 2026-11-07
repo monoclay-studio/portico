@@ -3,9 +3,10 @@ import {
   BusinessRuleError,
   ConflictError,
   convert,
-  money,
+  Decimal,
   IdempotencyConflictError,
   type LocalDate,
+  money,
   NotFoundError,
   newId,
   requirePermission,
@@ -16,19 +17,29 @@ import type { FiscalDocument, FiscalSeries, fiscalSeriesInput } from '../contrac
 import {
   deviationPercent,
   documentHash,
+  findNumberingGaps,
   formatDocumentNumber,
   GENESIS_HASH,
   retainUntil,
   verifyChain,
   withinTolerance,
-  findNumberingGaps,
 } from '../domain/fiscal';
+import { isReferenceRate } from '../domain/fx';
 import { categorize, type InvoiceItem, invoiceTotals, taxSummary } from '../domain/invoice';
 import { renderTextPdf } from '../domain/pdf';
 import type { FiscalDocumentsTable, FiscalSeriesTable } from '../tables';
 import { adjustPosting } from './postings';
 import { documentRecord } from './records';
-import { actorKey, type Deps, db, delegated, displayName, isUniqueViolation, loadFolio, requestHash } from './support';
+import {
+  actorKey,
+  type Deps,
+  db,
+  delegated,
+  displayName,
+  isUniqueViolation,
+  loadFolio,
+  requestHash,
+} from './support';
 
 /** Tolerance between the conversion rate used on an invoice and the central bank (MMA) rate — MIRA ±2%. */
 const MV_USD_TOLERANCE_PERCENT = '2';
@@ -45,26 +56,51 @@ function toSeries(r: Selectable<FiscalSeriesTable>): FiscalSeries {
   };
 }
 
-export async function createFiscalSeries(tx: TxContext, deps: Deps, input: z.infer<typeof fiscalSeriesInput>): Promise<FiscalSeries> {
+export async function createFiscalSeries(
+  tx: TxContext,
+  deps: Deps,
+  input: z.infer<typeof fiscalSeriesInput>,
+): Promise<FiscalSeries> {
   requirePermission(tx, 'finance.ledger.manage');
   await deps.ports.platform.getLegalEntity(tx, input.legalEntityId);
   try {
     const row = await db(tx)
       .insertInto('finance.fiscal_series')
-      .values({ id: newId(), tenant_id: tx.tenantId, legal_entity_id: input.legalEntityId, property_id: input.propertyId ?? null, kind: input.kind, prefix: input.prefix })
+      .values({
+        id: newId(),
+        tenant_id: tx.tenantId,
+        legal_entity_id: input.legalEntityId,
+        property_id: input.propertyId ?? null,
+        kind: input.kind,
+        prefix: input.prefix,
+      })
       .returningAll()
       .executeTakeFirstOrThrow();
-    await tx.audit({ action: 'finance.fiscalSeries.create', target: { type: 'fiscal_series', id: row.id }, after: input });
+    await tx.audit({
+      action: 'finance.fiscalSeries.create',
+      target: { type: 'fiscal_series', id: row.id },
+      after: input,
+    });
     return toSeries(row);
   } catch (err) {
-    if (isUniqueViolation(err)) throw new ConflictError('series_exists', `A ${input.kind} series with prefix ${input.prefix} already exists.`);
+    if (isUniqueViolation(err))
+      throw new ConflictError(
+        'series_exists',
+        `A ${input.kind} series with prefix ${input.prefix} already exists.`,
+      );
     throw err;
   }
 }
 
 export async function listFiscalSeries(tx: TxContext, legalEntityId: string): Promise<FiscalSeries[]> {
   requirePermission(tx, 'finance.ledger.read');
-  const rows = await db(tx).selectFrom('finance.fiscal_series').selectAll().where('legal_entity_id', '=', legalEntityId).orderBy('kind').orderBy('prefix').execute();
+  const rows = await db(tx)
+    .selectFrom('finance.fiscal_series')
+    .selectAll()
+    .where('legal_entity_id', '=', legalEntityId)
+    .orderBy('kind')
+    .orderBy('prefix')
+    .execute();
   return rows.map(toSeries);
 }
 
@@ -86,9 +122,17 @@ async function lockChainAndSeries(
     .executeTakeFirstOrThrow();
   let series: Selectable<FiscalSeriesTable> | undefined;
   if (seriesId) {
-    series = await db(tx).selectFrom('finance.fiscal_series').selectAll().where('id', '=', seriesId).forUpdate().executeTakeFirst();
+    series = await db(tx)
+      .selectFrom('finance.fiscal_series')
+      .selectAll()
+      .where('id', '=', seriesId)
+      .forUpdate()
+      .executeTakeFirst();
     if (!series || series.legal_entity_id !== legalEntityId || series.kind !== kind || !series.active) {
-      throw new ValidationError('invalid_series', `Choose an active ${kind.replace('_', ' ')} series of this legal entity.`);
+      throw new ValidationError(
+        'invalid_series',
+        `Choose an active ${kind.replace('_', ' ')} series of this legal entity.`,
+      );
     }
   } else {
     const pick = () =>
@@ -107,7 +151,9 @@ async function lockChainAndSeries(
     series = await pick();
     if (!series) {
       await sql`insert into finance.fiscal_series (id, tenant_id, legal_entity_id, kind, prefix)
-        values (${newId()}, ${tx.tenantId}, ${legalEntityId}, ${kind}, ${kind === 'invoice' ? 'INV-' : 'CN-'}) on conflict do nothing`.execute(tx.db);
+        values (${newId()}, ${tx.tenantId}, ${legalEntityId}, ${kind}, ${kind === 'invoice' ? 'INV-' : 'CN-'}) on conflict do nothing`.execute(
+        tx.db,
+      );
       series = await pick();
     }
     if (!series) throw new BusinessRuleError('series_unavailable', 'No document series is available.');
@@ -134,11 +180,24 @@ async function allocateAndInsert(
     postingIds: readonly string[];
   },
 ): Promise<Selectable<FiscalDocumentsTable> | { replayId: string }> {
-  const { chain, series } = await lockChainAndSeries(tx, args.legalEntityId, args.propertyId, args.kind, args.seriesId);
+  const { chain, series } = await lockChainAndSeries(
+    tx,
+    args.legalEntityId,
+    args.propertyId,
+    args.kind,
+    args.seriesId,
+  );
   // Re-check the key after taking the locks (a concurrent identical request may have just committed).
-  const dup = await db(tx).selectFrom('finance.fiscal_documents').select(['id', 'request_hash']).where('idempotency_key', '=', args.idempotencyKey).executeTakeFirst();
+  const dup = await db(tx)
+    .selectFrom('finance.fiscal_documents')
+    .select(['id', 'request_hash'])
+    .where('idempotency_key', '=', args.idempotencyKey)
+    .executeTakeFirst();
   if (dup) {
-    if (dup.request_hash !== args.requestHash) throw new IdempotencyConflictError('This idempotency key was already used to issue a different document.');
+    if (dup.request_hash !== args.requestHash)
+      throw new IdempotencyConflictError(
+        'This idempotency key was already used to issue a different document.',
+      );
     return { replayId: dup.id };
   }
   const number = series.next_number;
@@ -184,8 +243,16 @@ async function allocateAndInsert(
     })
     .returningAll()
     .executeTakeFirstOrThrow();
-  await db(tx).updateTable('finance.fiscal_series').set({ next_number: number + 1, version: sql`version + 1` }).where('id', '=', series.id).execute();
-  await db(tx).updateTable('finance.fiscal_chains').set({ last_hash: hash, document_count: position }).where('legal_entity_id', '=', args.legalEntityId).execute();
+  await db(tx)
+    .updateTable('finance.fiscal_series')
+    .set({ next_number: number + 1, version: sql`version + 1` })
+    .where('id', '=', series.id)
+    .execute();
+  await db(tx)
+    .updateTable('finance.fiscal_chains')
+    .set({ last_hash: hash, document_count: position })
+    .where('legal_entity_id', '=', args.legalEntityId)
+    .execute();
   if (args.postingIds.length) {
     await db(tx)
       .insertInto('finance.posting_document_locks')
@@ -195,9 +262,19 @@ async function allocateAndInsert(
   return row;
 }
 
-async function creditedTotal(tx: TxContext, invoiceId: string): Promise<{ total: number; cancelled: boolean }> {
-  const rows = await db(tx).selectFrom('finance.fiscal_documents').select(['total_minor', 'credit_mode']).where('original_document_id', '=', invoiceId).execute();
-  return { total: rows.reduce((s, r) => s + Math.abs(Number(r.total_minor)), 0), cancelled: rows.some((r) => r.credit_mode === 'cancel') };
+async function creditedTotal(
+  tx: TxContext,
+  invoiceId: string,
+): Promise<{ total: number; cancelled: boolean }> {
+  const rows = await db(tx)
+    .selectFrom('finance.fiscal_documents')
+    .select(['total_minor', 'credit_mode'])
+    .where('original_document_id', '=', invoiceId)
+    .execute();
+  return {
+    total: rows.reduce((s, r) => s + Math.abs(Number(r.total_minor)), 0),
+    cancelled: rows.some((r) => r.credit_mode === 'cancel'),
+  };
 }
 
 async function toDocument(tx: TxContext, r: Selectable<FiscalDocumentsTable>): Promise<FiscalDocument> {
@@ -208,7 +285,12 @@ async function toDocument(tx: TxContext, r: Selectable<FiscalDocumentsTable>): P
     if (c.cancelled || (c.total > 0 && c.total >= Math.abs(Number(r.total_minor)))) status = 'credited';
     else if (c.total > 0) status = 'partially_credited';
     creditNotes = (
-      await db(tx).selectFrom('finance.fiscal_documents').select(['id', 'document_number']).where('original_document_id', '=', r.id).orderBy('chain_position').execute()
+      await db(tx)
+        .selectFrom('finance.fiscal_documents')
+        .select(['id', 'document_number'])
+        .where('original_document_id', '=', r.id)
+        .orderBy('chain_position')
+        .execute()
     ).map((d) => ({ id: d.id, number: d.document_number }));
   }
   const snapshot = r.snapshot as Record<string, unknown>;
@@ -260,7 +342,11 @@ interface ItemRow {
   charge_group: string | null;
 }
 
-async function invoiceableItems(tx: TxContext, folioId: string, postingIds?: readonly string[]): Promise<ItemRow[]> {
+async function invoiceableItems(
+  tx: TxContext,
+  folioId: string,
+  postingIds?: readonly string[],
+): Promise<ItemRow[]> {
   let q = db(tx)
     .selectFrom('finance.postings as p')
     .leftJoin('finance.posting_document_locks as l', 'l.posting_id', 'p.id')
@@ -294,10 +380,19 @@ async function invoiceableItems(tx: TxContext, folioId: string, postingIds?: rea
 function toItems(rows: readonly ItemRow[]): InvoiceItem[] {
   return rows.map((r) => {
     const effectiveKind =
-      ['transfer_in', 'transfer_out', 'adjustment'].includes(r.kind) && r.orig_kind ? r.orig_kind : r.kind === 'transfer_in' || r.kind === 'transfer_out' ? 'charge' : r.kind;
+      ['transfer_in', 'transfer_out', 'adjustment'].includes(r.kind) && r.orig_kind
+        ? r.orig_kind
+        : r.kind === 'transfer_in' || r.kind === 'transfer_out'
+          ? 'charge'
+          : r.kind;
     return {
       postingId: r.id,
-      category: categorize({ kind: r.kind, effectiveKind, taxKind: r.tax_kind ?? r.orig_tax_kind, chargeGroup: r.charge_group }),
+      category: categorize({
+        kind: r.kind,
+        effectiveKind,
+        taxKind: r.tax_kind ?? r.orig_tax_kind,
+        chargeGroup: r.charge_group,
+      }),
       description: r.description,
       chargeCode: r.charge_code,
       date: r.service_date ?? r.business_date,
@@ -346,17 +441,17 @@ async function usdConversion(
     .where('business_date', '<=', date)
     .orderBy('business_date', 'desc')
     .execute();
-  const mma = rows.find((r) => /^mma/i.test(r.source));
-  const used = rows.find((r) => !/^mma/i.test(r.source) && r.business_date === mma?.business_date) ?? mma;
-  if (!mma || !used || mma.business_date !== date) {
+  const mma = rows.find((r) => isReferenceRate(r.source) && r.business_date === date);
+  const used = rows.find((r) => !isReferenceRate(r.source) && r.business_date === date) ?? mma;
+  if (!mma || !used) {
     throw new BusinessRuleError(
       'usd_conversion_rate_missing',
       `Invoices in ${currency} must show the USD equivalent at the Maldives Monetary Authority rate for the date of supply. Enter today's ${currency}→USD rate with source "MMA" before issuing.`,
       { currency, date },
     );
   }
-  const rate = String(used.rate);
-  const mmaRate = String(mma.rate);
+  const rate = new Decimal(String(used.rate)).toString();
+  const mmaRate = new Decimal(String(mma.rate)).toString();
   if (!withinTolerance(rate, mmaRate, MV_USD_TOLERANCE_PERCENT)) {
     throw new BusinessRuleError(
       'usd_conversion_out_of_tolerance',
@@ -386,14 +481,25 @@ export interface IssueInvoiceInput {
  * Issue a tax invoice for every not-yet-invoiced posting of a folio. Number allocated gaplessly under a series
  * lock inside the transaction; content snapshotted immutably and hash-chained; retries return the same document.
  */
-export async function issueInvoice(tx: TxContext, deps: Deps, input: IssueInvoiceInput): Promise<FiscalDocument> {
+export async function issueInvoice(
+  tx: TxContext,
+  deps: Deps,
+  input: IssueInvoiceInput,
+): Promise<FiscalDocument> {
   const folio = await loadFolio(tx, input.folioId);
   requirePermission(tx, 'finance.invoice.issue', { propertyId: folio.property_id });
   const { idempotencyKey, ...rest } = input;
   const hash = requestHash({ op: 'invoice', ...rest });
-  const existing = await db(tx).selectFrom('finance.fiscal_documents').selectAll().where('idempotency_key', '=', idempotencyKey).executeTakeFirst();
+  const existing = await db(tx)
+    .selectFrom('finance.fiscal_documents')
+    .selectAll()
+    .where('idempotency_key', '=', idempotencyKey)
+    .executeTakeFirst();
   if (existing) {
-    if (existing.request_hash !== hash) throw new IdempotencyConflictError('This idempotency key was already used to issue a different document.');
+    if (existing.request_hash !== hash)
+      throw new IdempotencyConflictError(
+        'This idempotency key was already used to issue a different document.',
+      );
     return toDocument(tx, existing);
   }
   await deps.ports.platform.assertWritable(tx, folio.property_id, 'charges');
@@ -409,7 +515,12 @@ export async function issueInvoice(tx: TxContext, deps: Deps, input: IssueInvoic
       { note: pack.note ?? null },
     );
   }
-  const buyer = { name: folio.payer_name, type: folio.payer_type, ...(input.payerDetails?.taxId ? { taxId: input.payerDetails.taxId } : {}), ...(input.payerDetails?.address ? { address: input.payerDetails.address } : {}) };
+  const buyer = {
+    name: folio.payer_name,
+    type: folio.payer_type,
+    ...(input.payerDetails?.taxId ? { taxId: input.payerDetails.taxId } : {}),
+    ...(input.payerDetails?.address ? { address: input.payerDetails.address } : {}),
+  };
   const check = particulars(le, buyer);
   if (live && check.missing.length) {
     throw new BusinessRuleError(
@@ -418,18 +529,41 @@ export async function issueInvoice(tx: TxContext, deps: Deps, input: IssueInvoic
       { missing: check.missing },
     );
   }
-  // Lock the folio so no posting slips in between selection and locking.
+  // Lock the folio so no posting slips in between selection and locking; a concurrent identical request that
+  // committed meanwhile is replayed (read committed: this statement sees it).
   await loadFolio(tx, folio.id, { forUpdate: true });
+  const raced = await db(tx)
+    .selectFrom('finance.fiscal_documents')
+    .selectAll()
+    .where('idempotency_key', '=', idempotencyKey)
+    .executeTakeFirst();
+  if (raced) {
+    if (raced.request_hash !== hash)
+      throw new IdempotencyConflictError(
+        'This idempotency key was already used to issue a different document.',
+      );
+    return toDocument(tx, raced);
+  }
   const rows = await invoiceableItems(tx, folio.id);
   const items = toItems(rows);
   if (!items.some((i) => i.category !== 'settlement')) {
-    throw new BusinessRuleError('nothing_to_invoice', 'This folio has no charges that are not already on an issued invoice.');
+    throw new BusinessRuleError(
+      'nothing_to_invoice',
+      'This folio has no charges that are not already on an issued invoice.',
+    );
   }
   const totals = invoiceTotals(items);
-  const usd = le.countryCode === 'MV' && folio.currency !== 'USD' ? await usdConversion(tx, folio.legal_entity_id, folio.currency, businessDate, totals) : null;
+  const usd =
+    le.countryCode === 'MV' && folio.currency !== 'USD'
+      ? await usdConversion(tx, folio.legal_entity_id, folio.currency, businessDate, totals)
+      : null;
   const depositEntries = rows.filter((r) => r.kind === 'deposit_application').map((r) => r.entry_id);
   const depositTax = depositEntries.length
-    ? await db(tx).selectFrom('finance.deposit_movements').select(['taxes', 'business_date']).where('entry_id', 'in', depositEntries).execute()
+    ? await db(tx)
+        .selectFrom('finance.deposit_movements')
+        .select(['taxes', 'business_date'])
+        .where('entry_id', 'in', depositEntries)
+        .execute()
     : [];
   const depositTaxCredits = depositTax.flatMap((m) =>
     ((m.taxes ?? []) as Array<{ name: string; amountMinor: number; currentMinor?: number }>).map((t) => ({
@@ -466,9 +600,19 @@ export async function issueInvoice(tx: TxContext, deps: Deps, input: IssueInvoic
         address: le.address ?? {},
         countryCode: le.countryCode,
       },
-      buyer: { name: buyer.name, type: buyer.type, taxId: buyer.taxId ?? null, address: buyer.address ?? null, email: input.payerDetails?.email ?? null },
+      buyer: {
+        name: buyer.name,
+        type: buyer.type,
+        taxId: buyer.taxId ?? null,
+        address: buyer.address ?? null,
+        email: input.payerDetails?.email ?? null,
+      },
       property: { id: property.id, name: property.name },
-      folio: { id: folio.id, label: displayName(folio), owner: { type: folio.owner_type, id: folio.owner_id } },
+      folio: {
+        id: folio.id,
+        label: displayName(folio),
+        owner: { type: folio.owner_type, id: folio.owner_id },
+      },
       currency: folio.currency,
       lines: items.filter((i) => i.category !== 'settlement'),
       taxSummary: taxSummary(items),
@@ -483,14 +627,31 @@ export async function issueInvoice(tx: TxContext, deps: Deps, input: IssueInvoic
     }),
   });
   if ('replayId' in result) {
-    return toDocument(tx, await db(tx).selectFrom('finance.fiscal_documents').selectAll().where('id', '=', result.replayId).executeTakeFirstOrThrow());
+    return toDocument(
+      tx,
+      await db(tx)
+        .selectFrom('finance.fiscal_documents')
+        .selectAll()
+        .where('id', '=', result.replayId)
+        .executeTakeFirstOrThrow(),
+    );
   }
-  await tx.audit({ action: 'finance.invoice.issue', target: { type: 'fiscal_document', id: result.id }, propertyId: folio.property_id, after: { documentNumber: result.document_number, total: totals.totalMinor } });
+  await tx.audit({
+    action: 'finance.invoice.issue',
+    target: { type: 'fiscal_document', id: result.id },
+    propertyId: folio.property_id,
+    after: { documentNumber: result.document_number, total: totals.totalMinor },
+  });
   await tx.emit({
     type: 'finance.invoice.issued',
     propertyId: folio.property_id,
     aggregate: { type: 'fiscal_document', id: result.id },
-    payload: { documentId: result.id, documentNumber: result.document_number, folioId: folio.id, total: { amountMinor: totals.totalMinor, currency: folio.currency } },
+    payload: {
+      documentId: result.id,
+      documentNumber: result.document_number,
+      folioId: folio.id,
+      total: { amountMinor: totals.totalMinor, currency: folio.currency },
+    },
   });
   return toDocument(tx, result);
 }
@@ -509,38 +670,75 @@ export interface CreditNoteInput {
  * details) and its postings can be invoiced again; `adjust`: selected charges are corrected by linked
  * adjustment postings which the credit note documents. The original invoice never changes.
  */
-export async function issueCreditNote(tx: TxContext, deps: Deps, input: CreditNoteInput): Promise<FiscalDocument> {
-  const inv = await db(tx).selectFrom('finance.fiscal_documents').selectAll().where('id', '=', input.invoiceId).executeTakeFirst();
-  if (!inv || inv.kind !== 'invoice') throw new NotFoundError('invoice', input.invoiceId);
+export async function issueCreditNote(
+  tx: TxContext,
+  deps: Deps,
+  input: CreditNoteInput,
+): Promise<FiscalDocument> {
+  const inv = await db(tx)
+    .selectFrom('finance.fiscal_documents')
+    .selectAll()
+    .where('id', '=', input.invoiceId)
+    .executeTakeFirst();
+  if (inv?.kind !== 'invoice') throw new NotFoundError('invoice', input.invoiceId);
   requirePermission(tx, 'finance.creditNote.issue', { propertyId: inv.property_id });
   const { idempotencyKey, ...rest } = input;
   const hash = requestHash({ op: 'credit-note', ...rest });
-  const existing = await db(tx).selectFrom('finance.fiscal_documents').selectAll().where('idempotency_key', '=', idempotencyKey).executeTakeFirst();
+  const existing = await db(tx)
+    .selectFrom('finance.fiscal_documents')
+    .selectAll()
+    .where('idempotency_key', '=', idempotencyKey)
+    .executeTakeFirst();
   if (existing) {
-    if (existing.request_hash !== hash) throw new IdempotencyConflictError('This idempotency key was already used to issue a different document.');
+    if (existing.request_hash !== hash)
+      throw new IdempotencyConflictError(
+        'This idempotency key was already used to issue a different document.',
+      );
     return toDocument(tx, existing);
   }
   await deps.ports.platform.assertWritable(tx, inv.property_id, 'charges');
   const credited = await creditedTotal(tx, inv.id);
   if (credited.cancelled || credited.total >= Math.abs(Number(inv.total_minor))) {
-    throw new BusinessRuleError('invoice_already_credited', `Invoice ${inv.document_number} is already fully credited.`);
+    throw new BusinessRuleError(
+      'invoice_already_credited',
+      `Invoice ${inv.document_number} is already fully credited.`,
+    );
   }
   const businessDate = await deps.ports.platform.getBusinessDate(tx, inv.property_id);
   const original = inv.snapshot as Record<string, unknown>;
   let postingIds: string[] = [];
   let items: InvoiceItem[];
   if (input.mode === 'cancel') {
-    if (input.lines) throw new ValidationError('cancel_is_full', 'A cancelling credit note always covers the whole invoice; omit lines.');
-    if (credited.total > 0) throw new BusinessRuleError('invoice_partially_credited', 'This invoice already has a credit note; credit the remaining lines with an adjusting credit note.');
+    if (input.lines)
+      throw new ValidationError(
+        'cancel_is_full',
+        'A cancelling credit note always covers the whole invoice; omit lines.',
+      );
+    if (credited.total > 0)
+      throw new BusinessRuleError(
+        'invoice_partially_credited',
+        'This invoice already has a credit note; credit the remaining lines with an adjusting credit note.',
+      );
     items = ((original.lines ?? []) as InvoiceItem[]).map((i) => ({ ...i, amountMinor: -i.amountMinor }));
   } else {
-    const locked = await db(tx).selectFrom('finance.posting_document_locks as l').innerJoin('finance.postings as p', 'p.id', 'l.posting_id').select(['p.id', 'p.kind']).where('l.document_id', '=', inv.id).execute();
+    const locked = await db(tx)
+      .selectFrom('finance.posting_document_locks as l')
+      .innerJoin('finance.postings as p', 'p.id', 'l.posting_id')
+      .select(['p.id', 'p.kind'])
+      .where('l.document_id', '=', inv.id)
+      .execute();
     const charges = locked.filter((p) => p.kind === 'charge').map((p) => p.id);
-    const lines: Array<{ postingId: string; amountMinor?: number }> = input.lines ?? charges.map((postingId) => ({ postingId }));
-    if (lines.length === 0) throw new ValidationError('nothing_to_credit', 'Choose at least one charge of the invoice to credit.');
+    const lines: Array<{ postingId: string; amountMinor?: number }> =
+      input.lines ?? charges.map((postingId) => ({ postingId }));
+    if (lines.length === 0)
+      throw new ValidationError('nothing_to_credit', 'Choose at least one charge of the invoice to credit.');
     for (const l of lines) {
       if (!charges.includes(l.postingId)) {
-        throw new ValidationError('posting_not_on_invoice', 'Each credited line must be a charge on this invoice.', { postingId: l.postingId });
+        throw new ValidationError(
+          'posting_not_on_invoice',
+          'Each credited line must be a charge on this invoice.',
+          { postingId: l.postingId },
+        );
       }
       const res = await adjustPosting(delegated(tx, ['finance.posting.correct']), deps, {
         postingId: l.postingId,
@@ -590,7 +788,14 @@ export async function issueCreditNote(tx: TxContext, deps: Deps, input: CreditNo
     }),
   });
   if ('replayId' in result) {
-    return toDocument(tx, await db(tx).selectFrom('finance.fiscal_documents').selectAll().where('id', '=', result.replayId).executeTakeFirstOrThrow());
+    return toDocument(
+      tx,
+      await db(tx)
+        .selectFrom('finance.fiscal_documents')
+        .selectAll()
+        .where('id', '=', result.replayId)
+        .executeTakeFirstOrThrow(),
+    );
   }
   if (input.mode === 'cancel') {
     // The cancelled invoice's postings may be invoiced again (e.g. with corrected payer details).
@@ -602,19 +807,33 @@ export async function issueCreditNote(tx: TxContext, deps: Deps, input: CreditNo
     target: { type: 'fiscal_document', id: result.id },
     propertyId: inv.property_id,
     reason: input.reason,
-    after: { documentNumber: result.document_number, credits: inv.document_number, mode: input.mode, total: totals.totalMinor },
+    after: {
+      documentNumber: result.document_number,
+      credits: inv.document_number,
+      mode: input.mode,
+      total: totals.totalMinor,
+    },
   });
   await tx.emit({
     type: 'finance.creditNote.issued',
     propertyId: inv.property_id,
     aggregate: { type: 'fiscal_document', id: result.id },
-    payload: { documentId: result.id, invoiceId: inv.id, mode: input.mode, total: { amountMinor: totals.totalMinor, currency: inv.currency } },
+    payload: {
+      documentId: result.id,
+      invoiceId: inv.id,
+      mode: input.mode,
+      total: { amountMinor: totals.totalMinor, currency: inv.currency },
+    },
   });
   return toDocument(tx, result);
 }
 
 export async function getDocument(tx: TxContext, id: string): Promise<FiscalDocument> {
-  const r = await db(tx).selectFrom('finance.fiscal_documents').selectAll().where('id', '=', id).executeTakeFirst();
+  const r = await db(tx)
+    .selectFrom('finance.fiscal_documents')
+    .selectAll()
+    .where('id', '=', id)
+    .executeTakeFirst();
   if (!r) throw new NotFoundError('fiscal_document', id);
   requirePermission(tx, 'finance.folio.read', { propertyId: r.property_id });
   return toDocument(tx, r);
@@ -623,12 +842,20 @@ export async function getDocument(tx: TxContext, id: string): Promise<FiscalDocu
 export async function listDocuments(tx: TxContext, folioId: string): Promise<FiscalDocument[]> {
   const f = await loadFolio(tx, folioId);
   requirePermission(tx, 'finance.folio.read', { propertyId: f.property_id });
-  const rows = await db(tx).selectFrom('finance.fiscal_documents').selectAll().where('folio_id', '=', folioId).orderBy('chain_position').execute();
+  const rows = await db(tx)
+    .selectFrom('finance.fiscal_documents')
+    .selectAll()
+    .where('folio_id', '=', folioId)
+    .orderBy('chain_position')
+    .execute();
   return Promise.all(rows.map((r) => toDocument(tx, r)));
 }
 
 /** Reproducible PDF rendering of a document from its immutable snapshot. */
-export async function renderDocumentPdf(tx: TxContext, id: string): Promise<{ filename: string; pdf: Buffer }> {
+export async function renderDocumentPdf(
+  tx: TxContext,
+  id: string,
+): Promise<{ filename: string; pdf: Buffer }> {
   const d = await getDocument(tx, id);
   const s = d.snapshot as Record<string, unknown> & {
     supplier?: { legalName?: string; taxId?: string | null; address?: Record<string, string> };
@@ -656,20 +883,38 @@ export async function renderDocumentPdf(tx: TxContext, id: string): Promise<{ fi
     `Levies stated separately (e.g. Green Tax): ${fmt(s.totals?.leviesMinor)}`,
     `Outside the tax base (gratuities, disbursements): ${fmt(s.totals?.outsideTaxBaseMinor)}`,
     `Total including tax: ${fmt(s.totals?.totalMinor)}`,
-    ...(s.usdConversion ? [`USD equivalent at ${String(s.usdConversion.rate)} (${String(s.usdConversion.rateSource)}, ${String(s.usdConversion.rateDate)})`] : []),
+    ...(s.usdConversion
+      ? [
+          `USD equivalent at ${String(s.usdConversion.rate)} (${String(s.usdConversion.rateSource)}, ${String(s.usdConversion.rateDate)})`,
+        ]
+      : []),
     '',
     `Document hash: ${d.hash}`,
   ];
-  return { filename: `${d.documentNumber}.pdf`, pdf: renderTextPdf(lines, `${String(s.title ?? d.kind)} ${d.documentNumber}`) };
+  return {
+    filename: `${d.documentNumber}.pdf`,
+    pdf: renderTextPdf(lines, `${String(s.title ?? d.kind)} ${d.documentNumber}`),
+  };
 }
 
 /** Verify the legal entity's fiscal chain end to end and gapless numbering per series. */
 export async function verifyFiscalLedger(
   tx: TxContext,
   legalEntityId: string,
-): Promise<{ ok: boolean; documents: number; brokenAt: number | null; reason: string | null; gaps: Array<{ seriesId: string; missing: number[] }> }> {
+): Promise<{
+  ok: boolean;
+  documents: number;
+  brokenAt: number | null;
+  reason: string | null;
+  gaps: Array<{ seriesId: string; missing: number[] }>;
+}> {
   requirePermission(tx, 'finance.ledger.read');
-  const rows = await db(tx).selectFrom('finance.fiscal_documents').selectAll().where('legal_entity_id', '=', legalEntityId).orderBy('chain_position').execute();
+  const rows = await db(tx)
+    .selectFrom('finance.fiscal_documents')
+    .selectAll()
+    .where('legal_entity_id', '=', legalEntityId)
+    .orderBy('chain_position')
+    .execute();
   const broken = verifyChain(
     rows.map((r) => ({
       chainPosition: r.chain_position,
@@ -684,6 +929,14 @@ export async function verifyFiscalLedger(
   );
   const bySeries = new Map<string, number[]>();
   for (const r of rows) bySeries.set(r.series_id, [...(bySeries.get(r.series_id) ?? []), r.number]);
-  const gaps = [...bySeries.entries()].map(([seriesId, nums]) => ({ seriesId, missing: findNumberingGaps(nums) })).filter((g) => g.missing.length > 0);
-  return { ok: !broken && gaps.length === 0, documents: rows.length, brokenAt: broken?.brokenAt ?? null, reason: broken?.reason ?? null, gaps };
+  const gaps = [...bySeries.entries()]
+    .map(([seriesId, nums]) => ({ seriesId, missing: findNumberingGaps(nums) }))
+    .filter((g) => g.missing.length > 0);
+  return {
+    ok: !broken && gaps.length === 0,
+    documents: rows.length,
+    brokenAt: broken?.brokenAt ?? null,
+    reason: broken?.reason ?? null,
+    gaps,
+  };
 }

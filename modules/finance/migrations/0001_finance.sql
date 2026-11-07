@@ -67,7 +67,9 @@ create table finance.fx_rates (
   entered_by       text not null,
   created_at       timestamptz not null default now(),
   check (from_currency <> to_currency),
-  unique (tenant_id, legal_entity_id, business_date, from_currency, to_currency)
+  -- One rate per source and date: the hotel's operational rate and the central bank reference rate (e.g. MMA)
+  -- may coexist so that invoices can prove the operational rate is within the legal tolerance.
+  unique (tenant_id, legal_entity_id, business_date, from_currency, to_currency, source)
 );
 select core.enable_tenant_isolation('finance.fx_rates');
 

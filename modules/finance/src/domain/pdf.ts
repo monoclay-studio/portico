@@ -17,7 +17,8 @@ export function renderTextPdf(lines: readonly string[], title: string): Buffer {
   const lineHeight = 13;
   const perPage = Math.floor((top - 40) / lineHeight);
   const pages: string[][] = [];
-  for (let i = 0; i < Math.max(lines.length, 1); i += perPage) pages.push(lines.slice(i, i + perPage) as string[]);
+  for (let i = 0; i < Math.max(lines.length, 1); i += perPage)
+    pages.push(lines.slice(i, i + perPage) as string[]);
   const objects: string[] = [];
   // 1: catalog, 2: pages, 3: font, then per page: page object + content stream
   const pageObjIds = pages.map((_, i) => 4 + i * 2);

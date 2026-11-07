@@ -23,7 +23,8 @@ export function isEligible(
 ): boolean {
   if (a.status !== 'active') return false;
   if (charge.serviceDate < a.validFrom || charge.serviceDate >= a.validTo) return false;
-  const any = a.eligibleChargeCodes.length === 0 && a.eligibleGroups.length === 0 && a.eligibleTags.length === 0;
+  const any =
+    a.eligibleChargeCodes.length === 0 && a.eligibleGroups.length === 0 && a.eligibleTags.length === 0;
   if (any) return true;
   return (
     a.eligibleChargeCodes.includes(charge.chargeCode) ||

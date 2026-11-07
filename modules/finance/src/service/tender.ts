@@ -28,8 +28,20 @@ export async function bridgeLines(
   if (a.currency === credit.currency) {
     return {
       lines: [
-        { accountKey: debit.accountKey, amountMinor: a.amountMinor, currency: a.currency, subLedger: debit.subLedger ?? null, ...(debit.postingIndex !== undefined ? { postingIndex: debit.postingIndex } : {}) },
-        { accountKey: credit.accountKey, amountMinor: -a.amountMinor, currency: a.currency, subLedger: credit.subLedger ?? null, ...(credit.postingIndex !== undefined ? { postingIndex: credit.postingIndex } : {}) },
+        {
+          accountKey: debit.accountKey,
+          amountMinor: a.amountMinor,
+          currency: a.currency,
+          subLedger: debit.subLedger ?? null,
+          ...(debit.postingIndex !== undefined ? { postingIndex: debit.postingIndex } : {}),
+        },
+        {
+          accountKey: credit.accountKey,
+          amountMinor: -a.amountMinor,
+          currency: a.currency,
+          subLedger: credit.subLedger ?? null,
+          ...(credit.postingIndex !== undefined ? { postingIndex: credit.postingIndex } : {}),
+        },
       ],
       creditAmount: a,
       fxRateId: null,
@@ -47,10 +59,40 @@ export async function bridgeLines(
   const f2 = await toFunctional(f);
   return {
     lines: [
-      { accountKey: debit.accountKey, amountMinor: a.amountMinor, currency: a.currency, functionalAmountMinor: f1, fxRateId: cross.rateId, subLedger: debit.subLedger ?? null, ...(debit.postingIndex !== undefined ? { postingIndex: debit.postingIndex } : {}) },
-      { accountKey: 'fx_position', amountMinor: -a.amountMinor, currency: a.currency, functionalAmountMinor: -f1, fxRateId: cross.rateId, memo: `conversion ${a.currency}→${credit.currency}` },
-      { accountKey: 'fx_position', amountMinor: f.amountMinor, currency: f.currency, functionalAmountMinor: f2, fxRateId: cross.rateId, memo: `conversion ${a.currency}→${credit.currency}` },
-      { accountKey: credit.accountKey, amountMinor: -f.amountMinor, currency: f.currency, functionalAmountMinor: -f2, fxRateId: cross.rateId, subLedger: credit.subLedger ?? null, ...(credit.postingIndex !== undefined ? { postingIndex: credit.postingIndex } : {}) },
+      {
+        accountKey: debit.accountKey,
+        amountMinor: a.amountMinor,
+        currency: a.currency,
+        functionalAmountMinor: f1,
+        fxRateId: cross.rateId,
+        subLedger: debit.subLedger ?? null,
+        ...(debit.postingIndex !== undefined ? { postingIndex: debit.postingIndex } : {}),
+      },
+      {
+        accountKey: 'fx_position',
+        amountMinor: -a.amountMinor,
+        currency: a.currency,
+        functionalAmountMinor: -f1,
+        fxRateId: cross.rateId,
+        memo: `conversion ${a.currency}→${credit.currency}`,
+      },
+      {
+        accountKey: 'fx_position',
+        amountMinor: f.amountMinor,
+        currency: f.currency,
+        functionalAmountMinor: f2,
+        fxRateId: cross.rateId,
+        memo: `conversion ${a.currency}→${credit.currency}`,
+      },
+      {
+        accountKey: credit.accountKey,
+        amountMinor: -f.amountMinor,
+        currency: f.currency,
+        functionalAmountMinor: -f2,
+        fxRateId: cross.rateId,
+        subLedger: credit.subLedger ?? null,
+        ...(credit.postingIndex !== undefined ? { postingIndex: credit.postingIndex } : {}),
+      },
     ],
     creditAmount: money(f.amountMinor, f.currency),
     fxRateId: cross.rateId,
@@ -67,7 +109,11 @@ export function decodeMethod(s: string | null): { method: PaymentMethodKind; pro
   return { method: (m ?? 'other') as PaymentMethodKind, provider: p ?? null };
 }
 
-export function clearingSide(method: PaymentMethodKind, provider: string | null, sessionId: string | null): Side {
+export function clearingSide(
+  method: PaymentMethodKind,
+  provider: string | null,
+  sessionId: string | null,
+): Side {
   const accountKey = clearingKeyForMethod(method, provider);
   return accountKey === 'cash' && sessionId
     ? { accountKey, subLedger: { type: 'cashier_session', id: sessionId } }
@@ -87,7 +133,7 @@ export async function openSessionFor(
       .select(['id', 'status', 'property_id'])
       .where('id', '=', explicitSessionId)
       .executeTakeFirst();
-    if (!s || s.status !== 'open' || s.property_id !== propertyId) {
+    if (s?.status !== 'open' || s.property_id !== propertyId) {
       throw new BusinessRuleError(
         'cashier_session_not_open',
         'The cashier session is not open at this property. Open a cashier session before handling cash.',

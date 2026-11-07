@@ -14,7 +14,9 @@ import * as reports from './reports';
 import * as setup from './setup';
 import { type Deps, delegated, ensureChart } from './support';
 
-type Rest<F> = F extends (tx: TxContext, deps: Deps, ...args: infer A) => infer R ? (tx: TxContext, ...args: A) => R : never;
+type Rest<F> = F extends (tx: TxContext, deps: Deps, ...args: infer A) => infer R
+  ? (tx: TxContext, ...args: A) => R
+  : never;
 
 function bind<F extends (tx: TxContext, deps: Deps, ...args: never[]) => unknown>(deps: Deps, f: F): Rest<F> {
   return ((tx: TxContext, ...args: never[]) => f(tx, deps, ...args)) as Rest<F>;
@@ -119,7 +121,12 @@ export type FinanceService = ReturnType<typeof createFinance>;
 /** Finance permissions a calling module's command implies when it uses finance inside the same transaction. */
 export const PROVIDER_DELEGATION: Record<string, readonly string[]> = {
   // reservations opens folios, posts room/package charges, applies deposits, marks departures
-  reservations: ['finance.folio.manage', 'finance.folio.read', 'finance.posting.create', 'finance.billingRule.manage'],
+  reservations: [
+    'finance.folio.manage',
+    'finance.folio.read',
+    'finance.posting.create',
+    'finance.billingRule.manage',
+  ],
   // payments records provider-confirmed money movements only
   payments: ['finance.folio.read', 'finance.posting.create', 'finance.ledger.manage'],
   // day-close posts nightly charges, closes allowance periods and reads checks
@@ -138,20 +145,33 @@ export function financeProvider(service: FinanceService, caller: keyof typeof PR
   const perms = PROVIDER_DELEGATION[caller] ?? [];
   const d = (tx: TxContext) => delegated(tx, perms);
   return {
-    openFolio: (tx: TxContext, input: Parameters<FinanceService['openFolio']>[1]) => service.openFolio(d(tx), input),
-    postCharge: (tx: TxContext, input: Parameters<FinanceService['postCharge']>[1]) => service.postCharge(d(tx), input),
-    recordPayment: (tx: TxContext, input: Parameters<FinanceService['recordPayment']>[1]) => service.recordPayment(d(tx), input),
-    recordRefund: (tx: TxContext, input: Parameters<FinanceService['recordRefund']>[1]) => service.recordRefund(d(tx), input),
-    recordDeposit: (tx: TxContext, input: Parameters<FinanceService['recordDeposit']>[1]) => service.recordDeposit(d(tx), input),
-    applyDeposits: (tx: TxContext, input: Parameters<FinanceService['applyDeposits']>[1]) => service.applyDeposits(d(tx), input),
-    recordPayout: (tx: TxContext, input: Parameters<FinanceService['recordPayout']>[1]) => service.recordPayout(d(tx), input),
+    openFolio: (tx: TxContext, input: Parameters<FinanceService['openFolio']>[1]) =>
+      service.openFolio(d(tx), input),
+    postCharge: (tx: TxContext, input: Parameters<FinanceService['postCharge']>[1]) =>
+      service.postCharge(d(tx), input),
+    recordPayment: (tx: TxContext, input: Parameters<FinanceService['recordPayment']>[1]) =>
+      service.recordPayment(d(tx), input),
+    recordRefund: (tx: TxContext, input: Parameters<FinanceService['recordRefund']>[1]) =>
+      service.recordRefund(d(tx), input),
+    recordDeposit: (tx: TxContext, input: Parameters<FinanceService['recordDeposit']>[1]) =>
+      service.recordDeposit(d(tx), input),
+    applyDeposits: (tx: TxContext, input: Parameters<FinanceService['applyDeposits']>[1]) =>
+      service.applyDeposits(d(tx), input),
+    recordPayout: (tx: TxContext, input: Parameters<FinanceService['recordPayout']>[1]) =>
+      service.recordPayout(d(tx), input),
     getFolioBalance: (tx: TxContext, folioId: string) => service.getFolioBalance(d(tx), folioId),
-    listFolios: (tx: TxContext, input: Parameters<FinanceService['listFolios']>[1]) => service.listFolios(d(tx), input),
-    getUnbalancedItems: (tx: TxContext, input: Parameters<FinanceService['getUnbalancedItems']>[1]) => service.getUnbalancedItems(d(tx), input),
-    markOwnerDeparted: (tx: TxContext, input: Parameters<FinanceService['markOwnerDeparted']>[1]) => service.markOwnerDeparted(d(tx), input),
-    grantAllowance: (tx: TxContext, input: Parameters<FinanceService['grantAllowance']>[1]) => service.grantAllowance(d(tx), input),
-    closeAllowances: (tx: TxContext, input: Parameters<FinanceService['closeAllowances']>[1]) => service.closeAllowances(d(tx), input),
-    createBillingRule: (tx: TxContext, input: Parameters<FinanceService['createBillingRule']>[1]) => service.createBillingRule(d(tx), input),
+    listFolios: (tx: TxContext, input: Parameters<FinanceService['listFolios']>[1]) =>
+      service.listFolios(d(tx), input),
+    getUnbalancedItems: (tx: TxContext, input: Parameters<FinanceService['getUnbalancedItems']>[1]) =>
+      service.getUnbalancedItems(d(tx), input),
+    markOwnerDeparted: (tx: TxContext, input: Parameters<FinanceService['markOwnerDeparted']>[1]) =>
+      service.markOwnerDeparted(d(tx), input),
+    grantAllowance: (tx: TxContext, input: Parameters<FinanceService['grantAllowance']>[1]) =>
+      service.grantAllowance(d(tx), input),
+    closeAllowances: (tx: TxContext, input: Parameters<FinanceService['closeAllowances']>[1]) =>
+      service.closeAllowances(d(tx), input),
+    createBillingRule: (tx: TxContext, input: Parameters<FinanceService['createBillingRule']>[1]) =>
+      service.createBillingRule(d(tx), input),
   };
 }
 
@@ -167,7 +187,9 @@ export function financeSubscriptions(service: FinanceService, ports: FinancePort
         const propertyId = typeof p.propertyId === 'string' ? p.propertyId : event.propertyId;
         if (!propertyId) return;
         const candidate = p.businessDate ?? p.departureDate;
-        const departedOn: LocalDate = isLocalDate(candidate) ? candidate : await ports.platform.getBusinessDate(tx, propertyId);
+        const departedOn: LocalDate = isLocalDate(candidate)
+          ? candidate
+          : await ports.platform.getBusinessDate(tx, propertyId);
         await service.markOwnerDeparted(tx, { propertyId, owner: { type: 'stay', id: stayId }, departedOn });
         await service.closeAllowances(tx, { stayId, upTo: '9999-12-31' });
       },

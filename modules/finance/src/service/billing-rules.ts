@@ -1,7 +1,13 @@
 import { explainVersionMiss, type Selectable, sql, type TxContext } from '@portico/db';
 import { BusinessRuleError, NotFoundError, newId, requirePermission, ValidationError } from '@portico/kernel';
 import type { z } from 'zod';
-import type { BillingRule, BillingRuleInput, billingRuleUpdate, PreviewInput, PreviewResult } from '../contracts';
+import type {
+  BillingRule,
+  BillingRuleInput,
+  billingRuleUpdate,
+  PreviewInput,
+  PreviewResult,
+} from '../contracts';
 import {
   assertRuleSetConsistent,
   capPeriodKey,
@@ -20,11 +26,17 @@ import { type Deps, db, displayName, loadFolio } from './support';
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 /** Plain-language description of a rule ("who pays for what" panel). */
-export function describeRule(r: { label: string; selector: RuleSelector; cap: RuleCap | null }, payer: string): string {
+export function describeRule(
+  r: { label: string; selector: RuleSelector; cap: RuleCap | null },
+  payer: string,
+): string {
   const what =
     (r.selector.chargeCodes?.length ?? 0) + (r.selector.chargeGroups?.length ?? 0) === 0
       ? 'all charges'
-      : [...(r.selector.chargeGroups ?? []).map((g) => `${g} charges`), ...(r.selector.chargeCodes ?? [])].join(', ');
+      : [
+          ...(r.selector.chargeGroups ?? []).map((g) => `${g} charges`),
+          ...(r.selector.chargeCodes ?? []),
+        ].join(', ');
   const when = [
     r.selector.serviceDateFrom ? `from ${r.selector.serviceDateFrom}` : '',
     r.selector.serviceDateTo ? `until before ${r.selector.serviceDateTo}` : '',
@@ -61,35 +73,59 @@ async function toRule(tx: TxContext, r: Selectable<BillingRulesTable>): Promise<
 
 async function validateRule(
   tx: TxContext,
-  input: { propertyId: string; owner: { type: string; id: string }; destinationFolioId: string; selector: RuleSelector; cap: RuleCap | null },
+  input: {
+    propertyId: string;
+    owner: { type: string; id: string };
+    destinationFolioId: string;
+    selector: RuleSelector;
+    cap: RuleCap | null;
+  },
 ): Promise<Map<string, ChargeGroup>> {
   validateSelector(input.selector);
   const groups = await chargeGroupMap(tx, input.propertyId);
   for (const c of input.selector.chargeCodes ?? []) {
     if (!groups.has(c)) {
-      throw new ValidationError('unknown_charge_code', `Charge code "${c}" is not set up at this property.`, { chargeCode: c });
+      throw new ValidationError('unknown_charge_code', `Charge code "${c}" is not set up at this property.`, {
+        chargeCode: c,
+      });
     }
   }
   const base = await defaultFolio(tx, input.owner);
   const dest = await loadFolio(tx, input.destinationFolioId);
   if (dest.property_id !== input.propertyId || base.property_id !== input.propertyId) {
-    throw new ValidationError('folio_property_mismatch', 'The destination folio must belong to the same property.');
+    throw new ValidationError(
+      'folio_property_mismatch',
+      'The destination folio must belong to the same property.',
+    );
   }
   if (dest.legal_entity_id !== base.legal_entity_id) {
-    throw new BusinessRuleError('intercompany_rule', 'The destination folio belongs to another legal entity.');
+    throw new BusinessRuleError(
+      'intercompany_rule',
+      'The destination folio belongs to another legal entity.',
+    );
   }
   if (dest.currency !== base.currency) {
-    throw new BusinessRuleError('folio_currency_mismatch', `The destination folio must use ${base.currency}, like the default folio.`);
+    throw new BusinessRuleError(
+      'folio_currency_mismatch',
+      `The destination folio must use ${base.currency}, like the default folio.`,
+    );
   }
   if (dest.status === 'voided' || dest.status === 'closed') {
-    throw new BusinessRuleError('folio_not_open', 'The destination folio is closed. Choose an open folio of the payer.');
+    throw new BusinessRuleError(
+      'folio_not_open',
+      'The destination folio is closed. Choose an open folio of the payer.',
+    );
   }
   if (input.cap && input.cap.kind !== 'percent' && input.cap.currency !== base.currency) {
-    throw new ValidationError('cap_currency_mismatch', `Limits must be in the folio currency (${base.currency}).`);
+    throw new ValidationError(
+      'cap_currency_mismatch',
+      `Limits must be in the folio currency (${base.currency}).`,
+    );
   }
   if (input.cap?.kind === 'percent') {
     const pct = Number(input.cap.percent);
-    if (!(pct > 0 && pct <= 100)) throw new ValidationError('invalid_percent', 'A percentage limit must be above 0 and at most 100.');
+    if (!(pct > 0 && pct <= 100))
+      throw new ValidationError('invalid_percent', 'A percentage limit must be above 0 and at most 100.');
   }
   return groups;
 }
@@ -106,11 +142,17 @@ function conflictError(label: string, conflicts: ReturnType<typeof findConflicts
 }
 
 async function lockOwner(tx: TxContext, owner: { type: string; id: string }): Promise<void> {
-  await sql`select pg_advisory_xact_lock(hashtext(${`finance.billing-rules:${owner.type}:${owner.id}`}))`.execute(tx.db);
+  await sql`select pg_advisory_xact_lock(hashtext(${`finance.billing-rules:${owner.type}:${owner.id}`}))`.execute(
+    tx.db,
+  );
 }
 
 /** Create a billing rule. Ties with existing rules are configuration errors (no ranking). */
-export async function createBillingRule(tx: TxContext, deps: Deps, input: BillingRuleInput): Promise<BillingRule> {
+export async function createBillingRule(
+  tx: TxContext,
+  deps: Deps,
+  input: BillingRuleInput,
+): Promise<BillingRule> {
   requirePermission(tx, 'finance.billingRule.manage', { propertyId: input.propertyId });
   await deps.ports.platform.assertWritable(tx, input.propertyId, 'charges');
   await lockOwner(tx, input.owner);
@@ -137,7 +179,12 @@ export async function createBillingRule(tx: TxContext, deps: Deps, input: Billin
     .returningAll()
     .executeTakeFirstOrThrow();
   const rule = await toRule(tx, row);
-  await tx.audit({ action: 'finance.billingRule.create', target: { type: 'billing_rule', id }, propertyId: input.propertyId, after: rule });
+  await tx.audit({
+    action: 'finance.billingRule.create',
+    target: { type: 'billing_rule', id },
+    propertyId: input.propertyId,
+    after: rule,
+  });
   await tx.emit({
     type: 'finance.billingRule.changed',
     propertyId: input.propertyId,
@@ -154,11 +201,19 @@ export async function updateBillingRule(
   expectedVersion: number,
   patch: z.infer<typeof billingRuleUpdate>,
 ): Promise<BillingRule> {
-  const current = await db(tx).selectFrom('finance.billing_rules').selectAll().where('id', '=', id).executeTakeFirst();
+  const current = await db(tx)
+    .selectFrom('finance.billing_rules')
+    .selectAll()
+    .where('id', '=', id)
+    .executeTakeFirst();
   if (!current) throw new NotFoundError('billing_rule', id);
   requirePermission(tx, 'finance.billingRule.manage', { propertyId: current.property_id });
   await deps.ports.platform.assertWritable(tx, current.property_id, 'charges');
-  if (!current.active) throw new BusinessRuleError('billing_rule_inactive', 'This rule was deactivated. Create a new rule instead.');
+  if (!current.active)
+    throw new BusinessRuleError(
+      'billing_rule_inactive',
+      'This rule was deactivated. Create a new rule instead.',
+    );
   const owner = { type: current.owner_type, id: current.owner_id };
   await lockOwner(tx, owner);
   const next = {
@@ -168,7 +223,9 @@ export async function updateBillingRule(
     cap: (patch.cap === undefined ? current.cap : patch.cap) as RuleCap | null,
   };
   const groups = await validateRule(tx, { propertyId: current.property_id, owner, ...next });
-  const conflicts = findConflicts({ id, selector: next.selector }, await loadRules(tx, owner), (c) => groups.get(c));
+  const conflicts = findConflicts({ id, selector: next.selector }, await loadRules(tx, owner), (c) =>
+    groups.get(c),
+  );
   if (conflicts.length) throw conflictError(next.label, conflicts);
   const row = await db(tx)
     .updateTable('finance.billing_rules')
@@ -186,7 +243,13 @@ export async function updateBillingRule(
   if (!row) return explainVersionMiss('billing_rule', id, expectedVersion, async () => current.version);
   const before = await toRule(tx, current);
   const after = await toRule(tx, row);
-  await tx.audit({ action: 'finance.billingRule.update', target: { type: 'billing_rule', id }, propertyId: current.property_id, before, after });
+  await tx.audit({
+    action: 'finance.billingRule.update',
+    target: { type: 'billing_rule', id },
+    propertyId: current.property_id,
+    before,
+    after,
+  });
   await tx.emit({
     type: 'finance.billingRule.changed',
     propertyId: current.property_id,
@@ -196,8 +259,17 @@ export async function updateBillingRule(
   return after;
 }
 
-export async function deactivateBillingRule(tx: TxContext, deps: Deps, id: string, expectedVersion: number): Promise<BillingRule> {
-  const current = await db(tx).selectFrom('finance.billing_rules').selectAll().where('id', '=', id).executeTakeFirst();
+export async function deactivateBillingRule(
+  tx: TxContext,
+  deps: Deps,
+  id: string,
+  expectedVersion: number,
+): Promise<BillingRule> {
+  const current = await db(tx)
+    .selectFrom('finance.billing_rules')
+    .selectAll()
+    .where('id', '=', id)
+    .executeTakeFirst();
   if (!current) throw new NotFoundError('billing_rule', id);
   requirePermission(tx, 'finance.billingRule.manage', { propertyId: current.property_id });
   await deps.ports.platform.assertWritable(tx, current.property_id, 'charges');
@@ -209,7 +281,11 @@ export async function deactivateBillingRule(tx: TxContext, deps: Deps, id: strin
     .returningAll()
     .executeTakeFirst();
   if (!row) return explainVersionMiss('billing_rule', id, expectedVersion, async () => current.version);
-  await tx.audit({ action: 'finance.billingRule.deactivate', target: { type: 'billing_rule', id }, propertyId: current.property_id });
+  await tx.audit({
+    action: 'finance.billingRule.deactivate',
+    target: { type: 'billing_rule', id },
+    propertyId: current.property_id,
+  });
   await tx.emit({
     type: 'finance.billingRule.changed',
     propertyId: current.property_id,
@@ -219,7 +295,10 @@ export async function deactivateBillingRule(tx: TxContext, deps: Deps, id: strin
   return toRule(tx, row);
 }
 
-export async function listBillingRules(tx: TxContext, owner: { type: string; id: string }): Promise<BillingRule[]> {
+export async function listBillingRules(
+  tx: TxContext,
+  owner: { type: string; id: string },
+): Promise<BillingRule[]> {
   const rows = await db(tx)
     .selectFrom('finance.billing_rules')
     .selectAll()
@@ -252,7 +331,13 @@ export async function previewRouting(tx: TxContext, input: PreviewInput): Promis
       cap: (r.cap ?? null) as RuleCap | null,
     }));
     for (const r of rules) {
-      await validateRule(tx, { propertyId: input.propertyId, owner: input.owner, destinationFolioId: r.destinationFolioId, selector: r.selector, cap: r.cap });
+      await validateRule(tx, {
+        propertyId: input.propertyId,
+        owner: input.owner,
+        destinationFolioId: r.destinationFolioId,
+        selector: r.selector,
+        cap: r.cap,
+      });
     }
     assertRuleSetConsistent(rules, groupOf);
   } else {
@@ -268,11 +353,24 @@ export async function previewRouting(tx: TxContext, input: PreviewInput): Promis
   }
   const charges = input.charges.map((c) => {
     const group = groups.get(c.chargeCode);
-    if (!group) throw new ValidationError('unknown_charge_code', `Charge code "${c.chargeCode}" is not set up at this property.`);
+    if (!group)
+      throw new ValidationError(
+        'unknown_charge_code',
+        `Charge code "${c.chargeCode}" is not set up at this property.`,
+      );
     if (c.amount.currency !== base.currency) {
-      throw new ValidationError('preview_currency_mismatch', `Preview amounts must be in the folio currency (${base.currency}).`);
+      throw new ValidationError(
+        'preview_currency_mismatch',
+        `Preview amounts must be in the folio currency (${base.currency}).`,
+      );
     }
-    return { chargeCode: c.chargeCode, chargeGroup: group, serviceDate: c.serviceDate, grossMinor: c.amount.amountMinor, ...(c.ref ? { ref: c.ref } : {}) };
+    return {
+      chargeCode: c.chargeCode,
+      chargeGroup: group,
+      serviceDate: c.serviceDate,
+      grossMinor: c.amount.amountMinor,
+      ...(c.ref ? { ref: c.ref } : {}),
+    };
   });
   const routed = routeBatch(rules, charges, base.id, groupOf, (id, key) => used.get(`${id}|${key}`) ?? 0);
   const names = new Map<string, string>();

@@ -29,7 +29,15 @@ export const chargeGroup = z.enum([
 export const folioOwnerType = z.enum(['stay', 'booking', 'group', 'company', 'house']);
 export const ruleOwnerType = z.enum(['stay', 'booking', 'group']);
 export const payerType = z.enum(['guest', 'company', 'agency', 'house']);
-export const paymentMethod = z.enum(['card', 'virtual_card', 'wallet', 'cash', 'bank_transfer', 'cheque', 'other']);
+export const paymentMethod = z.enum([
+  'card',
+  'virtual_card',
+  'wallet',
+  'cash',
+  'bank_transfer',
+  'cheque',
+  'other',
+]);
 export const entityRef = z.object({ type: z.string().min(1).max(60), id: z.string().min(1).max(200) });
 export const ownerRef = z.object({ type: folioOwnerType, id: uuid });
 export const payerRef = z.object({
@@ -53,14 +61,23 @@ export const recordIssue = z.object({
   code: z.string(),
   severity: z.enum(['blocking', 'warning', 'info']),
   message: z.string(),
-  owner: z.object({ kind: z.enum(['user', 'department']), id: z.string(), name: z.string().optional() }).optional(),
+  owner: z
+    .object({ kind: z.enum(['user', 'department']), id: z.string(), name: z.string().optional() })
+    .optional(),
   since: z.string().optional(),
 });
-export const recordLink = z.object({ rel: z.string(), type: z.string(), id: z.string(), title: z.string().optional() });
+export const recordLink = z.object({
+  rel: z.string(),
+  type: z.string(),
+  id: z.string(),
+  title: z.string().optional(),
+});
 export const recordFields = {
   allowedActions: z.array(recordAction),
   issues: z.array(recordIssue),
-  owner: z.object({ kind: z.enum(['user', 'department']), id: z.string(), name: z.string().optional() }).optional(),
+  owner: z
+    .object({ kind: z.enum(['user', 'department']), id: z.string(), name: z.string().optional() })
+    .optional(),
   links: z.array(recordLink),
 };
 
@@ -288,7 +305,11 @@ export const ruleSelector = z.object({
   daysOfWeek: z.array(z.number().int().min(0).max(6)).max(7).optional(),
 });
 export const ruleCap = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('per_night'), amountMinor: z.number().int().positive(), currency: currencyCode }),
+  z.object({
+    kind: z.literal('per_night'),
+    amountMinor: z.number().int().positive(),
+    currency: currencyCode,
+  }),
   z.object({ kind: z.literal('per_stay'), amountMinor: z.number().int().positive(), currency: currencyCode }),
   z.object({
     kind: z.literal('percent'),
@@ -377,7 +398,10 @@ export const depositSummary = z.object({
   ),
 });
 export type DepositSummary = z.infer<typeof depositSummary>;
-export const applyDepositsInput = z.object({ toFolioId: uuid, amountMinor: z.number().int().positive().optional() });
+export const applyDepositsInput = z.object({
+  toFolioId: uuid,
+  amountMinor: z.number().int().positive().optional(),
+});
 export const forfeitDepositInput = z.object({
   chargeCode: z.string().min(1).max(30),
   amountMinor: z.number().int().positive().optional(),
@@ -390,7 +414,10 @@ export const grantAllowanceInput = z.object({
   folioId: uuid,
   definitionRef: z.string().min(1).max(100),
   label: z.string().min(1).max(200),
-  period: z.union([z.object({ night: localDate }), z.object({ stay: z.object({ from: localDate, to: localDate }) })]),
+  period: z.union([
+    z.object({ night: localDate }),
+    z.object({ stay: z.object({ from: localDate, to: localDate }) }),
+  ]),
   amount: moneyInput,
   chargeCode: z.string().min(1).max(30),
   eligibleChargeCodes: z.array(z.string()).max(100).optional(),
@@ -497,7 +524,10 @@ export const receivablesAccount = receivablesAccountInput.extend({
   id: uuid,
   creditLimitMinor: z.number().int().nullable(),
   creditLimitMode: z.enum(['block', 'warn']),
-  status: z.object({ account: z.enum(['active', 'on_hold', 'closed']), credit: z.enum(['no_limit', 'within_limit', 'over_limit']) }),
+  status: z.object({
+    account: z.enum(['active', 'on_hold', 'closed']),
+    credit: z.enum(['no_limit', 'within_limit', 'over_limit']),
+  }),
   balance: moneyInput,
   version: z.number().int(),
   ...recordFields,
@@ -542,7 +572,10 @@ export type AgingReport = z.infer<typeof agingReport>;
 
 export const amountsByCurrency = z.record(currencyCode, z.number().int());
 export const openSessionInput = z.object({ propertyId: uuid, openingFloats: amountsByCurrency });
-export const closeSessionInput = z.object({ counted: amountsByCurrency, note: z.string().max(500).optional() });
+export const closeSessionInput = z.object({
+  counted: amountsByCurrency,
+  note: z.string().max(500).optional(),
+});
 export const paidOutInput = z.object({
   folioId: uuid,
   amount: moneyInput,
@@ -552,14 +585,24 @@ export const cashierSummary = z.object({
   id: uuid,
   propertyId: uuid,
   cashierName: z.string(),
-  status: z.object({ session: z.enum(['open', 'closed']), count: z.enum(['not_counted', 'balanced', 'over', 'short']) }),
+  status: z.object({
+    session: z.enum(['open', 'closed']),
+    count: z.enum(['not_counted', 'balanced', 'over', 'short']),
+  }),
   openedAt: z.string(),
   closedAt: z.string().nullable(),
   openingFloats: amountsByCurrency,
   expected: amountsByCurrency,
   counted: amountsByCurrency.nullable(),
   variance: amountsByCurrency.nullable(),
-  byMethod: z.array(z.object({ method: z.string(), currency: z.string(), totalMinor: z.number().int(), count: z.number().int() })),
+  byMethod: z.array(
+    z.object({
+      method: z.string(),
+      currency: z.string(),
+      totalMinor: z.number().int(),
+      count: z.number().int(),
+    }),
+  ),
   version: z.number().int(),
   ...recordFields,
 });
@@ -606,11 +649,18 @@ export const dailyRevenue = z.object({
   propertyId: uuid,
   businessDate: z.string(),
   currency: z.string(),
-  byChargeCode: z.array(z.object({ chargeCode: z.string(), accountCode: z.string(), netMinor: z.number().int() })),
+  byChargeCode: z.array(
+    z.object({ chargeCode: z.string(), accountCode: z.string(), netMinor: z.number().int() }),
+  ),
   taxes: z.array(z.object({ accountCode: z.string(), name: z.string(), amountMinor: z.number().int() })),
   totalRevenueMinor: z.number().int(),
   restatements: z.array(
-    z.object({ entryId: uuid, relatesTo: z.string(), reason: z.string().nullable(), amountMinor: z.number().int() }),
+    z.object({
+      entryId: uuid,
+      relatesTo: z.string(),
+      reason: z.string().nullable(),
+      amountMinor: z.number().int(),
+    }),
   ),
 });
 export type DailyRevenue = z.infer<typeof dailyRevenue>;
@@ -642,7 +692,13 @@ export type UnbalancedItem = z.infer<typeof unbalancedItem>;
 export const integrityReport = z.object({
   legalEntityId: uuid,
   checks: z.array(
-    z.object({ check: z.string(), ok: z.boolean(), expectedMinor: z.number().int(), actualMinor: z.number().int(), detail: z.string() }),
+    z.object({
+      check: z.string(),
+      ok: z.boolean(),
+      expectedMinor: z.number().int(),
+      actualMinor: z.number().int(),
+      detail: z.string(),
+    }),
   ),
   ok: z.boolean(),
 });

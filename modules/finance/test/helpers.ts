@@ -2,7 +2,16 @@ import { sourcesFromManifests, type TxContext, withTenantTx } from '@portico/db'
 import { Decimal, type Money, money, newId, type RequestContext, systemAuthorizer } from '@portico/kernel';
 import { platform, platformManifest } from '@portico/platform';
 import { createTestDatabase, type TestDatabase, testContext } from '@portico/testing';
-import { type CollectionRequest, createFinance, type FinancePorts, type FinanceService, financeManifest, type TaxChargeLine, type TaxComputation, type TaxLine } from '../src';
+import {
+  type CollectionRequest,
+  createFinance,
+  type FinancePorts,
+  type FinanceService,
+  financeManifest,
+  type TaxChargeLine,
+  type TaxComputation,
+  type TaxLine,
+} from '../src';
 
 export interface Harness {
   t: TestDatabase;
@@ -20,13 +29,25 @@ export class FakeTax {
   greenTaxMinor = 1200;
   calls = 0;
 
-  compute(line: TaxChargeLine, occupancy?: { adults: number; childrenAges: readonly number[] }): { net: Money; taxes: TaxLine[] } {
+  compute(
+    line: TaxChargeLine,
+    occupancy?: { adults: number; childrenAges: readonly number[] },
+  ): { net: Money; taxes: TaxLine[] } {
     this.calls++;
     const cur = line.amount.currency;
     const tgst = new Decimal(this.tgstRate(line.serviceDate)).div(100);
     const sc = new Decimal('0.10');
-    const withSc = ['accommodation', 'food_beverage', 'services'].includes(line.taxGroup) && line.chargeGroup !== 'deposit';
-    const mk = (name: string, kind: TaxLine['kind'], accountKey: string, amount: number, rate: string, extra: Partial<TaxLine> = {}): TaxLine => ({
+    const withSc =
+      ['accommodation', 'food_beverage', 'services'].includes(line.taxGroup) &&
+      line.chargeGroup !== 'deposit';
+    const mk = (
+      name: string,
+      kind: TaxLine['kind'],
+      accountKey: string,
+      amount: number,
+      rate: string,
+      extra: Partial<TaxLine> = {},
+    ): TaxLine => ({
       lineId: line.lineId,
       ruleId: `rule-${accountKey}`,
       ruleVersionId: `rule-${accountKey}-v${accountKey === 'tgst' ? this.tgstRate(line.serviceDate) : '1'}`,
@@ -41,7 +62,10 @@ export class FakeTax {
     const factor = (withSc ? new Decimal(1).plus(sc) : new Decimal(1)).mul(new Decimal(1).plus(tgst));
     let net: number;
     if (line.priceMode === 'inclusive') {
-      net = new Decimal(line.amount.amountMinor).div(factor).toDecimalPlaces(0, Decimal.ROUND_HALF_UP).toNumber();
+      net = new Decimal(line.amount.amountMinor)
+        .div(factor)
+        .toDecimalPlaces(0, Decimal.ROUND_HALF_UP)
+        .toNumber();
     } else {
       net = line.amount.amountMinor;
     }
@@ -49,8 +73,17 @@ export class FakeTax {
     const scAmt = withSc ? new Decimal(net).mul(sc).toDecimalPlaces(0, Decimal.ROUND_HALF_UP).toNumber() : 0;
     if (withSc) taxes.push(mk('Service charge 10%', 'service_charge', 'service_charge', scAmt, '10%'));
     const tgstAmt = new Decimal(net + scAmt).mul(tgst).toDecimalPlaces(0, Decimal.ROUND_HALF_UP).toNumber();
-    taxes.push(mk(`TGST ${this.tgstRate(line.serviceDate)}%`, 'tax', 'tgst', tgstAmt, `${this.tgstRate(line.serviceDate)}%`));
-    if (line.priceMode === 'inclusive') net = line.amount.amountMinor - taxes.reduce((s, t) => s + t.amount.amountMinor, 0);
+    taxes.push(
+      mk(
+        `TGST ${this.tgstRate(line.serviceDate)}%`,
+        'tax',
+        'tgst',
+        tgstAmt,
+        `${this.tgstRate(line.serviceDate)}%`,
+      ),
+    );
+    if (line.priceMode === 'inclusive')
+      net = line.amount.amountMinor - taxes.reduce((s, t) => s + t.amount.amountMinor, 0);
     if (line.chargeGroup === 'room' && occupancy) {
       const exempt = occupancy.childrenAges.filter((a) => a < 2).length;
       const guests = occupancy.adults + occupancy.childrenAges.length - exempt;
@@ -76,7 +109,13 @@ export async function startHarness(): Promise<Harness> {
     platform: {
       async getProperty(tx, id) {
         const p = await platform.getProperty(asSystem(tx), id);
-        return { id: p.id, name: p.name, legalEntityId: p.legalEntityId, baseCurrency: p.baseCurrency, timezone: p.timezone };
+        return {
+          id: p.id,
+          name: p.name,
+          legalEntityId: p.legalEntityId,
+          baseCurrency: p.baseCurrency,
+          timezone: p.timezone,
+        };
       },
       getBusinessDate: (tx, id) => platform.getBusinessDate(tx, id),
       async getLegalEntity(tx, id) {
@@ -121,11 +160,19 @@ export interface Org {
   as(grants: string[], scope?: string[] | 'all'): RequestContext;
 }
 
-export async function setupOrg(h: Harness, opts: { businessDate?: string; currency?: string; country?: string; environment?: 'live' | 'demo' } = {}): Promise<Org> {
+export async function setupOrg(
+  h: Harness,
+  opts: { businessDate?: string; currency?: string; country?: string; environment?: 'live' | 'demo' } = {},
+): Promise<Org> {
   const ctx = testContext({ environment: opts.environment ?? 'live' });
   const run = <T>(fn: (tx: TxContext) => Promise<T>, c: RequestContext = ctx) => withTenantTx(h.t.db, c, fn);
   await run((tx) =>
-    platform.provisionOrganization(tx, { name: 'Azure Isles', slug: `azure-${ctx.tenantId.slice(-12)}`, environment: opts.environment ?? 'live', planCode: 'enterprise' }),
+    platform.provisionOrganization(tx, {
+      name: 'Azure Isles',
+      slug: `azure-${ctx.tenantId.slice(-12)}`,
+      environment: opts.environment ?? 'live',
+      planCode: 'enterprise',
+    }),
   );
   const le = await run((tx) =>
     platform.createLegalEntity(tx, {
@@ -161,7 +208,9 @@ export async function setupOrg(h: Harness, opts: { businessDate?: string; curren
       return {
         ...ctx,
         actor: { kind: 'user', userId: newId(), displayName: 'Limited User' },
-        authz: testContext({ grants: grants.map((permission) => ({ permission, propertyIds: scope ?? [p.id] })) }).authz,
+        authz: testContext({
+          grants: grants.map((permission) => ({ permission, propertyIds: scope ?? [p.id] })),
+        }).authz,
       };
     },
   };
@@ -177,7 +226,11 @@ export async function advanceBusinessDate(org: Org, from: string): Promise<strin
 export async function openStay(h: Harness, org: Org, opts: { guest?: string; company?: string } = {}) {
   const stayId = newId();
   const guest = await org.run((tx) =>
-    h.finance.openFolio(tx, { propertyId: org.propertyId, owner: { type: 'stay', id: stayId }, payer: { type: 'guest', id: newId(), name: opts.guest ?? 'Aisha Ibrahim' } }),
+    h.finance.openFolio(tx, {
+      propertyId: org.propertyId,
+      owner: { type: 'stay', id: stayId },
+      payer: { type: 'guest', id: newId(), name: opts.guest ?? 'Aisha Ibrahim' },
+    }),
   );
   const company = opts.company
     ? await org.run((tx) =>

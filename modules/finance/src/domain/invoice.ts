@@ -40,7 +40,17 @@ export function categorize(input: {
   chargeGroup: string | null;
 }): InvoiceCategory {
   const k = input.effectiveKind;
-  if (['payment', 'refund', 'deposit_application', 'allowance_usage', 'allowance_return', 'receivables_transfer', 'write_off'].includes(k)) {
+  if (
+    [
+      'payment',
+      'refund',
+      'deposit_application',
+      'allowance_usage',
+      'allowance_return',
+      'receivables_transfer',
+      'write_off',
+    ].includes(k)
+  ) {
     return 'settlement';
   }
   if (k === 'tax') {
@@ -53,7 +63,8 @@ export function categorize(input: {
 }
 
 export function invoiceTotals(items: readonly InvoiceItem[]): InvoiceTotals {
-  const sum = (c: InvoiceCategory) => items.filter((i) => i.category === c).reduce((s, i) => s + i.amountMinor, 0);
+  const sum = (c: InvoiceCategory) =>
+    items.filter((i) => i.category === c).reduce((s, i) => s + i.amountMinor, 0);
   const value = sum('value');
   const sc = sum('service_charge');
   const tax = sum('tax');
@@ -85,9 +96,16 @@ export function taxSummary(items: readonly InvoiceItem[]): TaxSummaryLine[] {
   for (const i of items) {
     if (i.category !== 'tax' && i.category !== 'levy' && i.category !== 'service_charge') continue;
     const key = `${i.category}|${i.taxName}|${i.taxRate}`;
-    const cur = map.get(key) ?? { name: i.taxName ?? i.description, category: i.category, rate: i.taxRate, amountMinor: 0 };
+    const cur = map.get(key) ?? {
+      name: i.taxName ?? i.description,
+      category: i.category,
+      rate: i.taxRate,
+      amountMinor: 0,
+    };
     cur.amountMinor += i.amountMinor;
     map.set(key, cur);
   }
-  return [...map.values()].sort((a, b) => a.category.localeCompare(b.category) || a.name.localeCompare(b.name));
+  return [...map.values()].sort(
+    (a, b) => a.category.localeCompare(b.category) || a.name.localeCompare(b.name),
+  );
 }

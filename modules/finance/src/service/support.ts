@@ -1,11 +1,12 @@
 import { type Selectable, sql, type TxContext, typed } from '@portico/db';
 import {
+  type Authorizer,
   actorId,
   actorLabel,
   addDays,
-  type Authorizer,
   BusinessRuleError,
   canonicalJson,
+  Decimal,
   type EntityRef,
   IdempotencyConflictError,
   type LocalDate,
@@ -43,7 +44,8 @@ export function delegated(tx: TxContext, permissions: readonly string[]): TxCont
   const base: Authorizer = tx.authz;
   const authz: Authorizer = {
     can: (permission, scope) => permissions.includes(permission) || base.can(permission, scope),
-    propertyScope: (permission) => (permissions.includes(permission) ? 'all' : base.propertyScope(permission)),
+    propertyScope: (permission) =>
+      permissions.includes(permission) ? 'all' : base.propertyScope(permission),
   };
   return { ...tx, authz };
 }
@@ -53,7 +55,11 @@ export function delegated(tx: TxContext, permissions: readonly string[]): TxCont
 const accountCache = new WeakMap<TxContext, Map<string, string>>();
 
 /** Seed the default chart for a legal entity (idempotent). */
-export async function ensureChart(tx: TxContext, legalEntityId: string, functionalCurrency: string): Promise<void> {
+export async function ensureChart(
+  tx: TxContext,
+  legalEntityId: string,
+  functionalCurrency: string,
+): Promise<void> {
   const existing = await db(tx)
     .selectFrom('finance.accounts')
     .select(sql<number>`count(*)::int`.as('n'))
@@ -68,7 +74,11 @@ export async function ensureChart(tx: TxContext, legalEntityId: string, function
   }
 }
 
-export async function functionalCurrencyOf(tx: TxContext, deps: Deps, legalEntityId: string): Promise<string> {
+export async function functionalCurrencyOf(
+  tx: TxContext,
+  deps: Deps,
+  legalEntityId: string,
+): Promise<string> {
   const row = await db(tx)
     .selectFrom('finance.accounts')
     .select('functional_currency')
@@ -82,7 +92,12 @@ export async function functionalCurrencyOf(tx: TxContext, deps: Deps, legalEntit
 }
 
 /** Resolve an account id by system key, seeding the chart / derived accounts on first use. */
-export async function accountId(tx: TxContext, deps: Deps, legalEntityId: string, systemKey: string): Promise<string> {
+export async function accountId(
+  tx: TxContext,
+  deps: Deps,
+  legalEntityId: string,
+  systemKey: string,
+): Promise<string> {
   let cache = accountCache.get(tx);
   if (!cache) {
     cache = new Map();
@@ -133,18 +148,21 @@ export async function loadRates(
   if (currencies.length === 0) return [];
   const rows = await db(tx)
     .selectFrom('finance.fx_rates')
-    .select(['id', 'business_date', 'from_currency', 'to_currency', 'rate'])
+    .select(['id', 'business_date', 'from_currency', 'to_currency', 'rate', 'source'])
     .where('legal_entity_id', '=', legalEntityId)
     .where('business_date', '<=', date)
     .where('business_date', '>=', addDays(date, -MAX_RATE_AGE_DAYS))
-    .where((eb) => eb.or([eb('from_currency', 'in', [...currencies]), eb('to_currency', 'in', [...currencies])]))
+    .where((eb) =>
+      eb.or([eb('from_currency', 'in', [...currencies]), eb('to_currency', 'in', [...currencies])]),
+    )
     .execute();
   return rows.map((r) => ({
     id: r.id,
     businessDate: r.business_date,
     fromCurrency: r.from_currency,
     toCurrency: r.to_currency,
-    rate: String(r.rate),
+    rate: new Decimal(String(r.rate)).toString(),
+    source: r.source,
   }));
 }
 
@@ -258,7 +276,10 @@ export async function claimEntry(tx: TxContext, h: EntryHeader): Promise<ClaimRe
   if (inserted) return { claimed: true, entryId: inserted.id };
   const existing = await findEntryByKey(tx, h.idempotencyKey, h.requestHash);
   if (!existing) {
-    throw new BusinessRuleError('idempotency_unresolved', 'The posting key could not be resolved. Retry the request.');
+    throw new BusinessRuleError(
+      'idempotency_unresolved',
+      'The posting key could not be resolved. Retry the request.',
+    );
   }
   return { claimed: false, entryId: existing };
 }
@@ -292,10 +313,22 @@ export async function writeEntryBody(
   lines: readonly LineSpec[],
 ): Promise<string[]> {
   const functional = await functionalCurrencyOf(tx, deps, h.legalEntityId);
-  const foreign = [...new Set(lines.filter((l) => l.currency !== functional && l.functionalAmountMinor === undefined).map((l) => l.currency))];
+  const foreign = [
+    ...new Set(
+      lines
+        .filter((l) => l.currency !== functional && l.functionalAmountMinor === undefined)
+        .map((l) => l.currency),
+    ),
+  ];
   const rates = await loadRates(tx, h.legalEntityId, [...foreign, functional], h.businessDate);
   const rateFor = (currency: string) => {
-    const r = pickRate(rates, currency, functional, h.businessDate, addDays(h.businessDate, -MAX_RATE_AGE_DAYS));
+    const r = pickRate(
+      rates,
+      currency,
+      functional,
+      h.businessDate,
+      addDays(h.businessDate, -MAX_RATE_AGE_DAYS),
+    );
     return { rate: r.rate, rateId: r.rateId };
   };
   const fLines = functionalize(lines, functional, rateFor);
@@ -399,7 +432,11 @@ export async function postingIdsOfEntry(tx: TxContext, entryId: string): Promise
 
 export type FolioRow = Selectable<FoliosTable>;
 
-export async function loadFolio(tx: TxContext, folioId: string, opts: { forUpdate?: boolean } = {}): Promise<FolioRow> {
+export async function loadFolio(
+  tx: TxContext,
+  folioId: string,
+  opts: { forUpdate?: boolean } = {},
+): Promise<FolioRow> {
   let q = db(tx).selectFrom('finance.folios').selectAll().where('id', '=', folioId);
   if (opts.forUpdate) q = q.forUpdate();
   const row = await q.executeTakeFirst();

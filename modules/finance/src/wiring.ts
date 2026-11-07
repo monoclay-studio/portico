@@ -27,7 +27,10 @@ export function unavailableFinancePorts(): { tax: TaxPort; payments: PaymentsPor
     },
     payments: {
       async requestCollection() {
-        return { status: 'unavailable', detail: 'The payments module is not connected; arrange collection manually.' };
+        return {
+          status: 'unavailable',
+          detail: 'The payments module is not connected; arrange collection manually.',
+        };
       },
     },
   };
