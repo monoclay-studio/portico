@@ -45,7 +45,8 @@ export type CapabilityStatus = z.infer<typeof capabilityStatus>;
 export const readinessLevel = z.enum(['R1', 'R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8', 'R9']);
 export type ReadinessLevel = z.infer<typeof readinessLevel>;
 export const accessModel = z.enum(['public_api', 'partner_program', 'on_prem_interface', 'file']);
-export const effectClass = z.enum(['standard', 'money', 'inventory_reopen']);
+/** money: moves money · inventory: consumes or changes inventory/reservations · inventory_reopen: releases it. */
+export const effectClass = z.enum(['standard', 'money', 'inventory', 'inventory_reopen']);
 export type EffectClass = z.infer<typeof effectClass>;
 
 /** Same domains as platform data authority (ADR-0014). Duplicated here: modules never import each other. */
@@ -145,7 +146,8 @@ export const connectorSummary = z.object({
     status: z.enum(['not_required', 'not_started', 'applied', 'approved', 'unknown']),
     note: z.string(),
   }),
-  provenance: exchangeProvenance,
+  /** How data from this connector is labeled (CLAUDE.md rule 16): external, simulated or file-based. */
+  provenance: z.enum(['external', 'simulated', 'file']),
   isSimulator: z.boolean(),
   fileBased: z.boolean(),
   /** True when Portico has code for this connector; planned entries are listed honestly but cannot connect. */

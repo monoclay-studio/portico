@@ -92,7 +92,7 @@ export interface ConnectorDefinition {
     status: 'not_required' | 'not_started' | 'applied' | 'approved' | 'unknown';
     note: string;
   };
-  provenance: 'live' | 'simulated' | 'file';
+  provenance: 'external' | 'simulated' | 'file';
   isSimulator: boolean;
   fileBased: boolean;
   setupPath: 'connection' | 'webhook_subscriptions' | 'not_available';

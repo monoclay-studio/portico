@@ -4,8 +4,10 @@
  *
  * Effect classes:
  *  - money: posts or moves money in the external system (charges, payments, refunds, invoices, journals).
+ *  - inventory: consumes or changes inventory / reservations (creations, modifications, availability decreases).
  *  - inventory_reopen: releases inventory (cancellations, availability increases, block releases).
- *  - standard: everything else (room status, profile updates, read-model refreshes).
+ *  - standard: state-setting only (room status, profile fields) — coalesced to the latest on reconnection.
+ * Undeclared operations fail closed (see `effectOf`).
  *
  * Rules:
  *  1. Commands are sent only while the connection is operational (active / monitoring) and not paused.
@@ -35,17 +37,37 @@ export type CommandStatus =
 
 export type SendFailureKind = 'outage' | 'rate_limited' | 'auth' | 'timeout' | 'rejected' | 'invalid';
 
-export const RISKY_CLASSES: ReadonlySet<EffectClass> = new Set<EffectClass>(['money', 'inventory_reopen']);
+export const RISKY_CLASSES: ReadonlySet<EffectClass> = new Set<EffectClass>([
+  'money',
+  'inventory',
+  'inventory_reopen',
+]);
 
 export function isRisky(effect: EffectClass): boolean {
   return RISKY_CLASSES.has(effect);
 }
 
-const RANK: Record<EffectClass, number> = { standard: 0, inventory_reopen: 1, money: 2 };
+const RANK: Record<EffectClass, number> = { standard: 0, inventory: 1, inventory_reopen: 2, money: 3 };
 /** The stricter of two classes (the connector's declaration wins over a caller's weaker hint). */
 export function stricterEffect(a: EffectClass, b: EffectClass | undefined): EffectClass {
   if (!b) return a;
   return RANK[b] > RANK[a] ? b : a;
+}
+
+const MONEY_DOMAINS = new Set(['charges', 'payments', 'accounting']);
+
+/**
+ * Effect class of an outbound operation. FAILS CLOSED (INT-R19): an operation the connector did not declare is
+ * treated as money-moving for money domains and as inventory-changing otherwise, until the connector declares it.
+ */
+export function effectOf(
+  declared: Partial<Record<string, EffectClass>>,
+  operation: string,
+  dataDomain: string | null,
+): EffectClass {
+  const d = declared[operation];
+  if (d) return d;
+  return dataDomain !== null && MONEY_DOMAINS.has(dataDomain) ? 'money' : 'inventory';
 }
 
 /** Consecutive failures after which a connection counts as interrupted. */

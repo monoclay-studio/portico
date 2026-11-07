@@ -264,7 +264,7 @@ export interface OutboundCommandsTable {
   operation: string;
   idempotency_key: string;
   business_key: string | null;
-  effect_class: 'standard' | 'money' | 'inventory_reopen';
+  effect_class: 'standard' | 'money' | 'inventory' | 'inventory_reopen';
   payload: Json;
   source_ref: Json | null;
   status:

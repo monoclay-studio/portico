@@ -173,10 +173,11 @@ export function integrationStatusOf(
 ): IntegrationStatus {
   if (state === 'disconnected') return 'supported';
   const step = completedStep(state);
-  const operational = state === 'active' || state === 'monitoring' || state === 'paused' || state === 'error';
-  if (operational) {
+  if (state === 'active' || state === 'monitoring') {
     return ctx.environment === 'live' && !def.isSimulator && !def.fileBased ? 'live' : 'tested';
   }
+  // Paused or suspended connections are not exchanging production data: never "live".
+  if (state === 'paused' || state === 'error') return 'tested';
   if (step !== null && step >= 6) return 'tested';
   if (step !== null && step >= 5) return 'configured';
   return 'supported';

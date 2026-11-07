@@ -48,7 +48,7 @@ export const webhooksOutboundDefinition: ConnectorDefinition = {
       expectedIntervalSeconds: null,
       sequentialRevisions: false,
       mappedFields: [],
-      effects: {},
+      effects: { create: 'standard' }, // thin notifications: no money, no inventory
     },
   ],
   governableDomains: [],
@@ -64,7 +64,7 @@ export const webhooksOutboundDefinition: ConnectorDefinition = {
     status: 'not_required',
     note: 'Partners subscribe themselves under the hotel’s control.',
   },
-  provenance: 'live',
+  provenance: 'external',
   isSimulator: false,
   fileBased: false,
   setupPath: 'webhook_subscriptions',
@@ -109,7 +109,7 @@ const PLANNED_COMMON = {
   isSimulator: false,
   fileBased: false,
   setupPath: 'not_available' as const,
-  provenance: 'live' as const,
+  provenance: 'external' as const,
   vendorNotices: [],
   implementation: { level: 'R1' as const, label: 'Planned — no code yet', evidence: [] },
 };

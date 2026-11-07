@@ -43,6 +43,7 @@ import { decideOrdering, sortForProcessing } from '../domain/inbound-ordering';
 import {
   afterNegativeLookup,
   backoffSeconds,
+  effectOf,
   INTERRUPTION_THRESHOLD,
   isRisky,
   MONEY_STALENESS_HOURS,
@@ -1650,7 +1651,10 @@ export async function enqueueOutbound(
     connectionId: conn.id,
     propertyIds: input.propertyId ? [input.propertyId] : conn.property_ids,
   });
-  const effectClass = stricterEffect(wf.effects[input.operation] ?? 'standard', input.effectClassHint);
+  const effectClass = stricterEffect(
+    effectOf(wf.effects, input.operation, wf.dataDomain),
+    input.effectClassHint,
+  );
   const id = newId(tx.now.getTime());
   const inserted = await db(tx)
     .insertInto('integration.outbound_commands')

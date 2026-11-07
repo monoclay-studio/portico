@@ -346,7 +346,7 @@ create table integration.outbound_commands (
   -- The record the command sets (e.g. roomStatus:LGN-101). State-setting commands for the same business key are
   -- coalesced on reconnection: only the newest is sent (connection lifecycle spec §9, class S).
   business_key         text,
-  effect_class         text not null check (effect_class in ('standard', 'money', 'inventory_reopen')),
+  effect_class         text not null check (effect_class in ('standard', 'money', 'inventory', 'inventory_reopen')),
   payload              jsonb not null,
   source_ref           jsonb,
   status               text not null check (status in ('queued', 'sending', 'acknowledged', 'rejected',

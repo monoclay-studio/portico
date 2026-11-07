@@ -554,7 +554,7 @@ export const pmsSimulatorDefinition: ConnectorDefinition = {
         { field: 'ratePlanCode', kind: 'ratePlan', required: false },
         { field: 'status', kind: 'status', statusDomain: 'bookingStatus', required: true },
       ],
-      effects: { create: 'standard', update: 'standard', cancel: 'inventory_reopen' },
+      effects: { create: 'inventory', update: 'inventory', cancel: 'inventory_reopen' },
       currencyField: 'currency',
     },
     {
