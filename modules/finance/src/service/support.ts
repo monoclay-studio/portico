@@ -230,6 +230,7 @@ export interface PostingDraft {
   counterAccountId?: string | null;
   paymentRef?: EntityRef | null;
   paymentMethod?: string | null;
+  paymentVerification?: 'provider_confirmed' | 'recorded_unverified' | null;
   cashierSessionId?: string | null;
   source?: EntityRef | null;
   postDeparture?: boolean;
@@ -379,6 +380,7 @@ export async function writeEntryBody(
         payment_ref_type: p.paymentRef?.type ?? null,
         payment_ref_id: p.paymentRef?.id ?? null,
         payment_method: p.paymentMethod ?? null,
+        payment_verification: p.paymentVerification ?? null,
         cashier_session_id: p.cashierSessionId ?? null,
         source_type: p.source?.type ?? null,
         source_id: p.source?.id ?? null,

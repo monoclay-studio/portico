@@ -163,6 +163,7 @@ export interface PostingsTable {
   payment_ref_type: string | null;
   payment_ref_id: string | null;
   payment_method: string | null;
+  payment_verification: string | null;
   cashier_session_id: string | null;
   source_type: string | null;
   source_id: string | null;
@@ -232,6 +233,8 @@ export interface DepositMovementsTable {
   folio_id: string | null;
   payment_ref_type: string | null;
   payment_ref_id: string | null;
+  payment_method: Generated<string | null>;
+  payment_verification: Generated<string | null>;
   taxes: Generated<unknown>;
   business_date: string;
   created_at: Ts;

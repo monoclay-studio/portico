@@ -33,7 +33,7 @@ import {
   requestHash,
   writeEntryBody,
 } from './support';
-import { clearingSide, encodeMethod, openSessionFor, recordCashMovement } from './tender';
+import { clearingSide, decodeMethod, encodeMethod, openSessionFor, recordCashMovement } from './tender';
 
 /** Tax declared on a deposit, kept per tax account key (time of supply = receipt). */
 export interface DeclaredTax {
@@ -159,6 +159,9 @@ export interface RecordDepositInput {
   /** Tax group of the prepaid supply (default accommodation). */
   taxGroup?: string;
   cashierSessionId?: string;
+  verification?: 'provider_confirmed' | 'recorded_unverified';
+  /** See RecordPaymentInput.cashWithoutSession. */
+  cashWithoutSession?: 'reject' | 'flag';
 }
 
 /**
@@ -201,7 +204,9 @@ export async function recordDeposit(
   const property = await deps.ports.platform.getProperty(tx, propertyId);
   const businessDate = await deps.ports.platform.getBusinessDate(tx, propertyId);
   const method = input.method ?? 'card';
-  const sessionId = await openSessionFor(tx, propertyId, method, input.cashierSessionId);
+  const sessionId = await openSessionFor(tx, propertyId, method, input.cashierSessionId, {
+    cashRequiresSession: input.cashWithoutSession !== 'flag',
+  });
   const { taxes, unavailable } = await prepaymentTaxes(tx, deps, {
     propertyId,
     amount: input.amount,
@@ -296,6 +301,8 @@ export async function recordDeposit(
       folio_id: null,
       payment_ref_type: input.paymentRef.type,
       payment_ref_id: input.paymentRef.id,
+      payment_method: encodeMethod(method, input.provider),
+      payment_verification: input.verification ?? null,
       taxes: JSON.stringify(declared),
       business_date: businessDate,
     })
@@ -612,9 +619,14 @@ export async function refundDeposit(
     amount: Money;
     refundRef: EntityRef;
     idempotencyKey: string;
+    /** The deposit payment being refunded: its method is reused and the refund counts against it. */
+    originalPaymentRef?: EntityRef;
     method?: PaymentMethodKind;
     provider?: string;
     cashierSessionId?: string;
+    cashWithoutSession?: 'reject' | 'flag';
+    /** 'adjusted' when payments corrects a recorded deposit found wrong by reconciliation. */
+    movementKind?: 'refunded' | 'adjusted';
   },
 ): Promise<{ entryId: string; balance: Money; replayed: boolean }> {
   return depositOutflow(tx, deps, { ...input, kind: 'refunded' });
@@ -645,9 +657,12 @@ async function depositOutflow(
         amount: Money;
         refundRef: EntityRef;
         idempotencyKey: string;
+        originalPaymentRef?: EntityRef;
         method?: PaymentMethodKind;
         provider?: string;
         cashierSessionId?: string;
+        cashWithoutSession?: 'reject' | 'flag';
+        movementKind?: 'refunded' | 'adjusted';
       }
     | {
         kind: 'forfeited';
@@ -679,10 +694,28 @@ async function depositOutflow(
   if (prior) return done(prior, true);
   await deps.ports.platform.assertWritable(tx, acct0.property_id, 'charges');
   const businessDate = await deps.ports.platform.getBusinessDate(tx, acct0.property_id);
-  const method = input.kind === 'refunded' ? (input.method ?? 'card') : 'other';
+  let method: PaymentMethodKind = 'other';
+  let provider: string | null = null;
+  if (input.kind === 'refunded') {
+    const orig = input.originalPaymentRef
+      ? await db(tx)
+          .selectFrom('finance.deposit_movements')
+          .select('payment_method')
+          .where('booking_id', '=', input.bookingId)
+          .where('kind', '=', 'received')
+          .where('payment_ref_type', '=', input.originalPaymentRef.type)
+          .where('payment_ref_id', '=', input.originalPaymentRef.id)
+          .executeTakeFirst()
+      : undefined;
+    const decoded = decodeMethod(orig?.payment_method ?? null);
+    method = input.method ?? (orig?.payment_method ? decoded.method : 'card');
+    provider = input.provider ?? (orig?.payment_method ? decoded.provider : null);
+  }
   const sessionId =
     input.kind === 'refunded'
-      ? await openSessionFor(tx, acct0.property_id, method, input.cashierSessionId)
+      ? await openSessionFor(tx, acct0.property_id, method, input.cashierSessionId, {
+          cashRequiresSession: input.cashWithoutSession !== 'flag',
+        })
       : null;
   const claim = await claimEntry(tx, {
     legalEntityId: acct0.legal_entity_id,
@@ -691,7 +724,14 @@ async function depositOutflow(
     businessDate,
     idempotencyKey,
     requestHash: hash,
-    ...(input.kind === 'refunded' ? { source: input.refundRef } : { reasonCode: 'forfeit' }),
+    ...(input.kind === 'refunded'
+      ? {
+          source: input.refundRef,
+          ...(input.originalPaymentRef
+            ? { reasonCode: `refund_of:${input.originalPaymentRef.type}:${input.originalPaymentRef.id}` }
+            : {}),
+        }
+      : { reasonCode: 'forfeit' }),
     description:
       input.kind === 'refunded'
         ? `Deposit refund (booking ${input.bookingId})`
@@ -726,7 +766,7 @@ async function depositOutflow(
   ];
   if (input.kind === 'refunded') {
     lines.push({
-      ...clearingSide(method, input.provider ?? null, sessionId),
+      ...clearingSide(method, provider, sessionId),
       amountMinor: -amount,
       currency: cur,
     });
@@ -792,7 +832,7 @@ async function depositOutflow(
       tenant_id: tx.tenantId,
       deposit_account_id: acct.id,
       booking_id: input.bookingId,
-      kind: input.kind,
+      kind: input.kind === 'refunded' ? (input.movementKind ?? 'refunded') : input.kind,
       amount_minor: -amount,
       currency: cur,
       entry_id: claim.entryId,

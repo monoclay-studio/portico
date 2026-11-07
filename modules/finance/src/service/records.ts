@@ -215,6 +215,19 @@ export async function folioRecord(
       message: 'This folio is settled but shows a balance. Report this to finance.',
     });
   }
+  const unverified = await db(tx)
+    .selectFrom('finance.postings')
+    .select(['id'])
+    .where('folio_id', '=', f.id)
+    .where('payment_verification', '=', 'recorded_unverified')
+    .execute();
+  if (unverified.length) {
+    issues.push({
+      code: 'payments_awaiting_verification',
+      severity: 'info',
+      message: `${unverified.length} recorded payment(s) on this folio are awaiting verification against the bank or acquirer statement.`,
+    });
+  }
   if (f.reopenedReason)
     issues.push({
       code: 'reopened',

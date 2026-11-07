@@ -171,6 +171,7 @@ export async function getFolio(tx: TxContext, folioId: string): Promise<FolioDet
     paymentRef:
       p.payment_ref_type && p.payment_ref_id ? { type: p.payment_ref_type, id: p.payment_ref_id } : null,
     paymentMethod: p.payment_method,
+    paymentVerification: (p.payment_verification as Posting['paymentVerification']) ?? null,
     postDeparture: p.post_departure,
     invoicedOn: p.document_id ?? null,
     createdAt: new Date(p.created_at).toISOString(),

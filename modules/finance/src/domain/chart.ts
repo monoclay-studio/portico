@@ -23,6 +23,12 @@ export const DEFAULT_CHART: readonly AccountTemplate[] = [
   { code: '1300', name: 'Card clearing', type: 'asset', systemKey: 'card_clearing' },
   { code: '1350', name: 'Payout clearing (in transit to bank)', type: 'asset', systemKey: 'payout_clearing' },
   { code: '1360', name: 'Other payment clearing', type: 'asset', systemKey: 'payment_clearing' },
+  {
+    code: '1370',
+    name: 'Disputed card funds (withheld by provider)',
+    type: 'asset',
+    systemKey: 'disputed_funds',
+  },
   { code: '1900', name: 'Currency position (FX trading)', type: 'asset', systemKey: 'fx_position' },
   // Tax already declared on deposits at receipt (time of supply); released when the deposit is applied,
   // refunded or forfeited so that no supply is taxed twice.
@@ -79,6 +85,8 @@ export function clearingKeyForMethod(method: PaymentMethodKind, provider?: strin
   switch (method) {
     case 'card':
     case 'virtual_card':
+    case 'payment_link':
+    case 'external_terminal':
     case 'wallet':
       return provider ? `card_clearing:${normalizeKeyPart(provider)}` : 'card_clearing';
     case 'cash':

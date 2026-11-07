@@ -62,11 +62,15 @@ export type EntryType =
   | 'receivables_transfer'
   | 'receivables_payment'
   | 'write_off'
-  | 'opening_balance';
+  | 'opening_balance'
+  | 'payment_adjustment'
+  | 'dispute';
 
 export const PAYMENT_METHODS = [
   'card',
   'virtual_card',
+  'payment_link',
+  'external_terminal',
   'wallet',
   'cash',
   'bank_transfer',
@@ -95,3 +99,5 @@ export type RuleCap =
   | { kind: 'per_night'; amountMinor: number; currency: string }
   | { kind: 'per_stay'; amountMinor: number; currency: string }
   | { kind: 'percent'; percent: string };
+
+export type PaymentVerification = 'provider_confirmed' | 'recorded_unverified';

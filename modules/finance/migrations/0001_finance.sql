@@ -155,7 +155,8 @@ create table finance.journal_entries (
   entry_type              text not null check (entry_type in ('charge', 'payment', 'refund', 'deposit', 'deposit_application',
                             'deposit_refund', 'deposit_forfeit', 'transfer', 'adjustment', 'allowance_grant',
                             'allowance_close', 'payout', 'fx_settlement', 'cash_variance', 'paid_out',
-                            'receivables_transfer', 'receivables_payment', 'write_off', 'opening_balance')),
+                            'receivables_transfer', 'receivables_payment', 'write_off', 'opening_balance',
+                            'payment_adjustment', 'dispute')),
   business_date           date not null,
   occurred_at             timestamptz not null,
   idempotency_key         text not null,
@@ -226,6 +227,9 @@ create table finance.postings (
   payment_ref_type    text,
   payment_ref_id      text,
   payment_method      text,
+  -- provider_confirmed (PSP confirmed) or recorded_unverified (entered from a terminal slip, cash, bank transfer;
+  -- verified later by statement reconciliation in payments).
+  payment_verification text check (payment_verification in ('provider_confirmed', 'recorded_unverified')),
   cashier_session_id  uuid references finance.cashier_sessions(id),
   source_type         text,
   source_id           text,
@@ -397,13 +401,15 @@ create table finance.deposit_movements (
   tenant_id        uuid not null,
   deposit_account_id uuid not null references finance.deposit_accounts(id),
   booking_id       uuid not null,
-  kind             text not null check (kind in ('received', 'applied', 'refunded', 'forfeited', 'opening_balance')),
+  kind             text not null check (kind in ('received', 'applied', 'refunded', 'forfeited', 'opening_balance', 'adjusted')),
   amount_minor     bigint not null,      -- signed effect on the deposit balance
   currency         char(3) not null,
   entry_id         uuid not null references finance.journal_entries(id),
   folio_id         uuid references finance.folios(id),
   payment_ref_type text,
   payment_ref_id   text,
+  payment_method   text,
+  payment_verification text check (payment_verification in ('provider_confirmed', 'recorded_unverified')),
   -- Tax declared (+) or released (−) by this movement: [{ accountKey, ruleId, ruleVersionId, name, rate, amountMinor }]
   taxes            jsonb not null default '[]',
   business_date    date not null,

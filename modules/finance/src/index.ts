@@ -8,6 +8,7 @@ export { financeSearch } from './search';
 export {
   createFinance,
   type FinanceService,
+  financeLedgerForPayments,
   financeProvider,
   financeSubscriptions,
   PROVIDER_DELEGATION,

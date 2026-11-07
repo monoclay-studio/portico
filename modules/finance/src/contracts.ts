@@ -32,6 +32,8 @@ export const payerType = z.enum(['guest', 'company', 'agency', 'house']);
 export const paymentMethod = z.enum([
   'card',
   'virtual_card',
+  'payment_link',
+  'external_terminal',
   'wallet',
   'cash',
   'bank_transfer',
@@ -210,6 +212,8 @@ export const posting = z.object({
   allowanceInstanceId: uuid.nullable(),
   paymentRef: entityRef.nullable(),
   paymentMethod: z.string().nullable(),
+  /** provider_confirmed | recorded_unverified (awaiting statement reconciliation) — never shown as verified otherwise. */
+  paymentVerification: z.enum(['provider_confirmed', 'recorded_unverified']).nullable(),
   postDeparture: z.boolean(),
   invoicedOn: uuid.nullable(),
   createdAt: z.string(),

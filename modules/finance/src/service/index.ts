@@ -1,5 +1,12 @@
 import type { TxContext, TxEventSubscription } from '@portico/db';
-import { isLocalDate, type LocalDate } from '@portico/kernel';
+import {
+  BusinessRuleError,
+  type EntityRef,
+  isLocalDate,
+  type LocalDate,
+  type Money,
+  ValidationError,
+} from '@portico/kernel';
 import type { FinancePorts } from '../ports';
 import * as allowances from './allowances';
 import * as billingRules from './billing-rules';
@@ -7,6 +14,7 @@ import * as cashier from './cashier';
 import * as deposits from './deposits';
 import * as fiscal from './fiscal';
 import * as folios from './folios';
+import * as ledgerPort from './ledger-port';
 import * as payouts from './payouts';
 import * as postings from './postings';
 import * as receivables from './receivables';
@@ -37,6 +45,8 @@ export function createFinance(ports: FinancePorts) {
     recordDeposit: bind(deps, deposits.recordDeposit),
     applyDeposits: bind(deps, deposits.applyDeposits),
     recordPayout: bind(deps, payouts.recordPayout),
+    recordPaymentAdjustment: bind(deps, ledgerPort.recordPaymentAdjustment),
+    recordDisputeMovement: bind(deps, ledgerPort.recordDisputeMovement),
     getFolioBalance: folios.getFolioBalance,
     listFolios: folios.listFolios,
     getUnbalancedItems: bind(deps, reports.getUnbalancedItems),
@@ -173,6 +183,136 @@ export function financeProvider(service: FinanceService, caller: keyof typeof PR
       service.closeAllowances(d(tx), input),
     createBillingRule: (tx: TxContext, input: Parameters<FinanceService['createBillingRule']>[1]) =>
       service.createBillingRule(d(tx), input),
+  };
+}
+
+type LedgerMethod = 'card' | 'virtual_card' | 'payment_link' | 'external_terminal' | 'cash' | 'bank_transfer';
+type Verification = 'provider_confirmed' | 'recorded_unverified';
+
+/**
+ * The exact `LedgerPort` the payments module declares (modules/payments/src/ports.ts), so the composition root
+ * can bind it directly: `ledger: financeLedgerForPayments(finance)`. Payments calls it only after a provider
+ * confirmed (or when a Route D payment is recorded), inside its own transaction and savepoint. Cash recorded by
+ * payments without an open cashier session is posted and flagged instead of refused (the money was received).
+ * Deposits have no folio posting: their `postingId` carries the journal entry id.
+ */
+export function financeLedgerForPayments(service: FinanceService) {
+  const d = (tx: TxContext) => delegated(tx, PROVIDER_DELEGATION.payments ?? []);
+  return {
+    async recordPayment(
+      tx: TxContext,
+      input: {
+        folioId: string;
+        amount: Money;
+        paymentRef: EntityRef;
+        method: LedgerMethod;
+        idempotencyKey: string;
+        verification: Verification;
+      },
+    ): Promise<{ postingId: string }> {
+      const r = await service.recordPayment(d(tx), { ...input, cashWithoutSession: 'flag' });
+      return { postingId: r.postingId };
+    },
+    async recordDeposit(
+      tx: TxContext,
+      input: {
+        bookingId: string;
+        amount: Money;
+        paymentRef: EntityRef;
+        idempotencyKey: string;
+        method: LedgerMethod;
+        verification: Verification;
+        propertyId?: string;
+      },
+    ): Promise<{ postingId: string }> {
+      const r = await service.recordDeposit(d(tx), { ...input, cashWithoutSession: 'flag' });
+      return { postingId: r.entryId };
+    },
+    async recordRefund(
+      tx: TxContext,
+      input: {
+        folioId: string | null;
+        bookingId: string | null;
+        amount: Money;
+        refundRef: EntityRef;
+        originalPaymentRef: EntityRef;
+        idempotencyKey: string;
+      },
+    ): Promise<{ postingId: string }> {
+      const common = {
+        amount: input.amount,
+        refundRef: input.refundRef,
+        originalPaymentRef: input.originalPaymentRef,
+        idempotencyKey: input.idempotencyKey,
+        cashWithoutSession: 'flag' as const,
+      };
+      if (input.folioId)
+        return {
+          postingId: (await service.recordRefund(d(tx), { folioId: input.folioId, ...common })).postingId,
+        };
+      if (!input.bookingId)
+        throw new ValidationError(
+          'target_required',
+          'A refund needs the folio or booking of the original payment.',
+        );
+      // Deposit still held → deposit refund; already applied to a folio → refund on that folio.
+      const held = await service.getDeposits(d(tx), input.bookingId);
+      if (held && held.balance.amountMinor >= input.amount.amountMinor) {
+        const r = await service.refundDeposit(d(tx), { bookingId: input.bookingId, ...common });
+        return { postingId: r.entryId };
+      }
+      const applied = [...(held?.movements ?? [])].reverse().find((m) => m.kind === 'applied' && m.folioId);
+      if (!applied?.folioId) {
+        throw new BusinessRuleError(
+          'deposit_insufficient',
+          'The deposit held for this booking is smaller than the refund and was not applied to a folio.',
+        );
+      }
+      return {
+        postingId: (await service.recordRefund(d(tx), { folioId: applied.folioId, ...common })).postingId,
+      };
+    },
+    async recordPayout(
+      tx: TxContext,
+      input: {
+        legalEntityId: string;
+        payoutRef: EntityRef;
+        gross: Money;
+        fees: Money;
+        net: Money;
+        currency: string;
+        idempotencyKey: string;
+      },
+    ): Promise<{ journalEntryId: string }> {
+      return { journalEntryId: (await service.recordPayout(d(tx), input)).entryId };
+    },
+    async recordPaymentAdjustment(
+      tx: TxContext,
+      input: {
+        folioId: string | null;
+        bookingId: string | null;
+        amount: Money;
+        paymentRef: EntityRef;
+        adjustmentRef: EntityRef;
+        reason: string;
+        idempotencyKey: string;
+      },
+    ): Promise<{ postingId: string }> {
+      return { postingId: (await service.recordPaymentAdjustment(d(tx), input)).postingId };
+    },
+    async recordDisputeMovement(
+      tx: TxContext,
+      input: {
+        legalEntityId: string;
+        paymentRef: EntityRef;
+        disputeRef: EntityRef;
+        amount: Money;
+        kind: 'debit' | 'reversal';
+        idempotencyKey: string;
+      },
+    ): Promise<{ journalEntryId: string }> {
+      return { journalEntryId: (await service.recordDisputeMovement(d(tx), input)).journalEntryId };
+    },
   };
 }
 

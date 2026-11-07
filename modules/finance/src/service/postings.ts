@@ -728,6 +728,13 @@ export interface RecordPaymentInput {
   idempotencyKey: string;
   cashierSessionId?: string;
   reference?: string;
+  /** Provider-confirmed (PSP) or recorded from a slip/cash/bank transfer awaiting statement verification. */
+  verification?: 'provider_confirmed' | 'recorded_unverified';
+  /**
+   * Cash recorded by another module without an open cashier session: 'reject' (default, desk flows) or 'flag'
+   * (money already received — post it to cash without a session and raise an exception for the cashier).
+   */
+  cashWithoutSession?: 'reject' | 'flag';
 }
 
 async function entryResult(tx: TxContext, entryId: string, replayed: boolean): Promise<EntryResult> {
@@ -756,7 +763,9 @@ export async function recordPayment(
   }
   await deps.ports.platform.assertWritable(tx, f0.property_id, 'charges');
   const businessDate = await deps.ports.platform.getBusinessDate(tx, f0.property_id);
-  const sessionId = await openSessionFor(tx, f0.property_id, input.method, input.cashierSessionId);
+  const sessionId = await openSessionFor(tx, f0.property_id, input.method, input.cashierSessionId, {
+    cashRequiresSession: input.cashWithoutSession !== 'flag',
+  });
   const claim = await claimEntry(tx, {
     legalEntityId: f0.legal_entity_id,
     propertyId: f0.property_id,
@@ -811,6 +820,7 @@ export async function recordPayment(
         description: `Payment — ${input.method.replace('_', ' ')}${input.reference ? ` (${input.reference})` : ''}`,
         paymentRef: input.paymentRef,
         paymentMethod: encodeMethod(input.method, input.provider),
+        paymentVerification: input.verification ?? null,
         cashierSessionId: sessionId,
         counterAccountId: clearing,
         fxRateId: bridge.fxRateId,
@@ -821,6 +831,17 @@ export async function recordPayment(
     ],
     bridge.lines,
   );
+  if (!sessionId && input.method === 'cash') {
+    await raiseException(tx, {
+      propertyId: folio.property_id,
+      kind: 'cash_without_session',
+      severity: 'routine',
+      ref: { type: 'folio', id: folio.id },
+      message: `Cash of ${input.amount.amountMinor} ${input.amount.currency} (minor units) was recorded without an open cashier session. The receiving cashier should include it in their count.`,
+      details: { entryId: claim.entryId, paymentRef: input.paymentRef },
+      businessDate,
+    });
+  }
   if (sessionId) {
     if (input.method === 'cash') {
       await recordCashMovement(tx, {
@@ -873,6 +894,7 @@ export interface RecordRefundInput {
   originalPaymentRef: EntityRef;
   idempotencyKey: string;
   cashierSessionId?: string;
+  cashWithoutSession?: 'reject' | 'flag';
 }
 
 /** Record a confirmed refund as a new posting linked to the original payment (which stays unchanged). */
@@ -893,55 +915,25 @@ export async function recordRefund(
     return { ...r, postingId: r.postingIds[0] as string };
   }
   await deps.ports.platform.assertWritable(tx, f0.property_id, 'charges');
-  const originals = await db(tx)
-    .selectFrom('finance.postings')
-    .selectAll()
-    .where('payment_ref_type', '=', input.originalPaymentRef.type)
-    .where('payment_ref_id', '=', input.originalPaymentRef.id)
-    .where('kind', '=', 'payment')
-    .orderBy('created_at')
-    .execute();
-  const original = originals[0];
-  if (!original) {
-    throw new BusinessRuleError(
-      'original_payment_not_found',
-      'The payment being refunded is not recorded in the ledger. Record or reconcile the original payment first.',
-      { originalPaymentRef: input.originalPaymentRef },
-    );
-  }
-  const tender = (p: {
-    original_amount_minor: number | null;
-    original_currency: string | null;
-    amount_minor: number;
-    currency: string;
-  }) =>
-    p.original_currency
-      ? { amount: Math.abs(Number(p.original_amount_minor)), currency: p.original_currency }
-      : { amount: Math.abs(Number(p.amount_minor)), currency: p.currency };
-  const paidTender = tender(original);
-  if (paidTender.currency !== input.amount.currency) {
+  const original = await findOriginalPayment(tx, input.originalPaymentRef);
+  if (input.amount.currency !== original.tenderCurrency) {
     throw new ValidationError(
       'refund_currency_mismatch',
-      `Refund in ${paidTender.currency}, the currency of the original payment.`,
+      `Refund in ${original.tenderCurrency}, the currency of the original payment.`,
     );
   }
-  const prior_refunds = await db(tx)
-    .selectFrom('finance.postings')
-    .selectAll()
-    .where('corrects_posting_id', '=', original.id)
-    .where('kind', '=', 'refund')
-    .execute();
-  const refunded = prior_refunds.reduce((s, p) => s + tender(p).amount, 0);
-  if (refunded + input.amount.amountMinor > paidTender.amount) {
+  if (original.refundedMinor + input.amount.amountMinor > original.tenderMinor) {
     throw new BusinessRuleError(
       'refund_exceeds_payment',
-      `Only ${paidTender.amount - refunded} ${paidTender.currency} (minor units) of this payment can still be refunded.`,
-      { paid: paidTender.amount, refunded },
+      `Only ${original.tenderMinor - original.refundedMinor} ${original.tenderCurrency} (minor units) of this payment can still be refunded.`,
+      { paid: original.tenderMinor, refunded: original.refundedMinor },
     );
   }
-  const { method, provider } = decodeMethod(original.payment_method);
+  const { method, provider } = decodeMethod(original.paymentMethod);
   const businessDate = await deps.ports.platform.getBusinessDate(tx, f0.property_id);
-  const sessionId = await openSessionFor(tx, f0.property_id, method, input.cashierSessionId);
+  const sessionId = await openSessionFor(tx, f0.property_id, method, input.cashierSessionId, {
+    cashRequiresSession: input.cashWithoutSession !== 'flag',
+  });
   const claim = await claimEntry(tx, {
     legalEntityId: f0.legal_entity_id,
     propertyId: f0.property_id,
@@ -996,8 +988,9 @@ export async function recordRefund(
         currency: folio.currency,
         description: `Refund — ${method.replace('_', ' ')}`,
         paymentRef: input.refundRef,
-        paymentMethod: original.payment_method,
-        correctsPostingId: original.id,
+        paymentMethod: original.paymentMethod,
+        correctsPostingId: original.postingId,
+        source: input.originalPaymentRef,
         cashierSessionId: sessionId,
         counterAccountId: clearing,
         fxRateId: bridge.fxRateId,
@@ -1043,6 +1036,92 @@ export async function recordRefund(
     postingId: postingId as string,
     replayed: false,
   };
+}
+
+/** The original payment of a refund: a folio payment posting, or a deposit received on a booking. */
+export async function findOriginalPayment(
+  tx: TxContext,
+  ref: EntityRef,
+): Promise<{
+  postingId: string | null;
+  bookingId: string | null;
+  paymentMethod: string | null;
+  tenderMinor: number;
+  tenderCurrency: string;
+  refundedMinor: number;
+}> {
+  const tender = (p: {
+    original_amount_minor: number | null;
+    original_currency: string | null;
+    amount_minor: number;
+    currency: string;
+  }) =>
+    p.original_currency
+      ? { amount: Math.abs(Number(p.original_amount_minor)), currency: p.original_currency }
+      : { amount: Math.abs(Number(p.amount_minor)), currency: p.currency };
+  const posting = await db(tx)
+    .selectFrom('finance.postings')
+    .selectAll()
+    .where('payment_ref_type', '=', ref.type)
+    .where('payment_ref_id', '=', ref.id)
+    .where('kind', '=', 'payment')
+    .orderBy('created_at')
+    .executeTakeFirst();
+  if (posting) {
+    const refunds = await db(tx)
+      .selectFrom('finance.postings')
+      .selectAll()
+      .where('corrects_posting_id', '=', posting.id)
+      .where('kind', '=', 'refund')
+      .execute();
+    const t = tender(posting);
+    return {
+      postingId: posting.id,
+      bookingId: null,
+      paymentMethod: posting.payment_method,
+      tenderMinor: t.amount,
+      tenderCurrency: t.currency,
+      refundedMinor: refunds.reduce((s, r) => s + tender(r).amount, 0),
+    };
+  }
+  const deposit = await db(tx)
+    .selectFrom('finance.deposit_movements')
+    .selectAll()
+    .where('payment_ref_type', '=', ref.type)
+    .where('payment_ref_id', '=', ref.id)
+    .where('kind', '=', 'received')
+    .executeTakeFirst();
+  if (deposit) {
+    const folioRefunds = await db(tx)
+      .selectFrom('finance.postings')
+      .selectAll()
+      .where('source_type', '=', ref.type)
+      .where('source_id', '=', ref.id)
+      .where('kind', '=', 'refund')
+      .execute();
+    const depositRefunds = await db(tx)
+      .selectFrom('finance.journal_entries as e')
+      .innerJoin('finance.deposit_movements as m', 'm.entry_id', 'e.id')
+      .select('m.amount_minor')
+      .where('e.reason_code', '=', `refund_of:${ref.type}:${ref.id}`)
+      .where('m.kind', '=', 'refunded')
+      .execute();
+    return {
+      postingId: null,
+      bookingId: deposit.booking_id,
+      paymentMethod: deposit.payment_method ?? 'card',
+      tenderMinor: Number(deposit.amount_minor),
+      tenderCurrency: deposit.currency,
+      refundedMinor:
+        folioRefunds.reduce((s, r) => s + tender(r).amount, 0) +
+        depositRefunds.reduce((s, r) => s - Number(r.amount_minor), 0),
+    };
+  }
+  throw new BusinessRuleError(
+    'original_payment_not_found',
+    'The payment being refunded is not recorded in the ledger. Record or reconcile the original payment first.',
+    { originalPaymentRef: ref },
+  );
 }
 
 // ───────────────────────────── Transfers ─────────────────────────────
@@ -1558,8 +1637,7 @@ export async function reverseEntry(
     .selectAll()
     .where('id', '=', input.entryId)
     .executeTakeFirst();
-  if (!entry?.property_id)
-    throw new ValidationError('entry_not_found', 'The journal entry was not found.');
+  if (!entry?.property_id) throw new ValidationError('entry_not_found', 'The journal entry was not found.');
   requirePermission(tx, 'finance.posting.correct', { propertyId: entry.property_id });
   if (entry.entry_type !== 'charge') {
     throw new BusinessRuleError(

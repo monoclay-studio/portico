@@ -126,6 +126,7 @@ export async function openSessionFor(
   propertyId: string,
   method: PaymentMethodKind,
   explicitSessionId?: string,
+  opts: { cashRequiresSession?: boolean } = {},
 ): Promise<string | null> {
   if (explicitSessionId) {
     const s = await db(tx)
@@ -148,7 +149,7 @@ export async function openSessionFor(
     .where('user_key', '=', actorKey(tx))
     .where('status', '=', 'open')
     .executeTakeFirst();
-  if (!s && method === 'cash') {
+  if (!s && method === 'cash' && opts.cashRequiresSession !== false) {
     throw new BusinessRuleError(
       'cashier_session_required',
       'Cash can only be taken or paid out in an open cashier session. Open your cashier session (with your opening float) and try again.',
