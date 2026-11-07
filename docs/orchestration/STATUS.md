@@ -66,7 +66,7 @@
   **Still queued:** gap strategist → `docs/strategy/`; infra + parity-ops resume. UX lab not restarted (only the
   tester needs it). Seven-day pacing rule added to `usage-guardrail.md`.
 
-- **2026-11-07 18:00 UTC — next-wave plan.** The 10x briefs are on main (`docs/strategy/`). After
+- **2026-11-07 17:10 UTC — next-wave plan.** The 10x briefs are on main (`docs/strategy/`). After
   integration-step and identity-plus merge, start module round 2 from each module's brief, in gap-plan order:
   1. "make it real": backoffice wired to real APIs + reservations front-desk flows (FD-01/FD-09/FD-06);
   2. payments collection plans + finance receipts (MIRA 3-day rule);

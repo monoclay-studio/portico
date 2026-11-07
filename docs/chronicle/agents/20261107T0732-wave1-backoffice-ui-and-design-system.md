@@ -1,7 +1,7 @@
 # Agent run: Wave1: backoffice UI and design system
 
-- Started: 2026-11-07T07:32:35.606Z · last activity: 2026-11-07T16:38:36.742Z
-- Turns: 607 · tool uses: 364 · output tokens: 1,141,289
+- Started: 2026-11-07T07:32:35.606Z · last activity: 2026-11-07T17:18:42.498Z
+- Turns: 836 · tool uses: 506 · output tokens: 1,465,176
 - Type: general-purpose
 
 ## Brief (2026-11-07T07:32:35.606Z)
@@ -394,5 +394,71 @@ Everything is committed on `feat/backoffice-core` in `/home/user/wt/backoffice` 
 - design-system.png
 
 The main docs are `/home/user/wt/backoffice/apps/backoffice/README.md` and `/home/user/wt/backoffice/packages/ui/README.md`.
+````
+
+## Report (2026-11-07T17:18:42.347Z)
+
+````text
+## Steward fix round: finished on `feat/backoffice-core`
+
+Worktree `/home/user/wt/backoffice`. The branch is committed and not pushed. `main` is merged in twice: at the start, and again for the UX round-1 docs (merge `f606a16`). Every check below passed with exit code 0.
+
+### Findings → fix commit → evidence
+
+| Finding | Commit | Test or evidence |
+|---|---|---|
+| **P0-1** Cache leak on a shared desk tab | `4806e70` | Query keys now include org and user. The cache is cleared on every session change, and guest names are removed from localStorage on sign-out. A 401 only ends the session whose token made the request. e2e `P0-1: after a session ends on a shared tab…` |
+| **P1-1** Drawer focus | `cad6e23`, `25c2364` | Focus moves into the record on open and returns to the row on Esc. The drawer is a non-modal panel at ≥1280 px and a modal sheet below that. ui tests `RecordDrawer focus (P1-1)` (3); e2e `keyboard: Enter opens the record…` |
+| **P1-2** Uncertain outcomes; no timeout | `d4ce940`, `25c2364` | Reads time out after 20 s and writes after 30 s; a caller's abort is not reported as a failure. If a write's answer never arrives (including a 502/503/504 without a problem body), it is shown as pending verification with a "Check what was saved" button. A retry is offered only when an Idempotency-Key makes it safe. Retry boilerplate removed (C7.5). Client tests `P1-2: …` (2); ui `problem-alert.test.tsx` |
+| **P1-3** Statuses don't match the real modules; an unknown value crashed the screen | `cad6e23`, `1c00f91` | Vocabularies now follow the reservations, operations and payments contracts. Added `unitAvailability` / `inventory`, `sandbox` provenance, and `PresentedStatusBadge` for payments' own status presentation. An unknown value shows as a dashed neutral chip and is reported. Router-level and record-level error boundaries added. ui `status-badge.test.tsx`; app `error-boundary.test.tsx` |
+| **P1-4** Arrivals layout | `11cdb39`, `25c2364` | Proposal adopted with improvements. Readiness is the 2nd column and shows the full blocker on two lines plus who acts on it ("Next: Hawwa · Housekeeping"). Condition and Secured share one column; Balance is marked as an estimate. Low-priority columns hide behind a "+n hidden" chip. Duplicate context line removed. Count tiles became filter chips. Screenshots `arrivals-board.png`, `record-drawer-stay.png` |
+| **P1-5** Selection, bulk actions, list keys | `cad6e23`, `11cdb39` | DataTable gains selection: x / Space / Shift range / select all shown, plus a bulk-action bar. Keys: j / k, e, Enter. The open record follows the active row (split view); the table can also be driven through a handle while the drawer has focus. Bulk actions are CSV export and a stub for "Transfer delayed…". ui `data-table.test.tsx` (5 new tests) |
+| **P1-6** Data layer not swappable | `11cdb39` | One source per domain, typed with the real `@portico/reservations` / `operations` contracts or view models the app owns. The simulator now emits payloads in the real shapes, parsed with the real schemas, and its errors become problem+json. It runs only in non-live organizations; live shows "not set up yet". Provenance shown on screen comes from the source. The view model handles a null readiness, an HH:MM `eta`, a null guest name and a missing board. `data/simulated/maldives.test.ts` (13 tests, including a real-contract fixture) |
+| P2-1 / sample data contradicting itself | `11cdb39` | Removed: invented Today numbers, "Paid" next to a balance due, an in-house guest shown as "Ready", check-in allowed 9 days early, future-dated history, repeated guest names, Aishath listed as a room attendant, resort villas in the guesthouse's My work. Data is now seeded by property code + business date. Covered by tests in `maldives.test.ts`; e2e checks that the Arrivals tile equals its list |
+| P2-2/3/4 Focus restore, focus under the header, nested controls, label-in-name | `cad6e23`, `6f16ba7` | Covered by the axe gate below |
+| P2-5 Axe gate too narrow | `5b6a46a`, `6f16ba7` | Gate now uses wcag2a, wcag2aa, wcag21a, wcag21aa and wcag22aa, fails on every impact level, covers 9 screens, and also runs with the drawer and the palette open, in light and dark. Zero violations |
+| P2-6 Dark-mode contrast depended on the data | `cad6e23` | Colour tokens; dark pass included in the axe gate |
+| P2-7 Conflict-flow edge cases | `d4ce940` | Errors inside the conflict handler are now caught, and a second 409 re-compares against the newest version. Newest-first history requested from foundation (#8) |
+| P2-9 Simulator ran in live organizations | `11cdb39` | Test `never binds the simulator in a live organization` |
+| P2-11 Filter couldn't find codes or blocker text | `cad6e23`, `11cdb39` | Quick filter now searches hidden text (`searchText`); model test |
+| P2-14 Vocabulary drift | `cad6e23` | Units now show out of order / out of service / house use instead of "Blocked"; `sandbox` added |
+| P2-16 Shortcut map | `11cdb39` | Follows the C2 go-to map; e2e `g d` / `g i` |
+| P2-17 README overclaims | `28038cb` | Claims corrected; the gaps are stated |
+| P3-1 938 kB bundle | `5b6a46a` | Main chunk 366 kB. Routes load lazily and the simulator is its own lazy chunk. Source maps are hidden (`sourceMappingURL` verified absent) |
+| P3-2 / P3-3 / P3-4 / P3-6 / P3-7 / P3-8 / P3-9 / P3-10 | `cad6e23`, `4806e70`, `25c2364`, `5b6a46a`, `11cdb39`, `d4ce940` | Environment banner fails closed; 401 ends only the matching token's session; role names instead of codes; money shows the ISO code; e2e ports from env; tiles are filters; simulated data says "generated hh:mm"; intent fingerprint is hashed |
+| 1024 px overflow (NAV-05 / HK-09) | `25c2364` | e2e `no horizontal page scroll at 1024 px` |
+| Jargon and error copy | `25c2364` | Removed "wave 1", module names, "scenario S03", "simulator sample lines", help and lesson codes, role codes, "demo-seeder", "Reference: client" and the request-key copy. Field validation is in staff language; 403s no longer show permission codes; sign-in 401 says what to do; invite defaults to the current property and is hidden when access is refused |
+
+Departures and In house now exist (`g d`, `g i`), and the Today tiles open them. The praised parts are kept: the contract-checked client, the 409 flow and provenance labels.
+
+### UX round-1 overlap
+Where a fix overlapped a refinement, I used the refinement's version (C2, C3, C4, C5, C6.2, C7, C8, C9.2, C11, FD-03, FD-06, FD-14, NAV-07/08). For each backoffice/ui refinement, accepted / adapted / done now / next round is in `docs/ux/round-1/decisions/backoffice.md` (`9c06384`). None rejected; four adapted, with reasons.
+
+### Command results (final tree, all exit 0)
+- `pnpm lint`: 723 files, no fixes needed.
+- `pnpm turbo run typecheck --force`: 18 of 18 tasks passed.
+- `pnpm --filter @portico/ui test`: 87 tests passed.
+- `pnpm --filter @portico/backoffice test`: 36 tests passed.
+- `pnpm exec playwright test` (real API on 4100, Vite on 5180): 22 of 22 passed (11 smoke + 11 screenshot). Screenshots regenerated in `0538029`.
+
+`PORTICO_TEST_DB_PREFIX=w1_bo_fix` was set, but none of these suites create a test database. Playwright migrates and seeds `portico_w1_ui`.
+
+### Deferred, and why
+- **P2-8** (token held in memory, trusted types, expiry timer): needs an ADR. The P0 part (clearing data on sign-out) is done.
+- **P2-10** (view state in the URL), **date control**, `N` creates and record verb keys `c/o/m/p/a`, palette actions (NAV-01/02, FD-13, C2.4–5): next UX round, as instructed.
+- **P2-12** (keeping unsaved form edits across a session expiry): next round. The redirect after expiry works.
+- **P2-13** (real change preview contract, `preview_stale`, 202 forwarded): needs the real reservations binding, which you said not to wire yet. Infeasible previews already keep Confirm disabled, and confirm sends an idempotency key.
+- **P2-15**: only partly done. Plurals and `<bdi>` were added where I touched copy. Full plural rules for Arabic and Dhivehi, week start and locale from the property, and isolation for all data strings are still open.
+- **P2-18** (timeline list view and zoom) and **P3-5** (10 px rail labels): not started.
+- From the blackbox findings: simulated check-in and mark-inspected don't change the sample data (extend stay does); there are no actions for delayed transfers (FD-11/12); the CI copy lint (NAV-09) and the phone bottom bar (NAV-05) are next round.
+
+I asked foundation for 6 more things (#8–13 in `apps/backoffice/FOUNDATION_REQUESTS.md`). The ones that matter most: history newest-first, one shared status-vocabulary package, and per-blocker owner and summary on `frontDeskRow`.
+
+Key files:
+- `/home/user/wt/backoffice/apps/backoffice/src/data/` (`sources.ts`, `contracts.ts`, `views.ts`, `front-desk.ts`, `simulated/`)
+- `/home/user/wt/backoffice/apps/backoffice/src/features/front-desk/desk-page.tsx`
+- `/home/user/wt/backoffice/packages/ui/src/components/data-table/data-table.tsx`
+- `/home/user/wt/backoffice/packages/ui/src/components/record/record-drawer.tsx`
+- `/home/user/wt/backoffice/apps/backoffice/e2e/smoke.spec.ts`
 ````
 

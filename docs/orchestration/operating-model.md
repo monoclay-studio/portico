@@ -34,7 +34,7 @@ implementation of every module and the whole platform) → 10x briefs and a plat
 Black-box tester (no build context) → refining agent (knows how it's built and the best outcome) → module agents
 decide & implement → orchestrator oversees and re-measures. Details: `docs/ux/README.md`.
 
-## Quality steward: the meta loop (owner direction, 2026-11-07 17:05)
+## Quality steward: the meta loop (owner direction, 2026-11-07 16:52)
 
 A dedicated agent is in charge of every *checking* agent: steward reviewers, the black-box tester, the UX refiner,
 scenario tests, parity researchers and the gap strategist. After each round it:

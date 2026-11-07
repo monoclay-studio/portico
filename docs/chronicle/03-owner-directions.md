@@ -999,3 +999,9 @@ since you're running automated let's also put a guardrail against usage. when 5h
 make sure you keep a file of exactly how we are implementing this (this agent oversees, these specific agents working on modules, these were studied, these were implemented first etc etc..) the whole thing of portico right from the start.. At the end of portico I want to draft a process document so I can keep it for posterity and use as case study, success story, origin story etc.. keep as many data point as possible so we can get what we need in the end..
 ````
 
+## 2026-11-07 16:52 UTC — Owner
+
+````text
+let's make another agent who is in charge of these testing agents. see the way they are testing and refine their process and how they go through the flow each time. basically let's create a very very intelligent self improving system with many feedback loops..
+````
+
