@@ -2,7 +2,19 @@ import { describe, expect, it } from 'vitest';
 import { cancellationStructure, termsSnapshot } from '../contracts';
 import { assemble, checkEligibility, priceNights } from './offer';
 import { DEFAULT_CHILD_AGE_BANDS } from './pricing';
-import { postingPlan, reprice, verifyTerms } from './terms';
+import {
+  applyPriceOverride,
+  evaluateCancellationPenalty,
+  levyTrueUp,
+  postingPlan,
+  reprice,
+  verifyTerms,
+} from './terms';
+
+const KEY = Buffer.from('test-seal-key').toString('base64');
+/** One rule set for the whole file: agreed commercial version ids must match the rules used later. */
+const RULES = maldivesLikeRules();
+
 import { maldivesLikeRules, RESORT } from './test-fixtures';
 
 const UT = '00000000-0000-7000-8000-00000000a001';
@@ -79,6 +91,7 @@ function build(opts: { arrival?: string; departure?: string; base?: number } = {
         rhythm: { kind: 'nightly' },
         priceMode: 'included',
         fulfilmentOutlets: ['main-restaurant'],
+        outletKind: null,
         allowance: null,
       },
     ],
@@ -97,14 +110,15 @@ function build(opts: { arrival?: string; departure?: string; base?: number } = {
       guarantee: null,
       deposit: null,
     },
-    taxRules: maldivesLikeRules(),
+    taxRules: RULES,
     meta: {
       quoteId: '00000000-0000-7000-8000-00000000f001',
       quotedAt: '2026-11-07T08:00:00.000Z',
       configVector: 'cv1',
       priceSource: 'portico_quote',
       restrictionOverride: null,
-      supersedesHash: null,
+      supersedesSeal: null,
+      sealKey: KEY,
     },
   });
   return { assembled, priced };
@@ -127,23 +141,25 @@ describe('offer assembly', () => {
     expect(assembled.nightly.reduce((s, x) => s + x.gross.amountMinor, 0)).toBe(t.gross.amountMinor);
     expect(t.fees.amountMinor).toBe(15_000); // 10% service charge
     expect(t.taxes.amountMinor).toBe(3 * (2_400 + Math.round(0.17 * 55_000)));
-    expect(assembled.taxesAndFees.map((x) => x.ruleCode)).toEqual(['SC', 'TGST', 'GREEN12']);
+    expect(assembled.taxSummary.map((x) => x.ruleCode)).toEqual(['SC', 'TGST', 'GREEN12']);
+    expect(assembled.taxesAndFees.length).toBe(3 * 5); // flat lines: per night, room (3 rules) + HB (2 rules)
+    expect(assembled.terms.taxes.commercialRuleVersionIds).toHaveLength(1);
     expect(assembled.unverifiedTaxRules).toEqual(['SC', 'TGST', 'GREEN12']);
     expect(assembled.policies.cancellation?.tiers[0]?.fromInstant).toBe('2026-11-16T19:00:00.000Z');
   });
 
   it('produces a sealed snapshot that survives JSON + schema round trips', () => {
     const { assembled } = build();
-    expect(verifyTerms(assembled.terms)).toBe(true);
+    expect(verifyTerms(KEY, assembled.terms)).toBe(true);
     const roundTrip = termsSnapshot.parse(JSON.parse(JSON.stringify(assembled.terms)));
-    expect(verifyTerms(roundTrip)).toBe(true);
+    expect(verifyTerms(KEY, roundTrip)).toBe(true);
     const tampered = {
       ...roundTrip,
       nights: roundTrip.nights.map((x, i) =>
         i === 0 ? { ...x, amount: { ...x.amount, amountMinor: 1 } } : x,
       ),
     };
-    expect(verifyTerms(tampered)).toBe(false);
+    expect(verifyTerms(KEY, tampered)).toBe(false);
   });
 
   it('derives the posting plan from the snapshot alone with deterministic keys', () => {
@@ -190,11 +206,12 @@ describe('offer assembly', () => {
 describe('repricing agreed terms (change previews)', () => {
   const ctx = (current: ReturnType<typeof build>['priced'] | null) => ({
     property: { id: PROP, timezone: 'Indian/Maldives', checkInTime: '14:00', classification: RESORT },
-    taxRules: maldivesLikeRules(),
+    taxRules: RULES,
     meta: {
       quoteId: '00000000-0000-7000-8000-00000000f002',
       quotedAt: '2026-11-20T08:00:00.000Z',
       configVector: 'cv2',
+      sealKey: KEY,
     },
     current: current
       ? { drafts: new Map(current.drafts.map((d) => [d.date, d])), violations: current.violations }
@@ -216,7 +233,7 @@ describe('repricing agreed terms (change previews)', () => {
       typeChangePolicy: 'keep_agreed',
       changeAt: new Date('2026-11-20T08:00:00Z'),
     });
-    expect(r.nights.map((n) => [n.date, n.source, n.after?.amountMinor])).toEqual([
+    expect(r.nightly.map((n) => [n.date, n.source, n.after?.amountMinor])).toEqual([
       ['2026-12-01', 'agreed', 50_000],
       ['2026-12-02', 'agreed', 50_000],
       ['2026-12-03', 'agreed', 50_000],
@@ -224,8 +241,9 @@ describe('repricing agreed terms (change previews)', () => {
       ['2026-12-05', 'current_rates', 70_000],
     ]);
     expect(r.violations).toEqual([]);
-    expect(r.candidateTerms.supersedesHash).toBe(agreed.hash);
-    expect(verifyTerms(r.candidateTerms)).toBe(true);
+    expect(r.terms.supersedesSeal).toBe(agreed.seal);
+    expect(verifyTerms(KEY, r.terms)).toBe(true);
+    expect(verifyTerms(Buffer.from('another-key').toString('base64'), r.terms)).toBe(false);
     expect(r.difference.amountMinor).toBe(r.after.gross.amountMinor - r.before.gross.amountMinor);
   });
 
@@ -241,7 +259,7 @@ describe('repricing agreed terms (change previews)', () => {
       typeChangePolicy: 'keep_agreed',
       changeAt: new Date('2026-11-20T08:00:00Z'),
     });
-    expect(avg.nights[3]).toMatchObject({ source: 'agreed_average', after: { amountMinor: 50_000 } });
+    expect(avg.nightly[3]).toMatchObject({ source: 'agreed_average', after: { amountMinor: 50_000 } });
     const manual = reprice({
       ...ctx(null),
       terms: agreed,
@@ -267,13 +285,18 @@ describe('repricing agreed terms (change previews)', () => {
       typeChangePolicy: 'keep_agreed',
       changeAt: new Date('2026-11-25T08:00:00Z'), // inside the 14-day tier
     });
-    expect(r.nights.map((n) => [n.source, n.after?.amountMinor ?? null])).toEqual([
+    expect(r.nightly.map((n) => [n.source, n.after?.amountMinor ?? null])).toEqual([
       ['occupancy_repriced', 65_000],
       ['occupancy_repriced', 65_000],
       ['removed', null],
     ]);
     expect(r.penalties[0]).toMatchObject({ kind: 'cancellation', nights: ['2026-12-03'] });
-    expect(r.penalties[0]?.amount.amountMinor).toBe(agreed.nights[2]?.gross.amountMinor);
+    // Penalty basis = night price + hotel-set fees (service charge), not statutory per-guest levies.
+    const third = agreed.nights[2];
+    const fees = (third?.taxes ?? [])
+      .filter((t) => t.nature === 'commercial')
+      .reduce((a, t) => a + t.amount.amountMinor, 0);
+    expect(r.penalties[0]?.amount.amountMinor).toBe((third?.net.amountMinor ?? 0) + fees);
     // After arrival a removed night is an early departure.
     const late = reprice({
       ...ctx(null),
@@ -301,6 +324,103 @@ describe('repricing agreed terms (change previews)', () => {
       changeAt: new Date('2026-11-20T08:00:00Z'),
     });
     expect(r.difference.amountMinor).toBe(0);
-    expect(r.candidateTerms.unitTypeId).toBe(UT2);
+    expect(r.terms.unitTypeId).toBe(UT2);
+  });
+});
+
+describe('agreed-terms providers (penalties, Green Tax true-up, overrides)', () => {
+  const property = { id: PROP, timezone: 'Indian/Maldives', checkInTime: '14:00', classification: RESORT };
+
+  it('evaluates cancellation, no-show and early-departure penalties from the agreement alone', () => {
+    const terms = build().assembled.terms;
+    const free = evaluateCancellationPenalty(terms, new Date('2026-11-10T00:00:00Z'));
+    expect(free).toMatchObject({ event: 'cancellation', tier: null, amount: { amountMinor: 0 } });
+    const late = evaluateCancellationPenalty(terms, new Date('2026-11-25T00:00:00Z'));
+    expect(late.event).toBe('cancellation');
+    expect(late.penalty.kind).toBe('first_night');
+    // Basis = night price + service charge; Green Tax (statutory per-guest levy) is not a penalty (R-27).
+    const n0 = terms.nights[0];
+    const sc = (n0?.taxes ?? [])
+      .filter((t) => t.nature === 'commercial')
+      .reduce((a, t) => a + t.amount.amountMinor, 0);
+    expect(late.amount.amountMinor).toBe((n0?.net.amountMinor ?? 0) + sc);
+    const noShow = evaluateCancellationPenalty(terms, new Date('2026-12-02T10:00:00Z'), { event: 'no_show' });
+    expect(noShow.penalty.kind).toBe('first_night');
+    const early = evaluateCancellationPenalty(terms, new Date('2026-12-02T10:00:00Z'));
+    expect(early).toMatchObject({ event: 'early_departure', nights: ['2026-12-02', '2026-12-03'] });
+    expect(early.amount.amountMinor).toBe(terms.nights[1]?.net.amountMinor ? early.amount.amountMinor : 0);
+  });
+
+  it('trues up Green Tax to actual 24-hour blocks at check-out', () => {
+    const terms = build().assembled.terms; // 3 nights, 2 adults
+    const late = levyTrueUp(terms, {
+      checkInAt: new Date('2026-12-01T09:00:00Z'),
+      checkOutAt: new Date('2026-12-04T21:00:00Z'),
+    });
+    expect(late).toMatchObject({ agreedDays: 3, actualDays: 4, deltaDays: 1 });
+    expect(late.line).toMatchObject({
+      levyOnly: true,
+      nights: 1,
+      adjustment: 'supply',
+      serviceDate: '2026-12-05',
+    });
+    const short = levyTrueUp(terms, {
+      checkInAt: new Date('2026-12-01T21:00:00Z'),
+      checkOutAt: new Date('2026-12-04T07:00:00Z'),
+    });
+    expect(short).toMatchObject({ actualDays: 2, deltaDays: -1 });
+    expect(short.line?.adjustment).toBe('reversal');
+    expect(
+      levyTrueUp(terms, {
+        checkInAt: new Date('2026-12-01T09:00:00Z'),
+        checkOutAt: new Date('2026-12-04T07:00:00Z'),
+      }).line,
+    ).toBeNull();
+  });
+
+  it('makes complimentary terms: price 0, value-based taxes 0, Green Tax kept, sealed with the original recorded', () => {
+    const terms = build().assembled.terms;
+    const comp = applyPriceOverride({
+      terms,
+      override: { kind: 'complimentary' },
+      reason: 'Travel agent familiarization trip',
+      by: 'user:gm',
+      at: '2026-11-20T08:00:00.000Z',
+      property,
+      taxRules: RULES,
+      meta: {
+        quoteId: '00000000-0000-7000-8000-00000000f003',
+        quotedAt: '2026-11-20T08:00:00.000Z',
+        configVector: 'cv',
+        sealKey: KEY,
+      },
+    });
+    expect(comp.priceSource).toBe('complimentary');
+    expect(comp.totals.net.amountMinor).toBe(0);
+    expect(comp.totals.fees.amountMinor).toBe(0);
+    expect(comp.totals.taxes.amountMinor).toBe(3 * 2_400);
+    expect(comp.priceOverride).toMatchObject({
+      kind: 'complimentary',
+      original: { seal: terms.seal, totals: terms.totals },
+    });
+    expect(comp.supersedesSeal).toBe(terms.seal);
+    expect(verifyTerms(KEY, comp)).toBe(true);
+    const manual = applyPriceOverride({
+      terms,
+      override: { kind: 'total', totalMinor: 100_001 },
+      reason: 'Matched competitor rate',
+      by: 'user:gm',
+      at: '2026-11-20T08:00:00.000Z',
+      property,
+      taxRules: RULES,
+      meta: {
+        quoteId: '00000000-0000-7000-8000-00000000f004',
+        quotedAt: '2026-11-20T08:00:00.000Z',
+        configVector: 'cv',
+        sealKey: KEY,
+      },
+    });
+    expect(manual.nights.map((n) => n.amount.amountMinor)).toEqual([33_334, 33_334, 33_333]);
+    expect(manual.priceSource).toBe('manual_override');
   });
 });

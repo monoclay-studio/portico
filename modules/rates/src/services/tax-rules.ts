@@ -6,12 +6,21 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { TxContext } from '@portico/db';
-import { BusinessRuleError, NotFoundError, newId, requirePermission, ValidationError } from '@portico/kernel';
+import { pgCode, type TxContext, withSavepoint } from '@portico/db';
+import {
+  BusinessRuleError,
+  ConflictError,
+  instantToZoned,
+  NotFoundError,
+  newId,
+  requirePermission,
+  ValidationError,
+} from '@portico/kernel';
 import { z } from 'zod';
 import {
   type ComputeTaxesInput,
   computeTaxesInput,
+  type RulePackStatus,
   type TaxComputation,
   type TaxLine,
   type TaxRuleDto,
@@ -22,12 +31,21 @@ import {
   taxTemplateInstall,
   verification,
 } from '../contracts';
-import { computeTaxesPure, type LoadedTaxRule, type TaxRuleVersionData } from '../domain/tax-engine';
+import {
+  computeTaxesPure,
+  evalClassification,
+  type LoadedTaxRule,
+  type TaxRuleVersionData,
+} from '../domain/tax-engine';
 import { RATES_EVENTS } from '../events';
 import type { RatesPorts, RatesPropertyInfo } from '../ports';
 import { actorKey, db, json, parseInput, parseStored, type Row } from './shared';
 
-const today = (tx: TxContext) => tx.now.toISOString().slice(0, 10);
+/**
+ * "Today" for organization-level tax rules: the date at the earliest time zone on Earth (UTC+14), so a version
+ * that has started anywhere already counts as in effect (conservative for withdrawals and past-date warnings).
+ */
+const today = (tx: TxContext) => instantToZoned(tx.now, 'Pacific/Kiritimati').date;
 
 function toVersionDto(v: Row<'rates.tax_rule_versions'>) {
   return {
@@ -53,6 +71,7 @@ function toRuleDto(r: Row<'rates.tax_rules'>, versions: Array<Row<'rates.tax_rul
     name: r.name,
     jurisdiction: r.jurisdiction,
     category: r.category,
+    nature: r.nature,
     propertyIds: r.property_ids,
     taxPointPolicy: r.tax_point_policy,
     ledgerMappingKey: r.ledger_mapping_key,
@@ -152,6 +171,7 @@ export async function createTaxRule(tx: TxContext, raw: unknown): Promise<TaxRul
         name: input.name,
         jurisdiction: input.jurisdiction,
         category: input.category,
+        nature: input.nature,
         property_ids: input.propertyIds,
         tax_point_policy: input.taxPointPolicy,
         ledger_mapping_key: input.ledgerMappingKey,
@@ -222,20 +242,28 @@ export interface TaxActivationReport {
   definitionChanges: Array<{ field: string; before: unknown; after: unknown }>;
   warnings: string[];
   impact: string[];
+  /** Affected agreements as reported by reservations/finance (when the port is bound). */
+  affected?: Awaited<ReturnType<NonNullable<RatesPorts['affectedAgreements']>>>;
   generatedAt: string;
 }
 
-async function buildActivationReport(tx: TxContext, versionId: string) {
+async function buildActivationReport(
+  tx: TxContext,
+  versionId: string,
+  affected?: RatesPorts['affectedAgreements'],
+) {
   const v = await db(tx)
     .selectFrom('rates.tax_rule_versions')
     .selectAll()
     .where('id', '=', versionId)
     .executeTakeFirst();
   if (!v) throw new NotFoundError('tax_rule_version', versionId);
+  // Lock the rule so concurrent activations of its versions serialize (and see each other's closes).
   const rule = await db(tx)
     .selectFrom('rates.tax_rules')
     .selectAll()
     .where('id', '=', v.tax_rule_id)
+    .forUpdate()
     .executeTakeFirstOrThrow();
   const active = await db(tx)
     .selectFrom('rates.tax_rule_versions')
@@ -312,23 +340,43 @@ async function buildActivationReport(tx: TxContext, versionId: string) {
       'This version is not confirmed by a qualified adviser; a live property cannot issue fiscal documents from unconfirmed rules.',
     );
   }
-  report.impact.push(
-    "Agreed stays keep their agreed prices. Taxes for supplies whose tax point falls inside this version's dates use it; amounts whose tax point is already fixed (e.g. deposits taxed at payment) are not re-taxed.",
-    `Tax point policy of ${rule.code}: ${rule.tax_point_policy}.`,
-    'Affected future stays and deposits are listed by reservations/finance from the rates.taxRule.activated event (rates does not read bookings).',
-  );
+  if (rule.nature === 'commercial') {
+    report.impact.push(
+      `${rule.code} is a hotel-set (commercial) rule: agreed stays keep the version recorded in their terms; this version applies to new agreements and to charges outside an agreement.`,
+    );
+  } else {
+    report.impact.push(
+      "Agreed stays keep their agreed PRICES. For a statutory rule, supplies whose tax point falls inside this version's dates use it: on tax-exclusive agreements the tax line changes, on tax-inclusive agreements the net changes. Amounts whose tax point is already fixed (e.g. a deposit taxed at payment) are not re-taxed.",
+      `Tax point policy of ${rule.code}: ${rule.tax_point_policy}.`,
+    );
+  }
+  if (affected) {
+    report.affected = await affected(tx, {
+      ruleId: rule.id,
+      ruleCode: rule.code,
+      nature: rule.nature,
+      from: v.effective_from,
+      to: v.effective_to,
+    });
+  } else {
+    report.impact.push(
+      'The list of affected stays and deposits is not available here (the reservations/finance port is not bound); they react to the rates.taxRule.activated event.',
+    );
+  }
   return { v, rule, report };
 }
 
 export async function previewTaxRuleActivation(
+  ports: RatesPorts,
   tx: TxContext,
   versionId: string,
 ): Promise<TaxActivationReport> {
   requirePermission(tx, 'rates.taxRule.activate');
-  return (await buildActivationReport(tx, versionId)).report;
+  return (await buildActivationReport(tx, versionId, ports.affectedAgreements)).report;
 }
 
 export async function activateTaxRuleVersion(
+  ports: RatesPorts,
   tx: TxContext,
   versionId: string,
   raw: unknown,
@@ -341,7 +389,7 @@ export async function activateTaxRuleVersion(
       'Review the change report (preview) and confirm acknowledgeReport before activating.',
     );
   }
-  const { v, rule, report } = await buildActivationReport(tx, versionId);
+  const { v, rule, report } = await buildActivationReport(tx, versionId, ports.affectedAgreements);
   if (v.status !== 'draft')
     throw new BusinessRuleError(
       'tax_rule_version_not_draft',
@@ -361,16 +409,29 @@ export async function activateTaxRuleVersion(
       .where('id', '=', c.ruleVersionId)
       .execute();
   }
-  await db(tx)
-    .updateTable('rates.tax_rule_versions')
-    .set({
-      status: 'active',
-      activated_at: tx.now,
-      activated_by: actorKey(tx),
-      activation_report: json(report),
-    })
-    .where('id', '=', v.id)
-    .execute();
+  try {
+    await withSavepoint(tx, 'rates_activate_version', () =>
+      db(tx)
+        .updateTable('rates.tax_rule_versions')
+        .set({
+          status: 'active',
+          activated_at: tx.now,
+          activated_by: actorKey(tx),
+          activation_report: json(report),
+        })
+        .where('id', '=', v.id)
+        .execute(),
+    );
+  } catch (err) {
+    if (pgCode(err) === '23P01') {
+      throw new ConflictError(
+        'tax_rule_version_overlap',
+        `Another active version of ${rule.code} now covers these dates (it was activated at the same time). Refresh the rule, review its versions and try again.`,
+        { ruleCode: rule.code },
+      );
+    }
+    throw err;
+  }
   await tx.audit({
     action: 'rates.taxRule.activate',
     target: { type: 'tax_rule_version', id: v.id },
@@ -454,7 +515,10 @@ export function toVersionData(v: Row<'rates.tax_rule_versions'>): TaxRuleVersion
 export async function loadTaxRulesForProperty(
   tx: TxContext,
   property: Pick<RatesPropertyInfo, 'id' | 'countryCode'>,
-  opts: { ruleVersionIds?: readonly string[] | undefined } = {},
+  opts: {
+    ruleVersionIds?: readonly string[] | undefined;
+    agreedVersionIds?: readonly string[] | undefined;
+  } = {},
 ): Promise<LoadedTaxRule[]> {
   const pinned = opts.ruleVersionIds;
   const versions = pinned
@@ -505,7 +569,11 @@ export async function loadTaxRulesForProperty(
         'in',
         rules.map((r) => r.id),
       )
-      .where('status', '=', 'active')
+      .where((eb) =>
+        opts.agreedVersionIds && opts.agreedVersionIds.length > 0
+          ? eb.or([eb('status', '=', 'active'), eb('id', 'in', [...opts.agreedVersionIds])])
+          : eb('status', '=', 'active'),
+      )
       .execute());
   return rules.map((r) => ({
     rule: {
@@ -513,6 +581,7 @@ export async function loadTaxRulesForProperty(
       code: r.code,
       name: r.name,
       category: r.category,
+      nature: r.nature,
       taxPointPolicy: r.tax_point_policy,
       ledgerMappingKey: r.ledger_mapping_key,
       sequence: r.sequence,
@@ -530,13 +599,18 @@ export async function computeTaxesDetailed(
 ): Promise<TaxComputation> {
   const input = parseInput(computeTaxesInput, raw);
   const property = await ports.getProperty(tx, input.propertyId);
-  const rules = await loadTaxRulesForProperty(tx, property, { ruleVersionIds: input.ruleVersionIds });
+  const agreedVersionIds = [...new Set(input.lines.flatMap((l) => l.agreedRuleVersionIds ?? []))];
+  const rules = await loadTaxRulesForProperty(tx, property, {
+    ruleVersionIds: input.ruleVersionIds,
+    agreedVersionIds,
+  });
   return computeTaxesPure(rules, input.lines, {
     classification: property.classification,
     occupancy: input.occupancy,
     stayContext: input.stayContext,
     invoiceDate: input.invoiceDate,
-    paymentDate: input.paymentDate,
+    fullPaymentDate: input.fullPaymentDate,
+    expectedInvoiceDate: input.expectedInvoiceDate,
     fxRates: input.fxRates,
     exemptionCertificates: input.exemptionCertificates,
   });
@@ -612,6 +686,7 @@ export async function installTaxTemplate(
         name: r.name,
         jurisdiction: t.jurisdiction,
         category: r.category,
+        nature: r.nature,
         property_ids: input.propertyIds,
         tax_point_policy: r.taxPointPolicy,
         ledger_mapping_key: r.ledgerMappingKey,
@@ -650,4 +725,61 @@ export async function installTaxTemplate(
     after: { installed, skipped, propertyIds: input.propertyIds },
   });
   return { template: `${t.template}@${t.templateVersion}`, installed, skipped, disclaimer: t.disclaimer };
+}
+
+// ───────────────────────────── Rule pack status (live fiscal gate, RAT-R26) ─────────────────────────────
+
+/**
+ * Provider for finance's live-invoicing gate: which rules apply at the property today and whether every one is
+ * confirmed by a qualified adviser (`verified`). Read-only; no rates permission needed (callers gate it).
+ */
+export async function getRulePackStatus(
+  ports: RatesPorts,
+  tx: TxContext,
+  propertyId: string,
+): Promise<RulePackStatus> {
+  const property = await ports.getProperty(tx, propertyId);
+  const rules = await loadTaxRulesForProperty(tx, property);
+  const localToday = instantToZoned(tx.now, property.timezone).date;
+  const rows = rules.flatMap((r) => {
+    const v = r.versions.find(
+      (x) =>
+        (x.effectiveFrom === null || x.effectiveFrom <= localToday) &&
+        (x.effectiveTo === null || localToday < x.effectiveTo),
+    );
+    // Rules whose classification can never match this property (e.g. the USD 6 Green Tax at a resort) are not
+    // part of its pack; an unknown classification keeps the rule (computing it will say what is missing).
+    if (
+      v &&
+      evalClassification(v.definition.appliesTo.classification, property.classification).result === false
+    )
+      return [];
+    return [
+      {
+        ruleId: r.rule.id,
+        code: r.rule.code,
+        name: r.rule.name,
+        category: r.rule.category,
+        nature: r.rule.nature,
+        versionInForceId: v?.id ?? null,
+        verificationStatus: v?.verificationStatus ?? null,
+      },
+    ];
+  });
+  const inForce = rows.filter((r) => r.versionInForceId !== null);
+  const unverified = inForce.filter((r) => r.verificationStatus !== 'verified').map((r) => r.code);
+  const verified = inForce.length > 0 && unverified.length === 0;
+  return {
+    propertyId,
+    jurisdiction: property.countryCode,
+    verified,
+    note:
+      inForce.length === 0
+        ? 'No tax or fee rules are in force at this property. Install or configure the rule pack before invoicing.'
+        : verified
+          ? 'Every rule in force is confirmed by a qualified adviser.'
+          : `Not confirmed by a qualified adviser: ${unverified.join(', ')}. Live fiscal documents must not be issued from these rules.`,
+    rules: rows,
+    unverifiedRuleCodes: unverified,
+  };
 }

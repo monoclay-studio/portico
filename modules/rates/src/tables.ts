@@ -39,6 +39,7 @@ export interface InclusionsTable {
   rhythm: unknown;
   price_mode: 'included' | 'added';
   fulfilment_outlets: string[];
+  outlet_kind: string | null;
   allowance: unknown | null;
   status: Generated<'active' | 'retired'>;
   version: Generated<number>;
@@ -193,6 +194,7 @@ export interface TaxRulesTable {
   name: string;
   jurisdiction: string;
   category: 'tax' | 'fee';
+  nature: Generated<'statutory' | 'commercial'>;
   property_ids: string[] | null;
   tax_point_policy: 'service_date' | 'booking_date' | 'invoice_date' | 'time_of_supply';
   ledger_mapping_key: string;
@@ -228,6 +230,7 @@ export interface PlanSalesTable {
   tenant_id: string;
   property_id: string;
   rate_plan_id: string;
+  unit_type_id: string;
   stay_date: string;
   ref_type: string;
   ref_id: string;

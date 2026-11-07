@@ -28,6 +28,11 @@ export interface PromotionContext {
   unitTypeId: string;
   ratePlanId: string;
   promoCode?: string | undefined;
+  /**
+   * The plan is negotiated (company/agency-only) or a net (contracted) rate. Promotions without an explicit
+   * plan list never apply to such plans — contracted prices are not discounted by accident.
+   */
+  planIsContracted?: boolean | undefined;
 }
 
 export function isEligible(p: PromotionCandidate, ctx: PromotionContext): boolean {
@@ -43,6 +48,7 @@ export function isEligible(p: PromotionCandidate, ctx: PromotionContext): boolea
   if (c.channels && !c.channels.includes(ctx.channelId ?? 'direct')) return false;
   if (c.unitTypeIds && !c.unitTypeIds.includes(ctx.unitTypeId)) return false;
   if (c.ratePlanIds && !c.ratePlanIds.includes(ctx.ratePlanId)) return false;
+  if (!c.ratePlanIds && ctx.planIsContracted) return false;
   return true;
 }
 

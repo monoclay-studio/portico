@@ -11,6 +11,8 @@ export function derivationSteps(chain: readonly RatePlanDto[]): DerivationStep[]
       adjustment: d.adjustment,
       rounding: d.rounding,
       unitTypeAdjustments: d.unitTypeAdjustments,
+      floorMinor: d.floorMinor,
+      ceilingMinor: d.ceilingMinor,
     };
   });
 }

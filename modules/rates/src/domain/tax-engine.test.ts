@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { computeLine, computeTaxesPure, evalClassification, orderForCompounding } from './tax-engine';
+import {
+  computeLine,
+  computeTaxesPure,
+  evalClassification,
+  levyDays,
+  orderForCompounding,
+} from './tax-engine';
 import { GUESTHOUSE, line, maldivesLikeRules, RESORT, rule } from './test-fixtures';
 
 const adults2 = { adults: 2, childrenAges: [] as number[] };
@@ -11,10 +17,10 @@ describe('tax engine — compounding and rounding', () => {
     });
     const by = Object.fromEntries(r.taxes.map((t) => [t.ruleCode, t]));
     expect(by.SC?.amount.amountMinor).toBe(1_000);
-    expect(by.TGST?.base.amountMinor).toBe(11_000);
+    expect(by.TGST?.base?.amountMinor).toBe(11_000);
     expect(by.TGST?.amount.amountMinor).toBe(1_870);
     expect(by.GREEN12?.amount.amountMinor).toBe(2_400);
-    expect(by.GREEN12?.quantity).toEqual({ persons: 2, nights: 1, units: 1 });
+    expect(by.GREEN12?.quantity).toEqual({ persons: 2, exemptPersons: 0, nights: 1, units: 1 });
     expect(by.GREEN6).toBeUndefined();
     expect(r.net.amountMinor).toBe(10_000);
     expect(r.gross.amountMinor).toBe(10_000 + 1_000 + 1_870 + 2_400);
@@ -90,21 +96,54 @@ describe('tax engine — compounding and rounding', () => {
     expect(Math.abs(r.roundingResidueMinor)).toBeLessThanOrEqual(2);
   });
 
-  it('backs out fixed per-person amounts when the price includes them', () => {
+  it('backs out fixed per-person amounts only when a line names them explicitly', () => {
     const r = computeLine(
       maldivesLikeRules(),
-      line({ amountMinor: 15_270, occupancy: adults2, taxInclusion: { mode: 'inclusive' } }),
+      line({
+        amountMinor: 15_270,
+        occupancy: adults2,
+        taxInclusion: { mode: 'rules', includedRuleCodes: ['SC', 'TGST', 'GREEN12'] },
+      }),
       { classification: RESORT },
     );
     expect(r.net.amountMinor).toBe(10_000);
     expect(r.gross.amountMinor).toBe(15_270);
   });
 
+  it('inclusive mode includes value-based rules only: levies are added on top (R-06)', () => {
+    const r = computeLine(
+      maldivesLikeRules(),
+      line({ amountMinor: 12_870, occupancy: adults2, taxInclusion: { mode: 'inclusive' } }),
+      { classification: RESORT },
+    );
+    expect(r.net.amountMinor).toBe(10_000);
+    expect(r.taxes.find((t) => t.ruleCode === 'GREEN12')).toMatchObject({
+      inclusive: false,
+      amount: { amountMinor: 2_400 },
+    });
+    expect(r.gross.amountMinor).toBe(12_870 + 2_400);
+    // A free / complimentary tax-inclusive night does not fail and still carries Green Tax.
+    const free = computeLine(
+      maldivesLikeRules(),
+      line({ amountMinor: 0, occupancy: adults2, taxInclusion: { mode: 'inclusive' } }),
+      { classification: RESORT },
+    );
+    expect(free.taxes.map((t) => [t.ruleCode, t.amount.amountMinor])).toEqual([
+      ['SC', 0],
+      ['TGST', 0],
+      ['GREEN12', 2_400],
+    ]);
+  });
+
   it('refuses an inclusive price smaller than the fixed amounts it must contain', () => {
     expect(() =>
       computeLine(
         maldivesLikeRules(),
-        line({ amountMinor: 1_000, occupancy: adults2, taxInclusion: { mode: 'inclusive' } }),
+        line({
+          amountMinor: 1_000,
+          occupancy: adults2,
+          taxInclusion: { mode: 'rules', includedRuleCodes: ['SC', 'TGST', 'GREEN12'] },
+        }),
         { classification: RESORT },
       ),
     ).toThrow(/smaller than the fixed taxes/);
@@ -124,15 +163,27 @@ describe('tax engine — compounding and rounding', () => {
     ).toThrow(/Include both or neither/);
   });
 
-  it('mirrors negative (correction) lines exactly', () => {
+  it('mirrors reversal lines exactly, levies included', () => {
     const pos = computeLine(maldivesLikeRules(), line({ amountMinor: 3_333, occupancy: adults2 }), {
       classification: RESORT,
     });
-    const neg = computeLine(maldivesLikeRules(), line({ amountMinor: -3_333, occupancy: adults2 }), {
-      classification: RESORT,
-    });
+    const neg = computeLine(
+      maldivesLikeRules(),
+      line({ amountMinor: -3_333, occupancy: adults2, adjustment: 'reversal' }),
+      { classification: RESORT },
+    );
     expect(neg.taxes.map((t) => t.amount.amountMinor)).toEqual(pos.taxes.map((t) => -t.amount.amountMinor));
     expect(neg.gross.amountMinor).toBe(-pos.gross.amountMinor);
+  });
+
+  it('a price adjustment (rebate) never touches per-guest levies (R-15)', () => {
+    const rebate = computeLine(maldivesLikeRules(), line({ amountMinor: -5_000, occupancy: adults2 }), {
+      classification: RESORT,
+    });
+    expect(rebate.taxes.map((t) => [t.ruleCode, t.amount.amountMinor])).toEqual([
+      ['SC', -500],
+      ['TGST', -935],
+    ]);
   });
 
   it('keeps Green Tax on complimentary (zero-price) nights', () => {
@@ -231,14 +282,14 @@ describe('tax engine — time of supply (Maldives TGST: earlier of invoice or pa
     const l = line({ amountMinor: 10_000, serviceDate: '2025-07-10', occupancy: adults2 });
     const paidEarly = computeLine(tosRules(), l, {
       classification: RESORT,
-      paymentDate: '2025-06-15',
+      fullPaymentDate: '2025-06-15',
       invoiceDate: '2025-07-11',
     });
     expect(tgst(paidEarly)?.amount.amountMinor).toBe(1_760);
     expect(tgst(paidEarly)?.taxPointDate).toBe('2025-06-15');
     const invoicedFirst = computeLine(tosRules(), l, {
       classification: RESORT,
-      paymentDate: '2025-07-12',
+      fullPaymentDate: '2025-07-12',
       invoiceDate: '2025-07-02',
     });
     expect(tgst(invoicedFirst)?.amount.amountMinor).toBe(1_870);
@@ -252,7 +303,54 @@ describe('tax engine — time of supply (Maldives TGST: earlier of invoice or pa
         classification: RESORT,
       },
     );
-    expect(tgst(r)?.taxPointDate).toBe('2025-07-10');
+    expect(tgst(r)).toMatchObject({ taxPointDate: '2025-07-10', estimated: true });
+    // With an expected invoice date (e.g. check-out after a rate change) the estimate uses it (R-16).
+    const atCheckout = computeLine(
+      tosRules(),
+      line({ amountMinor: 10_000, serviceDate: '2025-06-29', occupancy: adults2 }),
+      { classification: RESORT, expectedInvoiceDate: '2025-07-02' },
+    );
+    expect(tgst(atCheckout)).toMatchObject({
+      ratePercent: '17',
+      taxPointDate: '2025-07-02',
+      estimated: true,
+    });
+    expect(atCheckout.taxes.find((t) => t.ruleCode === 'GREEN12')?.estimated).toBe(false);
+  });
+
+  it('splits a line at fixed tax points: TGST per part, Green Tax ONCE for the line (R-08)', () => {
+    const night = line({
+      amountMinor: 100_000,
+      serviceDate: '2025-07-10',
+      occupancy: { adults: 2, childrenAges: [1, 5] },
+      taxPointSplits: [{ amountMinor: 30_000, taxPointDate: '2025-06-20' }],
+    });
+    const r = computeLine(tosRules(), night, { classification: RESORT, invoiceDate: '2025-07-11' });
+    const tg = r.taxes.filter((t) => t.ruleCode === 'TGST');
+    expect(tg.map((t) => [t.ratePercent, t.taxPointDate, t.base?.amountMinor])).toEqual([
+      ['16', '2025-06-20', 33_000],
+      ['17', '2025-07-11', 77_000],
+    ]);
+    const green = r.taxes.filter((t) => t.ruleCode === 'GREEN12');
+    expect(green).toHaveLength(1);
+    // The fixture rule has no child exemption: 4 guests (the MV pack exempts under-2s).
+    expect(green[0]).toMatchObject({
+      amount: { amountMinor: 4_800 },
+      quantity: { persons: 4, exemptPersons: 0 },
+    });
+    expect(r.net.amountMinor).toBe(100_000);
+    expect(r.gross.amountMinor).toBe(
+      r.net.amountMinor + r.taxes.reduce((s, t) => s + t.amount.amountMinor, 0),
+    );
+    expect(() =>
+      computeLine(
+        tosRules(),
+        { ...night, taxPointSplits: [{ amountMinor: 200_000, taxPointDate: '2025-06-20' }] },
+        {
+          classification: RESORT,
+        },
+      ),
+    ).toThrow(/must not exceed/);
   });
 
   it('never re-taxes an amount whose tax point is already fixed (a deposit taxed at payment)', () => {
@@ -628,5 +726,112 @@ describe('tax engine — determinism, ordering and totals', () => {
         },
       ),
     ).toThrow(/unique/);
+  });
+});
+
+describe('tax engine — commercial rules, levies and evidence', () => {
+  const rulesWithScChange = () => {
+    const rules = maldivesLikeRules();
+    const sc = rules.find((r) => r.rule.code === 'SC');
+    if (!sc) throw new Error('fixture');
+    const v10 = { ...(sc.versions[0] as (typeof sc.versions)[number]), effectiveTo: '2027-01-01' };
+    const v12 = {
+      ...v10,
+      id: '00000000-0000-7000-8000-0000000c0012',
+      effectiveFrom: '2027-01-01',
+      effectiveTo: null,
+      definition: { ...v10.definition, ratePercent: '12' },
+    };
+    return { rules: rules.map((r) => (r === sc ? { ...sc, versions: [v10, v12] } : r)), v10, v12 };
+  };
+
+  it('posts hotel-set fees at the AGREED version; later versions apply only outside an agreement (R-01)', () => {
+    const { rules, v10 } = rulesWithScChange();
+    const agreed = computeLine(
+      rules,
+      line({
+        amountMinor: 10_000,
+        serviceDate: '2027-02-01',
+        occupancy: adults2,
+        agreedRuleVersionIds: [v10.id],
+      }),
+      { classification: RESORT },
+    );
+    expect(agreed.taxes.find((t) => t.ruleCode === 'SC')).toMatchObject({
+      ratePercent: '10',
+      nature: 'commercial',
+    });
+    expect(agreed.taxes.find((t) => t.ruleCode === 'TGST')?.base?.amountMinor).toBe(11_000);
+    const walkIn = computeLine(
+      rules,
+      line({ amountMinor: 10_000, serviceDate: '2027-02-01', occupancy: adults2 }),
+      {
+        classification: RESORT,
+      },
+    );
+    expect(walkIn.taxes.find((t) => t.ruleCode === 'SC')?.ratePercent).toBe('12');
+    // An agreement made before a fee existed does not acquire it.
+    const noFee = computeLine(
+      rules,
+      line({ amountMinor: 10_000, serviceDate: '2027-02-01', occupancy: adults2, agreedRuleVersionIds: [] }),
+      { classification: RESORT },
+    );
+    expect(noFee.taxes.find((t) => t.ruleCode === 'SC')).toBeUndefined();
+  });
+
+  it('levy-only lines charge per-guest levies alone; quantity rules carry no base but quantity and amount', () => {
+    const r = computeLine(
+      maldivesLikeRules(),
+      line({ amountMinor: 0, occupancy: adults2, nights: 2, levyOnly: true }),
+      { classification: RESORT },
+    );
+    expect(r.taxes).toHaveLength(1);
+    expect(r.taxes[0]).toMatchObject({
+      ruleCode: 'GREEN12',
+      basis: 'per_person_night',
+      base: null,
+      fixedAmount: { value: '12.00', currency: 'USD' },
+      quantity: { persons: 2, exemptPersons: 0, nights: 2 },
+      amount: { amountMinor: 4_800 },
+    });
+    const reversal = computeLine(
+      maldivesLikeRules(),
+      line({ amountMinor: 0, occupancy: adults2, nights: 1, levyOnly: true, adjustment: 'reversal' }),
+      { classification: RESORT },
+    );
+    expect(reversal.taxes[0]?.amount.amountMinor).toBe(-2_400);
+  });
+
+  it('counts Green Tax days in 24-hour blocks from actual check-in; the check-out block counts at ≥ 12 h (R-09)', () => {
+    const at = (s: string) => new Date(s);
+    // 3 nights, standard times 14:00 → 12:00: 2 full blocks + 22 h → 3 days.
+    expect(levyDays(at('2026-12-01T09:00:00Z'), at('2026-12-04T07:00:00Z')).days).toBe(3);
+    // Arrival after midnight (02:00) for a 3-night booking, check-out 12:00: 3 blocks + 10 h → 3 days.
+    expect(levyDays(at('2026-12-01T21:00:00Z'), at('2026-12-05T07:00:00Z'))).toMatchObject({
+      days: 3,
+      lastBlockHours: 10,
+    });
+    // Late check-out 20:00 after a 14:00 arrival: 3 blocks + 6 h → 3 days; at 02:00 next day (12 h) → 4 days.
+    expect(levyDays(at('2026-12-01T09:00:00Z'), at('2026-12-04T15:00:00Z')).days).toBe(3);
+    expect(levyDays(at('2026-12-01T09:00:00Z'), at('2026-12-04T21:00:00Z')).days).toBe(4);
+    expect(() => levyDays(at('2026-12-02T00:00:00Z'), at('2026-12-01T00:00:00Z'))).toThrow(/after check-in/);
+  });
+
+  it('records the exchange rate used for fixed foreign amounts and refuses a rate for another date (R-17)', () => {
+    const l = line({ amountMinor: 154_200, currency: 'MVR', occupancy: adults2, serviceDate: '2026-12-01' });
+    const r = computeLine(maldivesLikeRules(), l, {
+      classification: RESORT,
+      fxRates: [{ from: 'USD', to: 'MVR', rate: '15.42', source: 'MMA', asOf: '2026-12-01' }],
+    });
+    expect(r.taxes.find((t) => t.ruleCode === 'GREEN12')).toMatchObject({
+      fx: { from: 'USD', to: 'MVR', rate: '15.42', source: 'MMA', asOf: '2026-12-01' },
+      fixedAmount: { value: '12.00', currency: 'USD' },
+    });
+    expect(() =>
+      computeLine(maldivesLikeRules(), l, {
+        classification: RESORT,
+        fxRates: [{ from: 'USD', to: 'MVR', rate: '15.42', source: 'MMA', asOf: '2026-11-01' }],
+      }),
+    ).toThrow(/for its tax point 2026-12-01/);
   });
 });

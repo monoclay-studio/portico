@@ -8,6 +8,9 @@ import { platform, platformManifest } from '@portico/platform';
 import { createTestDatabase, type TestDatabase, testContext } from '@portico/testing';
 import { type RatesPorts, type RatesService, ratesManifest, ratesService } from '../src';
 
+/** Test-only seal key (never a production key). */
+export const TEST_SEAL_KEY = Buffer.from('rates-integration-test-seal-key').toString('base64');
+
 export async function startDb(): Promise<TestDatabase> {
   return createTestDatabase(sourcesFromManifests([platformManifest, ratesManifest]));
 }
@@ -90,7 +93,7 @@ export async function newOrg(
     }),
   );
   const ports = platformPorts(opts.ports);
-  const rates = ratesService(ports);
+  const rates = ratesService(ports, { termsSealKey: TEST_SEAL_KEY });
   const addProperty = async (
     code: string,
     classification?: Record<string, string | number | boolean>,

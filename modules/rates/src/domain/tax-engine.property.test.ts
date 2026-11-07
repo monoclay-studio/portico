@@ -123,7 +123,11 @@ describe('tax engine properties over random inputs', () => {
       const excl = computeLine(rules, line({ amountMinor: net, occupancy }), { classification: {} });
       const incl = computeLine(
         rules,
-        line({ amountMinor: excl.gross.amountMinor, occupancy, taxInclusion: { mode: 'inclusive' } }),
+        line({
+          amountMinor: excl.gross.amountMinor,
+          occupancy,
+          taxInclusion: { mode: 'rules', includedRuleCodes: rules.map((r) => r.rule.code) },
+        }),
         {
           classification: {},
         },

@@ -117,6 +117,13 @@ function validateDerivation(
       'parent_plan_not_found',
       'The parent rate plan does not exist at this property.',
     );
+  const self = plans.find((p) => p.id === planId);
+  if (self && self.status !== 'draft' && parent.status !== 'active') {
+    throw new DerivationError(
+      'parent_plan_not_active',
+      `A sellable plan can only derive from an active plan; ${parent.code} is ${parent.status}. Activate it first.`,
+    );
+  }
   if (parent.status === 'retired')
     throw new DerivationError(
       'parent_plan_retired',
@@ -328,6 +335,8 @@ export async function changeRatePlanStatus(
   if (!beforeRow) throw new NotFoundError('rate_plan', id);
   const before = toRatePlan(beforeRow);
   await guardConfigWrite(ports, tx, before.propertyId, 'rates.ratePlan.manage');
+  // Status changes read the whole plan graph (parents, derived plans): serialize with graph edits (R-21).
+  await lockPlanGraph(tx, before.propertyId);
   if (!TRANSITIONS[before.status]?.includes(status)) {
     throw new BusinessRuleError(
       'invalid_status_change',

@@ -50,7 +50,7 @@ describe('restrictions', () => {
       departure: '2026-12-23',
       bookingDate: '2026-11-07',
       effective: eff,
-      sold: new Map([['2026-12-22', 2]]),
+      soldFor: (date) => (date === '2026-12-22' ? 2 : 0),
     });
     expect(v.map((x) => [x.kind, x.date])).toEqual([
       ['closed_to_arrival', '2026-12-20'],
@@ -62,7 +62,9 @@ describe('restrictions', () => {
       ['closed_to_departure', '2026-12-23'],
     ]);
     expect(v.find((x) => x.kind === 'min_los')?.message).toMatch(/at least 5 nights; this stay has 3/);
-    expect(v.every((x) => x.overridable)).toBe(true);
+    // Restriction violations are overridable by staff — except sales limits (the ledger refuses the sale anyway).
+    expect(v.filter((x) => x.kind !== 'sales_limit').every((x) => x.overridable)).toBe(true);
+    expect(v.find((x) => x.kind === 'sales_limit')?.overridable).toBe(false);
     // Another unit type is not affected by the villa-specific row (only the all-types CTD applies).
     const room = evaluateRestrictions({
       arrival: '2026-12-22',
@@ -193,6 +195,7 @@ describe('inclusions and allowances', () => {
   const base = {
     version: 1,
     fulfilmentOutlets: [],
+    outletKind: null,
     allowance: null,
   };
   it('allocates included components from night prices, adds others, and builds allowance entitlements', () => {

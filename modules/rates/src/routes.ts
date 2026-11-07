@@ -1,14 +1,16 @@
 import { type PorticoDatabase, runIdempotent, withTenantTx } from '@portico/db';
 import { type HttpModule, idParams, requireIdempotencyKey, requireIfMatch, setVersion } from '@portico/http';
-import { requirePermission } from '@portico/kernel';
+import { requirePermission, ValidationError } from '@portico/kernel';
 import { z } from 'zod';
 import {
   calendarQuery,
   computeTaxesInput,
+  effectiveRestrictionDay,
   inclusion,
   inclusionInput,
   packageInput,
   packageUpdate,
+  penaltyEvaluation,
   pkg,
   policy,
   policyInput,
@@ -17,6 +19,7 @@ import {
   priceCell,
   priceChangeRequest,
   priceHistoryEntry,
+  priceOverrideRequest,
   pricePreview,
   promotion,
   promotionInput,
@@ -34,12 +37,14 @@ import {
   restrictionCell,
   restrictionPreview,
   restrictionQuery,
+  rulePackStatus,
   taxComputation,
   taxRuleActivation,
   taxRuleInput,
   taxRuleRecord,
   taxRuleVersionInput,
   taxTemplateInstall,
+  termsSnapshot,
 } from './contracts';
 import type { RatesService } from './service';
 
@@ -182,6 +187,7 @@ export function ratesHttp(deps: { database: PorticoDatabase; rates: RatesService
             tags: tags.calendar,
             params: idParams,
             querystring: z.object({ unitTypeId: z.uuid(), from: z.iso.date(), to: z.iso.date() }),
+            response: { 200: z.object({ items: z.array(effectiveRestrictionDay) }) },
           },
         },
         async (req) => ({
@@ -351,7 +357,25 @@ export function ratesHttp(deps: { database: PorticoDatabase; rates: RatesService
       );
       app.get(
         '/rate-policies/:id/versions',
-        { schema: { tags: tags.catalog, params: idParams } },
+        {
+          schema: {
+            tags: tags.catalog,
+            params: idParams,
+            response: {
+              200: z.object({
+                items: z.array(
+                  z.object({
+                    version: z.number().int(),
+                    name: z.string(),
+                    structure: z.unknown(),
+                    changed_at: z.date(),
+                    changed_by: z.string(),
+                  }),
+                ),
+              }),
+            },
+          },
+        },
         async (req) => ({
           items: await tx(req, (t) => rates.policyVersionHistory(t, req.params.id)),
         }),
@@ -398,6 +422,7 @@ export function ratesHttp(deps: { database: PorticoDatabase; rates: RatesService
               body: rates.taxRuleRecord(t, await rates.createTaxRule(t, req.body)),
             }),
           );
+          setVersion(reply, res.body.version);
           return reply.status(201).send(res.body);
         },
       );
@@ -508,6 +533,58 @@ export function ratesHttp(deps: { database: PorticoDatabase; rates: RatesService
         '/quotes/reprice',
         { schema: { tags: tags.quotes, body: priceChangeRequest, response: { 200: repricingResult } } },
         async (req) => tx(req, (t) => rates.priceChange(t, req.body)),
+      );
+
+      // ───────────── Agreed terms: overrides and penalties ─────────────
+      app.post(
+        '/terms/price-override',
+        { schema: { tags: tags.quotes, body: priceOverrideRequest, response: { 200: termsSnapshot } } },
+        async (req) => tx(req, (t) => rates.overridePrice(t, req.body)),
+      );
+      app.post(
+        '/terms/penalty',
+        {
+          schema: {
+            tags: tags.quotes,
+            body: z.object({
+              terms: termsSnapshot,
+              at: z.iso.datetime({ offset: true }).optional(),
+              event: z.enum(['cancellation', 'no_show', 'early_departure']).optional(),
+              nights: z.array(z.iso.date()).optional(),
+            }),
+            response: { 200: penaltyEvaluation },
+          },
+        },
+        async (req) =>
+          tx(req, async (t) => {
+            requirePermission(t, 'rates.quote.read', { propertyId: req.body.terms.propertyId });
+            if (!rates.verifyTerms(req.body.terms)) {
+              throw new ValidationError(
+                'terms_seal_invalid',
+                'These agreed terms do not carry a valid Portico seal. Load them again from the booking.',
+              );
+            }
+            const at = req.body.at ? new Date(req.body.at) : t.now;
+            return rates.evaluateCancellationPenalty(req.body.terms, at, {
+              ...(req.body.event ? { event: req.body.event } : {}),
+              ...(req.body.nights ? { nights: req.body.nights } : {}),
+            });
+          }),
+      );
+      app.get(
+        '/tax-rule-packs/:propertyId',
+        {
+          schema: {
+            tags: tags.tax,
+            params: z.object({ propertyId: z.uuid() }),
+            response: { 200: rulePackStatus },
+          },
+        },
+        async (req) =>
+          tx(req, async (t) => {
+            requirePermission(t, 'rates.quote.read', { propertyId: req.params.propertyId });
+            return rates.getRulePackStatus(t, req.params.propertyId);
+          }),
       );
     },
   };

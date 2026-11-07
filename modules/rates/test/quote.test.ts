@@ -1,7 +1,7 @@
 import { newId } from '@portico/kernel';
 import type { TestDatabase } from '@portico/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { type Offer, seedGuesthouseRates, seedResortRates, termsSnapshot, verifyTerms } from '../src';
+import { type Offer, seedGuesthouseRates, seedResortRates, termsSnapshot } from '../src';
 import { newOrg, type Org, startDb, sum, unitTypes } from './harness';
 
 let t: TestDatabase;
@@ -62,7 +62,8 @@ describe('quote engine — Maldives resort', () => {
       ['ROOM', 'ROOM', 83_000],
       ['BRKF', 'FB_BREAKFAST', 7_000],
     ]);
-    expect(bar.taxesAndFees.map((x) => x.ruleCode)).toEqual(['MV-SC', 'MV-TGST', 'MV-GREEN-12']);
+    expect(bar.taxSummary.map((x) => x.ruleCode)).toEqual(['MV-SC', 'MV-TGST', 'MV-GREEN-12']);
+    expect(bar.taxesAndFees.every((x) => x.lineId.startsWith('n:'))).toBe(true);
     const t0 = bar.totals;
     expect(t0.net.amountMinor).toBe(270_000);
     expect(t0.net.amountMinor + t0.taxes.amountMinor + t0.fees.amountMinor).toBe(t0.gross.amountMinor);
@@ -81,7 +82,7 @@ describe('quote engine — Maldives resort', () => {
     expect(nr.policies.cancellation?.code).toBe('NONREF');
     expect(nr.policies.deposit?.schedule[0]?.amount.amountMinor).toBe(nr.totals.gross.amountMinor);
     // Agreed terms are sealed and survive the JSON/schema round trip reservations will do.
-    expect(verifyTerms(termsSnapshot.parse(JSON.parse(JSON.stringify(bar.terms))))).toBe(true);
+    expect(o.rates.verifyTerms(termsSnapshot.parse(JSON.parse(JSON.stringify(bar.terms))))).toBe(true);
     expect(bar.terms.configVector).toBe(res.configVector);
   });
 
@@ -316,9 +317,9 @@ describe('quote engine — Maldives guesthouse', () => {
     expect(hb.nightly[0]?.amount.amountMinor).toBe(10_500);
     expect(bb.mealPlan).toBe('BB');
     expect(hb.nightly[0]?.components.map((c) => c.code)).toEqual(['ROOM', 'BRKF', 'DINNER']);
-    const green = bb.taxesAndFees.find((x) => x.ruleCode === 'MV-GREEN-6');
+    const green = bb.taxSummary.find((x) => x.ruleCode === 'MV-GREEN-6');
     expect(green?.amount.amountMinor).toBe(3 * 3 * 600); // 3 nights × (2 adults + 7-year-old); infant exempt
-    expect(bb.taxesAndFees.find((x) => x.ruleCode === 'MV-GREEN-12')).toBeUndefined();
+    expect(bb.taxSummary.find((x) => x.ruleCode === 'MV-GREEN-12')).toBeUndefined();
   });
 });
 
@@ -344,7 +345,7 @@ describe('change previews (scenario S03: extension reprices only new nights)', (
     const preview = await o.run((tx, r) =>
       r.priceChange(tx, { terms: offer.terms, change: { nights: { from: '2027-02-10', to: '2027-02-15' } } }),
     );
-    expect(preview.nights.map((n) => [n.date, n.source, n.after?.amountMinor])).toEqual([
+    expect(preview.nightly.map((n) => [n.date, n.source, n.after?.amountMinor])).toEqual([
       ['2027-02-10', 'agreed', 90_000],
       ['2027-02-11', 'agreed', 90_000],
       ['2027-02-12', 'agreed', 90_000],
@@ -353,7 +354,7 @@ describe('change previews (scenario S03: extension reprices only new nights)', (
     ]);
     expect(preview.violations).toEqual([]);
     expect(preview.after.net.amountMinor).toBe(3 * 90_000 + 2 * 108_000);
-    expect(preview.candidateTerms.supersedesHash).toBe(offer.terms.hash);
+    expect(preview.terms.supersedesSeal).toBe(offer.terms.seal);
     expect(preview.difference.amountMinor).toBe(
       preview.after.gross.amountMinor - offer.totals.gross.amountMinor,
     );
@@ -363,7 +364,7 @@ describe('change previews (scenario S03: extension reprices only new nights)', (
       nights: offer.terms.nights.map((n) => ({ ...n, amount: { ...n.amount, amountMinor: 1 } })),
     };
     await expect(o.run((tx, r) => r.priceChange(tx, { terms: tampered, change: {} }))).rejects.toThrow(
-      /do not match their hash/,
+      /valid Portico seal/,
     );
   });
 });

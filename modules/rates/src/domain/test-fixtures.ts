@@ -22,6 +22,7 @@ export function rule(
       id: fakeUuid(),
       name: header.code,
       category: 'tax',
+      nature: 'statutory',
       taxPointPolicy: 'service_date',
       ledgerMappingKey: `tax.${header.code.toLowerCase()}`,
       sequence: 100,
@@ -56,7 +57,7 @@ export function line(
 /** Maldives-shaped test rules: service charge 10% (fee), TGST 16%→17% on net + SC, Green Tax 12/6 USD. */
 export function maldivesLikeRules(): LoadedTaxRule[] {
   return [
-    rule({ code: 'SC', category: 'fee', sequence: 10 }, [
+    rule({ code: 'SC', category: 'fee', nature: 'commercial', sequence: 10 }, [
       {
         def: {
           kind: 'percentage',

@@ -23,6 +23,7 @@ import type {
   PromotionDiscount,
   PromotionEffect,
   TaxInclusion,
+  TaxLine,
   TaxSummaryLine,
   TermsSnapshot,
   Totals,
@@ -40,7 +41,7 @@ import {
 import { type ChildAgeBand, type DerivationStep, priceForOccupancy, resolveDerivedParams } from './pricing';
 import { applyPromotions, type PromotionCandidate, type PromotionContext } from './promotions';
 import { type Classification, computeTaxesPure, type LoadedTaxRule } from './tax-engine';
-import { sealTerms } from './terms-hash';
+import { sealTerms } from './terms-seal';
 
 export interface PropertyContext {
   id: string;
@@ -174,7 +175,20 @@ export function priceNights(input: {
       });
       continue;
     }
-    const params = resolveDerivedParams(root, input.steps, input.unitTypeId);
+    const flags = { belowZero: false };
+    const params = resolveDerivedParams(root, input.steps, input.unitTypeId, flags);
+    if (flags.belowZero) {
+      violations.push({
+        kind: 'derived_price_below_zero',
+        date,
+        message: `The derivation makes the price for ${date} negative. Raise the parent price, reduce the adjustment or set a floor.`,
+        required: null,
+        actual: null,
+        overridable: false,
+        source: { ratePlanId: input.ratePlanId, unitTypeId: input.unitTypeId },
+      });
+      continue;
+    }
     const r = priceForOccupancy(params, input.occupancy, input.bands);
     if (!r.ok) {
       violations.push({
@@ -230,13 +244,18 @@ export interface AssembleInput {
   }>;
   policies: PlanPolicies;
   taxRules: readonly LoadedTaxRule[];
+  /** An agreement continues: hotel-set (commercial) rules stay on these versions. */
+  agreedRuleVersionIds?: readonly string[] | undefined;
   meta: {
     quoteId: string;
     quotedAt: string;
     configVector: string;
     priceSource: TermsSnapshot['priceSource'];
     restrictionOverride: TermsSnapshot['restrictionOverride'];
-    supersedesHash: string | null;
+    priceOverride?: TermsSnapshot['priceOverride'];
+    supersedesSeal: string | null;
+    /** Server key for the HMAC seal (never part of the snapshot). */
+    sealKey: string;
   };
 }
 
@@ -245,7 +264,8 @@ export interface Assembled {
   added: AddedComponent[];
   allowances: AllowanceEntitlement[];
   includedInclusions: Offer['inclusions']['included'];
-  taxesAndFees: TaxSummaryLine[];
+  taxesAndFees: TaxLine[];
+  taxSummary: TaxSummaryLine[];
   totals: Totals;
   policies: OfferPolicies;
   commission: TermsSnapshot['commission'];
@@ -289,6 +309,7 @@ export function assemble(input: AssembleInput): Assembled {
         code: 'ROOM',
         chargeCode: input.plan.roomChargeCode,
         taxCategory: 'accommodation',
+        outletKind: null,
         amount: m(n.amountMinor - allocated, cur),
       },
       ...included.map((o) => ({
@@ -298,6 +319,7 @@ export function assemble(input: AssembleInput): Assembled {
         code: o.inclusion.code,
         chargeCode: o.inclusion.chargeCode,
         taxCategory: o.inclusion.taxCategory,
+        outletKind: o.inclusion.outletKind,
         amount: m(o.amountMinor, cur),
       })),
     ];
@@ -316,6 +338,9 @@ export function assemble(input: AssembleInput): Assembled {
         units: 1,
         occupancy: occ,
         nightIndex: nightIndex.get(n.date) ?? 0,
+        ...(c.outletKind ? { outletKind: c.outletKind } : {}),
+        ...(input.agreedRuleVersionIds ? { agreedRuleVersionIds: [...input.agreedRuleVersionIds] } : {}),
+        levyOnly: false,
       });
     }
   }
@@ -335,6 +360,9 @@ export function assemble(input: AssembleInput): Assembled {
       units: 1,
       occupancy: occ,
       nightIndex: nightIndex.get(o.nightDate) ?? 0,
+      ...(o.inclusion.outletKind ? { outletKind: o.inclusion.outletKind } : {}),
+      ...(input.agreedRuleVersionIds ? { agreedRuleVersionIds: [...input.agreedRuleVersionIds] } : {}),
+      levyOnly: false,
     });
   });
 
@@ -344,6 +372,9 @@ export function assemble(input: AssembleInput): Assembled {
           classification: input.property.classification,
           occupancy: input.occupancy,
           stayContext: { stayNights, arrival: input.arrival, bookingDate: input.bookingDate },
+          // Quotes have no invoice or payment yet: estimate the time of supply with the departure (check-out
+          // invoice). Estimated tax lines are flagged; deposits fix their part at payment (taxPointSplits).
+          expectedInvoiceDate: input.departure,
         })
       : null;
   const byLine = new Map((tax?.lines ?? []).map((l) => [l.lineId, l]));
@@ -398,13 +429,16 @@ export function assemble(input: AssembleInput): Assembled {
       s.amount = m(s.amount.amountMinor + t.amount.amountMinor, cur);
       if (!s.ruleVersionIds.includes(t.ruleVersionId)) s.ruleVersionIds.push(t.ruleVersionId);
       s.inclusive = s.inclusive || t.inclusive;
-      if (t.verificationStatus === 'unverified') s.verificationStatus = 'unverified';
+      if (t.verificationStatus !== 'verified' && s.verificationStatus === 'verified')
+        s.verificationStatus = t.verificationStatus;
     } else {
       summary.set(t.ruleId, {
         ruleId: t.ruleId,
         ruleCode: t.ruleCode,
         ruleName: t.ruleName,
         category: t.category,
+        nature: t.nature,
+        basis: t.basis,
         inclusive: t.inclusive,
         ruleVersionIds: [t.ruleVersionId],
         amount: t.amount,
@@ -412,7 +446,11 @@ export function assemble(input: AssembleInput): Assembled {
       });
     }
   }
-  const taxesAndFees = [...summary.values()];
+  const taxSummary = [...summary.values()];
+  const allTaxLines = (tax?.lines ?? []).flatMap((l) => l.taxes);
+  const commercialRuleVersionIds = [
+    ...new Set(allTaxLines.filter((t) => t.nature === 'commercial').map((t) => t.ruleVersionId)),
+  ].sort();
 
   const timing = {
     arrival: input.arrival,
@@ -475,14 +513,24 @@ export function assemble(input: AssembleInput): Assembled {
     const pct = c.percent
       ? new Decimal(base).mul(c.percent).div(100).toDecimalPlaces(0, Decimal.ROUND_HALF_UP).toNumber()
       : 0;
-    commission = { ...c, amount: m(pct + (c.amountPerNightMinor ?? 0) * nights.length, cur) };
+    commission =
+      c.model === 'net'
+        ? // Net (contracted) rate: the agency collects from the guest; the hotel invoices the agency the agreed
+          // net price plus taxes. There is no commission.
+          { ...c, amount: m(0, cur), agencyCollects: true, invoiceable: totals.gross }
+        : {
+            ...c,
+            amount: m(pct + (c.amountPerNightMinor ?? 0) * nights.length, cur),
+            agencyCollects: false,
+            invoiceable: totals.gross,
+          };
   }
 
   const includedInclusions = input.inclusions
     .filter((i) => i.priceMode === 'included')
     .map((i) => ({ inclusionId: i.id, code: i.code, name: i.name, priceMode: i.priceMode }));
 
-  const terms = sealTerms({
+  const terms = sealTerms(input.meta.sealKey, {
     schemaVersion: TERMS_SCHEMA_VERSION,
     kind: 'portico.rates.terms',
     quoteId: input.meta.quoteId,
@@ -525,6 +573,7 @@ export function assemble(input: AssembleInput): Assembled {
       rhythm: i.rhythm,
       priceMode: i.priceMode,
       fulfilmentOutlets: [...i.fulfilmentOutlets],
+      outletKind: i.outletKind,
       allowance: i.allowance,
     })),
     promotions: input.promotions.map((x) => ({
@@ -536,10 +585,11 @@ export function assemble(input: AssembleInput): Assembled {
     })),
     policies,
     commission,
-    taxes: { summary: taxesAndFees, ruleVersionIds: tax?.ruleVersionIds ?? [] },
+    taxes: { summary: taxSummary, ruleVersionIds: tax?.ruleVersionIds ?? [], commercialRuleVersionIds },
     totals,
     restrictionOverride: input.meta.restrictionOverride,
-    supersedesHash: input.meta.supersedesHash,
+    priceOverride: input.meta.priceOverride ?? null,
+    supersedesSeal: input.meta.supersedesSeal,
   });
 
   return {
@@ -547,13 +597,14 @@ export function assemble(input: AssembleInput): Assembled {
     added,
     allowances: inc.allowances,
     includedInclusions,
-    taxesAndFees,
+    taxesAndFees: allTaxLines,
+    taxSummary,
     totals,
     policies,
     commission,
     violations: inc.violations,
     unverifiedTaxRules: [
-      ...new Set(taxesAndFees.filter((t) => t.verificationStatus !== 'verified').map((t) => t.ruleCode)),
+      ...new Set(taxSummary.filter((t) => t.verificationStatus !== 'verified').map((t) => t.ruleCode)),
     ],
     terms,
   };
@@ -578,6 +629,7 @@ export function toOffer(
     nightly: a.nightly,
     inclusions: { included: a.includedInclusions, added: a.added, allowances: a.allowances },
     taxesAndFees: a.taxesAndFees,
+    taxSummary: a.taxSummary,
     totals: a.totals,
     policies: a.policies,
     commission: a.commission,

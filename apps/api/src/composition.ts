@@ -14,7 +14,14 @@ import type { Authenticator, HttpModule } from '@portico/http';
 import { type IdentityPorts, identityAuthenticator, identityHttp, identityManifest } from '@portico/identity';
 import { type ModuleManifest, systemAuthorizer } from '@portico/kernel';
 import { platform, platformHttp, platformManifest, platformSearch } from '@portico/platform';
-import { type RatesPorts, ratesHttp, ratesManifest, ratesSearch, ratesService } from '@portico/rates';
+import {
+  type RatesPorts,
+  ratesHttp,
+  ratesManifest,
+  ratesSearch,
+  ratesService,
+  termsSealKeyFromEnv,
+} from '@portico/rates';
 import { recordsHttp } from './records-routes';
 
 export const MANIFESTS: readonly ModuleManifest[] = [
@@ -63,7 +70,8 @@ export function compose(database: PorticoDatabase): Composition {
     // listUnitTypes: bind to inventory's unit-type listing when inventory merges (optional port; until then
     // unit type ids are not validated on price writes and the rates demo seed cannot run).
   };
-  const rates = ratesService(ratesPorts);
+  // Agreed terms are sealed with a server key (PORTICO_TERMS_SEAL_KEY; required in production).
+  const rates = ratesService(ratesPorts, { termsSealKey: termsSealKeyFromEnv().key });
   const ratesModule = ratesHttp({ database, rates });
 
   // ── cross-module experience: global search, summaries, record history ──

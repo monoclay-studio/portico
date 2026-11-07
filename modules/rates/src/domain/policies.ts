@@ -2,7 +2,15 @@
  * Cancellation, guarantee and deposit policies (pure, RAT-R18..R21). Deadlines are relative to arrival in the
  * PROPERTY's time zone; text is generated from the structure (never free text alone).
  */
-import { addDays, currencyExponent, Decimal, type LocalDate, toMajor } from '@portico/kernel';
+import {
+  addDays,
+  currencyExponent,
+  Decimal,
+  instantToZoned,
+  type LocalDate,
+  toMajor,
+  zonedTimeToInstant,
+} from '@portico/kernel';
 import type {
   CancellationStructure,
   Deadline,
@@ -15,44 +23,15 @@ import { laterDate } from './calendar';
 
 // ───────────────────────────── Time zones ─────────────────────────────
 
-function tzOffsetMs(instant: number, timeZone: string): number {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone,
-    hourCycle: 'h23',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  }).formatToParts(new Date(instant));
-  const get = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? 0);
-  const asUtc = Date.UTC(
-    get('year'),
-    get('month') - 1,
-    get('day'),
-    get('hour') % 24,
-    get('minute'),
-    get('second'),
-  );
-  return asUtc - Math.floor(instant / 1000) * 1000;
-}
-
-/** The instant at which the wall-clock `date time` occurs in `timeZone` (DST-safe for existing times). */
+/** The instant at which the wall-clock `date time` occurs in `timeZone` (kernel helper, DST-safe). */
 export function zonedInstant(date: LocalDate, time: string, timeZone: string): Date {
-  const [y, m, d] = date.split('-').map(Number) as [number, number, number];
-  const [hh, mm] = time.split(':').map(Number) as [number, number];
-  const guess = Date.UTC(y, m - 1, d, hh, mm);
-  let result = guess - tzOffsetMs(guess, timeZone);
-  const second = guess - tzOffsetMs(result, timeZone);
-  if (second !== result) result = second;
-  return new Date(result);
+  return zonedTimeToInstant(date, time, timeZone);
 }
 
 /** Wall-clock 'YYYY-MM-DD HH:MM' of an instant in a time zone. */
 export function formatLocal(instant: Date, timeZone: string): string {
-  const off = tzOffsetMs(instant.getTime(), timeZone);
-  return new Date(instant.getTime() + off).toISOString().slice(0, 16).replace('T', ' ');
+  const z = instantToZoned(instant, timeZone);
+  return `${z.date} ${z.time}`;
 }
 
 export function formatAmount(amountMinor: number, currency: string): string {

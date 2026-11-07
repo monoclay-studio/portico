@@ -20,6 +20,14 @@ export const decimalString = z
 export const nonNegativeDecimal = z
   .string()
   .regex(/^\d{1,12}(\.\d{1,8})?$/, 'Use a non-negative decimal number written as text, such as "17"');
+/** A percentage 0–100 written as text (bounded so prices, penalties and allocations never go negative). */
+export const percent0to100 = nonNegativeDecimal.refine((v) => Number(v) <= 100, {
+  message: 'A percentage must be between 0 and 100.',
+});
+/** A signed percentage adjustment ≥ −100 (a −100% derivation is free; never below zero). */
+export const percentAdjustment = decimalString.refine((v) => Number(v) >= -100, {
+  message: 'A percentage reduction cannot exceed 100%.',
+});
 /** A fixed amount in MAJOR units of a currency (e.g. Green Tax "12.00" USD). Converted exactly to minor units. */
 export const fixedAmount = z.object({ value: nonNegativeDecimal, currency: currencyCode });
 export type FixedAmount = z.infer<typeof fixedAmount>;
@@ -72,7 +80,7 @@ export type ClassificationPredicate = z.infer<typeof classificationPredicate>;
 export const taxBand = z.object({
   /** Upper bound (inclusive) of the net price per unit-night for this band; null = no upper bound. */
   upToPerUnitNight: fixedAmount.nullable(),
-  ratePercent: nonNegativeDecimal,
+  ratePercent: percent0to100,
 });
 
 export const taxExemption = z.discriminatedUnion('kind', [
@@ -86,7 +94,7 @@ export const taxRuleDefinition = z
   .object({
     kind: taxRuleKind,
     /** Percentage rules: e.g. "17" for 17%. */
-    ratePercent: nonNegativeDecimal.optional(),
+    ratePercent: percent0to100.optional(),
     /** Fixed-amount rules (per person-night, per unit-night, per stay, per charge). */
     amount: fixedAmount.optional(),
     /** Banded rules: rate switches by the net price per unit-night (e.g. India GST threshold). */
@@ -190,6 +198,12 @@ export const taxRuleInput = z.object({
   /** ISO country (e.g. MV) optionally with a subdivision (e.g. AE-DU). */
   jurisdiction: z.string().regex(/^[A-Z]{2}(-[A-Z0-9]{1,3})?$/),
   category: z.enum(['tax', 'fee']),
+  /**
+   * statutory = set by law, follows its tax point at posting (e.g. TGST, Green Tax);
+   * commercial = set by the hotel (service charge, resort fee): part of the agreement — agreed stays keep the
+   * version recorded in their terms; later versions apply only to new agreements and non-agreement charges.
+   */
+  nature: z.enum(['statutory', 'commercial']).default('statutory'),
   /** Restrict to specific properties; null = every property in the jurisdiction. */
   propertyIds: z.array(uuid).nullable().default(null),
   taxPointPolicy: taxPointPolicy.default('service_date'),
@@ -221,6 +235,7 @@ export const taxRule = z.object({
   name: z.string(),
   jurisdiction: z.string(),
   category: z.enum(['tax', 'fee']),
+  nature: z.enum(['statutory', 'commercial']),
   propertyIds: z.array(uuid).nullable(),
   taxPointPolicy,
   ledgerMappingKey: z.string(),
@@ -264,6 +279,27 @@ export const chargeLine = z.object({
   nightIndex: z.number().int().min(0).optional(),
   /** Tax point already fixed for this amount (e.g. deposit taxed at payment). Overrides each rule's policy. */
   taxPointDate: localDate.optional(),
+  /**
+   * Parts of the amount whose tax point is already fixed (e.g. a 30% deposit taxed at payment). Value-based rules
+   * are computed per part with the version in force at that part's tax point; quantity-based levies (Green Tax)
+   * are computed ONCE for the whole line. The remainder follows each rule's tax point policy.
+   */
+  taxPointSplits: z
+    .array(z.object({ amountMinor: minorAmount, taxPointDate: localDate }))
+    .max(20)
+    .optional(),
+  /**
+   * The line is posted under agreed terms: commercial rules (service charge, hotel fees) apply ONLY in these
+   * versions (TermsSnapshot.taxes.commercialRuleVersionIds). Omit for charges outside an agreement.
+   */
+  agreedRuleVersionIds: z.array(uuid).optional(),
+  /**
+   * supply (default for amount ≥ 0) · reversal (undoes a supply: every rule mirrors, per-guest levies included) ·
+   * price_adjustment (default for amount < 0: a rebate on price; per-guest levies are not touched).
+   */
+  adjustment: z.enum(['supply', 'reversal', 'price_adjustment']).optional(),
+  /** Only quantity-based levies apply (e.g. a Green Tax true-up for actual 24-hour blocks). */
+  levyOnly: z.boolean().default(false),
 });
 export type ChargeLineInput = z.input<typeof chargeLine>;
 export type ChargeLine = z.output<typeof chargeLine>;
@@ -296,10 +332,15 @@ export const computeTaxesInput = z.object({
       bookingDate: localDate.optional(),
     })
     .optional(),
-  /** Used by rules with taxPointPolicy invoice_date / time_of_supply. */
+  /** Invoice date (taxPointPolicy invoice_date / time_of_supply). */
   invoiceDate: localDate.optional(),
-  /** Used by rules with taxPointPolicy time_of_supply (earlier of invoice or payment). */
-  paymentDate: localDate.optional(),
+  /**
+   * A payment covering ALL lines of this request in full (time_of_supply). For a partial payment such as a
+   * deposit use `ChargeLine.taxPointSplits`, so only the paid part is fixed.
+   */
+  fullPaymentDate: localDate.optional(),
+  /** Estimate for quotes when neither invoice nor payment exists yet (e.g. departure). Lines are flagged `estimated`. */
+  expectedInvoiceDate: localDate.optional(),
   /** Pin exact rule versions (audit recompute): only these versions are used. */
   ruleVersionIds: z.array(uuid).optional(),
   fxRates: z.array(fxRate).default([]),
@@ -313,17 +354,33 @@ export const taxLine = z.object({
   ruleCode: z.string(),
   ruleName: z.string(),
   ruleVersionId: uuid,
+  /** tax = statutory tax or levy; fee = fee/service charge (the reporting split of totals). */
   category: z.enum(['tax', 'fee']),
-  kind: taxRuleKind,
+  /** statutory (law) or commercial (hotel-set, pinned to the agreement). */
+  nature: z.enum(['statutory', 'commercial']),
+  /**
+   * How the amount is computed. Value-based (`percentage`, `banded`) follows the price; quantity-based
+   * (`per_person_night`, `per_unit_night`, `per_stay`, `fixed_per_charge`) does not — e.g. Green Tax on a
+   * complimentary night.
+   */
+  basis: taxRuleKind,
   inclusive: z.boolean(),
-  /** For percentage rules: the base the rate applied to. For fixed rules: quantity basis. */
-  base: money,
+  /** Value-based rules: the base the rate applied to. Quantity-based: null (see quantity and fixedAmount). */
+  base: money.nullable(),
   ratePercent: z.string().nullable(),
-  quantity: z.object({ persons: z.number(), nights: z.number(), units: z.number() }).nullable(),
+  quantity: z
+    .object({ persons: z.number(), exemptPersons: z.number(), nights: z.number(), units: z.number() })
+    .nullable(),
+  /** Quantity-based rules: the per-unit amount in the rule's own currency (e.g. USD 12.00). */
+  fixedAmount: fixedAmount.nullable(),
+  /** Exchange rate used to convert `fixedAmount` into the line currency (evidence for USD reporting). */
+  fx: fxRate.nullable(),
   amount: money,
   ledgerMappingKey: z.string(),
   verificationStatus,
   taxPointDate: localDate,
+  /** True when the tax point is an estimate (no invoice or payment yet) — the amount may change at posting. */
+  estimated: z.boolean(),
 });
 export type TaxLine = z.infer<typeof taxLine>;
 
@@ -351,7 +408,7 @@ export const penalty = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('none') }),
   z.object({ kind: z.literal('first_night') }),
   z.object({ kind: z.literal('nights'), nights: z.number().int().min(1).max(366) }),
-  z.object({ kind: z.literal('percent_of_stay'), percent: nonNegativeDecimal }),
+  z.object({ kind: z.literal('percent_of_stay'), percent: percent0to100 }),
   z.object({ kind: z.literal('amount'), amountMinor: minorAmount }),
 ]);
 export type Penalty = z.infer<typeof penalty>;
@@ -386,7 +443,7 @@ export const cancellationStructure = z.object({
   noShow: penalty.default({ kind: 'first_night' }),
   earlyDeparture: penalty.default({ kind: 'none' }),
   /** Amounts penalties are computed on. */
-  basis: z.enum(['gross', 'net']).default('gross'),
+  basis: z.enum(['net_and_fees', 'gross', 'net']).default('net_and_fees'),
 });
 export type CancellationStructure = z.output<typeof cancellationStructure>;
 
@@ -404,7 +461,7 @@ export type GuaranteeStructure = z.infer<typeof guaranteeStructure>;
 export const scheduleItem = z.object({
   kind: z.enum(['deposit', 'preauthorization', 'balance']),
   amount: z.discriminatedUnion('basis', [
-    z.object({ basis: z.literal('percent'), percent: nonNegativeDecimal }),
+    z.object({ basis: z.literal('percent'), percent: percent0to100 }),
     z.object({ basis: z.literal('nights'), nights: z.number().int().min(1) }),
     z.object({ basis: z.literal('amount'), amountMinor: minorAmount }),
     z.object({ basis: z.literal('remaining') }),
@@ -487,7 +544,7 @@ export const inclusionPricing = z.discriminatedUnion('kind', [
     childBandAmountsMinor: z.record(z.string(), minorAmount).optional(),
   }),
   /** Percentage of the night price (allocation / revenue split). */
-  z.object({ kind: z.literal('percent_of_night'), percent: nonNegativeDecimal }),
+  z.object({ kind: z.literal('percent_of_night'), percent: percent0to100 }),
 ]);
 
 export const allowanceTerms = z.object({
@@ -521,6 +578,8 @@ export const inclusionInput = z
     /** included = allocated out of the night price (revenue split); added = charged on top of the price. */
     priceMode: z.enum(['included', 'added']),
     fulfilmentOutlets: z.array(z.string()).default([]),
+    /** Tax-relevant outlet kind of the fulfilling outlet (e.g. 'general_sector' outside tourism GST). */
+    outletKind: z.string().min(1).max(50).optional(),
     allowance: allowanceTerms.optional(),
   })
   .refine((i) => i.kind !== 'allowance' || i.allowance !== undefined, {
@@ -543,6 +602,7 @@ export const inclusion = z.object({
   rhythm: z.unknown(),
   priceMode: z.enum(['included', 'added']),
   fulfilmentOutlets: z.array(z.string()),
+  outletKind: z.string().nullable(),
   allowance: z.unknown().nullable(),
   status: z.enum(['active', 'retired']),
   version: z.number().int(),
@@ -581,7 +641,7 @@ export const pkg = z.object({
 // ───────────────────────────── Promotions ─────────────────────────────
 
 export const promotionDiscount = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('percent'), percent: nonNegativeDecimal }),
+  z.object({ kind: z.literal('percent'), percent: percent0to100 }),
   z.object({ kind: z.literal('amount_per_night'), amountMinor: minorAmount }),
   /** "Stay N pay M": for every `stayNights` nights, `freeNights` are free (repeats). */
   z.object({
@@ -660,9 +720,11 @@ export const RESTRICTION_KINDS = restrictionKind.options;
 
 export const adjustment = z.discriminatedUnion('kind', [
   /** e.g. "-10" for 10% below the parent. */
-  z.object({ kind: z.literal('percent'), percent: decimalString }),
+  z.object({ kind: z.literal('percent'), percent: percentAdjustment }),
   /** e.g. -2000 for 20.00 below the parent (minor units, plan currency). */
   z.object({ kind: z.literal('amount'), amountMinor: signedMinorAmount }),
+  /** Percent first, then amount, in one step (e.g. BAR −10% + USD 30). */
+  z.object({ kind: z.literal('combined'), percent: percentAdjustment, amountMinor: signedMinorAmount }),
 ]);
 export type Adjustment = z.infer<typeof adjustment>;
 
@@ -679,6 +741,9 @@ export const derivationInput = z.object({
   rounding: priceRounding.default({ incrementMinor: 1, mode: 'half_up' }),
   /** Optional per-unit-type differential replacing the plan-level adjustment. */
   unitTypeAdjustments: z.record(z.string(), adjustment).default({}),
+  /** Optional bounds for derived unit prices (base, single, occupancy overrides), in minor units. */
+  floorMinor: minorAmount.optional(),
+  ceilingMinor: minorAmount.optional(),
 });
 export type DerivationInput = z.output<typeof derivationInput>;
 
@@ -711,7 +776,7 @@ export type Eligibility = z.output<typeof eligibility>;
 export const commission = z.object({
   /** commissionable: guest pays the hotel, agency earns commission; net: agency collects, hotel invoices net. */
   model: z.enum(['commissionable', 'net']),
-  percent: nonNegativeDecimal.optional(),
+  percent: percent0to100.optional(),
   amountPerNightMinor: minorAmount.optional(),
   base: z.enum(['room_net', 'stay_net', 'stay_gross']).default('room_net'),
 });
@@ -945,6 +1010,8 @@ export const violationKind = z.enum([
   'outside_stay_dates',
   'plan_not_active',
   'inclusion_exceeds_price',
+  'derived_price_below_zero',
+  'tax_computation_failed',
 ]);
 export type ViolationKind = z.infer<typeof violationKind>;
 
@@ -985,6 +1052,7 @@ const component = z.object({
   code: z.string(),
   chargeCode: z.string(),
   taxCategory: z.string(),
+  outletKind: z.string().nullable(),
   amount: money,
 });
 export type PriceComponent = z.infer<typeof component>;
@@ -1075,6 +1143,7 @@ export const inclusionSnapshot = z.object({
   rhythm: inclusionRhythm,
   priceMode: z.enum(['included', 'added']),
   fulfilmentOutlets: z.array(z.string()),
+  outletKind: z.string().nullable(),
   allowance: allowanceTerms.nullable(),
 });
 export type InclusionSnapshot = z.infer<typeof inclusionSnapshot>;
@@ -1084,6 +1153,8 @@ export const taxSummaryLine = z.object({
   ruleCode: z.string(),
   ruleName: z.string(),
   category: z.enum(['tax', 'fee']),
+  nature: z.enum(['statutory', 'commercial']),
+  basis: taxRuleKind,
   inclusive: z.boolean(),
   ruleVersionIds: z.array(uuid),
   amount: money,
@@ -1126,7 +1197,23 @@ export const offerPolicies = z.object({
 });
 export type OfferPolicies = z.infer<typeof offerPolicies>;
 
-export const commissionTerms = commission.extend({ amount: money }).nullable();
+/**
+ * Commission / net terms. commissionable: the guest pays the hotel; the agency earns `amount`. net: the agency
+ * collects from the guest and the hotel invoices the agency `invoiceable` (no commission).
+ */
+export const commissionTerms = commission
+  .extend({ amount: money, agencyCollects: z.boolean(), invoiceable: money })
+  .nullable();
+
+/** A price override, complimentary or house-use agreement (RAT-R28 "price override details"). */
+export const priceOverrideRecord = z.object({
+  kind: z.enum(['nightly', 'total', 'complimentary', 'house_use']),
+  reason: z.string(),
+  by: z.string(),
+  at: z.string(),
+  /** What the agreement said before the override. */
+  original: z.object({ seal: z.string(), totals }),
+});
 
 export const TERMS_SCHEMA_VERSION = 1 as const;
 
@@ -1144,7 +1231,7 @@ export const termsSnapshot = z.object({
   propertyTimezone: z.string(),
   checkInTime: z.string(),
   currency: currencyCode,
-  priceSource: z.enum(['portico_quote', 'channel', 'manual_override']),
+  priceSource: z.enum(['portico_quote', 'channel', 'manual_override', 'complimentary', 'house_use']),
   ratePlan: z.object({
     id: uuid,
     code: z.string(),
@@ -1178,15 +1265,22 @@ export const termsSnapshot = z.object({
   commission: commissionTerms,
   taxes: z.object({
     summary: z.array(taxSummaryLine),
-    /** Rule versions used for this quote (reference only — posting recomputes by each rule's tax-point policy). */
+    /** Every rule version used for the quote (statutory ones are re-selected at posting by tax point). */
     ruleVersionIds: z.array(uuid),
+    /**
+     * Commercial (hotel-set) rule versions of the agreement, e.g. the service charge. Posting passes them as
+     * `ChargeLine.agreedRuleVersionIds`, so a later service-charge change never re-prices an agreed stay.
+     */
+    commercialRuleVersionIds: z.array(uuid),
   }),
   totals,
   restrictionOverride: z
     .object({ reason: z.string(), by: z.string(), at: z.string(), violations: z.array(violation) })
     .nullable(),
-  supersedesHash: z.string().nullable(),
-  hash: z.string(),
+  priceOverride: priceOverrideRecord.nullable(),
+  supersedesSeal: z.string().nullable(),
+  /** HMAC-SHA256 with a server key over the canonical JSON of every other field (forgery-evident). */
+  seal: z.string(),
 });
 export type TermsSnapshot = z.infer<typeof termsSnapshot>;
 
@@ -1206,7 +1300,10 @@ export const offer = z.object({
     added: z.array(addedComponent),
     allowances: z.array(allowanceEntitlement),
   }),
-  taxesAndFees: z.array(taxSummaryLine),
+  /** Every tax / fee line of the offer (domain-map shape): one per rule × charge line. */
+  taxesAndFees: z.array(taxLine),
+  /** The same, summed per rule (display). */
+  taxSummary: z.array(taxSummaryLine),
   totals,
   policies: offerPolicies,
   commission: commissionTerms,
@@ -1224,25 +1321,32 @@ export const quoteResponse = z.object({
   offers: z.array(offer),
 });
 
-export const stayChangeRequest = z.object({
-  /** New night range. Omit to keep the agreed range. */
-  nights: dateRange.optional(),
-  occupancy: occupancy.optional(),
-  unitTypeId: uuid.optional(),
-  /** Pricing of nights not in the agreement. Defaults to policy `reservations.repricing.newNights`. */
-  newNightsPolicy: z.enum(['current_rates', 'agreed_average', 'manual']).optional(),
-  manualNightAmountsMinor: z.record(z.string(), minorAmount).optional(),
-  /** Unit type change pricing. Defaults to policy `reservations.repricing.typeChange`. */
-  typeChangePolicy: z.enum(['keep_agreed', 'difference', 'reprice']).optional(),
-  /** When the change is made (ISO instant). Defaults to now. Determines penalties for removed nights. */
-  changeAt: z.string().optional(),
-});
+export const stayChangeRequest = z
+  .object({
+    /** New night range. Omit to keep the agreed range. */
+    nights: dateRange.optional(),
+    occupancy: occupancy.optional(),
+    unitTypeId: uuid.optional(),
+    /** Change of rate plan: every night is priced on the new plan at current rates, with its policies. */
+    ratePlanId: uuid.optional(),
+    /** Pricing of nights not in the agreement. Defaults to policy `reservations.repricing.newNights`. */
+    newNights: z.enum(['current_rates', 'agreed_average', 'manual']).optional(),
+    manualNightAmountsMinor: z.record(z.string(), minorAmount).optional(),
+    /** Unit-type change pricing. Defaults to policy `reservations.repricing.typeChange`. */
+    typeChange: z.enum(['keep_agreed', 'difference', 'reprice']).optional(),
+    /**
+     * When the change is evaluated (penalties for removed nights): an ISO instant, or a LocalDate (business date:
+     * today → now; another date → 12:00 property time). Anything other than now needs `rates.quote.backdate`.
+     */
+    asOf: z.union([localDate, z.iso.datetime({ offset: true })]).optional(),
+  })
+  .strict();
 export type StayChangeRequest = z.input<typeof stayChangeRequest>;
 
 export const priceChangeRequest = z.object({ terms: termsSnapshot, change: stayChangeRequest });
 
 export const repricingResult = z.object({
-  nights: z.array(
+  nightly: z.array(
     z.object({
       date: localDate,
       before: money.nullable(),
@@ -1256,6 +1360,7 @@ export const repricingResult = z.object({
         'removed',
         'type_difference',
         'type_repriced',
+        'plan_changed',
       ]),
       difference: money,
     }),
@@ -1272,7 +1377,8 @@ export const repricingResult = z.object({
   after: totals,
   difference: money,
   violations: z.array(violation),
-  candidateTerms: termsSnapshot,
+  /** The NEW sealed agreement for the changed stay (supersedes the old seal). Persist it only on commit. */
+  terms: termsSnapshot,
 });
 export type RepricingResult = z.infer<typeof repricingResult>;
 
@@ -1334,3 +1440,79 @@ export type RatePlanRecord = z.infer<typeof ratePlanRecord>;
 /** Tax/fee rule as a record: `status` = { taxRule, verification } of the version in force today. */
 export const taxRuleRecord = taxRule.omit({ status: true }).extend(recordParts);
 export type TaxRuleRecord = z.infer<typeof taxRuleRecord>;
+
+// ───────────────────────────── Provider shapes for consumers (reservations, finance) ─────────────────────────────
+
+export const penaltyEvaluation = z.object({
+  event: z.enum(['cancellation', 'no_show', 'early_departure']),
+  at: z.string(),
+  nights: z.array(localDate),
+  /** The tier in force (cancellation) or null = free. */
+  tier: z.object({ fromInstant: z.string().nullable(), description: z.string() }).nullable(),
+  penalty,
+  /** The night amounts the penalty was computed on (by `structure.basis`). */
+  basisAmount: money,
+  amount: money,
+  description: z.string(),
+});
+export type PenaltyEvaluation = z.infer<typeof penaltyEvaluation>;
+
+export const priceOverrideRequest = z
+  .object({
+    terms: termsSnapshot,
+    override: z.discriminatedUnion('kind', [
+      /** New price per night (minor units, plan's tax-inclusion mode); nights not listed keep their price. */
+      z.object({ kind: z.literal('nightly'), nightsMinor: z.record(z.string(), minorAmount) }),
+      /** New total for all nights, spread over the nights in proportion (largest remainder). */
+      z.object({ kind: z.literal('total'), totalMinor: minorAmount }),
+      z.object({ kind: z.literal('complimentary') }),
+      z.object({ kind: z.literal('house_use') }),
+    ]),
+    reason: z.string().min(3).max(500),
+  })
+  .strict();
+export type PriceOverrideRequest = z.input<typeof priceOverrideRequest>;
+
+export const rulePackStatus = z.object({
+  propertyId: uuid,
+  jurisdiction: z.string(),
+  /** True only when every rule in force at the property is confirmed by a qualified adviser (`verified`). */
+  verified: z.boolean(),
+  note: z.string(),
+  rules: z.array(
+    z.object({
+      ruleId: uuid,
+      code: z.string(),
+      name: z.string(),
+      category: z.enum(['tax', 'fee']),
+      nature: z.enum(['statutory', 'commercial']),
+      versionInForceId: uuid.nullable(),
+      verificationStatus: verificationStatus.nullable(),
+    }),
+  ),
+  unverifiedRuleCodes: z.array(z.string()),
+});
+export type RulePackStatus = z.infer<typeof rulePackStatus>;
+
+export const levyTrueUp = z.object({
+  agreedDays: z.number().int(),
+  actualDays: z.number().int(),
+  deltaDays: z.number().int(),
+  lastBlockHours: z.number(),
+  /** A levy-only charge line to post through computeTaxes (null when nothing changes). */
+  line: chargeLine.nullable(),
+});
+
+const effectiveValue = z.object({
+  value: z.union([z.number(), z.boolean()]),
+  scope: z.enum(['plan', 'all_plans']),
+  ratePlanId: uuid.nullable(),
+  ratePlanCode: z.string().nullable(),
+  inherited: z.boolean(),
+  unitTypeSpecific: z.boolean(),
+});
+/** Effective restrictions of a plan × unit type on one night, with where each value comes from (RAT-R04). */
+export const effectiveRestrictionDay = z.object({
+  date: localDate,
+  values: z.record(z.string(), effectiveValue),
+});

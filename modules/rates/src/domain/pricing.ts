@@ -36,13 +36,20 @@ export function roundToIncrement(value: Decimal, rounding: PriceRounding): numbe
   return value.div(inc).toDecimalPlaces(0, MODES[rounding.mode]).mul(inc).toNumber();
 }
 
-/** Apply one derivation adjustment to an amount. Negative results are floored at zero. */
+/** Exact result of an adjustment (percent first, then amount for `combined`). */
+export function adjustExact(amountMinor: number, adj: Adjustment, perPerson = false): Decimal {
+  const pct = (n: Decimal, percent: string) => n.mul(new Decimal(100).plus(percent)).div(100);
+  const base = new Decimal(amountMinor);
+  if (adj.kind === 'percent') return pct(base, adj.percent);
+  // An amount is a per unit-night surcharge/discount: it never changes per-person amounts.
+  if (adj.kind === 'amount') return perPerson ? base : base.plus(adj.amountMinor);
+  const scaled = pct(base, adj.percent);
+  return perPerson ? scaled : scaled.plus(adj.amountMinor);
+}
+
+/** Apply one adjustment and round once; never below zero (callers that must know use `adjustParams` flags). */
 export function applyAdjustment(amountMinor: number, adj: Adjustment, rounding: PriceRounding): number {
-  const exact =
-    adj.kind === 'percent'
-      ? new Decimal(amountMinor).mul(new Decimal(100).plus(adj.percent)).div(100)
-      : new Decimal(amountMinor).plus(adj.amountMinor);
-  return Math.max(0, roundToIncrement(exact, rounding));
+  return Math.max(0, roundToIncrement(adjustExact(amountMinor, adj), rounding));
 }
 
 export interface DerivationStep {
@@ -50,29 +57,44 @@ export interface DerivationStep {
   adjustment: Adjustment;
   rounding: PriceRounding;
   unitTypeAdjustments: Record<string, Adjustment>;
+  floorMinor?: number | undefined;
+  ceilingMinor?: number | undefined;
 }
 
 /**
  * Adjust every price parameter. A percent adjustment scales all of them; an amount adjustment is a per
  * unit-night surcharge/discount, so it changes the unit prices (base, single, occupancy overrides) but not the
- * per-person extra-adult and child amounts.
+ * per-person extra-adult and child amounts. Unit prices are clamped to the optional floor/ceiling. A result
+ * below zero is floored at 0 and reported through `flags.belowZero` (the night is then not sellable).
  */
 export function adjustParams(
   p: OccupancyPricing,
   adj: Adjustment,
   rounding: PriceRounding,
+  bounds: { floorMinor?: number | undefined; ceilingMinor?: number | undefined } = {},
+  flags: { belowZero: boolean } = { belowZero: false },
 ): OccupancyPricing {
-  const f = (n: number) => applyAdjustment(n, adj, rounding);
-  const perPerson = (n: number) => (adj.kind === 'percent' ? f(n) : n);
+  const round = (exact: Decimal) => {
+    const v = roundToIncrement(exact, rounding);
+    if (v < 0) flags.belowZero = true;
+    return Math.max(0, v);
+  };
+  const unit = (n: number) => {
+    let v = round(adjustExact(n, adj));
+    if (bounds.floorMinor !== undefined) v = Math.max(v, bounds.floorMinor);
+    if (bounds.ceilingMinor !== undefined) v = Math.min(v, bounds.ceilingMinor);
+    return v;
+  };
+  const perPerson = (n: number) => round(adjustExact(n, adj, true));
   const mapValues = (r: Record<string, number>, g: (n: number) => number) =>
     Object.fromEntries(Object.entries(r).map(([k, v]) => [k, g(v)]));
   return {
     baseOccupancy: p.baseOccupancy,
-    baseAmountMinor: f(p.baseAmountMinor),
-    singleAmountMinor: p.singleAmountMinor === null ? null : f(p.singleAmountMinor),
+    baseAmountMinor: unit(p.baseAmountMinor),
+    singleAmountMinor: p.singleAmountMinor === null ? null : unit(p.singleAmountMinor),
     extraAdultMinor: p.extraAdultMinor === null ? null : perPerson(p.extraAdultMinor),
     childAmountsMinor: mapValues(p.childAmountsMinor, perPerson),
-    occupancyAmountsMinor: mapValues(p.occupancyAmountsMinor, f),
+    occupancyAmountsMinor: mapValues(p.occupancyAmountsMinor, unit),
   };
 }
 
@@ -80,8 +102,15 @@ export function deriveParams(
   p: OccupancyPricing,
   step: DerivationStep,
   unitTypeId: string,
+  flags?: { belowZero: boolean },
 ): OccupancyPricing {
-  return adjustParams(p, step.unitTypeAdjustments[unitTypeId] ?? step.adjustment, step.rounding);
+  return adjustParams(
+    p,
+    step.unitTypeAdjustments[unitTypeId] ?? step.adjustment,
+    step.rounding,
+    { floorMinor: step.floorMinor, ceilingMinor: step.ceilingMinor },
+    flags,
+  );
 }
 
 /** Root (base plan) parameters → the parameters of the last plan in `steps` (root first). */
@@ -89,8 +118,9 @@ export function resolveDerivedParams(
   root: OccupancyPricing,
   steps: readonly DerivationStep[],
   unitTypeId: string,
+  flags?: { belowZero: boolean },
 ): OccupancyPricing {
-  return steps.reduce((p, s) => deriveParams(p, s, unitTypeId), root);
+  return steps.reduce((p, s) => deriveParams(p, s, unitTypeId, flags), root);
 }
 
 export type OccupancyPriceResult =

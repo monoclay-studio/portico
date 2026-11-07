@@ -7,11 +7,11 @@ import type { TestDatabase } from '@portico/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   type Offer,
+  postingChargeLines,
   postingPlan,
   seedResortRates,
   type TermsSnapshot,
   termsSnapshot,
-  verifyTerms,
 } from '../src';
 import { newOrg, startDb, sum, unitTypes } from './harness';
 
@@ -122,19 +122,39 @@ describe('agreed terms survive every later configuration change (E08)', () => {
           },
         ],
       });
-      const v3 = withV3.versions.find((v) => v.versionNo === 3)?.id as string;
+      const v3 = withV3.versions.find((v) => v.status === 'draft')?.id as string;
       const report = await r.previewTaxRuleActivation(tx, v3);
       expect(report.closes[0]).toMatchObject({ effectiveToBefore: null, effectiveToAfter: '2027-02-12' });
       await r.activateTaxRuleVersion(tx, v3, {
         reason: 'test: tax change mid-stay',
         acknowledgeReport: true,
       });
+      // The hotel raises its service charge to 12% from 2027-02-01 (a commercial, hotel-set rule).
+      const scRule = (await r.listTaxRules(tx, { jurisdiction: 'MV' })).find((x) => x.code === 'MV-SC');
+      const withSc12 = await r.addTaxRuleVersion(tx, scRule?.id as string, {
+        effectiveFrom: '2027-02-01',
+        definition: {
+          kind: 'percentage',
+          ratePercent: '12',
+          appliesTo: { taxCategories: ['accommodation', 'food_beverage'] },
+        },
+        sources: [
+          { url: 'https://example.com/hotel-service-charge-notice', title: 'Hotel notice (test only)' },
+        ],
+      });
+      const sc12 = withSc12.versions.find((v) => v.status === 'draft')?.id as string;
+      const scReport = await r.previewTaxRuleActivation(tx, sc12);
+      expect(scReport.impact[0]).toMatch(/agreed stays keep the version recorded in their terms/);
+      await r.activateTaxRuleVersion(tx, sc12, {
+        reason: 'test: service charge change',
+        acknowledgeReport: true,
+      });
     });
 
     // ── The agreement is unchanged and still verifies ──
     const reloaded: TermsSnapshot = termsSnapshot.parse(JSON.parse(persisted));
-    expect(verifyTerms(reloaded)).toBe(true);
-    expect(reloaded.hash).toBe(offer.terms.hash);
+    expect(o.rates.verifyTerms(JSON.parse(persisted))).toBe(true);
+    expect(reloaded.seal).toBe(offer.terms.seal);
     expect(canonicalJson(reloaded)).toBe(canonicalJson(JSON.parse(persisted)));
     // Posting every night needs only the snapshot: identical charges after all the changes.
     expect(postingPlan(reloaded, stayId)).toEqual(postingsBefore);
@@ -160,17 +180,8 @@ describe('agreed terms survive every later configuration change (E08)', () => {
     expect(fresh.offers[0]?.nightly[0]?.amount.amountMinor).not.toBe(reloaded.nights[0]?.amount.amountMinor);
 
     // ── Taxes: historical vs future records ──
-    const lines = postingsBefore.map((p) => ({
-      lineId: p.idempotencyKey,
-      chargeCode: p.chargeCode,
-      taxCategory: p.taxCategory,
-      amount: p.amount,
-      quantity: p.quantity,
-      serviceDate: p.serviceDate,
-      taxInclusion: p.taxInclusion,
-      occupancy: { adults: p.occupancy.adults, childrenAges: [...p.occupancy.childrenAges] },
-      nightIndex: p.nightIndex,
-    }));
+    // The posting lines carry the agreement's commercial rule versions (service charge stays as agreed).
+    const lines = postingChargeLines(reloaded, stayId);
     const stayContext = {
       stayNights: reloaded.stay.nights,
       arrival: reloaded.stay.arrival,
@@ -201,9 +212,14 @@ describe('agreed terms survive every later configuration change (E08)', () => {
     expect(tgstRate('2027-02-12')).toBe('18');
     expect(atPosting.totals.net.amountMinor).toBe(reloaded.totals.net.amountMinor);
     expect(atPosting.totals.taxes.amountMinor).toBeGreaterThan(pinned.totals.taxes.amountMinor);
-    // (c) An amount whose time of supply was fixed by an earlier payment (deposit at booking) is not re-taxed.
+    // (c) A stay paid in full at booking fixed its time of supply: nothing is re-taxed.
     const prepaid = await o.run((tx, r) =>
-      r.computeTaxesDetailed(tx, { propertyId: o.propertyId, lines, stayContext, paymentDate: '2026-11-07' }),
+      r.computeTaxesDetailed(tx, {
+        propertyId: o.propertyId,
+        lines,
+        stayContext,
+        fullPaymentDate: '2026-11-07',
+      }),
     );
     expect(
       prepaid.lines
@@ -211,10 +227,58 @@ describe('agreed terms survive every later configuration change (E08)', () => {
         .filter((x) => x.ruleCode === 'MV-TGST')
         .every((x) => x.ratePercent === '17'),
     ).toBe(true);
+    // (d) A 30% deposit paid at booking fixes TGST for that part only; Green Tax is charged once (R-08).
+    const room12 = lines.find((l) => l.lineId.startsWith('room:') && l.serviceDate === '2027-02-12');
+    if (!room12) throw new Error('room line');
+    const deposit = Math.round(room12.amount.amountMinor * 0.3);
+    const split = await o.run((tx, r) =>
+      r.computeTaxesDetailed(tx, {
+        propertyId: o.propertyId,
+        lines: [{ ...room12, taxPointSplits: [{ amountMinor: deposit, taxPointDate: '2026-11-07' }] }],
+        stayContext,
+      }),
+    );
+    const splitTaxes = split.lines[0]?.taxes ?? [];
+    expect(splitTaxes.filter((x) => x.ruleCode === 'MV-TGST').map((x) => x.ratePercent)).toEqual([
+      '17',
+      '18',
+    ]);
+    expect(splitTaxes.filter((x) => x.ruleCode === 'MV-GREEN-12')).toHaveLength(1);
+    expect(split.lines[0]?.net.amountMinor).toBe(room12.amount.amountMinor);
+
+    // (e) R-01: the hotel raised its service charge to 12% after booking. Agreed nights keep 10%; a charge
+    //     outside the agreement (minibar on the same day) gets 12%.
+    const sc = atPosting.lines.flatMap((l) => l.taxes).filter((x) => x.ruleCode === 'MV-SC');
+    expect(sc.length).toBeGreaterThan(0);
+    expect(sc.every((x) => x.ratePercent === '10' && x.nature === 'commercial')).toBe(true);
+    const agreedGross = reloaded.nights.reduce((a, n) => a + n.gross.amountMinor, 0);
+    const pinnedTgst = (date: string) =>
+      pinned.lines.filter((l) => l.lineId.includes(date)).reduce((a, l) => a + l.gross.amountMinor, 0);
+    expect(['2027-02-10', '2027-02-11'].map(pinnedTgst)).toEqual(
+      ['2027-02-10', '2027-02-11'].map((d) =>
+        atPosting.lines.filter((l) => l.lineId.includes(d)).reduce((a, l) => a + l.gross.amountMinor, 0),
+      ),
+    );
+    expect(agreedGross).toBe(reloaded.totals.gross.amountMinor);
+    const minibar = await o.run((tx, r) =>
+      r.computeTaxes(tx, {
+        propertyId: o.propertyId,
+        lines: [
+          {
+            lineId: 'minibar-1',
+            chargeCode: 'FB_MINIBAR',
+            taxCategory: 'food_beverage',
+            amount: { amountMinor: 5_000, currency: 'USD' },
+            serviceDate: '2027-02-12',
+          },
+        ],
+      }),
+    );
+    expect(minibar.find((x) => x.ruleCode === 'MV-SC')?.ratePercent).toBe('12');
 
     // ── A change preview on the old agreement keeps agreed nights at agreed prices ──
     const preview = await o.run((tx, r) => r.priceChange(tx, { terms: reloaded, change: {} }));
-    expect(preview.nights.every((n) => n.source === 'agreed' && n.difference.amountMinor === 0)).toBe(true);
+    expect(preview.nightly.every((n) => n.source === 'agreed' && n.difference.amountMinor === 0)).toBe(true);
     expect(preview.after.net.amountMinor).toBe(reloaded.totals.net.amountMinor);
   });
 });

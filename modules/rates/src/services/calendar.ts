@@ -741,7 +741,7 @@ export async function getEffectiveRestrictions(
           kind,
           {
             value: e.value,
-            scope: e.source.ratePlanId === null ? 'all_plans' : 'plan',
+            scope: e.source.ratePlanId === null ? ('all_plans' as const) : ('plan' as const),
             ratePlanId: e.source.ratePlanId,
             ratePlanCode: e.source.ratePlanId ? (codeOf.get(e.source.ratePlanId) ?? null) : null,
             inherited: e.source.ratePlanId !== null && e.source.ratePlanId !== input.ratePlanId,

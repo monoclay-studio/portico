@@ -52,6 +52,7 @@ create table rates.inclusions (
   rhythm             jsonb not null,
   price_mode         text not null check (price_mode in ('included', 'added')),
   fulfilment_outlets text[] not null default '{}',
+  outlet_kind        text,
   allowance          jsonb,
   status             text not null default 'active' check (status in ('active', 'retired')),
   version            int  not null default 1,
@@ -249,6 +250,9 @@ create table rates.tax_rules (
   name               text not null,
   jurisdiction       text not null,
   category           text not null check (category in ('tax', 'fee')),
+  -- statutory: follows its tax point at posting; commercial (hotel-set, e.g. service charge): agreed stays keep
+  -- the version recorded in their terms.
+  nature             text not null default 'statutory' check (nature in ('statutory', 'commercial')),
   property_ids       uuid[],
   tax_point_policy   text not null check (tax_point_policy in ('service_date', 'booking_date', 'invoice_date', 'time_of_supply')),
   ledger_mapping_key text not null,
@@ -296,6 +300,7 @@ create table rates.plan_sales (
   tenant_id     uuid not null,
   property_id   uuid not null,
   rate_plan_id  uuid not null references rates.rate_plans(id),
+  unit_type_id  uuid not null,
   stay_date     date not null,
   ref_type      text not null,
   ref_id        text not null,
@@ -305,7 +310,7 @@ create table rates.plan_sales (
   unique (tenant_id, rate_plan_id, stay_date, ref_type, ref_id)
 );
 select core.enable_tenant_isolation('rates.plan_sales');
-create index plan_sales_count_idx on rates.plan_sales (tenant_id, rate_plan_id, stay_date) where released_at is null;
+create index plan_sales_count_idx on rates.plan_sales (tenant_id, property_id, stay_date) where released_at is null;
 
 select core.apply_standard_grants('rates');
 

@@ -105,5 +105,19 @@ export const ratesManifest: ModuleManifest = {
       description: 'Price stays (quotes, change previews, tax previews)',
       scope: 'property',
     },
+    {
+      key: 'rates.quote.backdate',
+      description:
+        'Quote or evaluate changes as of another date than today (staff investigations, rebooking)',
+      scope: 'property',
+      sensitive: true,
+    },
+    {
+      key: 'rates.price.override',
+      description:
+        'Override agreed prices, or make a stay complimentary or house use, with a reason (audited)',
+      scope: 'property',
+      sensitive: true,
+    },
   ],
 };

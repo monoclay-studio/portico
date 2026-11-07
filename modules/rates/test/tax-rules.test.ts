@@ -36,7 +36,8 @@ describe('Maldives template (seed data, not code)', () => {
         (v.definition as { ratePercent: string }).ratePercent,
       ]),
     ).toEqual([
-      [null, '2025-07-01', '16'],
+      ['2014-11-01', '2023-01-01', '12'],
+      ['2023-01-01', '2025-07-01', '16'],
       ['2025-07-01', null, '17'],
     ]);
     for (const rule of rules) {
@@ -62,7 +63,7 @@ describe('Maldives template (seed data, not code)', () => {
     );
     const by = Object.fromEntries((result.lines[0]?.taxes ?? []).map((x) => [x.ruleCode, x]));
     expect(by['MV-SC']?.amount.amountMinor).toBe(1_000);
-    expect(by['MV-TGST']?.base.amountMinor).toBe(11_000);
+    expect(by['MV-TGST']?.base?.amountMinor).toBe(11_000);
     expect(by['MV-TGST']?.amount.amountMinor).toBe(1_870);
     expect(by['MV-GREEN-12']?.quantity?.persons).toBe(3); // 2 adults + 6-year-old; 1-year-old exempt
     expect(by['MV-GREEN-12']?.amount.amountMinor).toBe(3_600);
@@ -96,7 +97,7 @@ describe('Maldives template (seed data, not code)', () => {
       r.computeTaxes(tx, {
         propertyId: o.propertyId,
         lines: [line],
-        paymentDate: '2025-06-20',
+        fullPaymentDate: '2025-06-20',
         invoiceDate: '2025-07-16',
       }),
     );

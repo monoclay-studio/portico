@@ -157,12 +157,36 @@ describe('rates over HTTP', () => {
       payload: { terms: offer.terms, change: { nights: { from: '2026-12-10', to: '2026-12-14' } } },
     });
     expect(reprice.statusCode).toBe(200);
-    expect(reprice.json().nights.map((n: { source: string }) => n.source)).toEqual([
+    expect(reprice.json().nightly.map((n: { source: string }) => n.source)).toEqual([
       'agreed',
       'agreed',
       'agreed',
       'current_rates',
     ]);
+
+    const penalty = await h.app.inject({
+      method: 'POST',
+      url: '/v1/terms/penalty',
+      headers: o.auth,
+      payload: { terms: offer.terms, at: '2026-12-05T00:00:00Z' },
+    });
+    expect(penalty.statusCode).toBe(200);
+    expect(penalty.json()).toMatchObject({ event: 'cancellation', penalty: { kind: 'first_night' } });
+    const forged = await h.app.inject({
+      method: 'POST',
+      url: '/v1/terms/penalty',
+      headers: o.auth,
+      payload: { terms: { ...offer.terms, currency: 'EUR' } },
+    });
+    expect(forged.statusCode).toBe(400);
+    expect(forged.json().code).toBe('terms_seal_invalid');
+    const pack = await h.app.inject({
+      method: 'GET',
+      url: `/v1/tax-rule-packs/${o.propertyId}`,
+      headers: o.auth,
+    });
+    expect(pack.statusCode).toBe(200);
+    expect(pack.json()).toMatchObject({ verified: false, jurisdiction: 'MV' });
 
     const taxes = await h.app.inject({
       method: 'POST',

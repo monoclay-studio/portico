@@ -3,22 +3,32 @@
  * Portico — quotes, room postings, outlet charges, transfers — is computed here from effective-dated rule
  * DATA (never constants in code).
  *
- * Rounding rule (documented, single rounding per rule per line):
+ * Rounding rule (documented, single rounding per rule per line part):
  *  - Exclusive lines: rules are evaluated in compounding order. Each rule's amount is computed exactly with
  *    Decimal from its base and rounded ONCE to the line currency's minor unit with the rule's rounding mode.
  *    A compounding base uses the already-rounded amounts of the rules it includes (as printed on a bill:
  *    "TGST 17% on 110.00").
- *  - Inclusive lines (amount includes some or all rules): the exact net is solved from the compounding chain
- *    (each rule is affine in the net), rounded half-up to a minor unit, the included rules are then evaluated
- *    exactly as for an exclusive line, and the residue (amount − net − Σ included rules, usually 0 or ±1 minor
- *    unit) is assigned to the NET. Therefore net + Σ included = amount exactly.
+ *  - Inclusive lines: the exact net is solved from the compounding chain (each rule is affine in the net),
+ *    rounded half-up, the included rules are evaluated as for an exclusive line, and the residue
+ *    (amount − net − Σ included, ≤ 1 minor unit per included rule) is assigned to the NET; the displayed bases
+ *    use the final net. Therefore net + Σ included = amount exactly.
+ *  - `inclusive` mode includes VALUE-BASED rules only; quantity-based levies (per person / unit / stay / charge,
+ *    e.g. Green Tax) are always added on top unless a line names them explicitly (`rules` mode). A free or
+ *    complimentary night therefore never fails and still carries its per-guest levies.
+ *  - Lines with `taxPointSplits` (e.g. a deposit taxed at payment): value-based rules round once per part;
+ *    quantity-based levies are computed once for the whole line.
  *  - Line gross = net + Σ all rule amounts, exactly. Totals are sums of line values (never recomputed).
+ *
+ * Statutory vs commercial: statutory rules follow their tax point. Commercial (hotel-set) rules — service
+ * charge, resort fees — are part of an agreement: a line posted under agreed terms (`agreedRuleVersionIds`) uses
+ * exactly the agreed versions, so a later service-charge change never re-prices an agreed stay.
  */
-import { currencyExponent, Decimal, type LocalDate, type Occupancy } from '@portico/kernel';
+import { currencyExponent, Decimal, type LocalDate, type Occupancy, ValidationError } from '@portico/kernel';
 import type {
   ChargeLine,
   ClassificationCondition,
   ClassificationPredicate,
+  FixedAmount,
   FxRate,
   LineTaxResult,
   TaxComputation,
@@ -35,6 +45,7 @@ export interface TaxRuleHeader {
   code: string;
   name: string;
   category: 'tax' | 'fee';
+  nature: 'statutory' | 'commercial';
   taxPointPolicy: TaxPointPolicy;
   ledgerMappingKey: string;
   sequence: number;
@@ -67,7 +78,10 @@ export interface TaxEngineContext {
     | { stayNights: number; arrival?: LocalDate | undefined; bookingDate?: LocalDate | undefined }
     | undefined;
   invoiceDate?: LocalDate | undefined;
-  paymentDate?: LocalDate | undefined;
+  /** A payment covering every line in full (time of supply). Partial payments use ChargeLine.taxPointSplits. */
+  fullPaymentDate?: LocalDate | undefined;
+  /** Quote estimate of the invoice date (e.g. departure) when no invoice or payment exists yet. */
+  expectedInvoiceDate?: LocalDate | undefined;
   fxRates?: readonly FxRate[];
   exemptionCertificates?: ReadonlyArray<{
     ruleCode: string;
@@ -78,6 +92,8 @@ export interface TaxEngineContext {
 }
 
 const ROUNDING = { half_up: Decimal.ROUND_HALF_UP, half_even: Decimal.ROUND_HALF_EVEN } as const;
+const QUANTITY_KINDS = new Set(['per_person_night', 'per_unit_night', 'per_stay', 'fixed_per_charge']);
+export const isQuantityBased = (kind: string) => QUANTITY_KINDS.has(kind);
 
 // ───────────────────────────── Version selection ─────────────────────────────
 
@@ -92,11 +108,6 @@ export function versionEffectiveOn(
   );
 }
 
-/**
- * The date that selects a rule's version. A line's fixed `taxPointDate` wins (amount already taxed, e.g. a
- * deposit at payment). Otherwise by policy; when the deciding date is not known yet (a quote has no invoice or
- * payment), the service date is used as the estimate and reported on the tax line.
- */
 /** Pinned versions: the latest start on or before the date (end dates ignored). */
 export function pinnedVersionOn(
   versions: readonly TaxRuleVersionData[],
@@ -110,19 +121,32 @@ export function pinnedVersionOn(
   return best;
 }
 
+/**
+ * The date that selects a rule's version, and whether it is an estimate. A line's fixed `taxPointDate` wins.
+ * Otherwise by policy; when the deciding date is not known yet (a quote has no invoice or payment), the expected
+ * invoice date (or the service date) is used and the tax line is flagged `estimated`.
+ */
 export function taxPointDate(
   policy: TaxPointPolicy,
   line: Pick<ChargeLine, 'serviceDate' | 'taxPointDate'>,
-  ctx: Pick<TaxEngineContext, 'stayContext' | 'invoiceDate' | 'paymentDate'>,
-): LocalDate {
-  if (line.taxPointDate) return line.taxPointDate;
-  if (policy === 'booking_date') return ctx.stayContext?.bookingDate ?? line.serviceDate;
-  if (policy === 'invoice_date') return ctx.invoiceDate ?? line.serviceDate;
-  if (policy === 'time_of_supply') {
-    const known = [ctx.invoiceDate, ctx.paymentDate].filter((d): d is LocalDate => !!d).sort();
-    return known[0] ?? line.serviceDate;
+  ctx: Pick<TaxEngineContext, 'stayContext' | 'invoiceDate' | 'fullPaymentDate' | 'expectedInvoiceDate'>,
+): { date: LocalDate; estimated: boolean } {
+  if (line.taxPointDate) return { date: line.taxPointDate, estimated: false };
+  const estimate = { date: ctx.expectedInvoiceDate ?? line.serviceDate, estimated: true };
+  switch (policy) {
+    case 'service_date':
+      return { date: line.serviceDate, estimated: false };
+    case 'booking_date':
+      return ctx.stayContext?.bookingDate
+        ? { date: ctx.stayContext.bookingDate, estimated: false }
+        : { date: line.serviceDate, estimated: true };
+    case 'invoice_date':
+      return ctx.invoiceDate ? { date: ctx.invoiceDate, estimated: false } : estimate;
+    case 'time_of_supply': {
+      const known = [ctx.invoiceDate, ctx.fullPaymentDate].filter((d): d is LocalDate => !!d).sort();
+      return known[0] ? { date: known[0], estimated: false } : estimate;
+    }
   }
-  return line.serviceDate;
 }
 
 // ───────────────────────────── Applicability ─────────────────────────────
@@ -173,20 +197,40 @@ interface Applicable {
   version: TaxRuleVersionData;
   def: TaxRuleDefinition;
   pointDate: LocalDate;
+  estimated: boolean;
 }
+
+type Adjustment = 'supply' | 'reversal' | 'price_adjustment';
+const adjustmentOf = (line: ChargeLine): Adjustment =>
+  line.adjustment ?? (line.amount.amountMinor < 0 ? 'price_adjustment' : 'supply');
 
 function applicableRules(
   rules: readonly LoadedTaxRule[],
   line: ChargeLine,
   ctx: TaxEngineContext,
   exemptionsApplied: Array<{ ruleCode: string; reference: string }>,
+  scope: { valueBased: boolean; quantityBased: boolean },
 ): Applicable[] {
   const out: Applicable[] = [];
+  const adjustment = adjustmentOf(line);
   for (const { rule, versions, pinned } of rules) {
-    const pointDate = taxPointDate(rule.taxPointPolicy, line, ctx);
-    const version = pinned ? pinnedVersionOn(versions, pointDate) : versionEffectiveOn(versions, pointDate);
+    const tp = taxPointDate(rule.taxPointPolicy, line, ctx);
+    let version: TaxRuleVersionData | undefined;
+    if (rule.nature === 'commercial' && line.agreedRuleVersionIds) {
+      // Posted under agreed terms: only the agreed version of a hotel-set rule applies (never a later one).
+      const agreed = versions.filter((v) => line.agreedRuleVersionIds?.includes(v.id));
+      if (agreed.length === 0) continue;
+      version = pinnedVersionOn(agreed, line.serviceDate) ?? agreed[0];
+    } else {
+      version = pinned ? pinnedVersionOn(versions, tp.date) : versionEffectiveOn(versions, tp.date);
+    }
     if (!version) continue;
     const def = version.definition;
+    const quantity = isQuantityBased(def.kind);
+    if (quantity ? !scope.quantityBased : !scope.valueBased) continue;
+    if (!quantity && line.levyOnly) continue;
+    // A price rebate does not change how many guests stayed: per-guest levies are not touched.
+    if (quantity && adjustment === 'price_adjustment') continue;
     if (!def.appliesTo.taxCategories.includes(line.taxCategory)) continue;
     if (
       def.appliesTo.outletKinds &&
@@ -231,14 +275,14 @@ function applicableRules(
     if (def.kind === 'per_stay' && line.nightIndex !== undefined && line.nightIndex !== 0) continue;
     if (def.exemptions.some((e) => e.kind === 'certificate')) {
       const cert = (ctx.exemptionCertificates ?? []).find(
-        (c) => c.ruleCode === rule.code && c.validFrom <= pointDate && pointDate <= c.validTo,
+        (c) => c.ruleCode === rule.code && c.validFrom <= tp.date && tp.date <= c.validTo,
       );
       if (cert) {
         exemptionsApplied.push({ ruleCode: rule.code, reference: cert.reference });
         continue;
       }
     }
-    out.push({ rule, version, def, pointDate });
+    out.push({ rule, version, def, pointDate: tp.date, estimated: tp.estimated });
   }
   return orderForCompounding(out);
 }
@@ -277,40 +321,51 @@ export function orderForCompounding<
 
 interface Prepared extends Applicable {
   included: boolean;
-  /** Fixed total in minor units of the line currency (exact, unrounded) for fixed kinds. */
+  /** Fixed total in minor units of the line currency (exact, unrounded) for quantity-based kinds. */
   fixedMinor: Decimal | null;
+  fixedAmount: FixedAmount | null;
+  fx: FxRate | null;
   /** Rate as a fraction for percentage rules. */
   rate: Decimal | null;
   /** Bands for banded rules: thresholds in line-currency minor units per unit-night. */
   bands: Array<{ upToMinor: Decimal | null; rate: Decimal }> | null;
   capMinor: Decimal | null;
-  quantity: { persons: number; nights: number; units: number } | null;
+  quantity: { persons: number; exemptPersons: number; nights: number; units: number } | null;
 }
 
 function toLineMinor(
-  amount: { value: string; currency: string },
+  amount: FixedAmount,
   lineCurrency: string,
   fx: readonly FxRate[],
   ruleCode: string,
-): Decimal {
+  pointDate: LocalDate,
+): { minor: Decimal; fx: FxRate | null } {
+  const scale = new Decimal(10).pow(currencyExponent(lineCurrency));
   const major = new Decimal(amount.value);
-  if (amount.currency === lineCurrency) return major.mul(new Decimal(10).pow(currencyExponent(lineCurrency)));
-  const rate = fx.find((r) => r.from === amount.currency && r.to === lineCurrency);
+  if (amount.currency === lineCurrency) return { minor: major.mul(scale), fx: null };
+  const pair = fx.filter((r) => r.from === amount.currency && r.to === lineCurrency);
+  const rate = pair.find((r) => r.asOf === pointDate) ?? pair.find((r) => r.asOf === undefined);
   if (!rate) {
+    if (pair.length > 0) {
+      throw new TaxConfigurationError(
+        'fx_rate_date_mismatch',
+        `Tax rule ${ruleCode} needs the ${amount.currency}→${lineCurrency} rate for its tax point ${pointDate}; the rates provided are for other dates (${pair.map((r) => r.asOf).join(', ')}).`,
+        { ruleCode, taxPointDate: pointDate },
+      );
+    }
     throw new TaxConfigurationError(
       'fx_rate_required',
-      `Tax rule ${ruleCode} is a fixed ${amount.currency} amount but the charge is in ${lineCurrency}. Provide the ${amount.currency}→${lineCurrency} exchange rate for the business date.`,
+      `Tax rule ${ruleCode} is a fixed ${amount.currency} amount but the charge is in ${lineCurrency}. Provide the ${amount.currency}→${lineCurrency} exchange rate (with its source and date) for the tax point.`,
       { ruleCode, from: amount.currency, to: lineCurrency },
     );
   }
-  return major.mul(new Decimal(rate.rate)).mul(new Decimal(10).pow(currencyExponent(lineCurrency)));
+  return { minor: major.mul(new Decimal(rate.rate)).mul(scale), fx: rate };
 }
 
-function personsFor(def: TaxRuleDefinition, occ: Occupancy): number {
+function personsFor(def: TaxRuleDefinition, occ: Occupancy): { persons: number; exempt: number } {
   const under = def.persons?.exemptChildrenUnderAge;
-  const children =
-    under === undefined ? occ.childrenAges.length : occ.childrenAges.filter((a) => a >= under).length;
-  return occ.adults + children;
+  const exempt = under === undefined ? 0 : occ.childrenAges.filter((a) => a < under).length;
+  return { persons: occ.adults + occ.childrenAges.length - exempt, exempt };
 }
 
 function includedSet(inclusion: TaxInclusion, a: Applicable): boolean {
@@ -318,22 +373,29 @@ function includedSet(inclusion: TaxInclusion, a: Applicable): boolean {
     case 'exclusive':
       return false;
     case 'inclusive':
-      return true;
+      // Value-based rules only: quantity-based levies are added on top (never backed out of a price).
+      return !isQuantityBased(a.def.kind);
     case 'rules':
       return inclusion.includedRuleCodes.includes(a.rule.code);
     case 'rule_default':
-      return a.def.inclusiveDefault;
+      return a.def.inclusiveDefault && !isQuantityBased(a.def.kind);
   }
 }
 
 function prepare(a: Applicable, line: ChargeLine, ctx: TaxEngineContext): Prepared {
-  const fx = ctx.fxRates ?? [];
+  const fxRates = ctx.fxRates ?? [];
   const cur = line.amount.currency;
   const def = a.def;
   const nights = line.nights;
   const units = line.units;
   let fixedMinor: Decimal | null = null;
+  let fx: FxRate | null = null;
   let quantity: Prepared['quantity'] = null;
+  const fixed = () => {
+    const r = toLineMinor(def.amount as FixedAmount, cur, fxRates, a.rule.code, a.pointDate);
+    fx = r.fx;
+    return r.minor;
+  };
   if (def.kind === 'per_person_night') {
     const occ = line.occupancy ?? ctx.occupancy;
     if (!occ) {
@@ -343,39 +405,43 @@ function prepare(a: Applicable, line: ChargeLine, ctx: TaxEngineContext): Prepar
         { ruleCode: a.rule.code },
       );
     }
-    const persons = personsFor(def, occ);
-    quantity = { persons, nights, units };
-    fixedMinor = toLineMinor(def.amount as { value: string; currency: string }, cur, fx, a.rule.code)
-      .mul(persons)
-      .mul(nights);
+    const p = personsFor(def, occ);
+    quantity = { persons: p.persons, exemptPersons: p.exempt, nights, units };
+    fixedMinor = fixed().mul(p.persons).mul(nights);
   } else if (def.kind === 'per_unit_night') {
-    quantity = { persons: 0, nights, units };
-    fixedMinor = toLineMinor(def.amount as { value: string; currency: string }, cur, fx, a.rule.code)
-      .mul(units)
-      .mul(nights);
+    quantity = { persons: 0, exemptPersons: 0, nights, units };
+    fixedMinor = fixed().mul(units).mul(nights);
   } else if (def.kind === 'per_stay') {
-    quantity = { persons: 0, nights: 1, units };
-    fixedMinor = toLineMinor(def.amount as { value: string; currency: string }, cur, fx, a.rule.code).mul(
-      units,
-    );
+    quantity = { persons: 0, exemptPersons: 0, nights: 1, units };
+    fixedMinor = fixed().mul(units);
   } else if (def.kind === 'fixed_per_charge') {
-    quantity = { persons: 0, nights: 0, units: line.quantity };
-    fixedMinor = toLineMinor(def.amount as { value: string; currency: string }, cur, fx, a.rule.code).mul(
-      line.quantity,
-    );
+    quantity = { persons: 0, exemptPersons: 0, nights: 0, units: line.quantity };
+    fixedMinor = fixed().mul(line.quantity);
   }
   const rate = def.kind === 'percentage' ? new Decimal(def.ratePercent as string).div(100) : null;
   const bands =
     def.kind === 'banded'
       ? (def.bands ?? []).map((b) => ({
-          upToMinor: b.upToPerUnitNight ? toLineMinor(b.upToPerUnitNight, cur, fx, a.rule.code) : null,
+          upToMinor: b.upToPerUnitNight
+            ? toLineMinor(b.upToPerUnitNight, cur, fxRates, a.rule.code, a.pointDate).minor
+            : null,
           rate: new Decimal(b.ratePercent).div(100),
         }))
       : null;
   const capMinor = def.caps?.maxAmountPerLine
-    ? toLineMinor(def.caps.maxAmountPerLine, cur, fx, a.rule.code)
+    ? toLineMinor(def.caps.maxAmountPerLine, cur, fxRates, a.rule.code, a.pointDate).minor
     : null;
-  return { ...a, included: includedSet(line.taxInclusion, a), fixedMinor, rate, bands, capMinor, quantity };
+  return {
+    ...a,
+    included: includedSet(line.taxInclusion, a),
+    fixedMinor,
+    fixedAmount: fixedMinor !== null ? (def.amount as FixedAmount) : null,
+    fx,
+    rate,
+    bands,
+    capMinor,
+    quantity,
+  };
 }
 
 function bandRate(p: Prepared, netMinor: Decimal, line: ChargeLine): Decimal {
@@ -391,25 +457,26 @@ function roundRule(p: Prepared, exact: Decimal): Decimal {
   return exact.toDecimalPlaces(0, ROUNDING[p.def.rounding.mode]);
 }
 
+function baseOf(p: Prepared, net: Decimal, amounts: ReadonlyMap<string, Decimal>): Decimal {
+  let base = p.def.base.includeNet ? net : new Decimal(0);
+  for (const code of p.def.base.includeRuleCodes) base = base.plus(amounts.get(code) ?? 0);
+  return base;
+}
+
 /** Evaluate rules on a known net, using rounded amounts of earlier rules in compounding bases. */
 function evaluate(
   prepared: readonly Prepared[],
   net: Decimal,
   line: ChargeLine,
   amounts: Map<string, Decimal>,
-  bases: Map<string, Decimal>,
 ): void {
   for (const p of prepared) {
     let amount: Decimal;
     if (p.fixedMinor !== null) {
       amount = roundRule(p, p.fixedMinor);
-      bases.set(p.rule.code, net);
     } else {
-      let base = p.def.base.includeNet ? net : new Decimal(0);
-      for (const code of p.def.base.includeRuleCodes) base = base.plus(amounts.get(code) ?? 0);
       const rate = p.rate ?? bandRate(p, net, line);
-      amount = roundRule(p, base.mul(rate));
-      bases.set(p.rule.code, base);
+      amount = roundRule(p, baseOf(p, net, amounts).mul(rate));
     }
     if (p.capMinor !== null) {
       const cap = roundRule(p, p.capMinor);
@@ -473,7 +540,6 @@ function solveInclusiveNet(included: readonly Prepared[], gross: Decimal, line: 
         }
       }
       if (newlyCapped) continue;
-      // Band consistency: the solved net must fall in every chosen band.
       const consistent = banded.every((p) => {
         const idx = choice.get(p.rule.code) ?? 0;
         const perUnitNight = net.div(line.units * line.nights);
@@ -499,17 +565,37 @@ function money(amountMinor: Decimal | number, currency: string) {
   return { amountMinor: n === 0 ? 0 : n, currency };
 }
 
-/** Compute taxes for one line. */
-export function computeLine(
+/** One line (or one tax-point part of a line), restricted to value- and/or quantity-based rules. */
+function computeSingle(
   rules: readonly LoadedTaxRule[],
   line: ChargeLine,
   ctx: TaxEngineContext,
+  scope: { valueBased: boolean; quantityBased: boolean },
 ): LineTaxResult {
   const exemptionsApplied: Array<{ ruleCode: string; reference: string }> = [];
-  const applicable = applicableRules(rules, line, ctx, exemptionsApplied);
+  const applicable = applicableRules(rules, line, ctx, exemptionsApplied, scope);
   const prepared = applicable.map((a) => prepare(a, line, ctx));
+  // inclusive / rule_default: a rule included in the price pulls the rules its base compounds on into the price
+  // too (e.g. a levy that a percentage tax is computed on). `rules` mode stays exactly as listed.
+  if (line.taxInclusion.mode === 'inclusive' || line.taxInclusion.mode === 'rule_default') {
+    const byCode = new Map(prepared.map((p) => [p.rule.code, p]));
+    for (let changed = true; changed; ) {
+      changed = false;
+      for (const p of prepared) {
+        if (!p.included) continue;
+        for (const code of p.def.base.includeRuleCodes) {
+          const dep = byCode.get(code);
+          if (dep && !dep.included) {
+            dep.included = true;
+            changed = true;
+          }
+        }
+      }
+    }
+  }
   const cur = line.amount.currency;
-  const sign = line.amount.amountMinor < 0 ? -1 : 1;
+  const adjustment = adjustmentOf(line);
+  const sign = adjustment === 'reversal' || line.amount.amountMinor < 0 ? -1 : 1;
   const absAmount = new Decimal(Math.abs(line.amount.amountMinor));
 
   const included = prepared.filter((p) => p.included);
@@ -527,7 +613,6 @@ export function computeLine(
   }
 
   const amounts = new Map<string, Decimal>();
-  const bases = new Map<string, Decimal>();
   let net: Decimal;
   let residue = new Decimal(0);
   if (included.length === 0) {
@@ -537,41 +622,49 @@ export function computeLine(
     if (exactNet.isNegative()) {
       throw new TaxConfigurationError(
         'inclusive_amount_below_fixed_taxes',
-        `Line ${line.lineId}: the tax-inclusive amount is smaller than the fixed taxes and fees it must include. Raise the price or quote it tax-exclusive.`,
+        `Line ${line.lineId}: the tax-inclusive amount is smaller than the fixed taxes and fees it must include. Raise the price, or include only value-based taxes (inclusive mode) so levies are added on top.`,
         { lineId: line.lineId },
       );
     }
     const n0 = exactNet.toDecimalPlaces(0, Decimal.ROUND_HALF_UP);
-    evaluate(included, n0, line, amounts, bases);
+    evaluate(included, n0, line, amounts);
     let sumIncluded = new Decimal(0);
     for (const p of included) sumIncluded = sumIncluded.plus(amounts.get(p.rule.code) as Decimal);
     residue = absAmount.minus(n0).minus(sumIncluded);
     net = n0.plus(residue);
   }
-  evaluate(excluded, net, line, amounts, bases);
+  evaluate(excluded, net, line, amounts);
 
-  const taxes: TaxLine[] = prepared.map((p) => ({
-    lineId: line.lineId,
-    ruleId: p.rule.id,
-    ruleCode: p.rule.code,
-    ruleName: p.rule.name,
-    ruleVersionId: p.version.id,
-    category: p.rule.category,
-    kind: p.def.kind,
-    inclusive: p.included,
-    base: money((bases.get(p.rule.code) as Decimal).mul(sign), cur),
-    ratePercent:
-      p.rate !== null
-        ? p.rate.mul(100).toString()
-        : p.bands !== null
-          ? bandRate(p, net, line).mul(100).toString()
-          : null,
-    quantity: p.quantity,
-    amount: money((amounts.get(p.rule.code) as Decimal).mul(sign), cur),
-    ledgerMappingKey: p.rule.ledgerMappingKey,
-    verificationStatus: p.version.verificationStatus,
-    taxPointDate: p.pointDate,
-  }));
+  const taxes: TaxLine[] = prepared.map((p) => {
+    const quantityBased = p.fixedMinor !== null;
+    return {
+      lineId: line.lineId,
+      ruleId: p.rule.id,
+      ruleCode: p.rule.code,
+      ruleName: p.rule.name,
+      ruleVersionId: p.version.id,
+      category: p.rule.category,
+      nature: p.rule.nature,
+      basis: p.def.kind,
+      inclusive: p.included,
+      // Displayed bases use the final net (after the inclusive residue).
+      base: quantityBased ? null : money(baseOf(p, net, amounts).mul(sign), cur),
+      ratePercent:
+        p.rate !== null
+          ? p.rate.mul(100).toString()
+          : p.bands !== null
+            ? bandRate(p, net, line).mul(100).toString()
+            : null,
+      quantity: p.quantity,
+      fixedAmount: p.fixedAmount,
+      fx: p.fx,
+      amount: money((amounts.get(p.rule.code) as Decimal).mul(sign), cur),
+      ledgerMappingKey: p.rule.ledgerMappingKey,
+      verificationStatus: p.version.verificationStatus,
+      taxPointDate: p.pointDate,
+      estimated: p.estimated,
+    };
+  });
   const netMoney = money(net.mul(sign), cur);
   const gross = taxes.reduce((s, t) => s + t.amount.amountMinor, netMoney.amountMinor);
   return {
@@ -582,6 +675,72 @@ export function computeLine(
     roundingResidueMinor: residue.mul(sign).toNumber() || 0,
     exemptionsApplied,
   };
+}
+
+/** A line whose amount is partly taxed already (deposit parts with their own tax points). */
+function computeSplitLine(
+  rules: readonly LoadedTaxRule[],
+  line: ChargeLine,
+  ctx: TaxEngineContext,
+): LineTaxResult {
+  const splits = line.taxPointSplits ?? [];
+  const total = line.amount.amountMinor;
+  const fixedPart = splits.reduce((s, x) => s + x.amountMinor, 0);
+  if (total < 0 || fixedPart > total || line.adjustment === 'reversal') {
+    throw new ValidationError(
+      'invalid_tax_point_splits',
+      `Line ${line.lineId}: the parts with a fixed tax point (${fixedPart}) must not exceed the line amount (${total}), and only supplies can be split.`,
+      { lineId: line.lineId },
+    );
+  }
+  const { taxPointSplits: _splits, ...whole } = line;
+  const parts: Array<{ amountMinor: number; taxPointDate?: LocalDate }> = [
+    ...splits,
+    ...(total - fixedPart > 0 ? [{ amountMinor: total - fixedPart }] : []),
+  ];
+  const valueResults = parts.map((part) => {
+    const sub: ChargeLine = {
+      ...whole,
+      amount: { amountMinor: part.amountMinor, currency: line.amount.currency },
+    };
+    if (part.taxPointDate) sub.taxPointDate = part.taxPointDate;
+    return computeSingle(rules, sub, ctx, { valueBased: true, quantityBased: false });
+  });
+  const levies = computeSingle(rules, whole, ctx, { valueBased: false, quantityBased: true });
+  if (levies.taxes.some((t) => t.inclusive)) {
+    throw new TaxConfigurationError(
+      'split_with_included_levies',
+      `Line ${line.lineId}: a line with tax-point parts cannot include per-guest or fixed levies in its price. Add them on top.`,
+      { lineId: line.lineId },
+    );
+  }
+  const cur = line.amount.currency;
+  const net = valueResults.reduce((s, r) => s + r.net.amountMinor, 0);
+  const taxes = [...valueResults.flatMap((r) => r.taxes), ...levies.taxes];
+  const exemptions = [...valueResults.flatMap((r) => r.exemptionsApplied), ...levies.exemptionsApplied];
+  return {
+    lineId: line.lineId,
+    net: money(net, cur),
+    taxes,
+    gross: money(
+      taxes.reduce((s, t) => s + t.amount.amountMinor, net),
+      cur,
+    ),
+    roundingResidueMinor: valueResults.reduce((s, r) => s + r.roundingResidueMinor, 0),
+    exemptionsApplied: exemptions.filter(
+      (e, i) => exemptions.findIndex((x) => x.ruleCode === e.ruleCode) === i,
+    ),
+  };
+}
+
+/** Compute taxes for one line. */
+export function computeLine(
+  rules: readonly LoadedTaxRule[],
+  line: ChargeLine,
+  ctx: TaxEngineContext,
+): LineTaxResult {
+  if (line.taxPointSplits && line.taxPointSplits.length > 0) return computeSplitLine(rules, line, ctx);
+  return computeSingle(rules, line, ctx, { valueBased: true, quantityBased: true });
 }
 
 /** Compute taxes for many lines. All lines must share one currency (totals are in it). */
@@ -631,4 +790,26 @@ export function computeTaxesPure(
     },
     ruleVersionIds: [...versionIds].sort(),
   };
+}
+
+// ───────────────────────────── Green Tax 24-hour blocks ─────────────────────────────
+
+/**
+ * Guest-days for a per-guest-per-day levy charged in 24-hour blocks from actual check-in (MIRA Green Tax FAQ):
+ * every full block counts, and the final (check-out) block counts when at least `minHoursLastBlock` hours were
+ * spent in it. Day use (< 24 h) counts one day only when it reaches the threshold — adviser to confirm (README).
+ */
+export function levyDays(
+  checkInAt: Date,
+  checkOutAt: Date,
+  minHoursLastBlock = 12,
+): { days: number; fullBlocks: number; lastBlockHours: number } {
+  const ms = checkOutAt.getTime() - checkInAt.getTime();
+  if (!(ms > 0)) {
+    throw new ValidationError('invalid_stay_times', 'Check-out must be after check-in to count levy days.');
+  }
+  const hours = ms / 3_600_000;
+  const fullBlocks = Math.floor(hours / 24);
+  const lastBlockHours = Math.round((hours - fullBlocks * 24) * 100) / 100;
+  return { days: fullBlocks + (lastBlockHours >= minHoursLastBlock ? 1 : 0), fullBlocks, lastBlockHours };
 }

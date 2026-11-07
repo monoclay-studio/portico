@@ -137,10 +137,10 @@ describe('scenario S19 — pricing a bill with packages, allowances and differen
           ? tg.lineId.endsWith(`:${c.code === 'ROOM' ? 'room' : c.code}`)
           : tg.lineId.startsWith(`a:${c.code}:`),
       );
-      expect(tg.base.amountMinor).toBe(
+      expect(tg.base?.amountMinor ?? Number.NaN).toBe(
         (component?.c.amount.amountMinor ?? Number.NaN) + (sc?.amount.amountMinor ?? 0),
       );
-      expect(tg.amount.amountMinor).toBe(Math.round((tg.base.amountMinor * 17) / 100));
+      expect(tg.amount.amountMinor).toBe(Math.round(((tg.base?.amountMinor ?? Number.NaN) * 17) / 100));
     }
     // Green Tax: 3 guests per night (2 adults + 7-year-old); the 1-year-old is exempt.
     const green = all.filter((x) => x.ruleCode === 'MV-GREEN-12');

@@ -5,6 +5,9 @@ import type { RatesDB } from './tables';
 
 const db = (tx: TxContext) => typed<RatesDB>(tx.db);
 
+/** Escape LIKE wildcards so a query like "50%" matches literally. */
+const likeEscape = (q: string) => q.replace(/[\\%_]/g, (c) => `\\${c}`);
+
 function score(q: string, code: string, name: string): { score: number; matched: string } {
   const lq = q.toLowerCase();
   if (code.toLowerCase() === lq) return { score: 1, matched: 'code' };
@@ -33,7 +36,9 @@ export const ratesSearch: SearchProvider = {
         let rq = db(tx)
           .selectFrom(def.table)
           .select(['id', 'code', 'name', 'status', 'property_id'])
-          .where((eb) => eb.or([eb('code', 'ilike', `${q}%`), eb('name', 'ilike', `%${q}%`)]))
+          .where((eb) =>
+            eb.or([eb('code', 'ilike', `${likeEscape(q)}%`), eb('name', 'ilike', `%${likeEscape(q)}%`)]),
+          )
           .limit(limit);
         if (scope !== 'all') rq = rq.where('property_id', 'in', scope as string[]);
         for (const r of await rq.execute()) {
@@ -73,7 +78,9 @@ export const ratesSearch: SearchProvider = {
       const rows = await db(tx)
         .selectFrom('rates.tax_rules')
         .select(['id', 'code', 'name', 'status', 'jurisdiction'])
-        .where((eb) => eb.or([eb('code', 'ilike', `${q}%`), eb('name', 'ilike', `%${q}%`)]))
+        .where((eb) =>
+          eb.or([eb('code', 'ilike', `${likeEscape(q)}%`), eb('name', 'ilike', `%${likeEscape(q)}%`)]),
+        )
         .limit(limit)
         .execute();
       for (const r of rows)

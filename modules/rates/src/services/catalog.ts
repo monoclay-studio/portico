@@ -221,6 +221,7 @@ export function toInclusionSnapshot(r: Row<'rates.inclusions'>): InclusionSnapsh
     rhythm: parseStored(inclusionRhythm, r.rhythm, 'inclusion rhythm'),
     priceMode: r.price_mode,
     fulfilmentOutlets: r.fulfilment_outlets,
+    outletKind: r.outlet_kind,
     allowance: r.allowance ? parseStored(allowanceTerms, r.allowance, 'allowance terms') : null,
   };
 }
@@ -250,6 +251,7 @@ export async function createInclusion(ports: RatesPorts, tx: TxContext, raw: unk
         rhythm: json(input.rhythm),
         price_mode: input.priceMode,
         fulfilment_outlets: input.fulfilmentOutlets,
+        outlet_kind: input.outletKind ?? null,
         allowance: input.allowance ? json(input.allowance) : null,
       })
       .returningAll()

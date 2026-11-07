@@ -102,8 +102,11 @@ export interface RestrictionCheck {
   departure: LocalDate;
   bookingDate: LocalDate;
   effective: Map<LocalDate, EffectiveRestrictions>;
-  /** Stays already sold on the plan per night (for sales limits). */
-  sold?: Map<LocalDate, number>;
+  /**
+   * Stays already sold within the scope of the restriction that set the limit (its rate plan or all plans × its
+   * unit type or all types), per night.
+   */
+  soldFor?: (date: LocalDate, scope: { ratePlanId: string | null; unitTypeId: string | null }) => number;
   quantity?: number;
 }
 
@@ -177,18 +180,20 @@ export function evaluateRestrictions(c: RestrictionCheck): Violation[] {
         ),
       );
     if (e.salesLimit) {
-      const sold = c.sold?.get(d) ?? 0;
+      const sold = c.soldFor?.(d, e.salesLimit.source) ?? 0;
       const qty = c.quantity ?? 1;
       if (sold + qty > (e.salesLimit.value as number))
-        out.push(
-          v(
+        // Not overridable: the plan sales ledger refuses the sale at confirmation anyway.
+        out.push({
+          ...v(
             'sales_limit',
             d,
             `The sales limit of ${e.salesLimit.value} for the night of ${d} is reached (${sold} sold).`,
             e.salesLimit,
             sold,
           ),
-        );
+          overridable: false,
+        });
     }
   }
   const dep = c.effective.get(c.departure) ?? {};
