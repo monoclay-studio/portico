@@ -155,8 +155,9 @@ Sources used for every entry:
     payments to adopt it.
 - **Checks added.**
   - Retro edit 4: every cross-module note becomes a pending-fixes entry with an owner.
-  - Builder self-check v1, item 20, and pattern **AP-42**: import shared enums and errors, never copy them.
-  - Queued for steward v3: cross-module notes are filed as findings.
+  - Pattern **AP-42** (import shared enums and errors, never copy them). Builder self-check v3, theme "contract
+    drift", is queued.
+  - Queued for steward v4: cross-module notes are filed as findings.
 
 #### E-025 · P2 · D · A form validation error shows raw JSON and harmful advice
 - **Defect.** Saving a property with an empty name showed raw Zod JSON and told the user to "Reload the page", which
