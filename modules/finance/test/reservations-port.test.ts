@@ -21,6 +21,7 @@ describe('reservations → finance port', () => {
     const port = financeForReservations(h.finance);
     const agent = org.as(['reservations.booking.create']); // no finance permissions of its own
     const bookingId = newId();
+    h.bookings.set(bookingId, { propertyId: org.propertyId, status: 'confirmed' }); // known to reservations
     const stayId = newId();
     const profileId = newId();
     const companyId = newId();
@@ -182,6 +183,7 @@ describe('reservations → finance port', () => {
     const port = financeForReservations(h.finance);
     const agent = org.as(['reservations.booking.cancel']);
     const bookingId = newId();
+    h.bookings.set(bookingId, { propertyId: org.propertyId, status: 'confirmed' }); // known to reservations
     const booking = { type: 'booking', id: bookingId };
     const posted = await org.run(
       (tx) =>
@@ -226,6 +228,7 @@ describe('reservations → finance port', () => {
     const sister = await addProperty(h, org);
     const agent = org.as(['reservations.booking.create']);
     const stayId = newId();
+    h.bookings.set(stayId, { propertyId: org.propertyId, status: 'confirmed' }); // known to reservations
     const folio = await org.run(
       (tx) =>
         port.openFolio(tx, {

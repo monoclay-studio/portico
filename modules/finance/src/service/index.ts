@@ -51,7 +51,7 @@ export function createFinance(ports: FinancePorts) {
     recordDisputeMovement: bind(deps, ledgerPort.recordDisputeMovement),
     recordSettlementFees: bind(deps, ledgerPort.recordSettlementFees),
     markPaymentVerified: ledgerPort.markPaymentVerified,
-    describeTarget: ledgerPort.describeTarget,
+    describeTarget: bind(deps, ledgerPort.describeTarget),
     assertTargetInScope: bind(deps, ledgerPort.assertTargetInScope),
     assertPropertyScope: bind(deps, ledgerPort.assertPropertyScope),
     getPropertyLegalEntity: async (tx: TxContext, propertyId: string) =>

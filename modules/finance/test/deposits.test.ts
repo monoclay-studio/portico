@@ -24,6 +24,7 @@ describe('deposits (liability, time of supply)', () => {
   it('is a liability with tax declared on receipt, released (not re-declared) when applied', async () => {
     const org = await setupOrg(h);
     const bookingId = newId();
+    h.bookings.set(bookingId, { propertyId: org.propertyId, status: 'confirmed' }); // known to reservations
     const folioId = await newFolio(org, bookingId);
     const dep = await org.run((tx) =>
       h.finance.recordDeposit(tx, {
@@ -83,6 +84,7 @@ describe('deposits (liability, time of supply)', () => {
   it('keeps the prepaid part at the rate in force when it was paid (no re-rating after a rate change)', async () => {
     const org = await setupOrg(h);
     const bookingId = newId();
+    h.bookings.set(bookingId, { propertyId: org.propertyId, status: 'confirmed' }); // known to reservations
     const folioId = await newFolio(org, bookingId);
     h.tax.tgstRate = () => '16';
     try {
@@ -112,6 +114,7 @@ describe('deposits (liability, time of supply)', () => {
   it('refunds release the declared tax; forfeiture keeps it due and books only the net as revenue', async () => {
     const org = await setupOrg(h);
     const bookingId = newId();
+    h.bookings.set(bookingId, { propertyId: org.propertyId, status: 'confirmed' }); // known to reservations
     await newFolio(org, bookingId);
     await org.run((tx) =>
       h.finance.recordDeposit(tx, {

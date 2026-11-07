@@ -146,10 +146,12 @@ export async function assertLedgerTarget(
 ): Promise<void> {
   const owner = await d.ledger.describeTarget(tx, ref);
   if (!owner) {
-    if (ref.type === 'booking') return; // first deposit: finance binds the booking to this property on posting
+    // Review P1-1: an unknown booking is refused exactly like an unknown folio — never "bound" by its first deposit.
     throw new BusinessRuleError(
       'ledger_target_unknown',
-      'Finance does not know this folio, so a payment could not be shown on any bill. Open the folio first (or choose the right one), then collect.',
+      ref.type === 'folio'
+        ? 'Finance does not know this folio, so a payment could not be shown on any bill. Open the folio first (or choose the right one), then collect.'
+        : 'Portico has no booking with this reference, so a deposit could not be held for it. Check the booking code (or collect on the booking it belongs to), then collect. Nothing was charged.',
       { ref },
     );
   }

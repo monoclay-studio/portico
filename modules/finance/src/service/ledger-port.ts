@@ -272,11 +272,23 @@ export async function recordDisputeMovement(
   return { journalEntryId: claim.entryId, replayed: false };
 }
 
-/** Owner of a ledger target (ADR-0015): which property and legal entity a folio or booking deposit belongs to. */
+/**
+ * Owner of a ledger target (ADR-0015): which property and legal entity a folio or booking deposit belongs to. A
+ * booking's owner comes from reservations (booking directory, review P1-1); only deposits finance already holds for a
+ * booking reservations does not know (opening balances imported from a previous system) are described from finance.
+ */
 export async function describeTarget(
   tx: TxContext,
+  deps: Deps,
   ref: { type: 'folio' | 'booking'; id: string },
 ): Promise<{ propertyId: string; legalEntityId: string } | null> {
+  if (ref.type === 'booking') {
+    const booking = await deps.ports.bookings.describeBooking(tx, ref.id);
+    if (booking) {
+      const p = await deps.ports.platform.getProperty(tx, booking.propertyId);
+      return { propertyId: p.id, legalEntityId: p.legalEntityId };
+    }
+  }
   if (ref.type === 'folio') {
     const f = await db(tx)
       .selectFrom('finance.folios')
@@ -290,20 +302,14 @@ export async function describeTarget(
     .select(['property_id', 'legal_entity_id'])
     .where('booking_id', '=', ref.id)
     .executeTakeFirst();
-  if (acct) return { propertyId: acct.property_id, legalEntityId: acct.legal_entity_id };
-  const f = await db(tx)
-    .selectFrom('finance.folios')
-    .select(['property_id', 'legal_entity_id'])
-    .where('owner_type', '=', 'booking')
-    .where('owner_id', '=', ref.id)
-    .executeTakeFirst();
-  return f ? { propertyId: f.property_id, legalEntityId: f.legal_entity_id } : null;
+  // Only imported opening deposits exist for bookings reservations does not know; a booking folio alone never makes
+  // an unknown booking acceptable for money (review P1-1).
+  return acct ? { propertyId: acct.property_id, legalEntityId: acct.legal_entity_id } : null;
 }
 
 /**
  * Refuse a port call whose target belongs to another property or legal entity than the scope the calling module
- * authorized (ADR-0015 §3). A booking without any finance record yet is accepted for its first deposit when the
- * property is operated by the given legal entity.
+ * authorized (ADR-0015 §3), or that nobody knows: an unknown booking is refused like an unknown folio (review P1-1).
  */
 export async function assertTargetInScope(
   tx: TxContext,
@@ -311,17 +317,14 @@ export async function assertTargetInScope(
   ref: { type: 'folio' | 'booking'; id: string },
   scope: { propertyId: string; legalEntityId: string },
 ): Promise<void> {
-  const owner = await describeTarget(tx, ref);
+  const owner = await describeTarget(tx, deps, ref);
   if (!owner) {
     if (ref.type === 'folio') throw new ValidationError('folio_not_found', 'The folio was not found.');
-    const property = await deps.ports.platform.getProperty(tx, scope.propertyId);
-    if (property.legalEntityId !== scope.legalEntityId) {
-      throw new BusinessRuleError(
-        'scope_mismatch',
-        'The property is operated by another legal entity than the one given.',
-      );
-    }
-    return;
+    throw new BusinessRuleError(
+      'ledger_target_unknown',
+      'Portico has no booking with this reference, so the money could not be held for it. Check the booking code, or record the payment on the booking it belongs to. Nothing was posted.',
+      { ref },
+    );
   }
   if (owner.propertyId !== scope.propertyId || owner.legalEntityId !== scope.legalEntityId) {
     throw new BusinessRuleError(

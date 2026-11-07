@@ -23,6 +23,28 @@ export interface StayForPosting {
   nightly: { net: Money; taxes: TermsSnapshot['nights'][number]['taxes'] };
 }
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Booking directory (provider for payments and finance, integration-step review P1-1): which property owns a
+ * booking, or null when this organization has no such booking. Routing metadata only — no names, no money — so it
+ * does not check a reservations permission; tenant isolation is enforced by RLS. Money modules use it to refuse a
+ * deposit for an unknown booking or a booking of another property before any money moves.
+ */
+export async function describeBooking(
+  _deps: Deps,
+  tx: TxContext,
+  bookingId: string,
+): Promise<{ propertyId: string; status: string } | null> {
+  if (!UUID.test(bookingId)) return null;
+  const row = await db(tx)
+    .selectFrom('reservations.bookings')
+    .select(['property_id', 'status'])
+    .where('id', '=', bookingId)
+    .executeTakeFirst();
+  return row ? { propertyId: row.property_id, status: row.status } : null;
+}
+
 export async function getStay(deps: Deps, tx: TxContext, stayId: string): Promise<Stay> {
   const stay = await loadStay(tx, stayId);
   requirePermission(tx, P.bookingRead, { propertyId: stay.row.property_id });

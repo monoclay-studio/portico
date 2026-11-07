@@ -132,8 +132,18 @@ export interface PayerDirectoryPort {
   ): Promise<{ name: string; taxId?: string; address?: string } | null>;
 }
 
+/**
+ * Which property owns a booking (reservations, the only module that knows). Integration-step review P1-1: finance
+ * never binds a booking to "whichever property takes the first deposit"; a deposit for an unknown booking or a
+ * booking of another property is refused before anything is posted.
+ */
+export interface BookingDirectoryPort {
+  describeBooking(tx: TxContext, bookingId: string): Promise<{ propertyId: string; status: string } | null>;
+}
+
 export interface FinancePorts {
   platform: PlatformPort;
+  bookings: BookingDirectoryPort;
   tax: TaxPort;
   payments: PaymentsPort;
   payers: PayerDirectoryPort;

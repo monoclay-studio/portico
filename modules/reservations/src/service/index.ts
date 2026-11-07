@@ -82,6 +82,7 @@ export function reservationsService(ports: ReservationsPorts, config: Partial<Se
     // channel ingestion & domain-map provider functions
     ingestChannelBooking: bind(deps, channel.ingestChannelBooking),
     getStay: bind(deps, provider.getStay),
+    describeBooking: bind(deps, provider.describeBooking),
     listInHouseStaysForNight: bind(deps, provider.listInHouseStaysForNight),
     listDueArrivals: bind(deps, provider.listDueArrivals),
     listDueDepartures: bind(deps, provider.listDueDepartures),
@@ -98,6 +99,7 @@ export type ReservationsService = ReturnType<typeof reservationsService>;
  */
 export function reservationsProvider(service: ReservationsService) {
   return {
+    describeBooking: service.describeBooking,
     getStay: service.getStay,
     getBooking: service.getBooking,
     listInHouseStaysForNight: service.listInHouseStaysForNight,
