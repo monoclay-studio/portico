@@ -265,6 +265,8 @@ export function bookingInput(
     arrival: LocalDate;
     departure: LocalDate;
     guest?: { firstName: string; lastName: string };
+    /** An existing guest profile (booker and primary occupant), e.g. the owner of the guarantee card. */
+    guestProfileId?: string;
     unit?: string;
     adults?: number;
     childrenAges?: number[];
@@ -272,11 +274,13 @@ export function bookingInput(
   overrides: Partial<NewBookingInput> = {},
 ): NewBookingInput {
   const guest = stay.guest ?? { firstName: 'Elena', lastName: 'Ivanova' };
+  const known = stay.guestProfileId ? { profileId: stay.guestProfileId } : {};
   return {
     propertyId: p.id,
     intent: 'confirm',
     booker: {
       kind: 'profile',
+      ...known,
       profile: { ...guest, email: `${guest.lastName.toLowerCase()}-${newId()}@example.ru` },
     },
     source: 'direct_email',
@@ -293,7 +297,7 @@ export function bookingInput(
         departure: stay.departure,
         occupancy: { adults: stay.adults ?? 2, childrenAges: stay.childrenAges ?? [] },
         commercialType: 'standard',
-        occupants: [{ profile: { ...guest }, kind: 'adult', primary: true }],
+        occupants: [{ ...known, profile: { ...guest }, kind: 'adult', primary: true }],
         requests: [],
         ...(stay.unit ? { unitId: p.units[stay.unit] as string } : {}),
       },
@@ -428,13 +432,21 @@ export async function assertGlobalConsistency(
   }
 }
 
-/** A simulated card on file (payments, tokens only) at a property of a non-live organization. */
+/**
+ * A simulated card on file (payments, tokens only) at a property of a non-live organization, owned by `owner`
+ * (default: a guest profile of its own — fine for desk charges; a GUARANTEE card must belong to the booking's guest,
+ * booker or payer, review P1-2: use `guestWithCard`).
+ */
 export async function cardOnFile(
   s: Scenario,
   org: ScenarioOrg,
   propertyId: string,
   legalEntityId: string,
   token = 'pm_card_visa',
+  owner: { type: 'guest_profile' | 'company' | 'agency' | 'booking'; id: string } = {
+    type: 'guest_profile',
+    id: newId(),
+  },
 ) {
   const p = s.c.services.payments;
   return org.run(org.setup, async (tx) => {
@@ -447,10 +459,32 @@ export async function cardOnFile(
       providerToken: token,
       brand: 'visa',
       last4: '4242',
-      owner: { type: 'guest_profile', id: newId() },
+      owner,
       mitAgreement: false,
     });
   });
+}
+
+/** A guest profile (guests) and a card on file it owns — the guest's guarantee card. */
+export async function guestWithCard(
+  s: Scenario,
+  org: ScenarioOrg,
+  p: PropertyFixture,
+  guest: { firstName: string; lastName: string } = { firstName: 'Elena', lastName: 'Ivanova' },
+  token = 'pm_card_visa',
+): Promise<{ profileId: string; card: Awaited<ReturnType<typeof cardOnFile>> }> {
+  const { profileId } = await org.run(org.setup, (tx) =>
+    s.c.services.guests.resolveProfile(
+      tx,
+      { propertyId: p.id, givenName: guest.firstName, familyName: guest.lastName },
+      { matchStrategy: 'create_new' },
+    ),
+  );
+  const card = await cardOnFile(s, org, p.id, p.legalEntityId, token, {
+    type: 'guest_profile',
+    id: profileId,
+  });
+  return { profileId, card };
 }
 
 /** Housekeeping cleans a unit and the supervisor inspects it (operations), so check-in readiness passes. */

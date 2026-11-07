@@ -29,7 +29,7 @@ import { explainDecline } from '../domain/declines';
 import { presentAuthorization, presentPayment, presentRefund, presentRequest } from '../domain/presentation';
 import { capturableMinor, refundableMinor } from '../domain/states';
 import { PaymentsEvents } from '../events';
-import type { LedgerPort, PlatformPort, PropertyInfo } from '../ports';
+import type { LedgerPort, PlatformPort, PropertyInfo, ReferenceDirectoryPort } from '../ports';
 import type { ProviderAccount, SimulatorControls } from '../providers/provider';
 import type { ProviderRegistry } from '../providers/registry';
 import type {
@@ -55,6 +55,8 @@ export interface PaymentsDeps {
   database: PorticoDatabase;
   ledger: LedgerPort;
   platform: PlatformPort;
+  /** Owner of stays/bookings (reservations). Unbound in a standalone deployment alongside another PMS. */
+  references?: ReferenceDirectoryPort;
   registry: ProviderRegistry;
   breaker: BreakerConfig;
 }
@@ -146,10 +148,12 @@ export async function assertLedgerTarget(
 ): Promise<void> {
   const owner = await d.ledger.describeTarget(tx, ref);
   if (!owner) {
-    if (ref.type === 'booking') return; // first deposit: finance binds the booking to this property on posting
+    // Review P1-1: an unknown booking is refused exactly like an unknown folio — never "bound" by its first deposit.
     throw new BusinessRuleError(
       'ledger_target_unknown',
-      'Finance does not know this folio, so a payment could not be shown on any bill. Open the folio first (or choose the right one), then collect.',
+      ref.type === 'folio'
+        ? 'Finance does not know this folio, so a payment could not be shown on any bill. Open the folio first (or choose the right one), then collect.'
+        : 'Portico has no booking with this reference, so a deposit could not be held for it. Check the booking code (or collect on the booking it belongs to), then collect. Nothing was charged.',
       { ref },
     );
   }
@@ -165,6 +169,36 @@ export async function assertLedgerTarget(
       'wrong_merchant_of_record',
       `This ${ref.type} belongs to a different legal entity than the one operating this property; the money would be booked in the wrong company's books.`,
       { ref },
+    );
+  }
+}
+
+/**
+ * Review P1-1 sibling: a hold or recorded authorization is tied to a stay or booking of THIS property. An unknown
+ * reference or one of another property is refused before anything is recorded (no griefing of another property's
+ * guest: their check-in would otherwise find foreign payment records on its stay).
+ */
+export async function assertReferenceAt(
+  d: PaymentsDeps,
+  tx: TxContext,
+  ref: { type: string; id: string },
+  propertyId: string,
+): Promise<void> {
+  if (!d.references) return;
+  const owner = await d.references.describeReference(tx, ref);
+  if (owner === undefined) return;
+  if (owner === null) {
+    throw new BusinessRuleError(
+      'reference_unknown',
+      `Portico has no ${ref.type} with this reference, so nothing can be held or collected for it. Check the reference and try again.`,
+      { ref },
+    );
+  }
+  if (owner.propertyId !== propertyId) {
+    throw new BusinessRuleError(
+      'reference_other_property',
+      `This ${ref.type} belongs to another property. Collect at the property that owns it.`,
+      { ref, propertyId },
     );
   }
 }

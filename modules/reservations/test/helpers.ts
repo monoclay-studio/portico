@@ -223,7 +223,9 @@ export async function setupOrg(
   const ports: ReservationsPorts = { ...fakes, inventory, platform: realPlatformPort() };
   const svc = reservationsService(ports);
   const propertyId = property.id;
-  const cardMethodId = fakes.payments.addMethod(propertyId);
+  // The default guest (primary occupant of org.stay()) owns the default guarantee card (review P1-2 owner check).
+  const guestProfileId = newId();
+  const cardMethodId = fakes.payments.addMethod(propertyId, { type: 'guest_profile', id: guestProfileId });
   const org: Org = {
     t,
     ctx,
@@ -257,6 +259,7 @@ export async function setupOrg(
         commercialType: 'standard',
         occupants: [
           {
+            profileId: guestProfileId,
             profile: { firstName: 'Lena', lastName: 'Hoffmann', email: `lena-${newId()}@example.de` },
             kind: 'adult',
             primary: true,

@@ -325,6 +325,7 @@ describe('F-05: tax invoices state value and tax correctly (X11, X12)', () => {
   it('a deposit taxed at 16% applied after a rise to 17%: the invoice shows the declared rate and the right tax', async () => {
     const org = await setupOrg(h);
     const bookingId = newId();
+    h.bookings.set(bookingId, { propertyId: org.propertyId, status: 'confirmed' }); // known to reservations
     const folioId = (
       await org.run((tx) =>
         h.finance.openFolio(tx, {

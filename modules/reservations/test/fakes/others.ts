@@ -123,6 +123,8 @@ export class FakePayments implements PaymentsPort {
   crashNextAuthorize = false;
   /** Registered tokenized payment methods → property. */
   methods = new Map<string, string>();
+  /** Owner of each registered method (payments' `owner`), for the guarantee-card check (review P1-2). */
+  methodOwners = new Map<string, { type: string; id: string }>();
   /** Committed authorizations by idempotency key, in creation order. */
   authorizations = new Map<string, FakeAuthorization>();
   authorizeCalls = 0;
@@ -130,10 +132,23 @@ export class FakePayments implements PaymentsPort {
   providerCalls = 0;
   requests: Array<{ amount: Money; ref: EntityRef; key: string }> = [];
 
-  addMethod(propertyId: string): string {
+  addMethod(
+    propertyId: string,
+    owner: { type: string; id: string } = { type: 'guest_profile', id: newId() },
+  ): string {
     const id = newId();
     this.methods.set(id, propertyId);
+    this.methodOwners.set(id, owner);
     return id;
+  }
+
+  async describeMethod(
+    _tx: TxContext,
+    methodId: string,
+    scope: { propertyId: string },
+  ): Promise<{ id: string; owner: { type: string; id: string } } | null> {
+    const owner = this.methodOwners.get(methodId);
+    return owner && this.methods.get(methodId) === scope.propertyId ? { id: methodId, owner } : null;
   }
 
   private view(a: FakeAuthorization): AuthorizationView {

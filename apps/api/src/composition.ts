@@ -223,6 +223,7 @@ export function compose(database: PorticoDatabase): Composition {
   // them through late-bound references (both exist before any request is served).
   let ratesRef: RatesService | undefined;
   let paymentsRef: PaymentsService | undefined;
+  let reservationsRef: ReservationsService | undefined;
   const bound = <T>(ref: T | undefined, module: string): T => {
     if (!ref) throw new ModuleUnavailableError(module, 'composition');
     return ref;
@@ -234,6 +235,12 @@ export function compose(database: PorticoDatabase): Composition {
       getBusinessDate: platform.getBusinessDate,
       getLegalEntity: platform.getLegalEntity,
       assertWritable: platform.assertWritable,
+    },
+    // Which property owns a booking: reservations (review P1-1). Deposits for unknown or other-property bookings are
+    // refused; finance never binds a booking to the first property that takes money for it.
+    bookings: {
+      describeBooking: (tx, bookingId) =>
+        bound(reservationsRef, 'reservations').describeBooking(tx, bookingId),
     },
     tax: bindFinanceTax(() => bound(ratesRef, 'rates')),
     payments: {
@@ -445,6 +452,11 @@ export function compose(database: PorticoDatabase): Composition {
   const payments = createPaymentsModule({
     database,
     ledger: financeLedgerForPayments(finance),
+    // Owner of stays and bookings (reservations): holds and payments for another property's (or an unknown) stay or
+    // booking are refused before anything is recorded (review P1-1/P1-2).
+    references: {
+      describeReference: (tx, ref) => bound(reservationsRef, 'reservations').describeReference(tx, ref),
+    },
     platform: paymentsPlatform,
     secrets: envProviderSecrets(process.env),
     simulatorSigningSecret: process.env.PAYMENTS_SIMULATOR_SIGNING_SECRET ?? randomToken(),
@@ -489,6 +501,7 @@ export function compose(database: PorticoDatabase): Composition {
     operations: operationsForReservations(operationsService) satisfies OperationsPort,
     access: environmentAccessAdapter() satisfies AccessPort,
   });
+  reservationsRef = reservations;
   const reservationsModule = reservationsHttp({ database, service: reservations });
   // ── cross-module experience: global search, summaries, record history ──
   const searchProviders: SearchProvider[] = [

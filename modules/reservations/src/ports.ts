@@ -613,6 +613,15 @@ export interface PaymentsPort {
       description?: string;
     },
   ): Promise<{ id: string; status: Record<string, string> }>;
+  /**
+   * Who a saved payment method (card token) belongs to, or null when it is unknown, detached or of another property.
+   * Review P1-2: reservations checks that a card used for a stay belongs to its guest, booker or payer.
+   */
+  describeMethod(
+    tx: TxContext,
+    methodId: string,
+    scope: { propertyId: string },
+  ): Promise<{ id: string; owner: { type: string; id: string } } | null>;
   /** Records the intent and returns `processing`; the provider call happens after commit. */
   authorize(
     tx: TxContext,

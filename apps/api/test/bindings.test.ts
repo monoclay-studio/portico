@@ -13,6 +13,7 @@ import {
   assertGlobalConsistency,
   bookingInput,
   cardOnFile,
+  guestWithCard,
   hiyani,
   kandu,
   makeExternal,
@@ -159,14 +160,14 @@ describe('reservations → guests, payments, finance, operations (check-in and c
     const k = await kandu(s, org, '2027-03-10');
     const desk = org.staff('front_desk', 'Hassan', [k.id]);
     const { reservations, payments, finance, guests, operations } = s.c.services;
-    const card = await cardOnFile(s, org, k.id, k.legalEntityId);
+    const { profileId: guestId, card } = await guestWithCard(s, org, k);
     const b = applied<Booking>(
       await org.run(desk, (tx) =>
         reservations.createBooking(
           tx,
           bookingInput(
             k,
-            { arrival: '2027-03-10', departure: '2027-03-12', unit: '214' },
+            { arrival: '2027-03-10', departure: '2027-03-12', unit: '214', guestProfileId: guestId },
             { guarantee: { kind: 'card', paymentMethodId: card.id } },
           ),
         ),
@@ -204,6 +205,7 @@ describe('reservations → guests, payments, finance, operations (check-in and c
     );
     expect(pay.capturedMinor).toBe(50_000);
 
+    const chen = await guestWithCard(s, org, k, { firstName: 'Wei', lastName: 'Chen' }, 'pm_card_mastercard');
     // A second arrival without a deposit: the guarantee step authorizes the card (two-phase: `processing` inside
     // the step, settled by payments after commit, read back) — exactly once.
     const b2 = applied<Booking>(
@@ -217,8 +219,9 @@ describe('reservations → guests, payments, finance, operations (check-in and c
               departure: '2027-03-11',
               unit: '216',
               guest: { firstName: 'Wei', lastName: 'Chen' },
+              guestProfileId: chen.profileId,
             },
-            { guarantee: { kind: 'card', paymentMethodId: card.id } },
+            { guarantee: { kind: 'card', paymentMethodId: chen.card.id } },
           ),
         ),
       ),

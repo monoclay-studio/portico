@@ -13,6 +13,7 @@ import {
   assertGlobalConsistency,
   bookingInput,
   cardOnFile,
+  guestWithCard,
   kandu,
   organization,
   readyUnit,
@@ -32,14 +33,14 @@ describe('S03 — extension into a booked villa', () => {
     const k = await kandu(s, org, '2027-03-10');
     const { reservations, rates } = s.c.services;
     const desk = org.staff('front_desk', 'Hassan', [k.id]);
-    const card = await cardOnFile(s, org, k.id, k.legalEntityId);
+    const { profileId: guestId, card } = await guestWithCard(s, org, k);
     const ivanova = applied<Booking>(
       await org.run(desk, (tx) =>
         reservations.createBooking(
           tx,
           bookingInput(
             k,
-            { arrival: '2027-03-10', departure: '2027-03-12', unit: '214' },
+            { arrival: '2027-03-10', departure: '2027-03-12', unit: '214', guestProfileId: guestId },
             { guarantee: { kind: 'card', paymentMethodId: card.id } },
           ),
         ),

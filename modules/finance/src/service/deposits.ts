@@ -17,6 +17,7 @@ import { fromRatesTaxLine, normalizeLedgerKey, type PostingTax } from '../domain
 import type { PaymentMethodKind } from '../domain/types';
 import type { DepositAccountsTable } from '../tables';
 import { prepareDestination } from './folios';
+import { describeTarget } from './ledger-port';
 import { chargeCodeByCode } from './setup';
 import {
   accountId,
@@ -51,29 +52,46 @@ type DeclaredMap = Record<string, number>;
 const declaredOf = (a: Selectable<DepositAccountsTable>): DeclaredMap =>
   (a.declared_tax ?? {}) as DeclaredMap;
 
+/**
+ * The property of a booking's deposit (review P1-1). The owner comes from reservations (booking directory); a
+ * deposit is refused for a booking that exists nowhere, and for a booking of another property than the caller's.
+ * Only a deposit account finance already holds for a booking reservations does not know (opening balances imported
+ * from a previous system) is used as is. Never "whichever property takes the first deposit".
+ */
 async function resolveDepositProperty(
   tx: TxContext,
+  deps: Deps,
   bookingId: string,
   propertyId?: string,
 ): Promise<string> {
-  if (propertyId) return propertyId;
+  const owner = await describeTarget(tx, deps, { type: 'booking', id: bookingId });
+  if (!owner) {
+    throw new BusinessRuleError(
+      'ledger_target_unknown',
+      'Portico has no booking with this reference, so the deposit could not be held for it. Check the booking code, or record the payment on the booking it belongs to. Nothing was posted.',
+      { bookingId },
+    );
+  }
+  if (propertyId && propertyId !== owner.propertyId) {
+    throw new BusinessRuleError(
+      'scope_mismatch',
+      'This booking belongs to another property. Take the deposit at the property that owns the booking. Nothing was posted.',
+      { bookingId, propertyId },
+    );
+  }
   const acct = await db(tx)
     .selectFrom('finance.deposit_accounts')
-    .select('property_id')
+    .select(['property_id', 'legal_entity_id'])
     .where('booking_id', '=', bookingId)
     .executeTakeFirst();
-  if (acct) return acct.property_id;
-  const folio = await db(tx)
-    .selectFrom('finance.folios')
-    .select('property_id')
-    .where('owner_type', '=', 'booking')
-    .where('owner_id', '=', bookingId)
-    .executeTakeFirst();
-  if (folio) return folio.property_id;
-  throw new ValidationError(
-    'property_required',
-    'Give the property of the booking to record its first deposit.',
-  );
+  if (acct && (acct.property_id !== owner.propertyId || acct.legal_entity_id !== owner.legalEntityId)) {
+    throw new BusinessRuleError(
+      'scope_mismatch',
+      "This booking's deposits are held at another property or legal entity. Finance must move them before more is taken. Nothing was posted.",
+      { bookingId },
+    );
+  }
+  return owner.propertyId;
 }
 
 async function lockDepositAccount(
@@ -184,7 +202,7 @@ export async function recordDeposit(
 ): Promise<{ entryId: string; balance: Money; taxDeclared: Money; replayed: boolean }> {
   if (input.amount.amountMinor <= 0)
     throw new ValidationError('invalid_amount', 'A deposit must be positive.');
-  const propertyId = await resolveDepositProperty(tx, input.bookingId, input.propertyId);
+  const propertyId = await resolveDepositProperty(tx, deps, input.bookingId, input.propertyId);
   requirePermission(tx, 'finance.posting.create', { propertyId });
   const { idempotencyKey, ...rest } = input;
   const hash = requestHash({ op: 'deposit', ...rest });

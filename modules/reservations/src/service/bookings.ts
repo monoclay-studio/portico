@@ -49,6 +49,7 @@ import {
   propertyInfo,
 } from './context';
 import { emitReservationEvent } from './event-payload';
+import { assertGuaranteeMethod } from './guarantee';
 import { resolveGuest } from './guests';
 import { raiseIssue } from './issues';
 import { keyOperation } from './keys';
@@ -325,6 +326,15 @@ export async function createBookingInternal(
       conflicts.push({ stayId: inserted.stayId, conflictIds: inserted.conflictIds });
   }
 
+  // Review P1-2: a guarantee card recorded on the booking must belong to its guest, booker or payer (so nobody can
+  // attach a stranger's saved card for the desk to authorize later). Refused inside the transaction: nothing is kept.
+  if (input.guarantee?.paymentMethodId) {
+    await assertGuaranteeMethod(deps, tx, {
+      bookingId,
+      propertyId: input.propertyId,
+      methodId: input.guarantee.paymentMethodId,
+    });
+  }
   let rec = await loadBooking(tx, bookingId);
   await recordVersion(tx, rec, 'create');
   if ((status === 'tentative' || status === 'confirmed') && input.intent !== 'waitlist') {
@@ -916,6 +926,13 @@ export async function patchBooking(
   });
   if (forwarded) return forwarded;
   const p = input.patch;
+  if (p.guarantee?.paymentMethodId) {
+    await assertGuaranteeMethod(deps, tx, {
+      bookingId: row.id,
+      propertyId: row.property_id,
+      methodId: p.guarantee.paymentMethodId,
+    });
+  }
   await db(tx)
     .updateTable('reservations.bookings')
     .set({

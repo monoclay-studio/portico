@@ -10,7 +10,7 @@ import { DomainError, delegateAtProperty, type RequestContext } from '@portico/k
 import type { Authorization, Payment, PaymentRequest, Refund } from '../contracts';
 import { type BreakerConfig, DEFAULT_BREAKER } from '../domain/circuit-breaker';
 import { PaymentsEvents } from '../events';
-import type { LedgerPort, PlatformPort } from '../ports';
+import type { LedgerPort, PlatformPort, ReferenceDirectoryPort } from '../ports';
 import type { ProviderRegistry } from '../providers/registry';
 import * as accounts from './accounts';
 import * as collect from './collect';
@@ -25,6 +25,7 @@ export interface PaymentsServiceDeps {
   database: PaymentsDeps['database'];
   ledger: LedgerPort;
   platform: PlatformPort;
+  references?: ReferenceDirectoryPort;
   registry: ProviderRegistry;
   breaker?: BreakerConfig;
 }
@@ -262,6 +263,25 @@ export function createPaymentsService(input: PaymentsServiceDeps) {
         if (!scope) return queries.getPaymentStatus(tx, ref);
         await assertRefAt(tx, ref, scope.propertyId);
         return queries.getPaymentStatus(delegateAtProperty(tx, PORT_DELEGATION, scope.propertyId), ref);
+      },
+      /**
+       * Who a saved payment method belongs to (review P1-2): the calling module checks that a card used for a stay
+       * belongs to its guest, booker or payer. Null when the method does not exist, is detached or belongs to another
+       * property (indistinguishable to the caller).
+       */
+      async describeMethod(
+        tx: TxContext,
+        methodId: string,
+        scope: { propertyId: string },
+      ): Promise<{ id: string; owner: { type: string; id: string } } | null> {
+        if (!/^[0-9a-f-]{36}$/i.test(methodId)) return null;
+        const m = await db(tx)
+          .selectFrom('payments.payment_methods')
+          .select(['id', 'property_id', 'owner_type', 'owner_id', 'status'])
+          .where('id', '=', methodId)
+          .executeTakeFirst();
+        if (!m || m.property_id !== scope.propertyId || m.status !== 'active') return null;
+        return { id: m.id, owner: { type: m.owner_type, id: m.owner_id } };
       },
       listUnresolved: (tx: TxContext, i: { propertyId: string }) =>
         queries.listUnresolved(delegateAtProperty(tx, PORT_DELEGATION, i.propertyId), i),

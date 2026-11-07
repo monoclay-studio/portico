@@ -68,10 +68,20 @@ async function demoOrg(name = 'Demo Resort') {
       owner: { type: 'guest_profile', id: newId() },
       mitAgreement: false,
     });
+  /** A folio of this property (payments refuse unknown bookings and folios — review P1-1). */
+  const folio = async () =>
+    (
+      await post('/v1/finance/folios', {
+        propertyId: prop.json().id,
+        owner: { type: 'stay', id: newId() },
+        payer: { type: 'guest', name: 'Guest' },
+      })
+    ).json().id as string;
   return {
     tenantId,
     auth,
     post,
+    folio,
     propertyId: prop.json().id as string,
     accountId: account.json().id as string,
     accountEtag: account.headers.etag as string,
@@ -84,12 +94,12 @@ describe('payments API', () => {
     const org = await demoOrg();
     const m = await org.method('sim_timeout_then_succeeded');
     expect(m.statusCode).toBe(201);
-    const bookingId = newId();
+    const bookingId = await org.folio();
     const body = {
       propertyId: org.propertyId,
       methodId: m.json().id,
       amount: { amountMinor: 84_000, currency: 'USD' },
-      ref: { type: 'booking', id: bookingId },
+      ref: { type: 'folio', id: bookingId },
     };
     const noKey = await org.post('/v1/payments/charges', body, null);
     expect(noKey.statusCode).toBe(400);
@@ -115,7 +125,7 @@ describe('payments API', () => {
     const retry = await org.post('/v1/payments/charges', body, key);
     expect(retry.statusCode).toBe(201);
     expect(retry.json().id).toBe(first.json().id);
-    // payments → finance: the confirmed deposit is posted to the booking's deposit account (a liability) once.
+    // payments → finance: the confirmed payment is posted to the folio once.
     expect(retry.json().status).toMatchObject({ payment: 'succeeded', ledger: 'posted' });
     expect(retry.json().issues.map((i: { code: string }) => i.code)).not.toContain('ledger_not_posted');
 
@@ -127,7 +137,7 @@ describe('payments API', () => {
     expect(check.statusCode).toBe(200);
     const status = await h.app.inject({
       method: 'GET',
-      url: `/v1/payments/status-by-ref?refType=booking&refId=${bookingId}`,
+      url: `/v1/payments/status-by-ref?refType=folio&refId=${bookingId}`,
       headers: org.auth,
     });
     expect(status.json().payments).toHaveLength(1);
@@ -152,7 +162,7 @@ describe('payments API', () => {
       propertyId: org.propertyId,
       methodId: m.json().id,
       amount: { amountMinor: 1_000, currency: 'USD' },
-      ref: { type: 'booking', id: newId() },
+      ref: { type: 'folio', id: await org.folio() },
     });
     expect(res.statusCode).toBe(402);
     expect(res.json()).toMatchObject({
@@ -275,12 +285,13 @@ describe('payments API', () => {
       payload: { outage: 'refuse' },
     });
     expect(ok.statusCode).toBe(200);
+    const outageFolio = await org.folio();
     const charge = () =>
       org.post('/v1/payments/charges', {
         propertyId: org.propertyId,
         methodId: m.json().id,
         amount: { amountMinor: 1_000, currency: 'USD' },
-        ref: { type: 'booking', id: newId() },
+        ref: { type: 'folio', id: outageFolio },
       });
     for (let i = 0; i < 3; i++) expect((await charge()).statusCode).toBe(402);
     const down = await charge();
@@ -313,7 +324,7 @@ describe('payments API', () => {
       propertyId: victim.propertyId,
       methodId: m.json().id,
       amount: { amountMinor: 1_000, currency: 'USD' },
-      ref: { type: 'booking', id: newId() },
+      ref: { type: 'folio', id: await victim.folio() },
     });
     expect(paid.statusCode).toBe(201);
     const attacker = await demoOrg('Attacker');

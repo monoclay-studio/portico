@@ -111,6 +111,7 @@ describe('payments → finance LedgerPort', () => {
   it('records deposits, refunds held deposits and refunds applied deposits on the folio', async () => {
     const org = await setupOrg(h);
     const bookingId = newId();
+    h.bookings.set(bookingId, { propertyId: org.propertyId, status: 'confirmed' }); // known to reservations
     const folio = await org.run((tx) =>
       h.finance.openFolio(tx, {
         propertyId: org.propertyId,
@@ -302,8 +303,10 @@ describe('payments → finance LedgerPort', () => {
     ).rejects.toMatchObject({
       code: 'scope_mismatch',
     });
-    // First deposit binds the booking to the property; a later deposit from the sister property is refused.
+    // The booking's owner comes from reservations (review P1-1): a deposit from the sister property is refused, the
+    // first deposit no longer "binds" anything, and a booking nobody knows is refused before anything moves.
     const bookingId = newId();
+    h.bookings.set(bookingId, { propertyId: org.propertyId, status: 'confirmed' });
     const deposit = (sc: { propertyId: string; legalEntityId: string }) =>
       org.run((tx) =>
         ledger.recordDeposit(tx, {
@@ -327,6 +330,22 @@ describe('payments → finance LedgerPort', () => {
       scope(org),
     );
     await expect(deposit(sister)).rejects.toMatchObject({ code: 'scope_mismatch' });
+    const ghost = newId();
+    await expect(
+      org.run((tx) =>
+        ledger.recordDeposit(tx, {
+          ...scope(org),
+          clearing: simulator,
+          bookingId: ghost,
+          amount: usd(5000),
+          paymentRef: { type: 'payment', id: newId() },
+          idempotencyKey: `g:${ghost}`,
+          method: 'payment_link',
+          verification: 'provider_confirmed',
+        }),
+      ),
+    ).rejects.toMatchObject({ code: 'ledger_target_unknown' });
+    expect(await org.run((tx) => ledger.describeTarget(tx, { type: 'booking', id: ghost }))).toBeNull();
     await expect(
       org.run((tx) =>
         ledger.recordSettlementFees(tx, {

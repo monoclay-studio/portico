@@ -1,6 +1,6 @@
 import type { TxContext } from '@portico/db';
 import { ModuleUnavailableError, newId } from '@portico/kernel';
-import type { PayerDirectoryPort, PaymentsPort, TaxPort } from './ports';
+import type { BookingDirectoryPort, PayerDirectoryPort, PaymentsPort, TaxPort } from './ports';
 import { seedDefaultChargeCodes } from './service/setup';
 import { db, ensureChart } from './service/support';
 
@@ -10,11 +10,18 @@ import { db, ensureChart } from './service/support';
  * taxes); collection requests report 'unavailable' so a late charge still posts and is listed as an exception.
  */
 export function unavailableFinancePorts(): {
+  bookings: BookingDirectoryPort;
   tax: TaxPort;
   payments: PaymentsPort;
   payers: PayerDirectoryPort;
 } {
   return {
+    // Without reservations no booking is known: deposits are refused (never bound to the first property that pays).
+    bookings: {
+      async describeBooking() {
+        return null;
+      },
+    },
     // Without a directory, payers referenced only by id keep a placeholder name (live invoices then ask for it).
     payers: {
       async describePayer() {

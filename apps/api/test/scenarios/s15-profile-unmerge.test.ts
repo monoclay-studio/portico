@@ -56,7 +56,10 @@ describe('S15 — wrong merge corrected by an unmerge', () => {
 
     // After the merge, the second Ahmed Ali arrives and is checked in on the survivor profile (stay history).
     s.clock.advance(60 * 60_000);
-    const card = await cardOnFile(s, org, k.id, k.legalEntityId);
+    const card = await cardOnFile(s, org, k.id, k.legalEntityId, 'pm_card_visa', {
+      type: 'guest_profile',
+      id: a,
+    });
     const third = await org.run(desk, async (tx) => {
       const input = bookingInput(k, {
         arrival: '2027-03-08',

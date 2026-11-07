@@ -21,6 +21,8 @@ export interface Harness {
   tax: FakeTax;
   /** Fake payer directory (guests): payer id → name. */
   payerNames: Map<string, string>;
+  /** Fake booking directory (reservations): booking id → owning property. */
+  bookings: Map<string, { propertyId: string; status: string }>;
 }
 
 /**
@@ -122,9 +124,16 @@ export async function startHarness(): Promise<Harness> {
   const t = await createTestDatabase(sourcesFromManifests([platformManifest, financeManifest]));
   const collections: CollectionRequest[] = [];
   const payerNames = new Map<string, string>();
+  /** Fake booking directory (reservations): tests register the bookings they take deposits for. */
+  const bookings = new Map<string, { propertyId: string; status: string }>();
   const tax = new FakeTax();
   const asSystem = (tx: TxContext): TxContext => ({ ...tx, authz: systemAuthorizer });
   const ports: FinancePorts = {
+    bookings: {
+      async describeBooking(_tx, bookingId) {
+        return bookings.get(bookingId) ?? null;
+      },
+    },
     platform: {
       async getProperty(tx, id) {
         const p = await platform.getProperty(asSystem(tx), id);
@@ -173,7 +182,7 @@ export async function startHarness(): Promise<Harness> {
       },
     },
   };
-  return { t, finance: createFinance(ports), ports, collections, tax, payerNames };
+  return { t, finance: createFinance(ports), ports, collections, tax, payerNames, bookings };
 }
 
 export interface Org {

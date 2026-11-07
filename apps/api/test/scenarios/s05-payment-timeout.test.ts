@@ -12,6 +12,7 @@ import {
   assertGlobalConsistency,
   bookingInput,
   cardOnFile,
+  guestWithCard,
   kandu,
   organization,
   readyUnit,
@@ -31,14 +32,26 @@ describe('S05 — payment timeout at check-in', () => {
     const k = await kandu(s, org, '2027-03-10');
     const { reservations, payments } = s.c.services;
     const desk = org.staff('front_desk', 'Hassan', [k.id]);
-    const card = await cardOnFile(s, org, k.id, k.legalEntityId, 'sim_timeout_then_succeeded');
+    const { profileId: guestId, card } = await guestWithCard(
+      s,
+      org,
+      k,
+      undefined,
+      'sim_timeout_then_succeeded',
+    );
     const b = applied<Booking>(
       await org.run(desk, (tx) =>
         reservations.createBooking(
           tx,
           bookingInput(
             k,
-            { arrival: '2027-03-10', departure: '2027-03-12', unit: '305', type: 'WV' },
+            {
+              arrival: '2027-03-10',
+              departure: '2027-03-12',
+              unit: '305',
+              type: 'WV',
+              guestProfileId: guestId,
+            },
             { guarantee: { kind: 'card', paymentMethodId: card.id } },
           ),
         ),
@@ -102,14 +115,26 @@ describe('S05 — payment timeout at check-in', () => {
     const k = await kandu(s, org, '2027-03-10');
     const { reservations, payments } = s.c.services;
     const desk = org.staff('front_desk', 'Hassan', [k.id]);
-    const bad = await cardOnFile(s, org, k.id, k.legalEntityId, 'sim_timeout_then_failed');
+    const { profileId: guestId, card: bad } = await guestWithCard(
+      s,
+      org,
+      k,
+      undefined,
+      'sim_timeout_then_failed',
+    );
     const b = applied<Booking>(
       await org.run(desk, (tx) =>
         reservations.createBooking(
           tx,
           bookingInput(
             k,
-            { arrival: '2027-03-10', departure: '2027-03-11', unit: '307', type: 'WV' },
+            {
+              arrival: '2027-03-10',
+              departure: '2027-03-11',
+              unit: '307',
+              type: 'WV',
+              guestProfileId: guestId,
+            },
             { guarantee: { kind: 'card', paymentMethodId: bad.id } },
           ),
         ),
@@ -129,7 +154,11 @@ describe('S05 — payment timeout at check-in', () => {
     await payments.checkNow(desk, { type: 'authorization', id: st.authorizations[0]?.id as string });
     const failed = await reservations.performWorkflow(s.t.db, desk, { stayId, kind: 'check_in' });
     expect(failed.run?.steps.find((x) => x.key === 'guarantee')?.status).toBe('failed');
-    const good = await cardOnFile(s, org, k.id, k.legalEntityId, 'pm_card_visa');
+    // The guest's other card (review P1-2: only a card of the booking's guest, booker or payer secures the stay).
+    const good = await cardOnFile(s, org, k.id, k.legalEntityId, 'pm_card_visa', {
+      type: 'guest_profile',
+      id: guestId,
+    });
     const retried = await reservations.performWorkflow(s.t.db, desk, {
       stayId,
       kind: 'check_in',

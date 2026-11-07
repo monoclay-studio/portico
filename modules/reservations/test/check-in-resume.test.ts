@@ -1,5 +1,5 @@
 import { sql, withTenantTx } from '@portico/db';
-import { systemAuthorizer } from '@portico/kernel';
+import { newId, systemAuthorizer } from '@portico/kernel';
 import { platform } from '@portico/platform';
 import type { TestDatabase } from '@portico/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -130,8 +130,10 @@ describe('check-in as a resumable workflow', () => {
     });
     expect(org.fakes.payments.authorizeCalls).toBe(calls);
 
-    // Another card: a NEW idempotency key (one decline counted from payments' records), authorized after commit.
-    const otherCard = org.fakes.payments.addMethod(org.propertyId);
+    // Another card OF THE GUEST: a NEW idempotency key (one decline counted from payments' records), authorized after
+    // commit. (Review P1-2: only a card of the booking's guest, booker or payer may secure the stay.)
+    const guest = b.stays[0]?.occupants[0]?.profileId as string;
+    const otherCard = org.fakes.payments.addMethod(org.propertyId, { type: 'guest_profile', id: guest });
     const done = await org.svc.performWorkflow(t.db, org.ctx, {
       stayId,
       kind: 'check_in',
@@ -147,6 +149,72 @@ describe('check-in as a resumable workflow', () => {
       `checkin:${runId}:guarantee:1`,
     ]);
     expect(org.fakes.payments.providerCalls).toBe(2);
+  });
+
+  it("review P1-2: another card or amount needs payments.payment.collect; a stranger's card and an amount above the cap are refused", async () => {
+    const org = await setupOrg(t);
+    const b = created<Booking>(
+      await org.run((tx) => org.svc.createBooking(tx, org.booking({}, { unitId: org.units.V101 }))),
+    );
+    const stayId = b.stays[0]?.id as string;
+    const guest = b.stays[0]?.occupants[0]?.profileId as string;
+    const stranger = org.fakes.payments.addMethod(org.propertyId, { type: 'guest_profile', id: newId() });
+    const scope = [org.propertyId];
+    const nightReceptionist = org.user('Night receptionist', [
+      { permission: 'reservations.stay.checkIn', propertyIds: scope },
+      { permission: 'reservations.booking.read', propertyIds: scope },
+    ]);
+    // Without the payments capability, neither another card nor an amount can be chosen.
+    await expect(
+      org.svc.performWorkflow(t.db, nightReceptionist, {
+        stayId,
+        kind: 'check_in',
+        checkIn: { registration: { identityVerified: true }, guarantee: { paymentMethodId: stranger } },
+      }),
+    ).rejects.toMatchObject({ status: 403 });
+    await expect(
+      org.svc.performWorkflow(t.db, nightReceptionist, {
+        stayId,
+        kind: 'check_in',
+        checkIn: { guarantee: { amount: { amountMinor: 2_500_000, currency: 'USD' } } },
+      }),
+    ).rejects.toMatchObject({ status: 403 });
+    expect(org.fakes.payments.authorizeCalls).toBe(0);
+    // Even with the capability, a stranger's card is refused and nothing is authorized.
+    const strangerRun = await org.svc.performWorkflow(t.db, org.ctx, {
+      stayId,
+      kind: 'check_in',
+      checkIn: { registration: { identityVerified: true }, guarantee: { paymentMethodId: stranger } },
+    });
+    expect(strangerRun.run?.steps.find((x) => x.key === 'guarantee')).toMatchObject({
+      status: 'failed',
+      message: expect.stringMatching(/not a guest, booker or payer/),
+    });
+    // An amount above the agreed total × the guarantee cap is refused.
+    const huge = await org.svc.performWorkflow(t.db, org.ctx, {
+      stayId,
+      kind: 'check_in',
+      checkIn: { guarantee: { amount: { amountMinor: 2_500_000, currency: 'USD' } } },
+    });
+    expect(huge.run?.steps.find((x) => x.key === 'guarantee')).toMatchObject({
+      status: 'failed',
+      message: expect.stringMatching(/at most/),
+    });
+    expect(org.fakes.payments.authorizeCalls).toBe(0);
+    // A booking cannot record a stranger's card as its guarantee either (nothing is kept).
+    await expect(
+      org.run((tx) =>
+        org.svc.createBooking(tx, org.booking({ guarantee: { kind: 'card', paymentMethodId: stranger } })),
+      ),
+    ).rejects.toMatchObject({ code: 'guarantee_method_not_allowed' });
+    // The guest's own card on the booking is authorized for the agreed amount by the desk.
+    const own = org.fakes.payments.addMethod(org.propertyId, { type: 'guest_profile', id: guest });
+    const ok = await org.svc.performWorkflow(t.db, org.ctx, {
+      stayId,
+      kind: 'check_in',
+      checkIn: { guarantee: { paymentMethodId: own } },
+    });
+    expect(ok.run?.steps.find((x) => x.key === 'guarantee')?.status).toBe('done');
   });
 
   it('a unit that failed inspection blocks the unit step until another ready unit is chosen', async () => {

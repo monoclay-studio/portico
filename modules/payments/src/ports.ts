@@ -153,6 +153,18 @@ export interface LedgerPort {
   ): Promise<{ journalEntryId: string }>;
 }
 
+/**
+ * Which property owns a business reference (reservations: a booking or a stay), bound in the composition root.
+ * Review P1-1: a hold or payment for a stay/booking of another property — or for one that exists nowhere — is refused
+ * before anything is recorded. `undefined` = not a reference type the directory knows (no check).
+ */
+export interface ReferenceDirectoryPort {
+  describeReference(
+    tx: TxContext,
+    ref: { type: string; id: string },
+  ): Promise<{ propertyId: string } | null | undefined>;
+}
+
 export interface PropertyInfo {
   id: string;
   legalEntityId: string;

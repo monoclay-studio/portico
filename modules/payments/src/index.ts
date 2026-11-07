@@ -5,7 +5,14 @@ export { PaymentsEvents } from './events';
 export { type FinanceCollectionRequest, paymentsCollectionsForFinance } from './finance-collections';
 export { paymentsJobs } from './jobs';
 export * from './manifest';
-export type { EntityRef, LedgerPaymentMethod, LedgerPort, PlatformPort, PropertyInfo } from './ports';
+export type {
+  EntityRef,
+  LedgerPaymentMethod,
+  LedgerPort,
+  PlatformPort,
+  PropertyInfo,
+  ReferenceDirectoryPort,
+} from './ports';
 export {
   fetchHttpClient,
   type HttpClient,
@@ -36,7 +43,7 @@ export type { PaymentsDB } from './tables';
 import type { PorticoDatabase } from '@portico/db';
 import { type BreakerConfig, DEFAULT_BREAKER } from './domain/circuit-breaker';
 import { paymentsJobs } from './jobs';
-import type { LedgerPort, PlatformPort } from './ports';
+import type { LedgerPort, PlatformPort, ReferenceDirectoryPort } from './ports';
 import { fetchHttpClient, type HttpClient } from './providers/http-client';
 import { createProviderRegistry, type ProviderSecretsPort } from './providers/registry';
 import { SimulatorProvider } from './providers/simulator';
@@ -48,6 +55,8 @@ export function createPaymentsModule(deps: {
   database: PorticoDatabase;
   ledger: LedgerPort;
   platform: PlatformPort;
+  /** Owner of stays and bookings (reservations); omit in a standalone deployment alongside another PMS. */
+  references?: ReferenceDirectoryPort;
   secrets: ProviderSecretsPort;
   /** Signs simulator webhooks (not a real secret: the simulator moves no money). */
   simulatorSigningSecret: string;
@@ -64,6 +73,7 @@ export function createPaymentsModule(deps: {
     database: deps.database,
     ledger: deps.ledger,
     platform: deps.platform,
+    ...(deps.references ? { references: deps.references } : {}),
     registry,
     breaker: deps.breaker ?? DEFAULT_BREAKER,
   });

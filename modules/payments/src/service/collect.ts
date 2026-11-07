@@ -56,6 +56,7 @@ import {
   assertAccountUsable,
   assertLedgerTarget,
   assertPaymentsWritable,
+  assertReferenceAt,
   assertSameRequest,
   db,
   loadAccount,
@@ -269,6 +270,7 @@ export async function authorize(
   }
   await assertPaymentsWritable(d, tx, input.propertyId);
   const property = await loadProperty(d, tx, input.propertyId);
+  await assertReferenceAt(d, tx, input.ref, property.id);
   const method = await loadActiveMethod(tx, input.methodId);
   const account = await loadAccount(tx, method.account_id);
   assertAccountUsable(account, property, input.amount.currency);
@@ -1159,6 +1161,7 @@ export async function recordAuthorization(
   }
   await assertPaymentsWritable(d, tx, input.propertyId);
   const property = await loadProperty(d, tx, input.propertyId);
+  await assertReferenceAt(d, tx, input.ref, property.id);
   const account = await loadAccount(tx, input.accountId);
   if (account.provider !== 'external_terminal') {
     throw new BusinessRuleError(

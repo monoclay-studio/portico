@@ -55,6 +55,7 @@ import {
   policy,
 } from './context';
 import { emitReservationEvent } from './event-payload';
+import { checkGuaranteeMethod, guaranteeCap, PAYMENT_COLLECT } from './guarantee';
 import { resolveGuest } from './guests';
 import { raiseIssue } from './issues';
 import { agreedPenalty } from './penalties';
@@ -410,7 +411,23 @@ async function stepGuarantee(
   // ALWAYS read the authoritative status first (RES-I09, S05, R-11). Payments is two-phase: an authorization we
   // requested may still be `processing` (provider call after commit) or `pending_verification` (no answer). Never
   // authorize again while one is processing, pending or held — wait and read again.
-  const status = await payments.getPaymentStatus(tx, stayRef, { propertyId: stay.row.property_id });
+  // Payment records of this stay or booking held at another property (data repair, review P1-1/P2-7) are not
+  // usable here: a failed step that says so and names the recovery, never a bare 403.
+  const readStatus = async (ref: EntityRef) => {
+    try {
+      return await payments.getPaymentStatus(tx, ref, { propertyId: stay.row.property_id });
+    } catch (err) {
+      if (err instanceof DomainError && err.code === 'scope_mismatch') return null;
+      throw err;
+    }
+  };
+  const elsewhere: Outcome = {
+    status: 'failed',
+    message:
+      'A payment for this booking was recorded at another property, so it cannot secure this check-in. Finance must move it to this property; meanwhile take the guarantee here with a card of the guest.',
+  };
+  const status = await readStatus(stayRef);
+  if (!status) return elsewhere;
   const auths = status.authorizations;
   const declined = auths.filter((a) => authorizationState(a) === 'failed');
   // A NEW key only after the provider DECLINED an attempt (counted from payments' own records, so a lost step
@@ -456,11 +473,8 @@ async function stepGuarantee(
       idempotencyKey: step.idempotencyKey ?? keyFor(declined.length),
     };
   }
-  const bookingStatus = await payments.getPaymentStatus(
-    tx,
-    { type: 'booking', id: booking.row.id },
-    { propertyId: stay.row.property_id },
-  );
+  const bookingStatus = await readStatus({ type: 'booking', id: booking.row.id });
+  if (!bookingStatus) return elsewhere;
   if (
     bookingStatus.status === 'paid' ||
     bookingStatus.status === 'partially_paid' ||
@@ -479,6 +493,13 @@ async function stepGuarantee(
         'A booking payment is pending verification. Do not take payment again — reconciliation will resolve it.',
       result: guaranteeResult(bookingStatus, undefined, declined.length),
     };
+  }
+  // Review P1-2: another card or amount than the booking's agreed guarantee is an explicit payments capability
+  // (ADR-0015 §5) — the check-in permission secures the stay with ITS guarantee, not any card for any amount.
+  const overridesCard =
+    input?.paymentMethodId !== undefined && input.paymentMethodId !== guarantee.paymentMethodId;
+  if (overridesCard || input?.amount !== undefined) {
+    requirePermission(tx, PAYMENT_COLLECT, { propertyId: stay.row.property_id });
   }
   const methodId = input?.paymentMethodId ?? guarantee.paymentMethodId;
   if (!methodId) {
@@ -510,16 +531,33 @@ async function stepGuarantee(
       result: guaranteeResult(status, last, declined.length),
     };
   }
-  const amount: Money =
-    input?.amount ??
-    stayTotals(
-      stay,
-      await loadSnapshots(
-        tx,
-        stay.segments.map((s) => s.termsSnapshotId),
-      ),
-      booking.row.currency,
-    ).gross;
+  // The card must belong to the booking's guest, booker or payer (also for the booking's own recorded card).
+  const notAllowed = await checkGuaranteeMethod(deps, tx, {
+    bookingId: booking.row.id,
+    propertyId: stay.row.property_id,
+    methodId,
+  });
+  if (notAllowed) return { status: 'failed', message: notAllowed };
+  const agreed = stayTotals(
+    stay,
+    await loadSnapshots(
+      tx,
+      stay.segments.map((s) => s.termsSnapshotId),
+    ),
+    booking.row.currency,
+  ).gross;
+  const amount: Money = input?.amount ?? agreed;
+  const cap = await guaranteeCap(deps, tx, stay.row.property_id, agreed);
+  if (
+    amount.currency !== agreed.currency ||
+    amount.amountMinor > cap.amountMinor ||
+    amount.amountMinor <= 0
+  ) {
+    return {
+      status: 'failed',
+      message: `The amount to hold must be in ${agreed.currency}, positive and at most ${cap.amountMinor} minor units (the agreed stay total with the property's guarantee cap). Adjust the amount.`,
+    };
+  }
   const idempotencyKey = keyFor(declined.length);
   const auth = await payments.authorize(tx, {
     propertyId: stay.row.property_id,
