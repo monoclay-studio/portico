@@ -97,7 +97,7 @@ agents = []
 files = {os.path.basename(f)[len('agent-'):-len('.jsonl')]: f for f in glob.glob(os.path.join(sub_dir, 'agent-*.jsonl'))}
 for aid in sorted(set(files) | set(agent_desc) | set(reports_main)):
     f = files.get(aid)
-    a_first = a_last = None; briefs = []; reports = []; tool_uses = 0; out_tok = 0; in_tok = 0; turns = 0
+    a_first = a_last = None; briefs = []; reports = []; tool_uses = 0; out_tok = 0; in_tok = 0; turns = 0; seen_ids = set()
     if not f:
         d = agent_desc.get(aid, {})
         if d.get('prompt'): briefs.append({'ts': d.get('_ts'), 'text': d['prompt']})
@@ -115,8 +115,11 @@ for aid in sorted(set(files) | set(agent_desc) | set(reports_main)):
                 if t and not t.lstrip().startswith(('<system-reminder>', '[SYSTEM NOTIFICATION')):
                     briefs.append({'ts': ts, 'text': t})
         if o.get('type') == 'assistant':
-            turns += 1
-            u = m.get('usage') or {}
+            mid = m.get('id')
+            first_block = mid not in seen_ids
+            seen_ids.add(mid)
+            turns += 1 if first_block else 0
+            u = (m.get('usage') or {}) if first_block else {}
             out_tok += u.get('output_tokens', 0) or 0
             in_tok += (u.get('input_tokens', 0) or 0) + (u.get('cache_read_input_tokens', 0) or 0) + (u.get('cache_creation_input_tokens', 0) or 0)
             for c in m.get('content', []) if isinstance(m.get('content'), list) else []:

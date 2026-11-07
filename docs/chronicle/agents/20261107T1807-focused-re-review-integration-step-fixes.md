@@ -1,7 +1,7 @@
 # Agent run: Focused re-review: integration-step fixes
 
 - Started: 2026-11-07T18:07:37.453Z · last activity: 2026-11-07T18:29:35.323Z
-- Turns: 220 · tool uses: 135 · output tokens: 252,872
+- Turns: 126 · tool uses: 135 · output tokens: 124,069
 - Type: general-purpose
 
 ## Brief (2026-11-07T18:07:37.453Z)

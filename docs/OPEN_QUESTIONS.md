@@ -3,7 +3,8 @@
 Questions that materially affect scope, spending, commercial commitments, legal responsibility or live
 operations. **Work never stops on these**: each has a default that engineering proceeds with until answered.
 Agents: add new questions at the bottom using the template; never delete answered ones (mark them answered
-and move the answer into `docs/product/decisions.md`).
+and move the answer into `docs/product/decisions.md`). The **Implemented by** line (quality round 3, O4-1) is required
+for every new question, and for each open question whose default is a code or infrastructure setting.
 
 Template:
 
@@ -12,6 +13,7 @@ Template:
 **Context:** why this matters, in plain English.
 **Question:** the precise decision needed.
 **Default we are proceeding with:** …
+**Implemented by:** the file:line that does the default today, or the pending-fixes line that will make it so.
 **If the answer differs:** what changes / rework size.
 **Blocks:** what cannot proceed (and what can).
 **Raised by / date:** …

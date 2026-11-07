@@ -1,7 +1,7 @@
 # Agent run: Wave1: guests module
 
-- Started: 2026-11-07T07:32:35.553Z · last activity: 2026-11-07T18:33:55.059Z
-- Turns: 480 · tool uses: 296 · output tokens: 1,016,501
+- Started: 2026-11-07T07:32:35.553Z · last activity: 2026-11-07T19:06:26.438Z
+- Turns: 304 · tool uses: 327 · output tokens: 531,537
 - Type: general-purpose
 
 ## Brief (2026-11-07T07:32:35.553Z)
@@ -81,6 +81,38 @@ Gates:
 Use PORTICO_TEST_DB_PREFIX=w1_guests_fix (Postgres at 127.0.0.1:5432) and check the exit codes.
 
 Commit (Conventional Commits) and don't push. Reply with finding → commit → test, the self-check tables and the command results.
+
+Address this before completing your current task.
+````
+
+## Follow-up message (2026-11-07T18:53:06.911Z)
+
+````text
+The coordinator sent a message while you were working:
+The focused re-review of your erasure fix says **merge after fixes**: P0 0 · P1 0 · P2 4 · P3 5.
+- Your three claims hold, and the original PoC is refused.
+- Report: docs/orchestration/reviews/review-guests-erasure-fix.md on main.
+- PoCs: fix-sweep-poc/guests-r2-*.ts.txt.
+
+Required before merge, on fix/guests-erasure-idempotency:
+- **R2-P2-1, over-broad redaction.**
+  - The safety net substring-matches every contact value, addresses and local numbers as typed, against every stored response in the tenant.
+  - Erasing a guest with address "Maldives" made a replay of the org's property creation answer 410, because the time zone "Indian/Maldives" contains it. A 7-digit local number wiped an unrelated money response. A shared family email wiped another guest's responses, including one on legal hold. Anyone with erase permission can weaponise it.
+  - Match only profile ids, normalized emails (case-insensitive, whole value) and E.164-normalized phones, as WHOLE JSON string values. Never addresses, never local numbers as typed, never substrings.
+  - Respect other subjects' legal holds.
+  - Turn the reviewer's PoCs into regression tests: the time-zone collision, the digits inside an amount, the shared email with a legal hold, and the planted contact value.
+- **README:** correct the "Erasure reach" rows that cite tests that don't exist. Copies outside guests (finance payer names, payments card-holder and payer details, reservations occupants) are "not reached yet", and are now tracked in pending-fixes as R2-P2-4.
+
+Optional, if cheap: R2-P2-2. Lock the profile row before the status check on every write to a person's data, so an edit racing an erasure can't survive. If you skip it, it is already tracked in pending-fixes. R2-P2-3 (tagged index) and the P3s are tracked too; leave them unless trivial.
+
+Process:
+- Self-check v3 tables.
+- A test per sibling.
+- Re-attack your narrowed matcher: try to make it miss a real copy, and try to make it hit an unrelated one.
+
+Gates:
+`pnpm lint && pnpm turbo run typecheck --force && pnpm turbo run test --force --concurrency=2`
+Use PORTICO_TEST_DB_PREFIX=w1_guests_fix2 and merge main first. Commit and don't push. Reply with the results.
 
 Address this before completing your current task.
 ````
@@ -263,5 +295,96 @@ These three were known before this fix and are not yet in the README's gaps list
 | `pnpm test` | 0 | 16/16 tasks |
 
 No test databases were left behind. No checkpoint commits were rewritten. My write scope was kept, except that `apps/api/src` was not touched.
+````
+
+## Report (2026-11-07T19:06:26.233Z)
+
+````text
+R2-P2-1 is fixed, along with the optional R2-P2-2 and P3s 1, 3 and 5. The README is corrected, main is merged, and all gates pass with exit code 0. Everything is committed on `fix/guests-erasure-idempotency` (/home/user/wt/guests-fix), head f1b28b4, not pushed.
+
+**Finding → commit → test** (tests are in `modules/guests/test/erasure-precision.test.ts` unless noted)
+
+| Finding | Commit | Regression test |
+|---|---|---|
+| **R2-P2-1** over-broad redaction | 284a2de | R2-P2-1 block: "time-zone collision", "digits in an amount", "shared email + legal hold", "planted contact value (griefing)", "real copies are still found", "near misses stay", "counts only real redactions"; `core.test.ts` "WHOLE string values" |
+| **R2-P2-2** write racing an erasure | 284a2de, bdc68cf | "writer first", "erasure first: every sibling writer…" (11 writers), "channel booking racing an erasure", "mirror sync racing an erasure" |
+| R2-P3-1 request-hash oracle | 284a2de | `core.test.ts` "no oracle" |
+| R2-P3-3 replayed duplicates not re-checked | 284a2de | "replayed duplicate suggestions…" |
+| R2-P3-5 reason scrubbing | 284a2de | "whole words" ("Ann LI…annual…Lisa") |
+| README (R2-P2-4 copies outside guests) | 284a2de, bdc68cf, f1b28b4 | — |
+
+**What changed:**
+- **R2-P2-1:** erasure now matches only profile ids (survivor and merged-in), normalized emails (case-insensitive) and E.164 phones, and only as whole JSON string values. It never uses addresses, numbers as typed, or substrings.
+- **Legal hold:** an email or phone shared with a guest on legal hold is not used, and any response naming a held guest is kept.
+- **R2-P3-1:** a redacted response answers 410 for any request body, checked before the request hash, and its stored request hash is cleared.
+- **R2-P2-2:** every writer now locks the profile row before checking its status. If the erasure locked first, the writer is refused with `profile_anonymized`. If the writer locked first, the erasure waits and then erases what it wrote.
+- **README:** "Erasure reach" now lists other modules' copies as **not reached yet** (finance folio payer name, payments card holder name and payer, reservations booker/occupants; R2-P2-4), and every evidence cell names a test that exists.
+- **FR-10** records the indexed redaction proposal (R2-P2-3).
+
+**Re-attack on the narrowed matcher:**
+- **Copies it still finds:** a mixed-case email, an E.164 phone, a merged-in profile id, and an id nested deep in the response.
+- **Copies it misses (residuals, R2-P2-4):** the name alone, a phone written with spaces, an email inside free text.
+- **Unrelated values it no longer hits:**
+  - a longer email ending the same way;
+  - a longer phone with the same prefix;
+  - the same digits stored as a number;
+  - the same values in another organization;
+  - a "Maldives" address against the "Indian/Maldives" time zone;
+  - a dummy guest planted with a payment id;
+  - an email inside a note.
+
+**Self-check v4 § 5, invariant (g)**
+
+| Invariant | Input | Writer, repeat or inverse | Held to the rule? | Test (fails without fix?) |
+|---|---|---|---|---|
+| (g1) Erasure redacts only stored values exactly equal to the subject's identifiers, never under another subject's legal hold | identifier set: profile ids | create, merge (sets merged-into), erasure (family) | yes: survivor and merged-in ids are identifiers | "real copies are still found" (merged-in id) |
+| | | **inverse: unmerge** | yes: the restored person's id and contacts leave the family | "inverse (unmerge)": restored records kept |
+| | identifier set: contacts | profile create, resolve reuse, add contact, mirror sync (`insertContactPoint`), merge/unmerge moves, remove, erasure delete | yes: only normalized emails and E.164 phones; addresses and typed values excluded | "planted contact value" (yes, M8, M14), "time-zone", "amount" (yes, M14) |
+| | matching rule | `redactIdempotencyResponses` | yes: whole value, lower-cased, prefilter then exact test | "near misses stay" (yes, M7), `core.test` "WHOLE string values" (yes) |
+| | other subjects' `legal_hold` | set hold, release hold, merge (carries the hold to the survivor), unmerge (restores it) | yes: shared values dropped, held ids kept | "shared email + legal hold" (yes, M9); **inverse: hold released** → the shared email matches again |
+| | stored responses | `runIdempotent` (11 modules), 30-day purge job | yes: matched by whole value in any module | GUE-I06; API sibling suite |
+| | **own record:** erased marker plus cleared request hash | **repeat:** a second erasure, and erasing the same person twice | yes: markers are never re-matched; the second erasure is refused | "repeat…" (yes, M13); "no oracle" (yes, M12); "counts only real redactions" |
+| (g2) Every writer of a guest's personal data takes the profile row lock before it checks the status | profile status | erasure (anonymized), merge, unmerge | yes: erasure locks FOR UPDATE; writers lock FOR NO KEY UPDATE and re-read the status | "writer first", "erasure first" (yes, M1) |
+| | data rows | shared write check (`requireWritableProfile`): update, contact add/verify/remove, preference add/update/remove, alert add/resolve, note add/revise, relationship, special need, document, legal hold | yes | "erasure first: every sibling writer" (yes, M1) |
+| | | consent | yes | same (yes, M3) |
+| | | relationship target | yes | same (yes, M4) |
+| | | company contact | yes | same (yes, M5) |
+| | | resolve reuse | yes: an erased or merged profile is not reused | "channel booking racing" (yes, M2) |
+| | | mirror sync | yes | "mirror sync racing" (yes, M6) |
+| | | merge / unmerge | yes, unchanged: the pair is locked and the status re-checked; unmerge serializes on the merge row | S15 suite |
+
+**Proof each test fails without its fix:** I ran 14 mutations (`…/scratchpad/mut/run.py`). Each removes one fix; every one turned its test red:
+- M1–M6: each lock removed in turn.
+- M7: the substring matcher.
+- M8: identifiers built from every contact value as typed.
+- M9: the legal-hold keep list removed.
+- M10: replayed suggestions not re-filtered.
+- M11: no word boundaries in reason scrubbing.
+- M12: hash checked before the erased marker.
+- M13: no request-hash reset.
+- M14: the complete old net (M7 + M8).
+
+Exception: the two inverse tests (unmerge, hold released) also pass on the old code. They guard the rule against future changes rather than regress a specific defect.
+
+**Exemptions:**
+- **Not locked:**
+  - `recordStayHistory`: stay rows are pseudonymous and kept by erasure anyway.
+  - Document delete, document reveal and special-need read: these remove or read data, they don't add it.
+  - Duplicate detection and dismissal: they write scores and reason codes only.
+- **Values under 6 characters** are ignored. Attack run: a short value cannot redact anything.
+- **Shared email with another guest not on hold** is still redacted. Accepted: those responses do contain the erased person's email.
+- **Not reached, tracked:** other modules' copies and name-only responses (R2-P2-4); removed contacts (R2-P3-4); other modules' in-flight writes (R2-P3-2); scan cost (R2-P2-3, FR-10).
+
+**Gates** (`PORTICO_TEST_DB_PREFIX=w1_guests_fix2`, after merging main):
+
+| Command | Exit | Result |
+|---|---|---|
+| `pnpm install --frozen-lockfile` | 0 | lockfile unchanged |
+| `pnpm lint` | 0 | 806 files clean; module boundaries OK (10 modules) |
+| `pnpm turbo run typecheck --force` | 0 | 18/18 tasks |
+| `pnpm turbo run test --force --concurrency=2` | 0 | 16/16 tasks; guests 191, api 69, db 15 → 17 |
+| `pnpm test` | 0 | 16/16 tasks |
+
+The mutation runs left two `w1_guests_fix2_*` test databases behind; I dropped them, and none remain. No pushed commits were rewritten.
 ````
 

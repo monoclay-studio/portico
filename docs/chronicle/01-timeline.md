@@ -343,3 +343,24 @@ Each agent's brief and report are in `agents/`.
     5/5 failed.
   - Focused re-review #4 launched.
 
+- **22:21 — Usage check: 5-hour window 36%, seven-day 86%** <!-- t: trigger:4f98af2a @ 2026-11-07T22:21:20.575Z -->. Per the owner, pacing follows the 5-hour
+  window, but the seven-day allowance is a hard stop that would leave work half-finished. Decision: launch nothing
+  new while seven-day is ≥ 85%. The five running items finish. A data-safety checkpoint runs at seven-day ≥ 95%.
+- **22:25 — Quality steward round 3 reported** <!-- t: agent-ae7e0c581d1429f84 @ 2026-11-07T22:25:27.857Z (Quality steward (meta loop) round 0) -->; merged to main as `6d18714` <!-- t: commit:6d18714 @ 2026-11-07T22:25:46Z -->.
+  - Builder self-check v5 and v6 were published together. v5 covers external writers, the full lifecycle state
+    machine and a mutation proof for every P0/P1 fix. v6 adds a claim ledger: every capability statement points to
+    the test or code that makes it true.
+  - Orchestrator v4: recorded defaults must cite the code that implements them, every finding gets a disposition,
+    and chronicle times come from the event, not the moment of writing. Refiner v2.1 adds a triage-only variant.
+  - 32 new escapes (117 in total). One was the orchestrator's own: Q158's recorded default disagreed with the code.
+    A canary showed that payments' collection lock has no test that fails without it.
+  - The cost recount found that the extractor counted multi-block API messages more than once.
+- **22:30 — Orchestrator applied round 3's exact edits** <!-- t: now @ 2026-11-07T22:30:05Z -->.
+  - The extractor counts each API message once, and the agent records were refreshed (55 runs, 72 reports).
+  - `when.py owner` and `when.py trigger` were installed, and `verify-times.py` now refuses `now` on owner
+    and resume entries.
+  - UX round 2a: all 49 findings routed, checked by `tools/quality/dispositions.py`.
+  - Lint now treats warnings as errors.
+  - The question template has an "Implemented by" line.
+  - Every build and fix brief requires self-check v6. It was sent to the running infra fix round together with the
+    restore-drill state machine and the CI infra job.
