@@ -25,6 +25,14 @@ export interface ColumnDef<Row> {
   hideable?: boolean;
   /** Custom comparator on accessor values. */
   compare?: (a: CellValue, b: CellValue) => number;
+  /** Extra text the quick filter matches (codes, flags, blocker messages) beyond the accessor value. */
+  searchText?: (row: Row) => string;
+  /**
+   * 1 = essential … 5 = nice to have. When the table is too narrow, the lowest-priority columns are hidden first
+   * (with a visible "n columns hidden" note) instead of scrolling sideways. Default 3; identity columns are never
+   * auto-hidden.
+   */
+  priority?: number;
 }
 
 export type SortDirection = 'asc' | 'desc';
@@ -84,7 +92,9 @@ export function applyView<Row>(
     }
     if (search) {
       const words = search.split(/\s+/);
-      const hay = searchCols.map((c) => textOf(c.accessor(row))).join(' ');
+      const hay = searchCols
+        .map((c) => `${textOf(c.accessor(row))} ${c.searchText ? c.searchText(row).toLowerCase() : ''}`)
+        .join(' ');
       if (!words.every((w) => hay.includes(w))) return false;
     }
     return true;
@@ -182,4 +192,38 @@ export function moveCell(
     default:
       return null;
   }
+}
+
+/** Approximate minimum width in px of a grid track ('10rem', 'minmax(12rem, 2fr)', '96px'). */
+export function trackMinPx(width: string | undefined, remPx = 16): number {
+  const w = width ?? 'minmax(8rem, 1fr)';
+  const m = /^minmax\(\s*([\d.]+)(rem|px)/.exec(w) ?? /^([\d.]+)(rem|px)/.exec(w);
+  if (!m) return 8 * remPx;
+  const n = Number(m[1]);
+  return m[2] === 'rem' ? n * remPx : n;
+}
+
+/**
+ * Which columns fit in `available` px: hide the lowest-priority hideable columns first (stable for equal
+ * priority: later columns go first). Returns the ids to hide automatically.
+ */
+export function autoHiddenColumns<Row>(
+  columns: readonly ColumnDef<Row>[],
+  available: number,
+  reservedPx = 0,
+): string[] {
+  let total = reservedPx + columns.reduce((n, c) => n + trackMinPx(c.width), 0);
+  if (total <= available) return [];
+  const candidates = columns
+    .map((c, i) => ({ c, i }))
+    .filter(({ c }) => c.hideable !== false)
+    .sort((a, b) => (b.c.priority ?? 3) - (a.c.priority ?? 3) || b.i - a.i);
+  const hidden: string[] = [];
+  for (const { c } of candidates) {
+    if (total <= available) break;
+    if ((c.priority ?? 3) <= 1) break;
+    hidden.push(c.id);
+    total -= trackMinPx(c.width);
+  }
+  return hidden;
 }

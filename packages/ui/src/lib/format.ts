@@ -15,10 +15,14 @@ export function currencyDigits(currency: string): number {
   );
 }
 
+/**
+ * Money with its ISO code ("USD 1,234.50", ux-principles §2): several currencies (USD, MVR) are in play at once,
+ * so a bare "$" is ambiguous.
+ */
 export function formatMoney(
   money: MoneyValue,
   locale = 'en',
-  opts: { signDisplay?: 'auto' | 'always' | 'exceptZero' } = {},
+  opts: { signDisplay?: 'auto' | 'always' | 'exceptZero'; display?: 'code' | 'symbol' } = {},
 ): string {
   const digits = currencyDigits(money.currency);
   const major = money.amountMinor / 10 ** digits;
@@ -28,6 +32,7 @@ export function formatMoney(
     minimumFractionDigits: digits,
     maximumFractionDigits: digits,
     signDisplay: opts.signDisplay ?? 'auto',
+    currencyDisplay: opts.display ?? 'code',
   }).format(major);
 }
 

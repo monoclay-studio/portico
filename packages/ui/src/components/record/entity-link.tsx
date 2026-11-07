@@ -1,12 +1,10 @@
 import { HoverCard } from 'radix-ui';
-import { type ReactNode, useState } from 'react';
+import { type ReactNode, useContext, useState } from 'react';
 import { cn } from '../../lib/cn';
+import { GridCellContext } from '../data-table/data-table';
 import { Skeleton } from '../skeleton';
-import { STATUS_VALUES, StatusBadge, type StatusVocabulary } from '../status-badge';
+import { humanizeCode, StatusBadge, vocabularyForFamily } from '../status-badge';
 import type { RecordSummary } from './types';
-
-const isVocab = (family: string, value: string): family is StatusVocabulary =>
-  family in STATUS_VALUES && (STATUS_VALUES[family as StatusVocabulary] as readonly string[]).includes(value);
 
 /**
  * Link to any record with a hover/focus preview (GET /v1/records/:type/:id/summary), so people stop navigating
@@ -31,6 +29,8 @@ export function EntityLink({
   className?: string;
 }) {
   const [summary, setSummary] = useState<RecordSummary | null | undefined>(undefined);
+  // Inside a data grid the cell is the tab stop (Enter on the row opens it); the link stays clickable.
+  const inGridCell = useContext(GridCellContext);
   const load = () => {
     if (summary !== undefined) return;
     loadSummary(type, id).then(setSummary, () => setSummary(null));
@@ -41,6 +41,7 @@ export function EntityLink({
         <a
           href={`?record=${encodeURIComponent(`${type}:${id}`)}`}
           data-entity-link={`${type}:${id}`}
+          {...(inGridCell ? { tabIndex: -1 } : {})}
           onFocus={load}
           onClick={(e) => {
             e.preventDefault();
@@ -79,18 +80,19 @@ export function EntityLink({
               {summary.subtitle && <span className="text-ink-muted">{summary.subtitle}</span>}
               {summary.status && (
                 <span className="flex flex-wrap gap-1">
-                  {Object.entries(summary.status).map(([family, value]) =>
-                    isVocab(family, value) ? (
-                      <StatusBadge key={family} vocabulary={family} value={value as never} />
+                  {Object.entries(summary.status).map(([family, value]) => {
+                    const vocabulary = vocabularyForFamily(family);
+                    return vocabulary ? (
+                      <StatusBadge key={family} vocabulary={vocabulary} value={value} />
                     ) : (
                       <span
                         key={family}
                         className="rounded-sm border border-neutral-line px-1.5 text-xs text-neutral-fg"
                       >
-                        {family}: {value}
+                        {humanizeCode(family)}: {humanizeCode(value)}
                       </span>
-                    ),
-                  )}
+                    );
+                  })}
                 </span>
               )}
             </div>

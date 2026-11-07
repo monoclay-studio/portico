@@ -70,7 +70,7 @@ export function PropertiesPage() {
           rows={query.data}
           getRowId={(p) => p.id}
           helpKey="settings.properties.table"
-          selectedRowId={nav.trail[0]?.type === 'property' ? nav.trail[0].id : null}
+          openRowId={nav.trail[0]?.type === 'property' ? nav.trail[0].id : null}
           onRowActivate={(p) => {
             learning.event('record:open');
             nav.openFresh('property', p.id);

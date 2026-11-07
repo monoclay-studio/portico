@@ -1,9 +1,10 @@
 import { act, fireEvent, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { createRef } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { axeViolations, formatViolations } from '../../test/axe';
 import { renderUi } from '../../test/render';
-import { DataTable } from './data-table';
+import { DataTable, type DataTableHandle } from './data-table';
 import type { ColumnDef, SavedView } from './model';
 
 interface Unit {
@@ -156,6 +157,122 @@ describe('DataTable', () => {
     const { container } = renderUi(
       <DataTable label="Units" columns={columns} rows={make(8)} getRowId={(u) => u.id} views={views} />,
     );
+    const v = await axeViolations(container);
+    expect(v, formatViolations(v)).toEqual([]);
+  });
+
+  it('selects with x, Shift+x and Shift+click; the bulk bar acts on exactly the selected rows', () => {
+    const bulk = vi.fn();
+    renderUi(
+      <DataTable
+        label="Units"
+        columns={columns}
+        rows={make(10)}
+        getRowId={(u) => u.id}
+        selectable
+        bulkActions={(sel, clear) => (
+          <button
+            type="button"
+            onClick={() => {
+              bulk(sel.map((u) => u.id));
+              clear();
+            }}
+          >
+            Export selected
+          </button>
+        )}
+      />,
+    );
+    const grid = screen.getByRole('grid');
+    expect(grid).toHaveAttribute('aria-multiselectable', 'true');
+    expect(screen.queryByRole('region', { name: 'Actions for selected rows' })).toBeNull();
+    const first = grid.querySelector('[data-cell="0:0"]') as HTMLElement;
+    act(() => first.focus());
+    fireEvent.keyDown(first, { key: 'x' });
+    fireEvent.keyDown(document.activeElement as Element, { key: 'j' });
+    fireEvent.keyDown(document.activeElement as Element, { key: 'j' });
+    expect(document.activeElement).toHaveAttribute('data-cell', '2:0');
+    fireEvent.keyDown(document.activeElement as Element, { key: 'x', shiftKey: true });
+    const bar = screen.getByRole('region', { name: 'Actions for selected rows' });
+    expect(bar).toHaveTextContent('3 selected');
+    expect(grid.querySelector('[data-row-id="u1"]')).toHaveAttribute('aria-selected', 'true');
+    fireEvent.click(grid.querySelector('[data-row-id="u5"]') as Element, { shiftKey: true });
+    expect(bar).toHaveTextContent('6 selected');
+    fireEvent.click(within(bar).getByRole('button', { name: 'Export selected' }));
+    expect(bulk).toHaveBeenCalledWith(['u0', 'u1', 'u2', 'u3', 'u4', 'u5']);
+    expect(screen.queryByRole('region', { name: 'Actions for selected rows' })).toBeNull();
+  });
+
+  it('select-all selects only the rows shown by the current filter', async () => {
+    renderUi(<DataTable label="Units" columns={columns} rows={make(9)} getRowId={(u) => u.id} selectable />);
+    await userEvent.type(screen.getByRole('searchbox', { name: 'Filter rows' }), 'Sunset');
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Select all shown rows' }));
+    expect(screen.getByRole('region', { name: 'Actions for selected rows' })).toHaveTextContent('3 selected');
+  });
+
+  it('e runs the row primary action; with a record open, j/k open the next row (one key, no clicks)', () => {
+    const onRowPrimaryAction = vi.fn();
+    const onRowActivate = vi.fn();
+    renderUi(
+      <DataTable
+        label="Units"
+        columns={columns}
+        rows={make(5)}
+        getRowId={(u) => u.id}
+        onRowActivate={onRowActivate}
+        onRowPrimaryAction={onRowPrimaryAction}
+        openRowId="u0"
+        followActive
+      />,
+    );
+    const grid = screen.getByRole('grid');
+    expect(grid.querySelector('[data-row-id="u0"]')).toHaveAttribute('aria-current', 'true');
+    const first = grid.querySelector('[data-cell="0:0"]') as HTMLElement;
+    act(() => first.focus());
+    fireEvent.keyDown(first, { key: 'e' });
+    expect(onRowPrimaryAction).toHaveBeenCalledWith(expect.objectContaining({ id: 'u0' }));
+    fireEvent.keyDown(document.activeElement as Element, { key: 'j' });
+    expect(onRowActivate).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'u1' }));
+    // Modified keys are left to the browser / app (Ctrl+J etc.).
+    fireEvent.keyDown(document.activeElement as Element, { key: 'j', ctrlKey: true });
+    expect(onRowActivate).toHaveBeenCalledTimes(1);
+  });
+
+  it('can be driven from outside (the open record panel) through its handle', () => {
+    const onRowActivate = vi.fn();
+    const handle = createRef<DataTableHandle>();
+    renderUi(
+      <DataTable
+        label="Units"
+        columns={columns}
+        rows={make(5)}
+        getRowId={(u) => u.id}
+        onRowActivate={onRowActivate}
+        openRowId="u0"
+        followActive
+        handleRef={handle}
+      />,
+    );
+    act(() => handle.current?.move(1));
+    expect(onRowActivate).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'u1' }));
+    act(() => handle.current?.setFilter('type', 'Water Villa'));
+    expect(screen.getByText('2 of 5 rows')).toBeInTheDocument();
+    act(() => handle.current?.clearFilters());
+    expect(screen.getByText('5 of 5 rows')).toBeInTheDocument();
+  });
+
+  it('has no axe violations with selection and a selected row', async () => {
+    const { container } = renderUi(
+      <DataTable
+        label="Units"
+        columns={columns}
+        rows={make(4)}
+        getRowId={(u) => u.id}
+        selectable
+        bulkActions={() => <button type="button">Export</button>}
+      />,
+    );
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select Villa 0001' }));
     const v = await axeViolations(container);
     expect(v, formatViolations(v)).toEqual([]);
   });

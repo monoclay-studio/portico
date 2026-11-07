@@ -13,6 +13,15 @@ export interface ProblemDetails {
   correlationId: string;
   errors?: Array<{ path: string; message: string }>;
   details?: Record<string, unknown>;
+  /**
+   * Client hint: whether repeating THIS request is known to be safe (a read, or a write carrying an
+   * Idempotency-Key). Undefined = the UI makes no promise.
+   */
+  safeToRetry?: boolean;
+  /** Why repeating is safe: a read, or a write carrying an Idempotency-Key. */
+  retryBasis?: 'read' | 'idempotency_key';
+  /** Client hint: the request may or may not have taken effect (connection lost after sending, timeout). */
+  outcome?: 'unknown';
   [key: string]: unknown;
 }
 
@@ -27,15 +36,28 @@ export function isProblemDetails(value: unknown): value is ProblemDetails {
   );
 }
 
-/** Problem for failures that never reached the server (offline, DNS, CORS). */
-export function networkProblem(correlationId: string, detail: string): ProblemDetails {
+/** Problem for a request whose outcome the client cannot know (connection lost, timeout). */
+export function networkProblem(
+  correlationId: string,
+  detail: string,
+  opts: {
+    code?: string;
+    title?: string;
+    safeToRetry?: boolean;
+    retryBasis?: 'read' | 'idempotency_key';
+    outcomeUnknown?: boolean;
+  } = {},
+): ProblemDetails {
   return {
     type: 'about:blank#network',
-    title: 'Connection problem',
+    title: opts.title ?? 'Connection problem',
     status: 0,
-    code: 'network_error',
+    code: opts.code ?? 'network_error',
     detail,
-    retryable: true,
+    retryable: Boolean(opts.safeToRetry),
     correlationId,
+    ...(opts.safeToRetry !== undefined ? { safeToRetry: opts.safeToRetry } : {}),
+    ...(opts.retryBasis ? { retryBasis: opts.retryBasis } : {}),
+    ...(opts.outcomeUnknown ? { outcome: 'unknown' as const } : {}),
   };
 }

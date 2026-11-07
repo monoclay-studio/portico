@@ -1,6 +1,6 @@
 import { X } from 'lucide-react';
 import { Dialog as DialogPrimitive } from 'radix-ui';
-import type { ReactElement, ReactNode } from 'react';
+import { type ReactElement, type ReactNode, useEffect, useRef } from 'react';
 import { cn } from '../lib/cn';
 import { useUi } from '../provider';
 import { IconButton } from './button';
@@ -40,6 +40,11 @@ export function Dialog({
   icon,
 }: DialogProps) {
   const { strings } = useUi();
+  // Dialogs opened programmatically (no trigger) return focus to where it was when they opened (WCAG 2.4.3).
+  const returnTo = useRef<Element | null>(null);
+  useEffect(() => {
+    if (open) returnTo.current = document.activeElement;
+  }, [open]);
   return (
     <DialogPrimitive.Root
       {...(open !== undefined ? { open } : {})}
@@ -51,6 +56,15 @@ export function Dialog({
         <DialogPrimitive.Content
           {...(description ? {} : { 'aria-describedby': undefined })}
           onPointerDownOutside={modalStrict ? (e) => e.preventDefault() : undefined}
+          onCloseAutoFocus={
+            trigger
+              ? undefined
+              : (e) => {
+                  e.preventDefault();
+                  const t = returnTo.current;
+                  if (t instanceof HTMLElement && t.isConnected) t.focus();
+                }
+          }
           className={cn(
             'fixed inset-x-0 top-[8vh] z-50 mx-auto flex max-h-[84vh] w-[calc(100vw-2rem)] flex-col rounded-lg border border-line bg-surface text-ink shadow-lg',
             widths[size],

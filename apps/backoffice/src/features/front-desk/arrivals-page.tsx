@@ -323,7 +323,7 @@ export function ArrivalsPage() {
               rows={rows}
               getRowId={(r) => r.stayId}
               onRowActivate={open}
-              selectedRowId={selected?.stayId ?? null}
+              openRowId={selected?.stayId ?? null}
               views={visibleViews}
               onSaveView={saved.onSaveView}
               onDeleteView={saved.onDeleteView}

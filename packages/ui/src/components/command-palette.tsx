@@ -79,8 +79,10 @@ export function CommandPalette({
   const ordered = useMemo(() => groups.flatMap(([, cs]) => cs), [groups]);
   const activeCmd = ordered[active];
 
+  const returnTo = useRef<Element | null>(null);
   useEffect(() => {
     if (open) {
+      returnTo.current = document.activeElement;
       setQuery('');
       setActive(0);
     }
@@ -126,6 +128,12 @@ export function CommandPalette({
         <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-scrim" />
         <DialogPrimitive.Content
           aria-describedby={undefined}
+          onCloseAutoFocus={(e) => {
+            // Return focus where it was (a command that navigates moves focus itself afterwards).
+            e.preventDefault();
+            const t = returnTo.current;
+            if (t instanceof HTMLElement && t.isConnected) t.focus();
+          }}
           className="fixed inset-x-0 top-[12vh] z-50 mx-auto flex max-h-[70vh] w-[calc(100vw-2rem)] max-w-2xl flex-col overflow-hidden rounded-lg border border-line bg-surface text-ink shadow-lg"
         >
           <DialogPrimitive.Title className="pt-sr-only">{s.title}</DialogPrimitive.Title>

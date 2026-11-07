@@ -1,5 +1,6 @@
-import { act, screen, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { axeViolations, formatViolations } from '../../test/axe';
 import { renderUi } from '../../test/render';
@@ -124,6 +125,62 @@ describe('RecordDrawer', () => {
     expect(onBack).toHaveBeenCalled();
     await userEvent.click(screen.getByRole('button', { name: 'Open full page' }));
     expect(onOpenFullPage).toHaveBeenCalled();
+  });
+});
+
+function Harness({ mode }: { mode?: 'panel' | 'modal' }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button type="button" onClick={() => setOpen(true)}>
+        Open Sophie
+      </button>
+      <button type="button">Next in list</button>
+      {open && (
+        <RecordDrawer
+          title="Stay: Sophie Laurent"
+          trail={[{ key: 'stay:s1', title: 'Sophie Laurent' }]}
+          onNavigateTrail={() => {}}
+          onBack={() => setOpen(false)}
+          onClose={() => setOpen(false)}
+          {...(mode ? { mode } : {})}
+        >
+          <p>content</p>
+        </RecordDrawer>
+      )}
+    </>
+  );
+}
+
+describe('RecordDrawer focus (P1-1)', () => {
+  it('moves focus into the record on open and returns it to the opener on Esc', async () => {
+    renderUi(<Harness />);
+    await userEvent.click(screen.getByRole('button', { name: 'Open Sophie' }));
+    const drawer = document.querySelector('[data-record-drawer]');
+    expect(drawer).not.toBeNull();
+    await waitFor(() => expect(document.activeElement).toHaveAttribute('data-record-body'));
+    expect(drawer?.contains(document.activeElement)).toBe(true);
+    await userEvent.keyboard('{Escape}');
+    expect(document.querySelector('[data-record-drawer]')).toBeNull();
+    await waitFor(() => expect(document.activeElement).toHaveTextContent('Open Sophie'));
+  });
+
+  it('panel mode is non-modal: the list beside it stays reachable and a click there does not close it', async () => {
+    renderUi(<Harness />);
+    await userEvent.click(screen.getByRole('button', { name: 'Open Sophie' }));
+    const next = screen.getByRole('button', { name: 'Next in list' });
+    expect(next.closest('[aria-hidden="true"]')).toBeNull();
+    await userEvent.click(next);
+    expect(document.querySelector('[data-record-drawer]')).not.toBeNull();
+    expect(document.activeElement).toBe(next);
+  });
+
+  it('modal mode (narrow screens) traps focus and closes on an outside click', async () => {
+    renderUi(<Harness mode="modal" />);
+    await userEvent.click(screen.getByRole('button', { name: 'Open Sophie' }));
+    expect(document.querySelector('[data-record-drawer]')).toHaveAttribute('data-mode', 'modal');
+    await userEvent.tab();
+    expect(document.querySelector('[data-record-drawer]')?.contains(document.activeElement)).toBe(true);
   });
 });
 

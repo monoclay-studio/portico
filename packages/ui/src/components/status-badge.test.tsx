@@ -1,8 +1,16 @@
 import { screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { axeViolations, formatViolations } from '../test/axe';
 import { renderUi } from '../test/render';
-import { STATUS_SPECS, STATUS_VALUES, StatusBadge, type StatusVocabulary } from './status-badge';
+import {
+  isKnownStatus,
+  onUnknownStatus,
+  PresentedStatusBadge,
+  STATUS_SPECS,
+  STATUS_VALUES,
+  StatusBadge,
+  type StatusVocabulary,
+} from './status-badge';
 
 const vocabularies = Object.keys(STATUS_VALUES) as StatusVocabulary[];
 
@@ -36,8 +44,9 @@ describe('StatusBadge', () => {
         <StatusBadge vocabulary="stay" value="cancelled" />
         <StatusBadge vocabulary="condition" value="dirty" />
         <StatusBadge vocabulary="occupancy" value="vacant" />
-        <StatusBadge vocabulary="availability" value="sold_out" />
-        <StatusBadge vocabulary="payment" value="unpaid" />
+        <StatusBadge vocabulary="inventory" value="sold_out" />
+        <StatusBadge vocabulary="unitAvailability" value="out_of_order" />
+        <StatusBadge vocabulary="payment" value="none" />
       </div>,
     );
     const classes = [...container.querySelectorAll('[data-vocabulary]')].map((el) => el.className);
@@ -62,9 +71,59 @@ describe('StatusBadge', () => {
     expect(STATUS_SPECS.payment.paid.provisional).toBeFalsy();
   });
 
-  it('rejects values outside the vocabulary', () => {
-    expect(() => renderUi(<StatusBadge vocabulary="stay" value={'checked_in' as never} />)).toThrow(
-      /Unknown stay status/,
+  it('never crashes on a value from a newer server: neutral dashed chip with the raw value, reported once', () => {
+    const seen: string[] = [];
+    onUnknownStatus((vocabulary, value) => seen.push(`${vocabulary}:${value}`));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const { container } = renderUi(
+        <div>
+          <StatusBadge vocabulary="stay" value="checked_in" />
+          <StatusBadge vocabulary="stay" value="checked_in" />
+          <StatusBadge vocabulary="payment" value="chargeback_won" />
+        </div>,
+      );
+      const unknown = container.querySelectorAll('[data-unknown-status]');
+      expect(unknown).toHaveLength(3);
+      expect(unknown[0]?.textContent).toContain('Checked in');
+      expect(unknown[0]?.className).toContain('border-dashed');
+      expect(unknown[0]?.getAttribute('title')).toBe('Unrecognised value “checked_in”');
+      expect(seen).toEqual(['stay:checked_in', 'payment:chargeback_won']);
+    } finally {
+      onUnknownStatus(null);
+      warn.mockRestore();
+    }
+  });
+
+  it('isKnownStatus narrows only to values of that vocabulary', () => {
+    expect(isKnownStatus('stay', 'in_house')).toBe(true);
+    expect(isKnownStatus('stay', 'dirty')).toBe(false);
+    expect(isKnownStatus('payment', 'toString')).toBe(false);
+  });
+
+  it('renders the payments module presentation; unconfirmed is dashed whatever the tone', () => {
+    renderUi(
+      <div>
+        <PresentedStatusBadge
+          presentation={{
+            label: 'Recorded',
+            tone: 'recorded',
+            explanation: 'Not yet matched to a statement.',
+            confirmed: false,
+          }}
+        />
+        <PresentedStatusBadge
+          presentation={{
+            label: 'Paid',
+            tone: 'success',
+            explanation: 'Confirmed by the provider.',
+            confirmed: true,
+          }}
+        />
+      </div>,
     );
+    expect(screen.getByText('Recorded').parentElement?.className).toContain('border-dashed');
+    expect(screen.getByText('Paid').parentElement?.className).not.toContain('border-dashed');
+    expect(screen.getByText('. Not yet matched to a statement.')).toBeTruthy();
   });
 });

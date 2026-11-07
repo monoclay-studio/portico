@@ -15,11 +15,11 @@ export interface Segment {
 }
 
 const fill: Record<SegmentKind, string> = {
-  good: 'bg-viz-good text-[oklch(0.18_0_0)]',
-  warning: 'bg-viz-warning text-[oklch(0.18_0_0)]',
-  critical: 'bg-viz-critical text-white',
-  neutral: 'bg-viz-neutral text-[oklch(0.18_0_0)]',
-  seq: 'bg-viz-seq text-white',
+  good: 'bg-viz-good text-[var(--pt-viz-good-ink)]',
+  warning: 'bg-viz-warning text-[var(--pt-viz-warning-ink)]',
+  critical: 'bg-viz-critical text-[var(--pt-viz-critical-ink)]',
+  neutral: 'bg-viz-neutral text-[var(--pt-viz-neutral-ink)]',
+  seq: 'bg-[var(--pt-viz-seq-strong)] text-[var(--pt-viz-seq-ink)]',
 };
 const swatch: Record<SegmentKind, string> = {
   good: 'bg-viz-good',

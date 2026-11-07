@@ -69,7 +69,7 @@ export function OrganizationPage() {
                 <td className="py-2 pt-code text-ink-muted">{b.module}</td>
                 <td className="py-2">
                   {b.mode === 'live' ? (
-                    <StatusBadge vocabulary="availability" value="available" label={t('admin.liveApi')} />
+                    <ProvenanceBadge provenance="live" />
                   ) : (
                     <ProvenanceBadge provenance="simulated" />
                   )}

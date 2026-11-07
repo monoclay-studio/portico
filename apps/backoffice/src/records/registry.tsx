@@ -543,10 +543,10 @@ const unit: RecordDefinition = {
           { family: 'condition', vocabulary: 'condition', value: r.condition },
           { family: 'occupancy', vocabulary: 'occupancy', value: r.occupancy },
           ...(r.discrepancy !== 'none'
-            ? [{ family: 'discrepancy', vocabulary: 'occupancy' as const, value: r.discrepancy }]
+            ? [{ family: 'discrepancy', vocabulary: 'discrepancy' as const, value: r.discrepancy }]
             : []),
           ...(r.block
-            ? [{ family: 'availability', vocabulary: 'availability' as const, value: 'blocked' }]
+            ? [{ family: 'unitAvailability', vocabulary: 'unitAvailability' as const, value: r.block.kind }]
             : []),
         ],
         provenance: { kind: 'simulated', lastSyncedAt: res.generatedAt },

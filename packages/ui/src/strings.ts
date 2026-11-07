@@ -24,10 +24,11 @@ export const defaultUiStrings = {
   problem: {
     reference: 'Reference',
     copyReference: 'Copy reference {{id}}',
-    retryableHint: 'It is safe to try again: a retry never repeats an action that already happened.',
-    notRetryableHint: 'Trying again unchanged will fail the same way. Follow the steps above first.',
+    retrySafeKeyed: 'Trying again is safe: this request carries a key that prevents it from happening twice.',
+    retrySafeRead: 'Trying again is safe: it only reloads information.',
+    unknownOutcome: 'Outcome not confirmed',
     fieldErrors: 'Check these fields:',
-    offline: 'You appear to be offline. Nothing was sent. Reconnect and try again.',
+
     unknownTitle: 'Something went wrong',
   },
   conflict: {
@@ -142,6 +143,16 @@ export const defaultUiStrings = {
     clearFilters: 'Clear filters',
     rowCount: '{{shown}} of {{total}} rows',
     keyboardHint: 'Arrow keys move between cells. Enter opens the row.',
+    keyboardHintSelectable:
+      'j / k or arrow keys move between rows. Enter opens, x selects, e runs the row’s main action. Shift+click selects a range.',
+    hiddenToFit: 'hidden to fit',
+    hiddenColumns: '+{{count}} columns hidden to fit',
+    hiddenColumnsOne: '+1 column hidden to fit',
+    bulkActions: 'Actions for selected rows',
+    selectedCount: '{{count}} selected',
+    clearSelection: 'Clear selection',
+    selectAll: 'Select all shown rows',
+    selectRow: 'Select {{row}}',
   },
   datePicker: {
     chooseDate: 'Choose date',
@@ -164,7 +175,8 @@ export const defaultUiStrings = {
   commandPalette: {
     title: 'Command palette',
     placeholder: 'Type a command or search…',
-    noResults: 'No results. Try fewer words.',
+    noResults:
+      'No matches. Search by guest name, booking code, unit or property, or type the name of a screen.',
     hint: '↑ ↓ to move · Enter to run · Esc to close',
   },
   timeline: {
@@ -190,10 +202,12 @@ export const defaultUiStrings = {
   provenance: {
     label: 'Data source',
     lastSynced: 'last synced {{time}}',
+    generated: 'generated {{time}}',
     from: 'from {{system}}',
     kinds: {
       live: 'Live',
       simulated: 'Simulated',
+      sandbox: 'Sandbox',
       copied: 'Copied',
       delayed: 'Delayed',
       incomplete: 'Incomplete',
@@ -202,6 +216,7 @@ export const defaultUiStrings = {
     descriptions: {
       live: 'Current information from Portico.',
       simulated: 'Sample data produced by a simulator. Not real guests, money or bookings.',
+      sandbox: 'Result from a provider test system. Nothing real was charged, sent or published.',
       copied: 'A copy of your data for evaluation. Changes here do not affect your current system.',
       delayed: 'This information is older than it should be. It may have changed since.',
       incomplete: 'Some of this information is missing. Do not rely on totals.',
@@ -215,8 +230,10 @@ export const defaultUiStrings = {
       trial: 'Trial',
       training: 'Training',
       sandbox: 'Sandbox',
+      other: 'Not live',
     },
     descriptions: {
+      other: 'This is not your live hotel. Nothing here reaches real guests, cards or channels.',
       demo: 'Sample data. Nothing here can charge a card, message a guest or reach a real channel.',
       trial: 'Evaluation copy of your data. Isolated from your live hotel; external actions are simulated.',
       training: 'Practice environment. Bookings, payments and messages here are not real.',
@@ -228,10 +245,13 @@ export const defaultUiStrings = {
       booking: 'Booking status',
       stay: 'Stay status',
       occupancy: 'Occupancy',
+      discrepancy: 'Occupancy discrepancy',
       condition: 'Unit condition',
-      availability: 'Availability',
+      unitAvailability: 'Unit availability',
+      inventory: 'Inventory',
       payment: 'Payment status',
     },
+    unknownValue: 'Unrecognised value “{{value}}”',
     booking: {
       inquiry: 'Inquiry',
       quoted: 'Quoted',
@@ -254,8 +274,11 @@ export const defaultUiStrings = {
     occupancy: {
       vacant: 'Vacant',
       occupied: 'Occupied',
+    },
+    discrepancy: {
       skip: 'Skip (looks vacated)',
       sleep: 'Sleep (looks occupied)',
+      occupied_no_luggage: 'Occupied, no luggage',
     },
     condition: {
       dirty: 'Dirty',
@@ -264,26 +287,43 @@ export const defaultUiStrings = {
       inspected: 'Inspected',
       failed_inspection: 'Failed inspection',
     },
-    availability: {
+    unitAvailability: {
+      available: 'Available',
+      assigned: 'Assigned',
+      out_of_order: 'Out of order',
+      out_of_service: 'Out of service',
+      house_use: 'House use',
+    },
+    inventory: {
       available: 'Available',
       limited: 'Last units',
       sold_out: 'Sold out',
       held: 'Held',
-      blocked: 'Blocked',
       overbooked_authorized: 'Overbooking authorized',
       oversold: 'Oversold — needs resolution',
     },
     payment: {
-      not_required: 'Not required',
-      unpaid: 'Unpaid',
+      none: 'No payment yet',
       requested: 'Payment requested',
-      authorized: 'Authorized (not paid)',
+      requires_action: 'Guest action needed',
+      processing: 'Processing',
       pending_verification: 'Pending verification',
+      authorized: 'Authorized (not paid)',
+      partially_captured: 'Partly captured',
+      captured: 'Captured',
       partially_paid: 'Partly paid',
       paid: 'Paid',
+      succeeded: 'Paid',
+      awaiting_receipt: 'Awaiting receipt',
+      recorded_unverified: 'Recorded (not verified)',
+      recorded_verified: 'Recorded (verified)',
       failed: 'Failed',
+      voided: 'Voided',
+      expired: 'Authorization expired',
+      cancelled: 'Cancelled',
       refunded: 'Refunded',
-      guaranteed: 'Guaranteed',
+      disputed: 'Disputed',
+      unknown: 'Status unavailable',
     },
   },
 };

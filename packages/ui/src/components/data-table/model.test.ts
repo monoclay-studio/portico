@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   applyView,
+  autoHiddenColumns,
   type ColumnDef,
   EMPTY_VIEW_STATE,
   moveCell,
@@ -92,5 +93,47 @@ describe('table model', () => {
     expect(moveCell({ row: 2, col: 1 }, 'PageDown', b)).toEqual({ row: 7, col: 1 });
     expect(moveCell({ row: 7, col: 2 }, 'End', { ...b, ctrl: true })).toEqual({ row: 9, col: 3 });
     expect(moveCell({ row: 2, col: 1 }, 'x', b)).toBeNull();
+  });
+
+  it('quick search also matches searchText (codes, flags, blocker text not shown as a column)', () => {
+    const withCode: ColumnDef<R>[] = [
+      { ...columns[0], searchText: (r) => (r.id === '2' ? 'K7P2M9QX transfer delayed' : '') } as ColumnDef<R>,
+      ...columns.slice(1),
+    ];
+    expect(applyView(rows, withCode, { ...EMPTY_VIEW_STATE, search: 'k7p2' }).map((r) => r.id)).toEqual([
+      '2',
+    ]);
+    expect(applyView(rows, withCode, { ...EMPTY_VIEW_STATE, search: 'transfer' }).map((r) => r.id)).toEqual([
+      '2',
+    ]);
+  });
+
+  it('hides the lowest-priority columns first when the table is too narrow, never priority 1 or identity', () => {
+    const cols: ColumnDef<R>[] = [
+      {
+        id: 'guest',
+        header: 'Guest',
+        accessor: (r) => r.guest,
+        hideable: false,
+        width: 'minmax(12rem, 2fr)',
+      },
+      {
+        id: 'status',
+        header: 'Readiness',
+        accessor: (r) => r.status,
+        priority: 1,
+        width: 'minmax(10rem, 1fr)',
+      },
+      { id: 'villa', header: 'Villa', accessor: (r) => r.villa, priority: 2, width: '8rem' },
+      { id: 'eta', header: 'ETA', accessor: (r) => r.eta, priority: 4, width: '5rem' },
+    ];
+    // 192 + 160 + 128 + 80 = 560 px
+    expect(autoHiddenColumns(cols, 600)).toEqual([]);
+    expect(autoHiddenColumns(cols, 500)).toEqual(['eta']);
+    expect(autoHiddenColumns(cols, 400)).toEqual(['eta', 'villa']);
+    // Never below what identity + priority-1 columns need: it stops there (the table scrolls instead).
+    expect(autoHiddenColumns(cols, 100)).toEqual(['eta', 'villa']);
+    // Reserved px (selection column) counts too.
+    expect(autoHiddenColumns(cols, 590, 40)).toEqual(['eta']);
   });
 });

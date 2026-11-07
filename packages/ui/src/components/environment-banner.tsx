@@ -37,6 +37,11 @@ export function isNonLiveEnvironment(env: string | undefined | null): env is Non
   return (NON_LIVE_ENVIRONMENTS as readonly string[]).includes(env ?? '');
 }
 
+/** Fail closed: anything that is not exactly `live` (including an unknown or missing value) is treated as not live. */
+export function isLiveEnvironment(env: string | undefined | null): boolean {
+  return env === 'live';
+}
+
 export interface EnvironmentBannerProps {
   environment: EnvironmentName | string;
   /** Organization name shown in the banner so people with several organizations know where they are. */
@@ -51,10 +56,15 @@ export interface EnvironmentBannerProps {
  */
 export function EnvironmentBanner({ environment, organizationName, frame = true }: EnvironmentBannerProps) {
   const { strings } = useUi();
-  if (!isNonLiveEnvironment(environment)) return null;
-  const s = spec[environment];
+  if (isLiveEnvironment(environment)) return null;
+  // Unknown environments still get an unmistakable banner (sandbox styling), never silence.
+  const known = isNonLiveEnvironment(environment);
+  const s = known ? spec[environment] : spec.sandbox;
   const Icon = s.icon;
-  const label = strings.environment.kinds[environment];
+  const label = known ? strings.environment.kinds[environment] : strings.environment.kinds.other;
+  const description = known
+    ? strings.environment.descriptions[environment]
+    : strings.environment.descriptions.other;
   return (
     <>
       <section
@@ -70,7 +80,7 @@ export function EnvironmentBanner({ environment, organizationName, frame = true 
           <Icon aria-hidden className="size-4" strokeWidth={2.5} />
           {label}
         </span>
-        <span className="font-medium">{strings.environment.descriptions[environment]}</span>
+        <span className="font-medium">{description}</span>
         {organizationName && <span className="ms-auto font-semibold opacity-95">{organizationName}</span>}
       </section>
       {frame && (

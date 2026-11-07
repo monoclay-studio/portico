@@ -1,6 +1,6 @@
 import { ChevronRight, Maximize2, X } from 'lucide-react';
 import { Dialog as DialogPrimitive } from 'radix-ui';
-import { type ReactNode, useRef } from 'react';
+import { type ReactNode, useEffect, useRef } from 'react';
 import { cn } from '../../lib/cn';
 import { useUi } from '../../provider';
 import { IconButton } from '../button';
@@ -25,6 +25,8 @@ export function RecordDrawer({
   children,
   loading,
   title,
+  mode = 'panel',
+  recordKey,
 }: {
   trail: readonly RecordTrailItem[];
   /** Jump to a breadcrumb (index into trail). */
@@ -36,25 +38,59 @@ export function RecordDrawer({
   children: ReactNode;
   loading?: boolean;
   title: string;
+  /**
+   * `panel` (default): non-modal side panel — no scrim, the list beside it stays usable, so the next record is
+   * one key away (j/k). `modal`: a scrim and a focus trap, for narrow screens.
+   */
+  mode?: 'panel' | 'modal';
+  /** Key of the record shown; when it changes, focus moves to the new record. */
+  recordKey?: string;
 }) {
   const { strings } = useUi();
   const s = strings.record;
-  const bodyRef = useRef<HTMLDivElement>(null);
+  const bodyRef = useRef<HTMLElement>(null);
+  // Where focus was before the drawer opened: it goes back there on close (WCAG 2.4.3).
+  const returnTo = useRef<Element | null>(typeof document === 'undefined' ? null : document.activeElement);
+  const modal = mode === 'modal';
+  // Another record shown in the same panel: start at its top; keep focus inside if it was there.
+  useEffect(() => {
+    if (recordKey === undefined) return;
+    const body = bodyRef.current;
+    if (!body) return;
+    body.scrollTop = 0;
+    if (document.activeElement === document.body) body.focus();
+  }, [recordKey]);
   return (
-    <DialogPrimitive.Root open onOpenChange={(o) => !o && onBack()}>
+    <DialogPrimitive.Root open modal={modal} onOpenChange={(o) => !o && onBack()}>
       <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-scrim" />
+        {modal && <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-scrim" />}
         <DialogPrimitive.Content
           aria-describedby={undefined}
           data-record-drawer
+          data-mode={mode}
           onOpenAutoFocus={(e) => {
             // Land on the record itself (not the first toolbar button, whose tooltip would swallow the first Esc).
             e.preventDefault();
             bodyRef.current?.focus();
           }}
+          onCloseAutoFocus={(e) => {
+            e.preventDefault();
+            // If the person already moved on (e.g. focus is back in the list), leave focus where it is.
+            const active = document.activeElement;
+            const inDrawer = active === document.body || Boolean(active?.closest('[data-record-drawer]'));
+            const target = returnTo.current;
+            if (inDrawer && target instanceof HTMLElement && target.isConnected) target.focus();
+          }}
           onPointerDownOutside={(e) => {
             e.preventDefault();
-            onClose();
+            // In panel mode a click on the list beside it opens another record; only modal mode closes on outside.
+            if (modal) onClose();
+          }}
+          onFocusOutside={(e) => {
+            if (!modal) e.preventDefault();
+          }}
+          onInteractOutside={(e) => {
+            if (!modal) e.preventDefault();
           }}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && e.shiftKey && onOpenFullPage) {
@@ -62,7 +98,10 @@ export function RecordDrawer({
               onOpenFullPage();
             }
           }}
-          className="fixed inset-y-0 end-0 z-50 flex w-full flex-col border-s border-line bg-surface text-ink shadow-lg data-[state=open]:animate-[pt-slide-in-end_180ms_var(--pt-ease)] sm:max-w-xl lg:max-w-2xl"
+          className={cn(
+            'fixed inset-y-0 end-0 z-50 flex w-full flex-col border-s border-line bg-surface text-ink shadow-lg data-[state=open]:animate-[pt-slide-in-end_180ms_var(--pt-ease)]',
+            modal ? 'sm:max-w-xl lg:max-w-2xl' : 'sm:max-w-[34rem]',
+          )}
         >
           <div className="flex items-center gap-2 border-b border-line px-4 py-2">
             <nav aria-label={s.breadcrumb} className="min-w-0 flex-1">
@@ -116,9 +155,15 @@ export function RecordDrawer({
           <DialogPrimitive.Title asChild>
             <span className="pt-sr-only">{title}</span>
           </DialogPrimitive.Title>
-          <div className="min-h-0 flex-1 overflow-auto px-5 py-4">
+          <section
+            ref={bodyRef}
+            tabIndex={-1}
+            data-record-body
+            aria-label={title}
+            className="min-h-0 flex-1 overflow-auto px-5 py-4 outline-none focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-focus"
+          >
             {loading ? <SkeletonList rows={6} /> : children}
-          </div>
+          </section>
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>
     </DialogPrimitive.Root>

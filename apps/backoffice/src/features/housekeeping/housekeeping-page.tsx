@@ -282,7 +282,7 @@ export function HousekeepingPage() {
                 learning.event('record:open');
                 nav.openFresh('unit', r.unitId);
               }}
-              selectedRowId={nav.trail[0]?.type === 'unit' ? nav.trail[0].id : null}
+              openRowId={nav.trail[0]?.type === 'unit' ? nav.trail[0].id : null}
             />
           )}
         </>

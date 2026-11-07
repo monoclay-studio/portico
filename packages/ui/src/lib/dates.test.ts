@@ -35,12 +35,13 @@ describe('LocalDate helpers', () => {
 
 describe('formatMoney', () => {
   it('uses the currency minor-unit digits (integers in, never floats stored)', () => {
-    expect(formatMoney({ amountMinor: 123456, currency: 'USD' })).toBe('$1,234.56');
-    expect(formatMoney({ amountMinor: 1500, currency: 'JPY' })).toBe('¥1,500');
+    // ISO code by default: "$" is ambiguous in a multi-currency property (USD vs MVR vs AUD …).
+    expect(formatMoney({ amountMinor: 123456, currency: 'USD' })).toBe('USD\u00a01,234.56');
+    expect(formatMoney({ amountMinor: 1500, currency: 'JPY' })).toBe('JPY\u00a01,500');
     expect(formatMoney({ amountMinor: 1234, currency: 'KWD' })).toMatch(/1\.234/);
-    expect(formatMoney({ amountMinor: -500, currency: 'USD' })).toBe('-$5.00');
-    expect(formatMoney({ amountMinor: 500, currency: 'USD' }, 'en', { signDisplay: 'always' })).toBe(
-      '+$5.00',
-    );
+    expect(formatMoney({ amountMinor: -500, currency: 'USD' })).toBe('-USD\u00a05.00');
+    expect(
+      formatMoney({ amountMinor: 500, currency: 'USD' }, 'en', { signDisplay: 'always', display: 'symbol' }),
+    ).toBe('+$5.00');
   });
 });

@@ -1,5 +1,7 @@
 @layer base {
   html {
+    /* Keep focused elements clear of the sticky top bar when scrolled into view (WCAG 2.4.11). */
+    scroll-padding-top: 5rem;
     font-family: var(--pt-font-sans);
     color: var(--pt-ink);
     background: var(--pt-canvas);

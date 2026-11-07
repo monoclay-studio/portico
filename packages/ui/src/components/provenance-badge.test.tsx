@@ -17,7 +17,7 @@ describe('ProvenanceBadge', () => {
     for (const p of PROVENANCE_KINDS)
       expect(container.querySelector(`[data-provenance="${p}"]`)).not.toBeNull();
     expect(
-      screen.getByRole('button', { name: /Data source: Simulated\. Sample data produced by a simulator/ }),
+      screen.getByRole('button', { name: /^Simulated\. Sample data produced by a simulator/ }),
     ).toBeInTheDocument();
     const v = await axeViolations(container);
     expect(v, formatViolations(v)).toEqual([]);

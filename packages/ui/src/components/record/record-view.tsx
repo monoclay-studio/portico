@@ -15,7 +15,7 @@ import { useUi } from '../../provider';
 import { fmt } from '../../strings';
 import { Button, IconButton } from '../button';
 import { ProvenanceBadge } from '../provenance-badge';
-import { StatusBadge } from '../status-badge';
+import { humanizeCode, StatusBadge } from '../status-badge';
 import { Tooltip } from '../tooltip';
 import { HistoryTimeline } from './history-timeline';
 import type { HistoryState, RecordAction, RecordIssue, RecordLink, RecordModel } from './types';
@@ -35,7 +35,7 @@ export function RecordStatusChips({ model }: { model: Pick<RecordModel, 'status'
           <StatusBadge
             key={c.family}
             vocabulary={c.vocabulary}
-            value={c.value as never}
+            value={c.value}
             {...(c.label ? { label: c.label } : {})}
           />
         ) : (
@@ -44,7 +44,7 @@ export function RecordStatusChips({ model }: { model: Pick<RecordModel, 'status'
             data-status-family={c.family}
             className="inline-flex items-center gap-1 rounded-sm border border-neutral-line px-1.5 text-xs leading-5 text-neutral-fg"
           >
-            <span>{c.family}:</span> {c.label ?? c.value}
+            <span>{humanizeCode(c.family)}:</span> {c.label ?? humanizeCode(c.value)}
           </span>
         ),
       )}
