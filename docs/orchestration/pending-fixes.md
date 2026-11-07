@@ -1,0 +1,2 @@
+- rates: always emit TaxLine.basis (percentage|banded|per_person_night|per_unit_night|per_stay|fixed_per_charge) — reservations relies on it for complimentary-stay tax handling
+- reservations: waitlist consumer must read inventory.availability.changed 'range' shape (unitTypeId + from/to), not 'cells'; error-shape for UnitAssignmentConflictError.details.conflicts = { ref, nights }[]

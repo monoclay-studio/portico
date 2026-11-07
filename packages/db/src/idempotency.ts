@@ -1,4 +1,10 @@
-import { canonicalJson, IdempotencyConflictError, type RequestContext, sha256Hex } from '@portico/kernel';
+import {
+  actorId,
+  canonicalJson,
+  IdempotencyConflictError,
+  type RequestContext,
+  sha256Hex,
+} from '@portico/kernel';
 import { sql } from 'kysely';
 import type { PorticoDatabase } from './database';
 import { type TxContext, type TxOptions, withTenantTx } from './tx';
@@ -30,13 +36,20 @@ export async function runIdempotent<T>(
     throw new IdempotencyConflictError('Idempotency-Key must be between 1 and 200 characters.');
   }
   const requestHash = sha256Hex(canonicalJson(idem.request ?? null));
+  const actorKey = `${ctx.actor.kind}:${actorId(ctx.actor)}`;
   return withTenantTx(
     database,
     ctx,
     async (tx) => {
       const inserted = await tx.db
         .insertInto('core.idempotency_keys')
-        .values({ tenant_id: ctx.tenantId, scope: idem.scope, key: idem.key, request_hash: requestHash })
+        .values({
+          tenant_id: ctx.tenantId,
+          scope: idem.scope,
+          key: idem.key,
+          request_hash: requestHash,
+          actor_key: actorKey,
+        })
         .onConflict((oc) => oc.doNothing())
         .returning('key')
         .executeTakeFirst();
@@ -44,11 +57,16 @@ export async function runIdempotent<T>(
       if (!inserted) {
         const existing = await tx.db
           .selectFrom('core.idempotency_keys')
-          .select(['request_hash', 'response_status', 'response_body'])
+          .select(['request_hash', 'response_status', 'response_body', 'actor_key'])
           .where('tenant_id', '=', ctx.tenantId)
           .where('scope', '=', idem.scope)
           .where('key', '=', idem.key)
           .executeTakeFirstOrThrow();
+        if (existing.actor_key && existing.actor_key !== actorKey) {
+          throw new IdempotencyConflictError(
+            'This Idempotency-Key was used by a different user or integration. Use a new key for your request.',
+          );
+        }
         if (existing.request_hash !== requestHash) {
           throw new IdempotencyConflictError(
             'This Idempotency-Key was already used for a different request. Use a new key for a new request.',
