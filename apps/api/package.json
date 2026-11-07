@@ -18,12 +18,13 @@
   },
   "dependencies": {
     "@portico/db": "workspace:*",
+    "@portico/guests": "workspace:*",
     "@portico/http": "workspace:*",
     "@portico/identity": "workspace:*",
     "@portico/kernel": "workspace:*",
     "@portico/platform": "workspace:*",
-    "zod": "catalog:",
-    "pg": "catalog:"
+    "pg": "catalog:",
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@portico/testing": "workspace:*",

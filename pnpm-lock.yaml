@@ -89,6 +89,9 @@ importers:
       '@portico/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@portico/guests':
+        specifier: workspace:*
+        version: link:../../modules/guests
       '@portico/http':
         specifier: workspace:*
         version: link:../../packages/http
