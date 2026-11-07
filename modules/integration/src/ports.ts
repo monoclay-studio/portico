@@ -6,6 +6,7 @@ import type { TxContext } from '@portico/db';
 import { DomainError, type ExternalEffect } from '@portico/kernel';
 import type { DataDomain, MappingKind } from './contracts';
 import type { InternalCandidate } from './domain/mapping-suggest';
+import { MAPPING_KIND_LABELS } from './domain/vocabulary';
 
 export interface PropertyInfo {
   id: string;
@@ -104,7 +105,7 @@ export function unavailableCatalog(
     async listCandidates(_tx, input) {
       throw new ModuleUnavailableError(
         modules[input.kind] ?? 'provider',
-        `the list of Portico ${input.kind} records`,
+        `the list of Portico ${MAPPING_KIND_LABELS[input.kind]} records`,
       );
     },
   };
