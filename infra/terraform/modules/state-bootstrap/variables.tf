@@ -3,11 +3,6 @@ variable "bucket_name" {
   type        = string
 }
 
-variable "lock_table_name" {
-  type    = string
-  default = "portico-terraform-locks"
-}
-
 variable "noncurrent_version_days" {
   description = "How long previous state versions are kept (state rollback window)."
   type        = number

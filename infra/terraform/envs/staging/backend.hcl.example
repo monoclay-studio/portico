@@ -2,6 +2,6 @@
 bucket         = "portico-tfstate-<account id>"
 key            = "portico/staging/aps1-c01/terraform.tfstate"
 region         = "ap-south-1"
-dynamodb_table = "portico-terraform-locks"
+use_lockfile   = true
 kms_key_id     = "alias/portico-terraform-state"
 encrypt        = true

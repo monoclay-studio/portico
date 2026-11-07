@@ -1,12 +1,11 @@
 # Remote state for every Portico root module in one AWS account: an S3 bucket (versioned, KMS-encrypted, TLS-only,
-# no public access) plus a DynamoDB table for state locking. One state file per environment and cell:
+# no public access). Locking is native to S3 (`use_lockfile = true`, Terraform >= 1.10; the toolchain floor is 1.11),
+# so no DynamoDB table is needed. One state file per environment and cell:
 #   key = portico/<environment>/<cell>/terraform.tfstate
 #
-# Terraform >= 1.10 can lock natively in S3 (`use_lockfile = true`) and DynamoDB locking is deprecated there; the
-# table is kept because the pinned toolchain here is 1.9.x. Switch when the toolchain moves (README follow-ups).
-#
-# State contains sensitive values (initial database passwords — see modules/secrets). Access to this bucket and key
-# is equivalent to access to those values: restrict it to the people who run `terraform apply`.
+# Generated secrets never enter state (write-only attributes — modules/secrets). State still describes the whole
+# estate and holds a few non-rotating values Terraform must compare (e.g. the CloudFront→ALB origin-verify header),
+# so restrict this bucket to the people who run `terraform apply`.
 
 data "aws_caller_identity" "current" {}
 data "aws_partition" "current" {}
@@ -107,25 +106,4 @@ resource "aws_s3_bucket_policy" "state" {
   bucket     = aws_s3_bucket.state.id
   policy     = data.aws_iam_policy_document.state.json
   depends_on = [aws_s3_bucket_public_access_block.state]
-}
-
-resource "aws_dynamodb_table" "lock" {
-  name                        = var.lock_table_name
-  billing_mode                = "PAY_PER_REQUEST"
-  hash_key                    = "LockID"
-  deletion_protection_enabled = true
-
-  attribute {
-    name = "LockID"
-    type = "S"
-  }
-
-  server_side_encryption {
-    enabled     = true
-    kms_key_arn = aws_kms_key.state.arn
-  }
-
-  point_in_time_recovery {
-    enabled = true
-  }
 }

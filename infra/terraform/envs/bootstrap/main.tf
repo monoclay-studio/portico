@@ -1,4 +1,4 @@
-# One-time, per AWS account: remote-state bucket + lock table, and the GitHub OIDC identity provider.
+# One-time, per AWS account: remote-state bucket (S3-native locking), and the GitHub OIDC identity provider.
 #
 #   cd infra/terraform/envs/bootstrap
 #   terraform init && terraform apply -var 'state_bucket_name=portico-tfstate-<account id>'
