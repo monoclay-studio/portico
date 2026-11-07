@@ -433,7 +433,55 @@ billing is not activated for live customers until this is answered.
 **Raised by / date:** finance-cluster parity research, 2026-11-07
 
 
-### Q133 — MFA enrolment grace and step-up window defaults      Status: open
+### Q140 — Enrol as an Oracle OHIP partner to test OPERA Cloud extraction (extends Q61)    Status: open
+**Context:** One-button migration from OPERA Cloud runs through Oracle's API platform (OHIP). Its limits shape the migration: standard searches cap at 1,000 records, bulk export uses asynchronous jobs, and 50 requests/second are shared with the hotel's live interfaces. Our estimate is about US$100 in API fees to extract a 100-room resort, but that is unverified. Only a partner sandbox can measure the real time and cost (`docs/research/05-market-deep-dive/11-one-button-migration.md`).
+**Question:** May Monoclay apply to Oracle's partner programme now, accepting partner terms, with a sandbox/pilot usage budget (suggested ≤ US$500)?
+**Default we are proceeding with:** no application, agreement or paid usage. We build the OHIP extractor against public documentation and an OPERA-like simulator (R3) and prepare the application pack for you to approve.
+**If the answer differs:** if approved, we measure real extraction in the sandbox (R4) and recalibrate migration time and cost estimates.
+**Blocks:** OPERA Cloud migration beyond R3. Nothing else.
+**Raised by / date:** market deep dive, 2026-11-07
+
+### Q141 — May Portico act as an OPERA 5 OXI external system?                Status: open
+**Context:** OPERA 5 has an Oracle-documented "initial cutover resync" through OXI. It sends rates, profiles, blocks and reservations (including cancellations and no-shows) to an external system, which makes it the cleanest automated path off OPERA 5. Whether a non-partner may be the receiving system is unconfirmed.
+**Question:** May we ask Oracle whether Portico can be an OXI two-way external system without partnership or certification, and pursue it if needed?
+**Default we are proceeding with:** no contact with Oracle until you approve. We build the file-export pack path (hotel-run OPERA exports delivered over SFTP/HTTPS with unmasked data) and an OXI receiver tested against our own simulator only.
+**If the answer differs:** OXI becomes the primary OPERA 5 route; the file pack stays as fallback.
+**Blocks:** OXI-based OPERA 5 migration beyond R3.
+**Raised by / date:** market deep dive, 2026-11-07
+
+### Q142 — How stored guest cards move during a migration (pilot)            Status: open
+**Context:** Stored cards can only move from one payment provider to another, never through a file. Stripe requires a PCI Level 1 counterpart for the transfer, and wallet-saved cards cannot move. The payment provider for Maldivian hotels is still undecided (Q2).
+**Question:** For the pilot, do we re-collect cards from guests rather than arrange a provider-to-provider transfer?
+**Default we are proceeding with:** re-collect. The migration checklist lists future stays whose guarantee needs a new card and sends collection requests (simulated until live); no card data is ever handled by Portico.
+**If the answer differs:** add a provider-to-provider transfer step to the migration checklist once a provider is chosen.
+**Blocks:** nothing in development.
+**Raised by / date:** market deep dive, 2026-11-07
+
+### Q143 — Is migration included in the price? (extends Q60)                Status: open
+**Context:** Competitors charge for imports (Cloudbeds charges, and does not import cancelled or no-show bookings) or run paid projects. "One button" is our differentiator, but some steps have usage costs, such as OHIP calls.
+**Question:** Is automated migration included for pilot (and later all) customers, with any third-party usage costs shown and capped?
+**Default we are proceeding with:** included for planning purposes; usage costs estimated before start, shown to the hotel and capped; nothing published.
+**If the answer differs:** a priced migration package in configuration; no product rework.
+**Blocks:** pricing page and quotes only.
+**Raised by / date:** market deep dive, 2026-11-07
+
+### Q144 — Never read an OPERA 5 database without written rights              Status: open
+**Context:** Some vendors migrate by querying the OPERA 5 database directly. Whether a hotel's Oracle or ISV contract allows that is contract-specific.
+**Question:** Do you agree that Portico never extracts from an OPERA 5 database unless the hotel confirms in writing that its contract allows it?
+**Default we are proceeding with:** yes. The database route is disabled unless the hotel uploads a signed rights confirmation, which is recorded in the migration's audit trail.
+**If the answer differs:** policy change only.
+**Blocks:** nothing.
+**Raised by / date:** market deep dive, 2026-11-07
+
+### Q145 — Patent review: AI room assignment (Oracle US 11,514,374)           Status: open
+**Context:** Market research found an Oracle patent on AI-driven room assignment. Its legal status is unconfirmed. Portico plans optimized room assignment (inventory and reservations). This goes to counsel together with Q40.
+**Question:** Will you have counsel review this patent, together with the Q40 items, before we ship automated room assignment?
+**Default we are proceeding with:** room assignment ships as explainable rule-based suggestions with staff confirmation; no machine-learned assignment until counsel reviews.
+**If the answer differs:** none if cleared; design-around if counsel advises.
+**Blocks:** ML-based room assignment only.
+**Raised by / date:** market deep dive, 2026-11-07
+
+### Q146 — MFA enrolment grace and step-up window defaults      Status: open
 **Context:** ADR-0017 §8 fixed the rule that sensitive (⚑) permissions never work without MFA. What remains a policy choice is how long a new member may keep working on everyday (non-sensitive) tasks before enrolling when an organization requires MFA for everyone (the "grace", capped at 72 hours), and how long a verification stays fresh for sensitive actions (the "step-up window"). A desk agent who posts corrections or refunds several times a shift will be asked for a code each time the window lapses.
 **Question:** Keep the defaults — grace 72 hours (maximum 72) and step-up window 15 minutes — or choose others (e.g. 24-hour grace; 30–60 minutes for desk roles)?
 **Default we are proceeding with:** grace 72 h (policy may lower it, never above 72), step-up window 15 min, both per-organization policy.
@@ -441,7 +489,7 @@ billing is not activated for live customers until this is answered.
 **Blocks:** nothing in development; affects pilot staff experience.
 **Raised by / date:** identity module agent (steward review P1-2, P3-11), 2026-11-07
 
-### Q134 — Identity provider for the Monoclay operator console     Status: open
+### Q147 — Identity provider for the Monoclay operator console     Status: open
 **Context:** Monoclay operators (support sessions, trial provisioning, the simulated-message mailbox, credential recovery) authenticate today with static configured tokens that have no expiry and no MFA. The console is therefore switched off when `NODE_ENV=production` (review P2-17). ADR-0017 also needs an operator procedure for support-led credential recovery (identity check, dual control).
 **Question:** Confirm AWS IAM Identity Center (SSO with MFA) as the operator identity provider, and who owns the credential-recovery procedure and its SLA.
 **Default we are proceeding with:** AWS IAM Identity Center; console disabled in production until it is wired; recovery procedure listed as a launch-gate item without an owner.
@@ -449,7 +497,7 @@ billing is not activated for live customers until this is answered.
 **Blocks:** Monoclay support access and operator-created trials in production; support-led recovery of a person who lost every factor or an organization that lost every administrator.
 **Raised by / date:** identity module agent (steward review P2-17, ADR-0017), 2026-11-07
 
-### Q135 — MFA in demo and training organizations; delivery for prospect trials     Status: open
+### Q148 — MFA in demo and training organizations; delivery for prospect trials     Status: open
 **Context:** Sensitive permissions now always need MFA, so seeded demo and training administrators must enrol an authenticator before they can, for example, manage roles or legal entities. Separately, a trial the operator creates for a prospect is a non-live organization, so its invitation and reset emails are simulated (they appear only in the operator mailbox) and the prospect receives nothing.
 **Question:** (a) Should demo/training seeds stay subject to MFA like every organization (secure, slightly more friction in demos), or may demo organizations relax it? (b) May staff onboarding emails from trial organizations be delivered for real (an exception to "non-live never sends"), or should operators onboard prospects another way?
 **Default we are proceeding with:** (a) no exemption: demo and training follow the same MFA rule; (b) no real delivery from non-live organizations; operators onboard prospects manually.
@@ -457,7 +505,7 @@ billing is not activated for live customers until this is answered.
 **Blocks:** smooth self-guided demos and prospect trials; nothing in development.
 **Raised by / date:** identity module agent (steward review P3-12), 2026-11-07
 
-### Q136 — Open trials per live organization                       Status: open
+### Q149 — Open trials per live organization                       Status: open
 **Context:** Any live customer with `platform.trial.manage` can create trial organizations. Unlimited trials cost hosting and widen the surface for abuse (review P3-10).
 **Question:** How many open trials may a live organization hold, and should the number depend on the plan?
 **Default we are proceeding with:** at most 3 open trials per live organization, all plans; closing a trial frees a slot.

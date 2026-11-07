@@ -30,6 +30,12 @@
   (reads findings + code + vision/design/experience docs + specs + parity + market digest) → per-module refinements →
   module agents decide/implement.
 
+- 2026-11-07 12:05 UTC: usage 81% → nothing new started. **Queued for after the reset (16:10 UTC), in order:**
+  (1) backoffice fix round from `reviews/review-backoffice.md` (P0-1 cache leak first; arrivals layout proposal in
+  `reviews/backoffice/`); (2) gap strategist (brief in this log, 12:30 entry) → `docs/strategy/`; (3) refining agent
+  for UX round 1 when the black-box tester finishes; (4) resume infra and parity-ops. Running at this time: fix rounds
+  for rates, payments, reservations, integration, finance, identity-plus; black-box UX tester.
+
 ## 1. Owner, product and how to work with the owner
 
 - Owner: founder of **Monoclay LLC** (Delaware, Stripe Atlas), based in the Maldives. Product: **Portico** (final name).
@@ -78,19 +84,19 @@ direction, experience architecture, parity framework, this orchestration folder.
 |---|---|---|---|---|
 | `feat/guests-core` | wt/guests | guests module | **MERGED** to main | — |
 | `feat/inventory-core` | wt/inventory | inventory | **MERGED** to main | — |
-| `feat/rates-core` | wt/rates | rates + tax engine | steward review: P0 (service charge from current config) + contract decisions → **fix round running** | verify fixes → merge first |
-| `feat/reservations-core` | wt/reservations | bookings/stays/front desk | steward review: P0 (1-cent channel diff drops taxes) → **fix round running** | merge after rates/finance/payments |
-| `feat/finance-core` | wt/finance | ledger, folios, billing rules, AR, invoices, cashier | steward review: 2 P0 (concurrent corrections, credit notes); ADR-0016 → **fix round running** | merge after rates |
-| `feat/payments-core` | wt/payments | payments (simulator, Stripe Connect, Route D) | steward review: 3 P0 → **fix round running** | merge after finance |
-| `feat/operations-core` | wt/operations | housekeeping, maintenance, tasks, offline sync | steward review: 2 P0 → **fix round running** | merge after rates |
-| `feat/integration-core` | wt/integration | connector framework, setup, health, webhooks | steward review: P0 SSRF → **fix round running** | merge after rates |
-| `feat/backoffice-core` | wt/backoffice | packages/ui + apps/backoffice | **steward review running** | fix round → merge |
+| `feat/rates-core` | wt/rates | rates + tax engine | **MERGED** to main (4aec0d5) — P0 + P1 fixed; parity gate not yet passed (13 P0 rows untested, mostly cross-module; README § Known gaps) | bind `affectedAgreements`, `channelForApiClient` at integration step |
+| `feat/reservations-core` | wt/reservations | bookings/stays/front desk | **MERGED** to main (6c53c03) — P0 R-01 + P1s fixed; inventory bound for real; rates/guests/finance/payments/operations ports still stubbed (`module_not_available`) | integration step: `ratesPortFrom` adapter, channel-price terms in rates, `instantiatePaymentSchedule`, bind remaining ports, R-25 |
+| `feat/finance-core` | wt/finance | ledger, folios, billing rules, AR, invoices, cashier | **MERGED** to main — 2 P0 + review items fixed; ports to rates/payments still stubbed; F-10 receipts not built | integration step: bind tax→rates, payments LedgerPort→`financeLedgerForPayments`, collection→payments (update apps/api/test/payments.test.ts) |
+| `feat/payments-core` | wt/payments | payments (simulator, Stripe Connect, Route D) | **MERGED** to main (872e45b) — 3 P0 + P1s fixed; folio collections refused until finance binds `LedgerPort`; parity gate open (28 P0 rows, mostly unbuilt: collection plans, hosted card entry, PCI proxy, forwarding) | finance binds LedgerPort at its merge |
+| `feat/operations-core` | wt/operations | housekeeping, maintenance, tasks, offline sync | **MERGED** to main (9296305) — both P0 + most P1 fixed; P1-5/6/8 deferred with reasons (README) | — |
+| `feat/integration-core` | wt/integration | connector framework, setup, health, webhooks | **MERGED** to main (4d90c6a) — P0 SSRF fixed (`safeFetch`), F2–F9 fixed | bind platform transitions after identity-plus merges (FR-2) |
+| `feat/backoffice-core` | wt/backoffice | packages/ui + apps/backoffice | steward review: **merge after fixes** (P0 cached data leaks to next user on shared tab; 6 P1) — `reviews/review-backoffice.md` | **fix round queued for after usage reset** → verify → merge |
 | `feat/identity-platform-enterprise` | wt/identity-plus | MFA, SSO, SCIM, custom roles, break-glass, trials, activation | steward review: **do not merge** (2 P0 cross-org takeover, 8 P1) → ADR-0017 → **fix round running** (sent 11:55Z) | second steward review → merge |
 | `feat/infra-aws` | wt/infra | Terraform, Dockerfiles, runbooks | **paused** (usage) | resume when usage < 80%; set `TRUSTED_PROXY_CIDRS` (pending-fixes) |
 | `docs/parity-ops` | wt/parity-ops | parity: operations, guests, comms, resort, access, guest-experience, crm, identity, integration, ai | **paused** (usage) | resume when usage < 80% |
 | journey, back-of-house, parity-front, parity-finance, readiness, product, adoption docs | — | docs | **MERGED** to main | spec change requests folded in at integration step |
-| market deep dive | wt/market | owner's research prompt + one-button migration | **running** | digest → gap strategist → 10x briefs |
-| UX loop round 1 | wt/uxlab (lab API :4300, UI :5380) | black-box tester (no build context) | **running** | findings → docs/ux/round-1 → refiner → module owners |
+| market deep dive | wt/market | owner's research prompt + one-button migration | **MERGED** to main (`docs/research/05-*`; Q140–Q145) | **gap strategist queued for after usage reset** |
+| UX loop round 1 | wt/uxlab | black-box tester (no build context) | **findings done** → `docs/ux/round-1/blackbox-findings.md` (top: nothing can be created; no checkout/money; simulated actions don't change state; 1024px overflow; raw technical text) | **refining agent queued for after usage reset** |
 
 Branch briefs: `docs/orchestration/module-agent-playbook.md` (shared module rules), `workstream-briefs.md`
 (per-workstream scope + every follow-up instruction sent), `steward-review-brief.md`, `parity-researcher-brief.md`.

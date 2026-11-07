@@ -21,3 +21,16 @@
 - inventory (ADR-0015, from operations fix round): stop re-checking `inventory.block.manage` on PORT calls (keep it on inventory's own HTTP routes); then remove operations' system-scope workaround in its InventoryPort adapter (apps/api composition)
 - reservations (from operations fix round): set `aggregateVersion` on stay events and include `stays[]` in booking events so operations can mirror stays without guessing
 - decision needed at integration step: composite units (inventory) in operations' unit mirror — excluded for now (operations review P1-8)
+- infra: set `PORTICO_TERMS_SEAL_KEY` (secret, Secrets Manager) for the API — rates seals booking terms with it; required in production
+- reservations + finance (rates merged 4aec0d5): adopt the breaking renames in docs/architecture/domain-map.md § rates (TaxLine.basis, fullPaymentDate + taxPointSplits, nightly/terms, seal, taxCategory/taxInclusion)
+- finance (payments merged 872e45b): implement payments' `LedgerPort` (describeTarget, scoped postings with clearing account per provider, markPaymentVerified, recordSettlementFees) and bind `financeLedgerForPayments` in composition — until then folio collections answer 503
+- foundation/infra: `portico_worker` DB role for apps/worker and the public webhook route; grant SECURITY DEFINER routing functions (`payments.route_webhook`, `payments.tenants_for_jobs`, other modules' job routing) to it only (payments review P3-5)
+- reservations (integration step, from its fix round): `ratesPortFrom` adapter mapping rates' sealed TermsSnapshot v1 / Offer / RepricingResult (store rates' document unchanged, pass it back to priceChange / evaluateCancellationPenalty / complimentaryTerms); deposits via `rates.instantiatePaymentSchedule`; bind payments, finance, guests, operations ports; R-25 composite `assignedUnitId` + consume `inventory.assignment.changed`
+- rates: channel-price terms (a TermsSnapshot built from a channel's delivered price, taxes recomputed by rates) — needed by reservations' channel ingestion (R-01)
+- payments (ADR-0015): stop re-checking the caller's own permission keys on PORT calls (reservations binds payments at the integration step)
+- integration step (finance merged): bind finance tax port → rates (`bindFinanceTax`), payments LedgerPort → `financeLedgerForPayments(finance)`, finance collection requests → payments; update apps/api/test/payments.test.ts (expects the stubs)
+- reservations → finance contract: pass `propertyId` on recordDeposit, applyDeposits, listFolios, setBillingRules, getFolioBalance, getDepositBalance
+- finance F-10: receipts (MIRA: invoice or receipt within 3 days; for deposits that is the payment) — not built
+- parity-finance: downgrade PAR-FIN-132/133 and the other rows the finance review named (F-12)
+- platform: `lockBusinessDate` provider for finance (review P2-01)
+- integration (after identity-plus merges): bind platform openTransitionFor / planAuthorityTransition / assertEffectInScope and transitionGuard → integration pendingOperations (modules/integration/FOUNDATION_REQUESTS.md FR-2)

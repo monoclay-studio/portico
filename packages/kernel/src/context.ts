@@ -17,7 +17,8 @@ export type TenantEnvironment = 'live' | 'trial' | 'sandbox' | 'training' | 'dem
  * Where a piece of displayed information comes from. Shown to users so they never mistake simulated, copied
  * or stale information for live facts.
  */
-export type Provenance = 'live' | 'simulated' | 'copied' | 'delayed' | 'incomplete' | 'external';
+/** CLAUDE.md rule 16. `sandbox` = produced against a provider's test environment (rule 12: simulated *or* sandbox). */
+export type Provenance = 'live' | 'simulated' | 'sandbox' | 'copied' | 'delayed' | 'incomplete' | 'external';
 
 /** Resolved permissions of the current actor. Implemented by the identity module (and test fakes). */
 export interface Authorizer {

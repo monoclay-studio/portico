@@ -117,4 +117,4 @@ and owners (`owners.accounting`). Owns the authority registry for all ten govern
 ## Open questions for the owner
 - Q63/Q44: trial deletion grace (7 days assumed) versus retention obligations for copied data.
 - Q3/Q60: prices and final packaging of editions, add-ons and Connect packs.
-- Q136 (`docs/OPEN_QUESTIONS.md`): open trials per live organization (3 assumed).
+- Q149 (`docs/OPEN_QUESTIONS.md`): open trials per live organization (3 assumed).

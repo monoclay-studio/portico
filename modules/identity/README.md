@@ -204,7 +204,7 @@ their own memberships — trial access never implies live access. SSO/SCIM are g
   dual control) has no operator endpoint or runbook yet; nor has recovery of an organization that lost every
   administrator. Both are launch-gate items.
 - A trial created by the operator console for a prospect lives in a non-live environment, so its staff messages are
-  simulated (operator mailbox). The first real delivery path for prospects needs a decision (Q135).
+  simulated (operator mailbox). The first real delivery path for prospects needs a decision (Q148).
 - API-client secret rotation with overlap window.
 - SCIM: no bulk, sort or ETags; `userName` cannot change (the sign-in identity may be shared across organizations);
   SCIM deprovisioning is not power-ordered (an IdP acts for the organization; `identity.scim.provision` is documented
@@ -217,5 +217,5 @@ their own memberships — trial access never implies live access. SSO/SCIM are g
 - `docs/parity/identity.md` missing (outside this module's write scope).
 
 ## Open questions for the owner
-Recorded in `docs/OPEN_QUESTIONS.md` (Q133–Q136): enrolment grace and step-up window defaults, the operator-console
+Recorded in `docs/OPEN_QUESTIONS.md` (Q146–Q149): enrolment grace and step-up window defaults, the operator-console
 identity provider, MFA in demo and training organizations, and trial limits / prospect onboarding delivery.

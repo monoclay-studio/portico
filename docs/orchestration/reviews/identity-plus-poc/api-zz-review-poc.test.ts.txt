@@ -1,0 +1,41 @@
+import { sourcesFromManifests } from '@portico/db';
+import { createServer } from '@portico/http';
+import { fixedClock } from '@portico/kernel';
+import { createTestDatabase } from '@portico/testing';
+import { describe, expect, it } from 'vitest';
+import { compose, MANIFESTS } from '../src';
+
+describe('REVIEW PoC: per-IP rate limits are bypassable with X-Forwarded-For (trustProxy: true)', () => {
+  it('30 sign-in attempts with rotating X-Forwarded-For never hit 429; the same XFF does', async () => {
+    const t = await createTestDatabase(sourcesFromManifests(MANIFESTS), { clock: fixedClock(new Date()) });
+    const c = compose(t.db, { env: { NODE_ENV: 'test' } });
+    const app = await createServer({ authenticator: c.authenticator, modules: c.httpModules, logger: false });
+    try {
+      const codes: number[] = [];
+      for (let i = 0; i < 30; i++) {
+        const r = await app.inject({
+          method: 'POST',
+          url: '/v1/auth/login',
+          headers: { 'x-forwarded-for': `203.0.113.${i}` },
+          payload: { email: 'nobody@lagoon.mv', password: 'x'.repeat(12) },
+        });
+        codes.push(r.statusCode);
+      }
+      expect(codes.filter((s) => s === 429)).toHaveLength(0);
+      const same: number[] = [];
+      for (let i = 0; i < 25; i++) {
+        const r = await app.inject({
+          method: 'POST',
+          url: '/v1/auth/login',
+          headers: { 'x-forwarded-for': '198.51.100.7' },
+          payload: { email: 'nobody@lagoon.mv', password: 'x'.repeat(12) },
+        });
+        same.push(r.statusCode);
+      }
+      expect(same.filter((s) => s === 429).length).toBeGreaterThan(0);
+    } finally {
+      await app.close();
+      await t.drop();
+    }
+  }, 60_000);
+});
