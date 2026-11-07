@@ -12,9 +12,17 @@ not yet on `main`); Test paths are relative to the repository root on that branc
 `feat/finance-core` @ `232be3a`). If a branch merges with changes, the steward re-verifies; if rejected, rows fall
 back to `specified`.
 
+**Re-verified after the payments steward review fixes** (2026-11-07, branch `feat/payments-core` after
+`af3a409`): rows below cite the fixes; each review finding has a regression test in
+`modules/payments/test/review-regressions.test.ts` (cited as `review-regressions Pn-m`). Statuses were corrected where the review found
+overclaims (P2-13): MIT now derives the initiator from consent, PAN checks cover every free-text field and the DB,
+duplicate approval codes are a DB constraint with a concurrent test, VCC charging is tested on the simulator only (the
+real path needs the PCI proxy, PAR-PAY-027), 3DS `requires_action`, authorization renewal and the evidence pack are
+not built.
+
 **Reconciliation.** This file supersedes the module draft `modules/payments/PARITY.md` (which said "move to
 docs/parity/payments.md at merge"): delete the draft when merging so there is one matrix. Every row and edge case of
-the draft is carried over; draft IDs map as follows.
+the draft is carried over (the draft is deleted on the payments branch); draft IDs map as follows.
 
 | Draft capability → this file | Draft edge case → this file |
 |---|---|
@@ -37,7 +45,7 @@ the draft is carried over; draft IDs map as follows.
 | PAR-PAY-004 | Full-capability simulator with failure injection for demo/training | assumption | P0 | tested | payments.md PAY-R03 | modules/payments/test/scenario-s05-payment-timeout.test.ts; test/scenario-s20-provider-outage.test.ts |
 | PAR-PAY-005 | Record-only external terminal payments (approval code, terminal id) matched to batch reports | assumption (Maldives Route D, Q2) | P0 | tested | payments.md PAY-R03, PAY-R24 | modules/payments/test/route-d-recorded.test.ts |
 | PAR-PAY-006 | Local Maldivian acquirer/gateway adapter | assumption (Q2) | P0 | deferred | payments.md PAY-R03 — R1 pending Q2 vendor choice | — |
-| PAR-PAY-007 | Integrated card-present terminals (tap/insert, tip on terminal, token for later MIT) | Stripe [Terminal][st-terminal] · Mews [terminal setup][mw-terminal] · Apaleo [payment by terminal][ap-fin] | P1 | deferred | payments.md PAY-R02 — after pilot; Route D covers standalone terminals (modules/payments/PARITY.md) | — |
+| PAR-PAY-007 | Integrated card-present terminals (tap/insert, tip on terminal, token for later MIT) | Stripe [Terminal][st-terminal] · Mews [terminal setup][mw-terminal] · Apaleo [payment by terminal][ap-fin] | P1 | deferred | payments.md PAY-R02 — after pilot; Route D covers standalone terminals | — |
 | PAR-PAY-008 | Provider account health (restricted/suspended) with banner and safe alternatives | assumption (research 02 §2.5 pain) | P0 | tested | payments.md PAY-R26 | modules/payments/test/scenario-s20-provider-outage.test.ts |
 | PAR-PAY-009 | Environment safety: no live provider call in demo/trial/training | assumption (architecture rule 12) | P0 | tested | payments.md PAY-R04, PAY-I06 | modules/payments/test/environment-safety.test.ts |
 | PAR-PAY-010 | Payment method configuration per property (cash, card types, bank transfer, vouchers) with accounting mapping | OPERA [payment methods][op-paymethods] · [credit card types][op-cc-types] · Mews [accounting configuration][mw-acct-config] | P0 | tested | finance.md FIN-R12 (payment codes) | modules/finance/src/domain/domain.test.ts (methods mapped to accounts) |
@@ -46,15 +54,16 @@ the draft is carried over; draft IDs map as follows.
 
 | ID | Capability | Market evidence | Priority | Status | Spec | Test |
 |---|---|---|---|---|---|---|
-| PAR-PAY-020 | Tokenized card on file; no PAN/CVC storage anywhere | Apaleo [payment accounts][ap-payacct] · Mews [credit cards API][mw-cards-api] | P0 | tested | payments.md PAY-R05, PAY-I05 | modules/payments/test/isolation-permissions.test.ts |
+| PAR-PAY-020 | Tokenized card on file; no PAN/CVC storage anywhere | Apaleo [payment accounts][ap-payacct] · Mews [credit cards API][mw-cards-api] | P0 | tested | payments.md PAY-R05, PAY-I05 | modules/payments/test/isolation-permissions.test.ts; review-regressions P2-6 |
 | PAR-PAY-021 | Hosted card entry (PSP components) on Portico pages | Stripe [save and reuse][st-save] | P0 | specified | payments.md PAY-R06 | — |
 | PAR-PAY-022 | Mandate/consent evidence stored with the token (terms version, 3DS result, network transaction id) | Stripe [3D Secure][st-3ds] · [save and reuse][st-save] | P0 | tested | payments.md PAY-R05 | modules/payments/test/authorizations.test.ts (MIT requires agreement) |
 | PAR-PAY-023 | Card wallet on the guest profile reused across stays (where token/mandate allows) | OPERA [credit card wallet][op-wallet] · Apaleo [reuse payment method][ap-payacct] | P1 | specified | payments.md PAY-R08 | — |
 | PAR-PAY-024 | Copy a card from one reservation to related reservations | OPERA [copy credit card][op-cc-copy] | P2 | missing | — | — |
 | PAR-PAY-025 | OTA virtual card metadata (activation date, amount, currency, expiry) separate from token | Mews [VCC charging][mw-vcc] | P0 | tested | payments.md PAY-R07 | modules/payments/test/requests-vcc.test.ts |
-| PAR-PAY-026 | VCC charged automatically at activation for exactly its amount, retries for funding delay, task on final failure | Mews [VCC charging][mw-vcc] | P0 | tested | payments.md PAY-R07 | modules/payments/test/requests-vcc.test.ts |
+| PAR-PAY-026 | VCC charged automatically at activation for exactly its amount, retries for funding delay, task on final failure | Mews [VCC charging][mw-vcc] | P0 | tested | payments.md PAY-R07 (charging tested on the simulator; real VCC charging needs the PCI proxy, PAR-PAY-027) | modules/payments/test/requests-vcc.test.ts |
 | PAR-PAY-027 | OTA hotel-collect card data routed through PCI proxy to tokens | assumption (research 04 §B6) | P0 | specified | payments.md §2 (PCI proxy in integration) | — |
 | PAR-PAY-028 | Card expiry/replacement handling (ask guest for new card via link) | assumption | P1 | missing | — | — |
+| PAR-PAY-029 | Card verification without a charge ($0 / setup) to guarantee a booking | Stripe [save and reuse][st-save] | P1 | deferred | payments.md PAY-R06 — needs hosted card entry; until then a guarantee is a pre-authorization (PAR-PAY-030) | — |
 
 ### Authorizations, captures and charges
 
@@ -63,42 +72,46 @@ the draft is carried over; draft IDs map as follows.
 | PAR-PAY-030 | Pre-authorization at check-in or T−n days; never shown as a payment | OPERA [authorization rules][op-auth-rules] · Apaleo [authorizations][ap-auth] · Mews [preauthorization policy][mw-preauth-policy] | P0 | tested | payments.md PAY-R09, PAY-R22 | modules/payments/test/authorizations.test.ts (hold never posted) |
 | PAR-PAY-031 | Authorization rules estimating expected spend (room + incidentals per night) | OPERA [authorization rules][op-auth-rules] | P1 | missing | — | — |
 | PAR-PAY-032 | Incremental authorization as charges approach the authorized amount (incl. nightly batch) | OPERA [batch authorizations][op-batch-auth] · Stripe [incremental][st-incr] | P1 | tested | payments.md PAY-R09 | modules/payments/test/authorizations.test.ts |
-| PAR-PAY-033 | Scheme-specific authorization expiry (extended lodging authorizations) with renewal before expiry | Stripe [extended authorization][st-ext-auth] · Apaleo [28-day holds][ap-auth] | P0 | tested | payments.md PAY-R09, PAY-R10 | modules/payments/test/authorizations.test.ts (warns before expiry) |
+| PAR-PAY-033 | Scheme-specific authorization expiry (extended lodging authorizations) with renewal before expiry | Stripe [extended authorization][st-ext-auth] · Apaleo [28-day holds][ap-auth] | P0 | building | payments.md PAY-R09, PAY-R10 — expiry per provider/policy and a warning before expiry are built; the renewal task / automatic re-authorization is not | modules/payments/test/authorizations.test.ts (warns before expiry) |
 | PAR-PAY-034 | Capture full or partial; multiple partial captures | Stripe [multicapture][st-multicapture] · Apaleo [payment by authorization][ap-fin] | P0 | tested | payments.md PAY-R09 | modules/payments/test/authorizations.test.ts (partial captures) |
 | PAR-PAY-035 | Over-capture (capture above authorized amount where scheme permits) | Stripe [overcapture][st-overcapture] | P2 | missing | — | — |
 | PAR-PAY-036 | Release unused authorization at checkout; authorization reversal on payment-method change | OPERA [authorization reversals][op-auth-reversal] | P0 | tested | payments.md PAY-R09 (`release`) | modules/payments/test/authorizations.test.ts (releases holds) |
-| PAR-PAY-037 | Customer-initiated and merchant-initiated charges (no-show, post-departure, scheduled) referencing mandate | Stripe [save and reuse][st-save] | P0 | tested | payments.md PAY-R11 | modules/payments/test/authorizations.test.ts; src/providers/stripe-connect.test.ts (off-session MIT) |
+| PAR-PAY-037 | Customer-initiated and merchant-initiated charges (no-show, post-departure, scheduled) referencing mandate | Stripe [save and reuse][st-save] | P0 | tested | payments.md PAY-R11 — initiator derived from the consent record, mandate (terms version + acceptance) required (review P1-8); cross-check with the booking's agreed-terms snapshot waits for reservations | modules/payments/test/authorizations.test.ts (MIT derived from consent); src/providers/stripe-connect.test.ts (off-session MIT) |
 | PAR-PAY-038 | Plain-language decline reasons with recovery actions | assumption | P0 | tested | payments.md PAY-R12 | modules/payments/test/authorizations.test.ts; src/domain/domain.test.ts |
-| PAR-PAY-039 | 3DS/SCA challenge handling (`requires_action`) for guest-present flows | Stripe [3D Secure][st-3ds] | P1 | tested | payments.md PAY-R12 | modules/payments/src/providers/stripe-connect.test.ts (requires_action); src/domain/domain.test.ts (3DS → link) |
+| PAR-PAY-039 | 3DS/SCA challenge handling (`requires_action`) for guest-present flows | Stripe [3D Secure][st-3ds] | P1 | specified | payments.md PAY-R12 — not built (review P1-12): `requires_action` is reported as a decline whose recovery is "send a payment link"; needs hosted card entry PAY-R06 | modules/payments/src/providers/stripe-connect.test.ts and src/domain/domain.test.ts cover only the mapping to a link |
 | PAR-PAY-040 | Back-to-back stays sharing an authorization | OPERA [back to back authorization examples][op-b2b-auth] | P2 | missing | — | — |
 | PAR-PAY-041 | Credit-limit overage auto-charge when folio balance passes card limit | OPERA [credit limit overage][op-cl-overage] | P1 | missing | — | — |
 | PAR-PAY-042 | MOTO (mail/telephone order) card payments | Simphony [MOTO][sim-moto] | P2 | missing | — | — |
 | PAR-PAY-043 | Card surcharges per card type passed to guest where legal | OPERA [card payments with surcharges][op-postings] | P2 | missing | — | — |
 | PAR-PAY-044 | Dynamic currency conversion offered at terminal | assumption (acquirer feature) | P2 | missing | — | — |
+| PAR-PAY-045 | Split tenders on one folio (part card, part cash/transfer) | OPERA [postings and payments][op-postings] | P1 | built | payments.md PAY-R14 — sequential tenders; one card collection in flight per folio at a time (review P1-1) | review-regressions P1-1 |
+| PAR-PAY-046 | Fraud screening / 3DS on the booking engine | Stripe [3D Secure][st-3ds] | P1 | deferred | payments.md PAY-R06 — needs hosted card entry and the guest booking engine (later wave) | — |
+| PAR-PAY-047 | Ledger targets checked before money moves: the folio/booking belongs to the collecting property and its legal entity; every posting carries the scope | assumption (architecture rules 4, 14) | P0 | tested | payments.md PAY-I01; review P0-1 | review-regressions P0-1; apps/api/test/payments.test.ts (finance not connected → folio refused) |
 
 ### Pending verification, webhooks and reconciliation
 
 | ID | Capability | Market evidence | Priority | Status | Spec | Test |
 |---|---|---|---|---|---|---|
 | PAR-PAY-050 | Timeout/ambiguous outcome shown as pending verification, resolved by provider query on backoff | Stripe [idempotent requests][st-idem] | P0 | tested | payments.md PAY-R13 | modules/payments/test/scenario-s05-payment-timeout.test.ts |
-| PAR-PAY-051 | Second charge for the same item blocked while one is pending | assumption (research 02 §2.5 double-charge pain) | P0 | tested | payments.md PAY-R14 | modules/payments/test/scenario-s05-payment-timeout.test.ts |
+| PAR-PAY-051 | Second charge for the same item blocked while one is pending | assumption (research 02 §2.5 double-charge pain) | P0 | tested | payments.md PAY-R14 | modules/payments/test/scenario-s05-payment-timeout.test.ts; review-regressions P1-1 (two desks at the same moment) |
 | PAR-PAY-052 | Persisted provider operation with idempotency key committed before the call | Stripe [idempotent requests][st-idem] | P0 | tested | payments.md PAY-R04, PAY-I02 | modules/payments/test/scenario-s06-refund-retry.test.ts (racing executors) |
-| PAR-PAY-053 | Webhooks verified, de-duplicated, order-tolerant, stored raw (no card data) | Stripe [webhooks][st-webhooks] | P0 | tested | payments.md PAY-R15 | modules/payments/test/webhooks.test.ts |
+| PAR-PAY-053 | Webhooks verified, de-duplicated, order-tolerant, stored raw (no card data) | Stripe [webhooks][st-webhooks] | P0 | tested | payments.md PAY-R15 — processed marker in the effects' transaction; redelivery reprocesses; hourly event backstop with cursor (review P0-3) | modules/payments/test/webhooks.test.ts; review-regressions P0-3 |
 | PAR-PAY-054 | Manual commit/fail of a pending payment by a supervisor (with evidence) | Apaleo [payment commit/fail][ap-fin-beta] | P1 | missing | — | — |
-| PAR-PAY-055 | Daily reconciliation of provider balance transactions vs payments vs ledger | Stripe [payout reconciliation][st-payout-recon] · Mews [reconcile ledgers][mw-ledger-reconcile] | P0 | built | payments.md PAY-R16, PAY-I08 | modules/payments/test/scenario-s05-payment-timeout.test.ts (scheduled reconciliation job); balance-transaction report matching partial |
-| PAR-PAY-056 | Terminal batch settlement / card settlement close-out | OPERA [credit card settlement][op-cc-settle] | P0 | tested | payments.md PAY-R24 (batch matching) | modules/payments/test/route-d-recorded.test.ts (acquirer settlement file) |
+| PAR-PAY-055 | Daily reconciliation of provider balance transactions vs payments vs ledger | Stripe [payout reconciliation][st-payout-recon] · Mews [reconcile ledgers][mw-ledger-reconcile] | P0 | building | payments.md PAY-R16, PAY-I08 — balance-transaction sweep not built (review P1-12); scheduled reconciliation of pending operations, ledger retries and the event backstop are | modules/payments/test/scenario-s05-payment-timeout.test.ts (scheduled reconciliation job); review-regressions P0-3 (backstop) |
+| PAR-PAY-056 | Terminal batch settlement / card settlement close-out | OPERA [credit card settlement][op-cc-settle] | P0 | tested | payments.md PAY-R24 (batch matching; gross/fee/net, fees posted to finance) | modules/payments/test/route-d-recorded.test.ts (acquirer settlement file); review-regressions P1-5/6/7/9 |
+| PAR-PAY-058 | Per-transaction provider fee breakdown | Stripe [payout reconciliation][st-payout-recon] | P1 | deferred | payments.md PAY-R16 — payout-level gross/fees/net recorded; per-transaction fees come with the balance-transaction sweep | — |
 | PAR-PAY-057 | Review/inspect all payments with state, fees and payout link | Mews [review payments][mw-review-payments] · [payments API][mw-payments-api] | P0 | specified | payments.md §9 Payments & payouts page | — |
 
 ### Refunds and disputes
 
 | ID | Capability | Market evidence | Priority | Status | Spec | Test |
 |---|---|---|---|---|---|---|
-| PAR-PAY-060 | Refund full/partial linked to the original payment; idempotent retry | Stripe [refunds][st-refunds] · Apaleo [refund payment][ap-fin] · OPERA [post CC refund][op-postings] | P0 | tested | payments.md PAY-R17 | modules/payments/test/scenario-s06-refund-retry.test.ts |
+| PAR-PAY-060 | Refund full/partial linked to the original payment; idempotent retry | Stripe [refunds][st-refunds] · Apaleo [refund payment][ap-fin] · OPERA [post CC refund][op-postings] | P0 | tested | payments.md PAY-R17 — ceiling after corrections (review P1-4); refused while disputed (P2-9) | modules/payments/test/scenario-s06-refund-retry.test.ts; review-regressions P1-4, P2-9 |
 | PAR-PAY-061 | Refund approval above threshold | assumption | P1 | specified | payments.md PAY-R17 | — |
 | PAR-PAY-062 | Unlinked refund to a different card or method (with permission) | Apaleo [folio refund][ap-fin] | P1 | missing | — | — |
 | PAR-PAY-063 | Refund by bank transfer (outbound) recorded and confirmed | assumption | P1 | missing | — | — |
 | PAR-PAY-064 | Dispute records from provider webhooks with deadlines and finance task | Stripe [disputes][st-disputes] | P0 | tested | payments.md PAY-R18 | modules/payments/test/webhooks.test.ts |
-| PAR-PAY-065 | One-click evidence pack (terms acceptance, registration card, 3DS, folio, comms, check-in/out log) | assumption (research 04 §B6) | P1 | built | payments.md PAY-R18 | modules/payments/test/webhooks.test.ts (evidence checklist; export pack pending) |
+| PAR-PAY-065 | One-click evidence pack (terms acceptance, registration card, 3DS, folio, comms, check-in/out log) | assumption (research 04 §B6) | P1 | building | payments.md PAY-R18 | modules/payments/test/webhooks.test.ts (evidence checklist; export pack pending) |
 | PAR-PAY-066 | Dispute fund movements recorded in the ledger | Stripe [disputes][st-disputes] | P0 | tested | payments.md PAY-R18 (`recordDisputeMovement`) | modules/payments/test/webhooks.test.ts; modules/finance/test/payments-ledger-port.test.ts |
 
 ### Payment requests and automation
@@ -116,13 +129,15 @@ the draft is carried over; draft IDs map as follows.
 | PAR-PAY-078 | Auto-settlement of folios at checkout or periodically by payment type | OPERA [auto folio settlement][op-auto-settle] | P1 | missing | — | — |
 | PAR-PAY-079 | Guest pays balance from a link or QR on the folio (pay-at-table / self-pay) | Simphony [pay using QR code][sim-qr] | P2 | missing | — | — |
 | PAR-PAY-080 | Payment request reminders and expiry handling | assumption | P1 | specified | payments.md PAY-R22 (reminders) | — |
+| PAR-PAY-081 | Payment receipt sent to the guest | assumption (all PMS) | P1 | deferred | payments.md PAY-R19 — needs comms (`message.guest`); finance issues the folio receipt | — |
+| PAR-PAY-082 | A payment request owns its purpose on a booking/folio: desk charge, recorded payment or VCC for the same purpose refused unless staff state why (audited) — interim until collection plans | assumption (research 02 §2.5 double-charge pain) | P0 | tested | payments.md PAY-R20 (interim, review P1-2) | review-regressions P1-2 |
 
 ### Cash, bank transfers, payouts
 
 | ID | Capability | Market evidence | Priority | Status | Spec | Test |
 |---|---|---|---|---|---|---|
 | PAR-PAY-090 | Cash payments confirmed at entry and attributed to the cashier session | OPERA [cashier closure][op-cashier-close] | P0 | tested | payments.md PAY-R23 | modules/payments/test/route-d-recorded.test.ts |
-| PAR-PAY-091 | Bank transfers recorded as awaiting receipt until confirmed with bank reference | assumption (Maldives DMC practice) | P0 | tested | payments.md PAY-R23 | modules/payments/test/route-d-recorded.test.ts (verified against bank statements) |
+| PAR-PAY-091 | Bank transfers recorded as awaiting receipt until confirmed with bank reference | assumption (Maldives DMC practice) | P0 | tested | payments.md PAY-R23 — `awaiting_receipt` until `confirm-receipt` (`payments.bankTransfer.confirm`) or `cancel-expected` (review P1-7) | modules/payments/test/route-d-recorded.test.ts; review-regressions P1-5/6/7/9 |
 | PAR-PAY-092 | Bank-feed matching of incoming transfers to awaiting items | Xero [bank reconciliation][xero-rec] | P1 | tested | payments.md PAY-R23 — statement file import + auto-match (branch); live bank feed LATER (Q107) | modules/payments/test/route-d-recorded.test.ts; src/domain/domain.test.ts (matching) |
 | PAR-PAY-093 | Payouts with gross, fees, disputes, reserves, net and constituent transactions | Stripe [payouts][st-payouts] · Mews [payments balance][mw-review-payments] | P0 | tested | payments.md PAY-R25 | modules/payments/test/webhooks.test.ts (payouts never revenue) |
 | PAR-PAY-094 | Payout reconciliation report per payout; payout never revenue | Stripe [payout reconciliation][st-payout-recon] | P0 | tested | payments.md PAY-R25 | modules/payments/test/webhooks.test.ts; modules/finance/test/payments-ledger-port.test.ts |
@@ -131,10 +146,11 @@ the draft is carried over; draft IDs map as follows.
 | PAR-PAY-097 | Payment events (succeeded, failed, pending, refund, dispute, payout) | Stripe [webhooks][st-webhooks] | P1 | built | payments.md §7 | — (events emitted; consumers tested in finance S10) |
 | PAR-PAY-098 | Forward payments to an external PMS folio in connected mode | assumption (adoption brief) | P0 | specified | payments.md §14 | — |
 | PAR-PAY-099 | Payment permissions (collect, refund, approve, VCC view, waive, reconcile) | OPERA [cashier login protected functions][op-cashier-login] | P0 | tested | payments.md §8 | modules/payments/test/isolation-permissions.test.ts |
-| PAR-PAY-100 | Platform application fee on embedded (Connect) payments, kept separate from hotel funds | Stripe [direct charges][st-direct] | P2 | tested | payments.md PAY-R03 | modules/payments/src/providers/stripe-connect.test.ts |
+| PAR-PAY-100 | Platform application fee on embedded (Connect) payments, kept separate from hotel funds | Stripe [direct charges][st-direct] | P2 | tested | payments.md PAY-R03 — set by Monoclay operators only (review P0-2) | modules/payments/src/providers/stripe-connect.test.ts; review-regressions P0-2 |
 | PAR-PAY-101 | Circuit breaker per provider account with a single recovery probe | assumption (S20) | P0 | tested | payments.md PAY-R26 | modules/payments/src/domain/domain.test.ts |
 | PAR-PAY-102 | Tenant isolation of payments and methods; data-authority refusal when payments are external | assumption (architecture rules 4, 15) | P0 | tested | payments.md §14 | modules/payments/test/isolation-permissions.test.ts |
 | PAR-PAY-103 | Terminal refunds and manual authorizations completed on a standalone terminal recorded and matched | assumption (Route D) | P0 | tested | payments.md PAY-R24 | modules/payments/test/route-d-recorded.test.ts |
+| PAR-PAY-104 | A provider account belongs to exactly one organization; linking and application fees are Monoclay-operator actions; activation comes from the provider | Stripe [direct charges][st-direct] | P0 | tested | payments.md PAY-R01, PAY-R03; review P0-2 | review-regressions P0-2 |
 
 ## Edge cases
 
@@ -150,16 +166,16 @@ the draft is carried over; draft IDs map as follows.
 | EC-PAY-008 | Staff manually charges a VCC while an automated VCC charge is scheduled | Manual charge satisfies the item; scheduled execution is superseded; history shows who collected | P0 | specified | — |
 | EC-PAY-009 | VCC charged on activation date but funds not yet loaded | Decline categorised as funding delay; retries per backoff for up to N days; task at final failure; never charged above VCC amount | P0 | tested | modules/payments/test/requests-vcc.test.ts |
 | EC-PAY-010 | Channel did not send a VCC activation date | Item scheduled at arrival date in property time with visible "activation date unknown" warning; staff can edit | P1 | missing | — |
-| EC-PAY-011 | Authorization expires during a 35-night stay | Renewal task or automatic re-authorization `renewBeforeDays` before expiry; expired authorization shown expired, never as guarantee | P0 | tested | modules/payments/test/authorizations.test.ts |
+| EC-PAY-011 | Authorization expires during a 35-night stay | Renewal task or automatic re-authorization `renewBeforeDays` before expiry; expired authorization shown expired, never as guarantee | P0 | building | modules/payments/test/authorizations.test.ts (warning exception before expiry; expired shown expired; renewal task / automatic re-authorization not built — PAY-R10) |
 | EC-PAY-012 | Incremental authorization declined at night | Stay flagged "guarantee insufficient" for the morning desk; no posting block unless policy says so | P1 | missing | — |
 | EC-PAY-013 | Checkout amount exceeds authorized amount | Capture up to authorized (or over-capture where supported) and charge the remainder as a new charge with consent; never silently fail | P0 | missing | — |
 | EC-PAY-014 | Guest switches card at checkout | New charge on new card; old authorization released and release confirmation tracked; a release that never completes raises a guest-complaint risk task | P0 | built | modules/payments/test/authorizations.test.ts (release; release-confirmation tracking pending) |
-| EC-PAY-015 | No-show charge attempted on a card whose terms did not disclose no-show charging | MIT blocked; payment request created instead; reason shown | P0 | tested | modules/payments/test/authorizations.test.ts |
+| EC-PAY-015 | No-show charge attempted on a card whose terms did not disclose no-show charging | MIT blocked; payment request created instead; reason shown | P0 | building | modules/payments/test/authorizations.test.ts (MIT without a recorded mandate is blocked with the reason and "send a payment link"; the booking-terms check and the automatic request are not built) |
 | EC-PAY-016 | Provider account suspended during peak check-in | Banner with what is affected; automation paused; safe alternatives offered (external terminal record, cash, link later); nothing pretends to succeed | P0 | tested | modules/payments/test/scenario-s20-provider-outage.test.ts |
 | EC-PAY-017 | Provider recovers; 40 queued automated collections | Each re-validated (still due? not satisfied? guest still in house? amount current?) before execution; skipped items logged with reason (E13/S20) | P0 | tested | modules/payments/test/scenario-s20-provider-outage.test.ts |
 | EC-PAY-018 | Island internet drops mid-payment at a guesthouse | UI shows pending verification offline-honestly; no local "paid"; resolution on reconnect; staff can record an external-terminal payment instead | P0 | built | modules/payments/test/scenario-s05-payment-timeout.test.ts (pending verification path) |
 | EC-PAY-019 | External terminal record never matches any terminal batch line after N days | Exception to Finance with the record, terminal id and amount; status stays "not verified with provider" | P0 | tested | modules/payments/test/route-d-recorded.test.ts |
-| EC-PAY-020 | External terminal record entered twice with the same approval code | Second entry warned as probable duplicate (same terminal, approval code, amount, day); requires override reason | P0 | tested | modules/payments/test/route-d-recorded.test.ts (duplicate approval code refused) |
+| EC-PAY-020 | External terminal record entered twice with the same approval code | Second entry warned as probable duplicate (same terminal, approval code, amount, day); requires override reason | P0 | tested | modules/payments/test/route-d-recorded.test.ts; review-regressions P1-3 (unique per account, terminal, reference and property-local day as a DB constraint; concurrent entries → one; audited override) |
 | EC-PAY-021 | Bank transfer confirmed, then the bank returns it | Reversal of the payment posting, collection item back to due, receivables reopened, task created | P0 | missing | — |
 | EC-PAY-022 | Refund requested above the remaining refundable amount (in-flight refunds count) | Rejected with refundable amount shown (PAY-I03) | P0 | tested | modules/payments/test/scenario-s06-refund-retry.test.ts |
 | EC-PAY-023 | Refund of a payment made on a card that is now closed | Provider error mapped to "card closed — refund by other method"; alternative refund flow with permission | P1 | missing | — |
@@ -168,7 +184,7 @@ the draft is carried over; draft IDs map as follows.
 | EC-PAY-026 | Payout total differs from the sum of transactions by an unexplained amount | Reconciliation exception with the difference and candidate causes; never auto-adjusted | P0 | built | modules/payments/test/webhooks.test.ts (missing breakdown flagged) |
 | EC-PAY-027 | Payout settles in MVR for USD charges (acquirer conversion) | FX difference to gains/losses at payout reconciliation; rate implied by acquirer recorded | P0 | specified | — |
 | EC-PAY-028 | Payment link paid partially (instalments) and then expires | Request `partially_paid → expired`; paid part stays; collection item reflects remainder; new link offered | P1 | built | modules/payments/test/requests-vcc.test.ts |
-| EC-PAY-029 | Booking cancelled after a payment link was sent but before guest pays | Link cancelled at provider; if guest still pays (race), payment recorded as unscheduled and a refund-or-credit task created | P0 | built | — (modules/payments/PARITY.md EC-PAY-027: recorded + exception) |
+| EC-PAY-029 | Booking cancelled after a payment link was sent but before guest pays | Link cancelled at provider; if guest still pays (race), payment recorded as unscheduled and a refund-or-credit task created | P0 | built | — (payment recorded + `payment_request_overpaid` exception; provider-side link cancellation not built) |
 | EC-PAY-030 | Booking shortened after deposit collected beyond new total | Plan diff shows over-collection; refund-or-credit task; satisfied items never removed | P0 | specified | — |
 | EC-PAY-031 | Demo environment user enters a real-looking card number | Simulator only; effect blocked for live; labelled simulated; no provider call (PAY-I06) | P0 | tested | modules/payments/test/environment-safety.test.ts |
 | EC-PAY-032 | Log line or AI context would contain a PAN-looking string | Redaction removes it; schema has no PAN column; static check in CI (PAY-I05) | P0 | tested | modules/payments/test/isolation-permissions.test.ts; src/domain/domain.test.ts (scrub) |
@@ -181,7 +197,7 @@ the draft is carried over; draft IDs map as follows.
 | EC-PAY-039 | Worker is down; a payment intent is not sent for 20 minutes | Intent cancelled with "nothing was charged"; never sent late | P0 | tested | modules/payments/test/scenario-s20-provider-outage.test.ts |
 | EC-PAY-040 | Two processes recover the same unsent intent concurrently | Exactly one provider call | P0 | tested | modules/payments/test/scenario-s06-refund-retry.test.ts |
 | EC-PAY-041 | Sandbox organization configured with a live provider key | Refused before any request, with the reason | P0 | tested | modules/payments/test/environment-safety.test.ts |
-| EC-PAY-042 | Staff paste a card number into a token, reference or name field | Refused at the API boundary and by a database check | P0 | tested | modules/payments/test/isolation-permissions.test.ts |
+| EC-PAY-042 | Staff paste a card number into a token, reference or name field | Refused at the API boundary and by a database check | P0 | tested | modules/payments/test/isolation-permissions.test.ts; review-regressions P2-6 (every free-text field, statement files, DB checks on reference/reason/note columns) |
 | EC-PAY-043 | Another organization uses our payment or method ids | 404; RLS hides the rows; nothing refunded or captured | P0 | tested | modules/payments/test/isolation-permissions.test.ts |
 | EC-PAY-044 | An external system is the payments system of record | Payment actions refused with the explanation and the external system named | P0 | tested | modules/payments/test/isolation-permissions.test.ts |
 | EC-PAY-045 | Settlement amount differs from the recorded terminal amount | Owned exception; correction by adjustment; record verified only after | P0 | tested | modules/payments/test/route-d-recorded.test.ts |
@@ -194,6 +210,19 @@ the draft is carried over; draft IDs map as follows.
 | EC-PAY-052 | Refund requested for a payment still pending verification | Refused until the payment is resolved; explains why | P0 | tested | modules/payments/test/scenario-s06-refund-retry.test.ts |
 | EC-PAY-053 | Refund fails at the provider after the amount was reserved | Reserved refundable amount released; nothing posted; staff told | P0 | tested | modules/payments/test/scenario-s06-refund-retry.test.ts |
 | EC-PAY-054 | Statement has no reference; amount, date and last 4 match two records | No automatic match (ambiguous); both listed for staff | P0 | tested | modules/payments/src/domain/domain.test.ts (unique-only fallback) |
+| EC-PAY-055 | Webhook processing fails half-way, or the provider never delivers an event | Marked processed only with its effects; redelivery reprocesses; the hourly backstop lists provider events since a cursor and applies the missing ones | P0 | tested | review-regressions P0-3 |
+| EC-PAY-056 | Two desks charge the same folio at the same moment | Exactly one collection in flight (DB constraint); the other is told a charge is being verified | P0 | tested | review-regressions P1-1 |
+| EC-PAY-057 | A deposit link is paid and the desk also charges the deposit | Desk charge refused (the request owns the purpose) unless staff state why it is separate (audited) | P0 | tested | review-regressions P1-2 |
+| EC-PAY-058 | Acquirer settles net of fees | Matched on gross; fees posted to finance once per statement; gross − fee = net checked | P0 | tested | review-regressions P1-5/6/7/9 |
+| EC-PAY-059 | Refund after a recorded payment was corrected downwards | Refund ceiling uses the corrected amount | P0 | tested | review-regressions P1-4 |
+| EC-PAY-060 | Collection names a folio/booking of another property or legal entity | Refused before any money moves; with finance not connected, folio collections are refused | P0 | tested | review-regressions P0-1; apps/api/test/payments.test.ts |
+| EC-PAY-061 | A second organization links (or claims by id) a provider account already in use; a tenant tries to activate a Stripe account or set a fee | Refused; routing reaches exactly one organization; status from the provider, fees from operators | P0 | tested | review-regressions P0-2 |
+| EC-PAY-062 | Organization converts trial → live while a simulated intent is pending | Nothing is sent (`environment_changed`); lookups only in the environment that issued it | P0 | tested | review-regressions P1-11 |
+| EC-PAY-063 | The same idempotency key is reused with different content | Refused as a conflict; the original unchanged | P0 | tested | review-regressions P2-2/P2-3 |
+| EC-PAY-064 | Ledger failure recurs after staff resolved the exception | Exception reopened | P1 | tested | review-regressions P2-1 |
+| EC-PAY-065 | Many cash payments banked as one daily deposit | Verified against the day's cash total | P1 | tested | review-regressions P2-12 |
+| EC-PAY-066 | Bank statement contains account numbers or long transfer references | Kept as "[number ending 1234]" (DB refuses 12+ digit runs); card-shaped values refuse the file | P1 | tested | modules/payments/src/domain/domain.test.ts |
+| EC-PAY-067 | Staff enter a bank reference with 12+ consecutive digits | Refused with an explanation (it could be a card number): enter the last digits — PCI scope beats convenience | P2 | different | — |
 
 ## Evidence sources (all verified 2026-11-07)
 

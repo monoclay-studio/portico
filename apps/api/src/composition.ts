@@ -46,7 +46,14 @@ import {
   inventoryManifest,
   inventorySearch,
 } from '@portico/inventory';
-import { fieldCryptoFromEnv, type ModuleManifest, systemAuthorizer } from '@portico/kernel';
+import {
+  DomainError,
+  fieldCryptoFromEnv,
+  type ModuleManifest,
+  ModuleUnavailableError,
+  randomToken,
+  systemAuthorizer,
+} from '@portico/kernel';
 import {
   createOperationsDemoSeed,
   createOperationsService,
@@ -58,6 +65,16 @@ import {
   operationsSearch,
   operationsSubscriptions,
 } from '@portico/operations';
+import {
+  createPaymentsModule,
+  envProviderSecrets,
+  type LedgerPort,
+  type PlatformPort as PaymentsPlatformPort,
+  type PaymentsService,
+  paymentsManifest,
+  paymentsSearch,
+  seedPaymentsDemo,
+} from '@portico/payments';
 import { platform, platformHttp, platformManifest, platformSearch } from '@portico/platform';
 import {
   createRatesDemoSeed,
@@ -69,6 +86,22 @@ import {
   ratesService,
   termsSealKeyFromEnv,
 } from '@portico/rates';
+import {
+  type AccessPort,
+  environmentAccessAdapter,
+  type FinancePort,
+  type GuestsPort,
+  inventoryPortFrom,
+  type OperationsPort,
+  type PaymentsPort,
+  type PlatformPort,
+  type RatesPort,
+  reservationsHttp,
+  reservationsJobs,
+  reservationsManifest,
+  reservationsService,
+} from '@portico/reservations';
+
 import { recordsHttp } from './records-routes';
 import type { DemoSeedStep } from './seed/demo';
 
@@ -77,11 +110,46 @@ export const MANIFESTS: readonly ModuleManifest[] = [
   identityManifest,
   inventoryManifest,
   guestsManifest,
+  reservationsManifest,
   operationsManifest,
   ratesManifest,
   integrationManifest,
   // wave-1 modules register here
+  paymentsManifest,
 ];
+
+/**
+ * Stub for a port whose provider is another wave-1 module not merged yet. Every call fails with a clear,
+ * retryable error (except the operations given in `available`).
+ */
+function unavailablePort<T extends object>(module: string, available: Partial<T> = {}): T {
+  return new Proxy({} as T, {
+    get: (_t, prop) => {
+      if (prop === 'then') return undefined; // not a thenable
+      if (prop in available) return available[prop as keyof T];
+      return () => {
+        throw new ModuleUnavailableError(module, String(prop));
+      };
+    },
+  });
+}
+
+/**
+ * Finance is not merged yet. Payments may not collect against a folio it cannot place (P0-1: the folio might belong
+ * to another property or company), so folio collections are refused with a clear reason; a booking deposit is
+ * accepted (finance binds the booking to the property when it posts the deposit, and refuses a mismatch) and shows
+ * "not yet on the bill" until finance is connected. Every posting fails retryably and is retried by reconciliation.
+ */
+const ledgerUntilFinanceMerges = unavailablePort<LedgerPort>('finance', {
+  async describeTarget(_tx, ref) {
+    if (ref.type === 'booking') return null;
+    throw new DomainError(
+      'module_not_available',
+      'Finance is not connected yet, so Portico cannot confirm which property this folio belongs to and will not collect against it. Take the payment as a booking deposit, or record it once finance is connected.',
+      { status: 503, retryable: true, details: { module: 'finance', operation: 'describeTarget' } },
+    );
+  },
+});
 
 // ── inventory ── bound once; inventory's only port is platform (exists on main), so nothing is stubbed.
 // Other modules (reservations, operations, groups, distribution, day-close) bind their inventory ports to this.
@@ -112,6 +180,7 @@ export interface Composition {
     inventory: InventoryService;
     operations: OperationsService;
     rates: RatesService;
+    payments: PaymentsService;
   };
   /** Demo data contributed by each module, run in order inside each demo organization (apps/api/src/seed). */
   demoSeedSteps: DemoSeedStep[];
@@ -152,6 +221,46 @@ export function compose(database: PorticoDatabase): Composition {
   // ── inventory ──
   const inventoryModule = inventoryHttp({ database, inventory: inventoryService });
 
+  // ── reservations ──
+  // Platform is real. inventory, rates, guests, finance, payments, operations are wave-1 modules built in
+  // parallel: bound to stubs that answer 503 `module_not_available` until the orchestrator binds the providers.
+  // access (door locks / keys) is a later module: the environment-safe fallback adapter answers `simulated` in
+  // non-live environments and `unavailable` (manual fallback at the desk) in live.
+  const reservationsPlatform: PlatformPort = {
+    async getProperty(tx, propertyId) {
+      // Property facts for computation (time zone, currency) — not a user-facing read.
+      const p = await platform.getProperty({ ...tx, authz: systemAuthorizer }, propertyId);
+      return {
+        id: p.id,
+        name: p.name,
+        timezone: p.timezone,
+        baseCurrency: p.baseCurrency,
+        legalEntityId: p.legalEntityId,
+        businessDate: p.businessDate,
+        checkInTime: p.checkInTime,
+        checkOutTime: p.checkOutTime,
+      };
+    },
+    getBusinessDate: (tx, propertyId) => platform.getBusinessDate(tx, propertyId),
+    assertWritable: (tx, propertyId, domain) => platform.assertWritable(tx, propertyId, domain),
+    getDataAuthority: (tx, propertyId, domain) => platform.getDataAuthority(tx, propertyId, domain),
+    resolvePolicy: (tx, propertyId, key, def) => platform.resolvePolicy(tx, propertyId, key, def),
+  };
+  const reservations = reservationsService({
+    platform: reservationsPlatform,
+    // R-13: the real inventory module through reservations' structural adapter (unit number → name, exclusions →
+    // reasons/conflicting refs, sold[] for the who-sold-it explanation). Drift in inventory's contract fails tsc here.
+    // ADR-0015: reservations authorizes the user's intent on every command; inventory is called with system scope
+    // (like operations' binding) and still enforces integrity and the availability authority.
+    inventory: inventoryPortFrom(inventoryService, { scope: asSystem }),
+    rates: unavailablePort<RatesPort>('rates'),
+    guests: unavailablePort<GuestsPort>('guests'),
+    finance: unavailablePort<FinancePort>('finance'),
+    payments: unavailablePort<PaymentsPort>('payments'),
+    operations: unavailablePort<OperationsPort>('operations'),
+    access: environmentAccessAdapter() satisfies AccessPort,
+  });
+  const reservationsModule = reservationsHttp({ database, service: reservations });
   // ── operations (housekeeping, tasks, maintenance, lost & found, offline sync) ──
   const operationsPorts: OperationsPorts = {
     platform: {
@@ -316,15 +425,40 @@ export function compose(database: PorticoDatabase): Composition {
     simulators: { pms: pmsSimulators },
   };
   const integrationModule = integrationHttp({ database, integration: integrationDeps });
+  // ── payments ── (finance LedgerPort: bind `financeLedgerForPayments(finance)` when finance merges)
+  const paymentsPlatform: PaymentsPlatformPort = {
+    // Payments has already checked its own permission; it needs the merchant (legal entity) and time zone.
+    async getProperty(tx, propertyId) {
+      const p = await platform.getProperty(asSystem(tx), propertyId);
+      return { id: p.id, legalEntityId: p.legalEntityId, timezone: p.timezone, baseCurrency: p.baseCurrency };
+    },
+    async getLegalEntity(tx, id) {
+      const le = await platform.getLegalEntity(tx, id);
+      return { id: le.id, countryCode: le.countryCode, baseCurrency: le.baseCurrency };
+    },
+    assertWritable: (tx, propertyId, domain) => platform.assertWritable(tx, propertyId, domain),
+    async resolvePolicy(tx, propertyId, key, defaultValue) {
+      return { value: (await platform.resolvePolicy(tx, propertyId, key, defaultValue)).value };
+    },
+  };
+  const payments = createPaymentsModule({
+    database,
+    ledger: ledgerUntilFinanceMerges,
+    platform: paymentsPlatform,
+    secrets: envProviderSecrets(process.env),
+    simulatorSigningSecret: process.env.PAYMENTS_SIMULATOR_SIGNING_SECRET ?? randomToken(),
+  });
 
   // ── cross-module experience: global search, summaries, record history ──
   const searchProviders: SearchProvider[] = [
     platformSearch,
     inventorySearch,
     guestsSearchProvider(guestsService),
+    reservations.search(),
     operationsSearch,
     ratesSearch,
     integrationSearch,
+    paymentsSearch,
   ];
   const recordsModule = recordsHttp({ database, manifests: MANIFESTS, searchProviders });
 
@@ -335,20 +469,26 @@ export function compose(database: PorticoDatabase): Composition {
       identityModule,
       inventoryModule,
       guestsModule,
+      reservationsModule,
       operationsModule,
       ratesModule,
       integrationModule,
+      payments.http,
       recordsModule,
     ],
     subscriptions: [
+      ...reservations.subscriptions(),
       ...operationsSubscriptions(operationsPorts),
       ...integrationSubscriptions(integrationDeps),
+      ...payments.subscriptions,
     ],
     searchProviders,
     jobs: [
       ...CORE_JOBS,
       ...createInventoryJobs(inventoryService),
       ...guestsJobs(guestsService),
+      ...reservationsJobs(reservations),
+      ...payments.jobs,
       ...operationsJobs(operationsPorts, {
         onError: (job, propertyId, err) =>
           console.error(
@@ -363,13 +503,20 @@ export function compose(database: PorticoDatabase): Composition {
       }),
       ...integrationJobs(integrationDeps),
     ],
-    services: { guests: guestsService, inventory: inventoryService, operations: operationsService, rates },
+    services: {
+      guests: guestsService,
+      inventory: inventoryService,
+      operations: operationsService,
+      rates,
+      payments: payments.service,
+    },
     demoSeedSteps: [
       { name: 'inventory', run: inventoryDemoSeed },
       createGuestsDemoSeed(guestsService),
       createOperationsDemoSeed(operationsService),
       // After inventory: prices the demo properties' unit types by profile (resort vs guesthouse).
       { name: 'rates', run: createRatesDemoSeed(rates, ratesPorts) },
+      { name: 'payments', run: seedPaymentsDemo },
     ],
   };
 }
