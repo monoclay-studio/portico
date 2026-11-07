@@ -214,6 +214,18 @@ describe('isolation and permissions', () => {
     ).toBeNull();
   });
 
+  it('executing a run needs the start or resume permission at its property (a reader cannot drive it)', async () => {
+    const org = await setupOrg(h);
+    const { run } = await org.run(
+      (tx) => h.service.createRun(tx, { propertyId: org.propertyId }),
+      nightAudit(h, org),
+    );
+    const reader = org.as(['dayClose.run.read'], [org.propertyId], 'Reader');
+    await expect(h.service.executeRun(h.t.db, reader, run.id)).rejects.toMatchObject({ code: 'forbidden' });
+    const view = await org.run((tx) => h.service.getRun(tx, run.id), org.auditor);
+    expect(view.execution.executions).toEqual([]);
+  });
+
   it('advancing needs platform.businessDate.advance on the person: without it the run stops before the date moves', async () => {
     const org = await setupOrg(h);
     await addStay(h, org, { arrival: '2026-11-06', departure: '2026-11-09' });

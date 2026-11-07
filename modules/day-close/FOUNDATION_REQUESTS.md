@@ -30,3 +30,10 @@ The doc comment says "during a DST gap the next valid instant is returned". For 
 Day Close corrects it locally (`src/domain/schedule.ts` `nextValidLocalMinute`, tested in
 `src/domain/domain.test.ts` › "starts at the next valid local minute on a spring-forward night (EC-DCL-024)").
 Proposed: the same correction in the kernel (other modules use it for cancellation deadlines).
+
+## FR-4 — data-authority vocabulary in the kernel (BS3-1)
+
+`DayClosePorts.platform.getDataAuthority` declares `authority: 'portico' | 'external'` and `DayCloseDomain` lists the
+three domains Day Close reads. Both are subsets of platform's vocabulary, type-checked where the composition root binds
+platform (a new platform value fails `tsc` there), but they are still written out because a module cannot import
+platform. Proposed: `DataDomain` and `DataAuthorityKind` exported from `@portico/kernel` (as value arrays, see FR-2).

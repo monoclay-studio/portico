@@ -17,9 +17,10 @@ import { closeIssue, emitRunEvent, loadItems, setStep, upsertIssue } from '../re
 import { pregrantAllowances, processItems, roomAndPackagePostings, sweepNight } from './postings';
 import type { StepContext, StepFn, StepOutcome } from './shared';
 
+/** The kernel's code for "collaborating module not connected" (taken from the kernel, never copied). */
+const MODULE_NOT_AVAILABLE = new ModuleUnavailableError('kernel').code;
 const notConnected = (err: unknown): boolean =>
-  err instanceof ModuleUnavailableError ||
-  (err instanceof DomainError && err.code === 'module_not_available');
+  err instanceof ModuleUnavailableError || (err instanceof DomainError && err.code === MODULE_NOT_AVAILABLE);
 
 // ───────────────────────────── 1. preflight ─────────────────────────────
 

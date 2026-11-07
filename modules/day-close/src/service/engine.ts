@@ -13,6 +13,7 @@ import {
   BusinessRuleError,
   ConflictError,
   effectMode,
+  ForbiddenError,
   newId,
   type RequestContext,
 } from '@portico/kernel';
@@ -21,6 +22,7 @@ import { type FailureRecord, toFailure } from '../domain/errors';
 import { nextRetryAt } from '../domain/schedule';
 import { firstIncompleteStep, isActive } from '../domain/steps';
 import { DAY_CLOSE_EVENTS } from '../events';
+import { DAY_CLOSE_PERMISSIONS as P } from '../manifest';
 import type { RunsTable } from '../tables';
 import { actorKey, actorName, type Deps, db, type EngineHooks, json } from './context';
 import { resolvePolicy } from './policy';
@@ -62,6 +64,13 @@ async function claim(
   | { run: RunRow; ok: false; reason: 'not_active' | 'in_progress' }
 > {
   const run = await lockRun(tx, runId);
+  // The executor acts on the user's intent: starting or resuming Day Close at this property (system processes pass).
+  if (
+    !tx.authz.can(P.runStart, { propertyId: run.property_id }) &&
+    !tx.authz.can(P.runResume, { propertyId: run.property_id })
+  ) {
+    throw new ForbiddenError(P.runResume, { propertyId: run.property_id });
+  }
   if (!isActive(run.status as RunStatus)) return { run, ok: false, reason: 'not_active' };
   if (run.lease_owner && run.lease_until && (run.lease_until as Date).getTime() > tx.now.getTime()) {
     return { run, ok: false, reason: 'in_progress' };
