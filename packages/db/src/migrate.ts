@@ -64,6 +64,36 @@ create table if not exists core.schema_migrations (
   primary key (module, name)
 );`;
 
+/**
+ * Roles are cluster-wide, so concurrent migrations of DIFFERENT databases (parallel test files, parallel
+ * developers) race on CREATE/ALTER ROLE ("tuple concurrently updated", duplicate role). Retry with jitter.
+ */
+async function bootstrapRoles(client: pg.Client, appRolePassword: string | undefined): Promise<void> {
+  const transient = (err: unknown) => {
+    const e = err as { code?: string; message?: string };
+    return (
+      e.code === '23505' ||
+      e.code === '42710' ||
+      e.code === '40001' ||
+      /tuple concurrently updated/i.test(e.message ?? '')
+    );
+  };
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await client.query(BOOTSTRAP_SQL);
+      if (appRolePassword) {
+        await client.query(
+          `alter role portico_app with login password '${appRolePassword.replace(/'/g, "''")}'`,
+        );
+      }
+      return;
+    } catch (err) {
+      if (!transient(err) || attempt >= 25) throw err;
+      await new Promise((r) => setTimeout(r, 20 + Math.random() * 120));
+    }
+  }
+}
+
 export async function migrate(opts: MigrateOptions): Promise<{ applied: string[] }> {
   const log = opts.log ?? (() => {});
   const client = new pg.Client({ connectionString: opts.connectionString });
@@ -71,12 +101,7 @@ export async function migrate(opts: MigrateOptions): Promise<{ applied: string[]
   const applied: string[] = [];
   try {
     await client.query(`select pg_advisory_lock(hashtext('portico_migrations'))`);
-    await client.query(BOOTSTRAP_SQL);
-    if (opts.appRolePassword) {
-      await client.query(
-        `alter role portico_app with login password '${opts.appRolePassword.replace(/'/g, "''")}'`,
-      );
-    }
+    await bootstrapRoles(client, opts.appRolePassword);
     const ordered = [
       { module: 'core', dir: CORE_MIGRATIONS_DIR },
       ...orderSources(opts.sources.filter((s) => s.module !== 'core')),
