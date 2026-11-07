@@ -1,5 +1,5 @@
 import { sql, type TxContext } from '@portico/db';
-import { type EntityRef, eachNight, type LocalDate, NotFoundError, newId } from '@portico/kernel';
+import { type EntityRef, eachNight, isUuid, type LocalDate, NotFoundError, newId } from '@portico/kernel';
 import {
   availableOf,
   type CellCounts,
@@ -52,6 +52,7 @@ export interface CompositeCellState extends CompositeNight {
 
 export async function loadTypes(tx: TxContext, ids: readonly string[]): Promise<Map<string, TypeInfo>> {
   const out = new Map<string, TypeInfo>();
+  ids = ids.filter((id) => isUuid(id));
   if (ids.length === 0) return out;
   const { rows } = await sql<{
     id: string;

@@ -1,5 +1,12 @@
 import { sql, type TxContext } from '@portico/db';
-import { addDays, type DateRange, type LocalDate, NotFoundError, requirePermission } from '@portico/kernel';
+import {
+  addDays,
+  type DateRange,
+  isUuid,
+  type LocalDate,
+  NotFoundError,
+  requirePermission,
+} from '@portico/kernel';
 import type { AvailabilityCell, AvailabilityExplanation, AvailabilityGrid } from '../contracts';
 import {
   availableOf,
@@ -52,6 +59,8 @@ async function buildCells(
   let typeIds: string[];
   if (requestedTypeIds) {
     typeIds = [...new Set(requestedTypeIds)];
+    const invalid = typeIds.find((id) => !isUuid(id));
+    if (invalid) throw new NotFoundError('unit_type', invalid);
   } else {
     const rows = await idb(tx)
       .selectFrom('inventory.unit_types')

@@ -1,5 +1,5 @@
 import { sql, type TxContext } from '@portico/db';
-import type { DateRange, EntityRef, LocalDate } from '@portico/kernel';
+import { type DateRange, type EntityRef, isUuid, type LocalDate } from '@portico/kernel';
 import { rangeContainsNight } from '../domain/ranges';
 
 /** Lightweight unit row used by inventory computations. */
@@ -64,6 +64,9 @@ export async function loadUnits(
   tx: TxContext,
   filter: { ids?: readonly string[]; unitTypeIds?: readonly string[]; propertyId?: string },
 ): Promise<UnitLite[]> {
+  // Malformed ids can never match a row; treat them as "not found" rather than a database error.
+  if (filter.ids) filter = { ...filter, ids: filter.ids.filter((id) => isUuid(id)) };
+  if (filter.unitTypeIds) filter = { ...filter, unitTypeIds: filter.unitTypeIds.filter((id) => isUuid(id)) };
   if ((filter.ids && filter.ids.length === 0) || (filter.unitTypeIds && filter.unitTypeIds.length === 0))
     return [];
   const { rows } = await sql<UnitSqlRow>`
