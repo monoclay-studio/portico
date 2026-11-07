@@ -1,11 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { cancellationStructure, depositStructure, promotionConditions } from '../contracts';
+import {
+  cancellationStructure,
+  depositStructure,
+  guaranteeStructure,
+  promotionConditions,
+} from '../contracts';
 import { computeInclusions } from './inclusions';
 import {
   formatLocal,
   instantiateSchedule,
   penaltyAmount,
   renderCancellationText,
+  renderGuaranteeText,
   resolveCancellationTiers,
   tierInForce,
   zonedInstant,
@@ -383,6 +389,15 @@ describe('policies', () => {
       tierInForce(resolveCancellationTiers(nr, timing, 'USD'), new Date('2026-01-01T00:00:00Z'))?.penalty
         .kind,
     ).toBe('percent_of_stay');
+  });
+
+  it('states the guarantee and the release time of non-guaranteed bookings in property time', () => {
+    const g = guaranteeStructure.parse({ accepted: ['card', 'deposit'], holdUntil: '18:00' });
+    expect(renderGuaranteeText(g)).toMatch(/held until 18:00 property time on the arrival day/);
+    // The release instant reservations schedules: 18:00 Malé time on arrival = 13:00Z.
+    expect(zonedInstant('2026-12-20', g.holdUntil as string, 'Indian/Maldives').toISOString()).toBe(
+      '2026-12-20T13:00:00.000Z',
+    );
   });
 
   it('computes penalty amounts', () => {

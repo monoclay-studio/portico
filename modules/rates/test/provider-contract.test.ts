@@ -241,6 +241,30 @@ describe('robust pricing (R-06, R-07, R-20, R-23)', () => {
     ).toBe(offer.totals.gross.amountMinor);
   });
 
+  it('a tax configuration problem makes offers unbookable with the reason instead of failing the quote', async () => {
+    const { o, uts } = await resort();
+    // A property whose tax classification was never filled in: Green Tax cannot decide its rate.
+    const bare = await o.addProperty('BARE', {}, 'resort');
+    await o.run((tx, r) =>
+      seedResortRates(r, tx, { propertyId: bare, unitTypes: uts, from: '2026-11-07', days: 400 }),
+    );
+    const res = await o.run((tx, r) =>
+      r.quoteDetailed(tx, { propertyId: bare, nights: stay, occupancy: { adults: 2 } }),
+    );
+    expect(res.offers.length).toBeGreaterThan(0);
+    for (const offer of res.offers) {
+      expect(offer.bookable).toBe(false);
+      const failure = offer.restrictionViolations.find((v) => v.kind === 'tax_computation_failed');
+      expect(failure).toMatchObject({ overridable: false });
+      expect(failure?.message).toMatch(/^Taxes could not be computed: .*mv\./);
+    }
+    // The configured property next door still quotes normally in the same organization.
+    const ok = await o.run((tx, r) =>
+      r.quoteDetailed(tx, { propertyId: o.propertyId, nights: stay, occupancy: { adults: 2 } }),
+    );
+    expect(ok.offers.some((x) => x.bookable)).toBe(true);
+  });
+
   it('bounds percentages and refuses negative derived prices with an explanation', async () => {
     expect(
       promotionInput.safeParse({

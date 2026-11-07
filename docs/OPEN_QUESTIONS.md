@@ -176,6 +176,14 @@ billing is not activated for live customers until this is answered.
 **Blocks:** live SaaS billing. Nothing in development.
 **Raised by / date:** product strategy, 2026-11-07
 
+### Q48 — Tax treatment of package allowances and breakage on Maldives tax invoices    Status: open
+**Context:** All-inclusive and dining-credit packages include allowances (e.g. USD 100/day dining credit). Finance found that counting both the package and the food paid by the credit overstates value-before-tax, and breakage (unused credit) currently carries no separate tax.
+**Question:** For the Maldives adviser — how must a TGST tax invoice present a package with an allowance, consumption against it, and breakage?
+**Default we are proceeding with:** package price invoiced once; consumption shown as information only; breakage follows the tax already charged on the package (ADR-0016 §5), configurable.
+**If the answer differs:** rule-pack configuration change; invoices regenerated only for future documents.
+**Blocks:** live tax invoices for packages with allowances. Nothing in development.
+**Raised by / date:** orchestrator (finance review), 2026-11-07
+
 ### Q60 — Packaging and pricing for standalone modules and migration services    Status: open
 **Context:** The adoption brief lets hotels keep their PMS and use selected Portico capabilities (housekeeping, guest messaging, reporting, transfers — `docs/adoption/adoption-paths.md` §4). Every edition in `modules/platform/src/domain/plans.ts` is built on the full PMS core, and Essentials allows only 1 property, so a 3-property group adopting only housekeeping and messaging cannot be represented. Migration effort (rehearsals, OPERA imports) is also a cost: competitors sell reservation import separately (Cloudbeds) or include it.
 **Question:** (a) Do you approve selling standalone modules as separate "connected" packages (per property or per unit, with their own limits), independent of the PMS editions? (b) Is migration of future reservations, profiles and open balances included in onboarding, or a paid service?
@@ -359,4 +367,68 @@ billing is not activated for live customers until this is answered.
 **If the answer differs:** configuration change only.
 **Blocks:** pricing page and quotes; nothing in development.
 **Raised by / date:** back-of-house product architect, 2026-11-07
+
+### Q120 — Guest self-service in the first release (online check-in, booking-engine content, online check-out)    Status: open
+**Context:** The front-cluster parity matrices (`docs/parity/reservations.md`, `distribution.md`) show that every modern competitor offers online check-in, online check-out and a booking engine with unit photos and descriptions. In Portico these sit in the "guest journey, later wave" and are in no spec yet (PAR-RES-083, PAR-RES-099, PAR-DST-042). For Maldives resorts, pre-arrival collection of flight details also drives seaplane transfer planning.
+**Question:** Should online check-in (details, ID, arrival flight, signature, payment) and booking-engine content be part of the pilot scope, or stay in a later wave?
+**Default we are proceeding with:** treat online check-in and booking-engine content as P0 for competitiveness; specify them in the guest-journey specs so they feed the existing check-in checklist (RES-R24) and booking engine (DST-R16); build after the desk workflows they depend on. A pilot can start without them if the hotel accepts that.
+**If the answer differs:** if deferred, the pilot hotel collects arrival details by e-mail/WhatsApp and keeps its current booking engine; no rework of core modules.
+**Blocks:** nothing in wave 1 core work; blocks the guest-journey wave plan and pilot scope.
+**Raised by / date:** parity researcher (front cluster), 2026-11-07
+
+### Q121 — How Maldives resorts contract with tour operators (allotment, free sale, stop-sale)    Status: open
+**Context:** GRP-R11 covers allotments with release days. Tour-operator practice also includes free-sale contracts (sell until a stop-sale notice), stop-sale/release notices, and bookings confirmed by e-mail rather than through a channel (PAR-GRP-052/053, PAR-DST-034). These facts should come from real resorts (see Q64).
+**Question:** In discovery, can we confirm which contract forms the target resorts use with tour operators/DMCs (allotment, free sale, commitment/guarantee), how stop-sales are sent today, and how tour-operator bookings arrive (channel, extranet, e-mail)?
+**Default we are proceeding with:** support allotment, free-sale and commitment contracts, a stop-sale notice log with acknowledgements, and e-mail bookings turned into draft bookings for staff review (never auto-confirmed).
+**If the answer differs:** free-sale or e-mail intake may drop in priority; allotment support is unaffected.
+**Blocks:** final priority of GRP-R11 extensions; nothing in wave 1.
+**Raised by / date:** parity researcher (front cluster), 2026-11-07
+
+### Q122 — What we promise about working through an island internet outage    Status: open
+**Context:** Island connectivity drops. The vision promises "offline-honest" operation; the staff PWA is offline-first (OPS-R21–R23), but the desk web app is not, and no spec covers check-in/check-out during an outage (EC-RES-046). Offline writes for reservations and money are costly and risky; a read-only continuity snapshot plus late entry is cheap and safe.
+**Question:** For the pilot, is a read-only continuity snapshot (arrivals, assignments, balances, in-house list) plus labelled late entry of what happened during the outage an acceptable promise, or must the desk be able to check guests in and out offline?
+**Default we are proceeding with:** read-only continuity snapshot available offline on desk devices, and late entry of actions with original times labelled "entered late"; no offline writes to reservations or money in wave 1.
+**If the answer differs:** offline desk writes need a conflict-resolution design for reservations and payments (several weeks of work) and new edge-case tests.
+**Blocks:** nothing now; affects the pilot readiness checklist and what sales may promise.
+**Raised by / date:** parity researcher (front cluster), 2026-11-07
+
+### Q123 — GDS distribution through an intermediary    Status: open
+**Context:** OPERA and SiteMinder offer GDS distribution (Sabre, Amadeus, Travelport) through a CRS/intermediary; it needs a commercial contract and per-booking fees (PAR-DST-060/061). DST marks it LATER as the `distribution.gds` add-on. Corporate and MICE travel to the Maldives is small compared with leisure.
+**Question:** Is GDS distribution needed for the first target customers, and if so through which intermediary?
+**Default we are proceeding with:** no GDS work before a customer asks; keep the data model GDS-ready (rate codes, commission, IATA numbers on agencies).
+**If the answer differs:** a GDS connection is an intermediary integration plus contract work, priced separately; no change to core modules.
+**Blocks:** nothing.
+**Raised by / date:** parity researcher (front cluster), 2026-11-07
+
+### Q124 — Which Maldives taxes OTAs collect in prepaid bookings    Status: open
+**Context:** For OTA-prepaid bookings, the channel may or may not include Green Tax and TGST in the amount it collects. If Portico guesses wrong, the guest is charged twice or the tax is never collected (EC-DST-016, EC-DST-017). This complements Q41 (computation details) and needs facts from hotels and the hub.
+**Question:** Can discovery with pilot candidates and the chosen hub confirm, per major channel, whether Green Tax and TGST are included in channel-collected amounts or payable at the property?
+**Default we are proceeding with:** per-channel configuration of which taxes the channel collects, defaulting to "Green Tax payable at property, TGST included in the channel price", with any mismatch between the channel amount and Portico's computation raised as an exception, never silently posted.
+**If the answer differs:** only the per-channel defaults change.
+**Blocks:** live channel activation (already gated by Q23); nothing in development.
+**Raised by / date:** parity researcher (front cluster), 2026-11-07
+
+### Q130 — Maldives foreign-exchange rules for tourism businesses          Status: open
+**Context:** Resorts price in USD, take USD and MVR cash, and settle cards and bank transfers in either currency. Finance converts with a business-date rate and checks MVR conversions against the MMA reference rate (±2%, from `docs/readiness/maldives-tax-rules.md`). We have not verified whether Maldivian law or Maldives Monetary Authority rules oblige tourism businesses to convert or deposit a share of foreign-currency receipts through local banks, which rate is authoritative for accounting (MMA mid rate, bank buy/sell), or whether cash change may be given in USD.
+**Question:** With the Maldivian adviser (Q20/Q106 scope): what foreign-currency obligations apply to tourism establishments (conversion/deposit duties, rate source for accounting, limits on USD cash handling and change)?
+**Default we are proceeding with:** no conversion or deposit duty is modelled; FX rates are data per business date with source; MMA ±2% check marked `unverified`; cash exchange at the desk allowed with configurable limits; a rate older than the business date is used only with a visible stale-rate warning.
+**If the answer differs:** policy/data changes in finance FX (FIN-R40/R41) and accounting cash management (ACC-R25); possibly a reporting export.
+**Blocks:** nothing in development; live Maldives FX configuration.
+**Raised by / date:** finance-cluster parity research, 2026-11-07
+
+### Q131 — Liability for offline card and room-charge acceptance            Status: open
+**Context:** Island connectivity drops. `fnb-pos` allows room charges offline up to an exposure limit (default USD 200 per stay, FNB-R20) and record-only card tenders; some acquirers offer store-and-forward offline card authorisation where the merchant carries the decline risk. These are the hotel's commercial risks, but the defaults Portico ships shape them.
+**Question:** Are you comfortable shipping the default offline exposure limit (USD 200 per stay, hotel-configurable, 0 allowed) and keeping acquirer store-and-forward card acceptance off by default, enabled only by a hotel admin who acknowledges the risk in-product?
+**Default we are proceeding with:** yes as described; acknowledgement recorded in the audit log; never enabled in demo/trial.
+**If the answer differs:** policy default changes only.
+**Blocks:** nothing in development; live POS pilot configuration.
+**Raised by / date:** finance-cluster parity research, 2026-11-07
+
+### Q132 — Unclaimed guest credits and expired deposits                      Status: open
+**Context:** Finance can keep a cancelled booking's deposit "as guest credit" (FIN-R24) and folios can end with credit balances that guests never claim; receivables accounts can hold unallocated payments. Whether a hotel may recognise unclaimed balances as income after a period, must refund them, or must hold them indefinitely is a legal/tax question per market (Q83 covers vouchers only).
+**Question:** What rule should the Maldives pack apply to unclaimed guest credits, retained deposits kept as credit, and unallocated receivables payments?
+**Default we are proceeding with:** balances remain liabilities indefinitely; an aging report lists them with owners; release to income only by an explicit, approved journal with reason (no automatic breakage).
+**If the answer differs:** a configurable expiry/breakage policy per balance type (data change plus a small Day Close/period task).
+**Blocks:** nothing.
+**Raised by / date:** finance-cluster parity research, 2026-11-07
 

@@ -10,7 +10,8 @@ every charge in Portico, the **quote engine**, and the sealed **agreed terms** (
 `computeTaxes`. The shapes in § Provider contract are canonical; reservations and finance adapt to them.
 
 Spec: `docs/specs/rates.md` (Draft v1). Maldives tax facts: `docs/readiness/maldives-tax-rules.md` (MIRA-sourced).
-Parity: `docs/parity/rates.md` (gate passes). Steward review: `docs/orchestration/reviews/review-rates.md`.
+Parity: `docs/parity/rates.md` (the parity researcher's matrix, statuses updated here; gate **not yet passing** —
+see § Known gaps). Steward review: `docs/orchestration/reviews/review-rates.md`.
 
 ## Layout
 
@@ -285,13 +286,14 @@ Emitted: `rates.prices.changed` {propertyId, changeSetId, ratePlanIds, unitTypeI
 | Port | Binding |
 |---|---|
 | `getProperty`, `assertWritable`, `resolvePolicy`, `getBusinessDate` | platform (composition; `getProperty` via the system authorizer — FOUNDATION_REQUESTS #1) |
-| `listUnitTypes` (optional) | **unbound** → bind to inventory at merge (validates unit types; needed by the demo seed) |
+| `listUnitTypes` (optional) | inventory `listUnitTypes` (system authorizer; validates unit types; used by the demo seed) |
 | `channelForApiClient` (optional) | **unbound** → bind to integration/distribution channel bindings (default `api_client:<clientId>`) |
-| `companyExists` (optional) | **unbound** → bind to guests `getCompany` |
+| `companyExists` (optional) | guests `getCompany` (system authorizer): exists in the organization and is not `inactive` |
 | `affectedAgreements` (optional) | **unbound** → bind to reservations/finance for the tax change report |
 
 Server key: `PORTICO_TERMS_SEAL_KEY` (base64; mandatory in production, development default otherwise).
-Demo seed at merge: `DEMO_SEED_STEPS.push({ name: 'rates', run: createRatesDemoSeed(rates, ratesPorts) })` after inventory.
+Demo seed: registered in `Composition.demoSeedSteps` as `{ name: 'rates', run: createRatesDemoSeed(rates, ratesPorts) }`
+after inventory. `Composition.services.rates` exposes the provider for consumers' port bindings.
 
 ## Contract changes (vs domain-map § rates) — not all additive
 
@@ -312,6 +314,16 @@ Pricing assistance (RAT-R31), rate forwarding to an external system of record, c
 second-currency plans in quotes; `per_document` tax rounding; occupant-attribute exemptions (residents); localized
 names and policy text; quote log; two-phase (scheduled) tax activation with consumer sign-off; channel-price
 snapshots (`priceSource: 'channel'`) are not constructed by rates; terms seal key rotation (key ids) not yet.
+
+Parity gate (`node tools/parity-report.mjs --gate rates`) fails on rows rates cannot close alone or has not built:
+P0 — localized names and policy text (PAR-RAT-001, -062), per-document rounding (-069, Q41), affected stays in the
+tax change report (-070, EC-RAT-002: needs `affectedAgreements`), fiscal block on unverified packs (-071, EC-RAT-034:
+finance/platform), multi-unit quotes (-075), effective-dated classification history (EC-RAT-007: platform), child
+ages missing on channel bookings (EC-RAT-009), allowance breakage/consumption (EC-RAT-026/-027: finance),
+concurrent price-cell edits returning 409 with the changed cells (EC-RAT-035). P1 `missing`: 18 rows (categories,
+approvals, rate protection, copy, discounts, default structures, restriction sources, restriction automation,
+coupons, package forecast, seasonal policies, manual tax exemption, lowest-price calendar, rate check report,
+EC-RAT-008/-020/-029/-030).
 
 ## Open questions (for the owner / adviser; defaults in force)
 

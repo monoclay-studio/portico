@@ -1,5 +1,6 @@
 import { newId } from '@portico/kernel';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { DEMO_PASSWORD, seedDemo } from '../src/seed/demo';
 import { type ApiHarness, signedInOrg, startApi } from './helpers';
 
 let h: ApiHarness;
@@ -41,7 +42,19 @@ async function resortOrg() {
     },
   });
   expect(prop.statusCode).toBe(201);
-  return { ...org, propertyId: prop.json().id as string };
+  const propertyId = prop.json().id as string;
+  // Unit types come from inventory (RatesPorts.listUnitTypes is bound in the composition root).
+  const type = await post(org.auth, `/v1/properties/${propertyId}/unit-types`, {
+    code: 'WV',
+    name: 'Water Villa',
+    kind: 'villa',
+    baseOccupancy: 2,
+    maxAdults: 3,
+    maxChildren: 2,
+    maxOccupancy: 4,
+  });
+  expect(type.statusCode).toBe(201);
+  return { ...org, propertyId, unitTypeId: type.json().id as string };
 }
 
 describe('rates over HTTP', () => {
@@ -80,7 +93,21 @@ describe('rates over HTTP', () => {
     const replay = await post(o.auth, '/v1/rate-plans', planBody, { 'idempotency-key': createKey });
     expect(replay.json().id).toBe(plan.json().id);
 
-    const unitTypeId = newId();
+    const unitTypeId = o.unitTypeId;
+    // A unit type inventory does not know is refused.
+    const unknownType = await h.app.inject({
+      method: 'POST',
+      url: '/v1/rate-calendar/prices/preview',
+      headers: o.auth,
+      payload: {
+        propertyId: o.propertyId,
+        ratePlanId: plan.json().id,
+        unitTypeIds: [newId()],
+        ranges: [{ from: '2026-12-01', to: '2026-12-02' }],
+        set: { baseOccupancy: 2, baseAmountMinor: 80_000 },
+      },
+    });
+    expect(unknownType.json()).toMatchObject({ code: 'unit_type_not_found' });
     const update = {
       propertyId: o.propertyId,
       ratePlanId: plan.json().id,
@@ -269,5 +296,41 @@ describe('rates over HTTP', () => {
       },
     });
     expect(quote.statusCode).toBe(404);
+  });
+});
+
+describe('rates demo data (composition demoSeedSteps)', () => {
+  it('prices every demo property from its inventory unit types, so a quote works right after seeding', async () => {
+    // Shoulder season, 5 nights: clear of the resort's festive minimum stay.
+    const orgs = await seedDemo(h.t.db, { businessDate: '2026-11-07' });
+    for (const org of orgs) {
+      const admin = org.users.find((u) => u.role === 'org_admin');
+      const login = await h.app.inject({
+        method: 'POST',
+        url: '/v1/auth/login',
+        payload: { email: admin?.email, password: DEMO_PASSWORD },
+      });
+      const auth = { authorization: `Bearer ${login.json().token}` };
+      for (const p of org.properties) {
+        const plans = await h.app.inject({
+          method: 'GET',
+          url: `/v1/rate-plans?propertyId=${p.id}`,
+          headers: auth,
+        });
+        expect(plans.json().items.length).toBeGreaterThan(0);
+        const quote = await h.app.inject({
+          method: 'POST',
+          url: '/v1/quotes',
+          headers: { ...auth, 'idempotency-key': newId() },
+          payload: {
+            propertyId: p.id,
+            nights: { from: '2027-05-10', to: '2027-05-15' },
+            occupancy: { adults: 2 },
+          },
+        });
+        expect(quote.statusCode).toBe(200);
+        expect(quote.json().offers.some((o: { bookable: boolean }) => o.bookable)).toBe(true);
+      }
+    }
   });
 });
