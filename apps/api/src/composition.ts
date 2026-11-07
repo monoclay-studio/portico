@@ -31,6 +31,17 @@ import {
   inventorySearch,
 } from '@portico/inventory';
 import { fieldCryptoFromEnv, type ModuleManifest, systemAuthorizer } from '@portico/kernel';
+import {
+  createOperationsDemoSeed,
+  createOperationsService,
+  type OperationsPorts,
+  type OperationsService,
+  operationsHttp,
+  operationsJobs,
+  operationsManifest,
+  operationsSearch,
+  operationsSubscriptions,
+} from '@portico/operations';
 import { platform, platformHttp, platformManifest, platformSearch } from '@portico/platform';
 import { recordsHttp } from './records-routes';
 import type { DemoSeedStep } from './seed/demo';
@@ -40,6 +51,7 @@ export const MANIFESTS: readonly ModuleManifest[] = [
   identityManifest,
   inventoryManifest,
   guestsManifest,
+  operationsManifest,
   // wave-1 modules register here
 ];
 
@@ -67,7 +79,7 @@ export interface Composition {
   /** Periodic background jobs run by apps/worker (each module contributes its own). */
   jobs: ScheduledJob[];
   /** Provider services other modules' ports bind to (domain map). */
-  services: { guests: GuestsService; inventory: InventoryService };
+  services: { guests: GuestsService; inventory: InventoryService; operations: OperationsService };
   /** Demo data contributed by each module, run in order inside each demo organization (apps/api/src/seed). */
   demoSeedSteps: DemoSeedStep[];
 }
@@ -107,22 +119,97 @@ export function compose(database: PorticoDatabase): Composition {
   // ── inventory ──
   const inventoryModule = inventoryHttp({ database, inventory: inventoryService });
 
+  // ── operations (housekeeping, tasks, maintenance, lost & found, offline sync) ──
+  const operationsPorts: OperationsPorts = {
+    platform: {
+      // Reference reads (timezone, business date, departments) for internal computation use system scope;
+      // operations enforces its own permissions on every command.
+      async getProperty(tx, propertyId) {
+        const p = await platform.getProperty({ ...tx, authz: systemAuthorizer }, propertyId);
+        return {
+          id: p.id,
+          timezone: p.timezone,
+          businessDate: p.businessDate,
+          checkInTime: p.checkInTime,
+          profile: p.profile,
+        };
+      },
+      assertWritable: (tx, propertyId, domain) => platform.assertWritable(tx, propertyId, domain),
+      async getDataAuthority(tx, propertyId, domain) {
+        const a = await platform.getDataAuthority(tx, propertyId, domain);
+        return {
+          authority: a.authority,
+          connectionId: a.connectionId,
+          systemName: a.systemName,
+          writeMode: a.writeMode,
+        };
+      },
+      resolvePolicy: async (tx, propertyId, key) =>
+        (await platform.resolvePolicy(tx, propertyId, key, {})).value,
+      listDepartments: async (tx, propertyId) =>
+        (await platform.listDepartments({ ...tx, authz: systemAuthorizer }, propertyId)).map((d) => ({
+          id: d.id,
+          kind: d.kind,
+        })),
+    },
+    // ADR-0015: operations authorizes the user's intent (operations.maintenance.setInventoryImpact at the
+    // property); inventory enforces integrity and its data authority. Refusals are kept on the work order.
+    // Until inventory drops its own permission re-check on port calls (pending-fixes: ADR-0015), the adapter calls
+    // it with system scope AFTER operations authorized the intent; inventory still enforces integrity and the
+    // availability/maintenance authority of the property.
+    inventory: {
+      blockUnit: (tx, input) => inventoryService.blockUnit(asSystem(tx), input),
+      releaseBlock: (tx, input) => inventoryService.releaseBlock(asSystem(tx), input),
+      listUnits: (tx, propertyId, filter) => inventoryService.listUnits(asSystem(tx), propertyId, filter),
+    },
+  };
+  const operationsService = createOperationsService(operationsPorts);
+  const operationsModule = operationsHttp({ database, service: operationsService });
+
   // ── cross-module experience: global search, summaries, record history ──
   const searchProviders: SearchProvider[] = [
     platformSearch,
     inventorySearch,
     guestsSearchProvider(guestsService),
+    operationsSearch,
   ];
   const recordsModule = recordsHttp({ database, manifests: MANIFESTS, searchProviders });
 
   return {
     authenticator: identityAuthenticator(database, identityPorts),
-    httpModules: [platformModule, identityModule, inventoryModule, guestsModule, recordsModule],
-    subscriptions: [],
+    httpModules: [
+      platformModule,
+      identityModule,
+      inventoryModule,
+      guestsModule,
+      operationsModule,
+      recordsModule,
+    ],
+    subscriptions: [...operationsSubscriptions(operationsPorts)],
     searchProviders,
-    jobs: [...CORE_JOBS, ...createInventoryJobs(inventoryService), ...guestsJobs(guestsService)],
-    services: { guests: guestsService, inventory: inventoryService },
-    demoSeedSteps: [{ name: 'inventory', run: inventoryDemoSeed }, createGuestsDemoSeed(guestsService)],
+    jobs: [
+      ...CORE_JOBS,
+      ...createInventoryJobs(inventoryService),
+      ...guestsJobs(guestsService),
+      ...operationsJobs(operationsPorts, {
+        onError: (job, propertyId, err) =>
+          console.error(
+            JSON.stringify({
+              level: 'error',
+              msg: 'job failed for property',
+              job,
+              propertyId,
+              err: err instanceof Error ? err.name : 'unknown',
+            }),
+          ),
+      }),
+    ],
+    services: { guests: guestsService, inventory: inventoryService, operations: operationsService },
+    demoSeedSteps: [
+      { name: 'inventory', run: inventoryDemoSeed },
+      createGuestsDemoSeed(guestsService),
+      createOperationsDemoSeed(operationsService),
+    ],
   };
 }
 
