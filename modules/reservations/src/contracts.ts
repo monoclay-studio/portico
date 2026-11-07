@@ -446,6 +446,17 @@ export const nightEffect = z.object({
 export const stayEffect = z.object({
   stayId: uuid.nullable(),
   label: z.string(),
+  /** The agreed terms the commit will persist, with their policies (bound into the preview token, RES-R12). */
+  agreedTerms: z.array(
+    z.object({
+      from: localDate,
+      to: localDate,
+      digest: z.string(),
+      ratePlanId: z.string(),
+      cancellation: z.string(),
+      guarantee: z.array(z.string()),
+    }),
+  ),
   before: z
     .object({
       arrival: localDate,

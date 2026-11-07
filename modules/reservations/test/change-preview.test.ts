@@ -290,3 +290,50 @@ describe('room moves', () => {
     });
   });
 });
+
+describe('preview token integrity (steward R-04, R-18)', () => {
+  it('R-04: a policy change after the preview makes the commit stale; the preview shows the policy', async () => {
+    const org = await setupOrg(t);
+    const p = await org.run((tx) =>
+      org.svc.previewChange(tx, { kind: 'new_booking', booking: org.booking() }),
+    );
+    expect(p.stays[0]?.agreedTerms[0]?.cancellation).toMatch(/Free cancellation until 7 days/);
+    const plan = (org.fakes.rates.plans.get(org.propertyId) ?? []).find((x) => x.id === org.plans.bar);
+    if (!plan) throw new Error('no plan');
+    plan.cancellation = { tiers: [], nonRefundable: true, noShow: { kind: 'percent_of_stay', percent: 100 } };
+    plan.guarantee = ['deposit'];
+    const err = (await org.svc
+      .commitChangeSafely(t.db, org.ctx, { previewToken: p.token })
+      .catch((e: unknown) => e)) as PreviewStaleError;
+    expect(err).toBeInstanceOf(PreviewStaleError);
+    const fresh = err.details?.freshPreview as ChangePreview;
+    expect(fresh.stays[0]?.agreedTerms[0]?.cancellation).toMatch(/Non-refundable/);
+    const count = await org.run((tx) =>
+      sql<{ n: number }>`select count(*)::int as n from reservations.bookings`.execute(tx.db),
+    );
+    expect(count.rows[0]?.n).toBe(0);
+  });
+
+  it('R-18: only one alternative of a preview can be committed', async () => {
+    const org = await setupOrg(t, { units: { family: ['F301'] } });
+    await org.run((tx) => org.svc.createBooking(tx, org.booking({}, { unitTypeId: org.types.family })));
+    const p = await org.run((tx) =>
+      org.svc.previewChange(tx, {
+        kind: 'new_booking',
+        booking: org.booking({}, { unitTypeId: org.types.family }),
+      }),
+    );
+    const [a1, a2] = p.alternatives;
+    await org.svc.commitChangeSafely(t.db, org.ctx, { previewToken: a1?.preview.token ?? '' });
+    await expect(
+      org.svc.commitChangeSafely(t.db, org.ctx, { previewToken: a2?.preview.token ?? '' }),
+    ).rejects.toThrow(/no longer applies/);
+    await expect(org.svc.commitChangeSafely(t.db, org.ctx, { previewToken: p.token })).rejects.toThrow(
+      /no longer applies/,
+    );
+    const count = await org.run((tx) =>
+      sql<{ n: number }>`select count(*)::int as n from reservations.bookings`.execute(tx.db),
+    );
+    expect(count.rows[0]?.n).toBe(2);
+  });
+});

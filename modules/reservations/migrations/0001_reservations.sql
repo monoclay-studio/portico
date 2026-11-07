@@ -186,7 +186,7 @@ create table reservations.change_previews (
   request         jsonb not null,
   result          jsonb not null,
   fingerprint     text not null,
-  status          text not null default 'open' check (status in ('open', 'committed', 'stale', 'expired')),
+  status          text not null default 'open' check (status in ('open', 'committed', 'stale', 'expired', 'superseded')),
   created_by      text not null,
   created_at      timestamptz not null,
   expires_at      timestamptz not null,

@@ -288,3 +288,28 @@ export function complimentarySnapshot(
     originalTotals: doc.totals,
   };
 }
+
+/** Digest of agreed terms for preview tokens: the document minus volatile quote metadata (RES-R12, R-04). */
+export function termsDigest(doc: TermsSnapshot): string {
+  const {
+    hash: _h,
+    quotedAt: _q,
+    quoteId: _i,
+    ...rest
+  } = doc as TermsSnapshot & { hash?: unknown; quoteId?: unknown };
+  return sha256Hex(canonicalJson(rest));
+}
+
+/** Plain-language cancellation policy for previews (shown before the guest's agreement is recorded). */
+export function describeCancellationPolicy(p: CancellationPolicy): string {
+  if (p.text) return p.text;
+  if (p.nonRefundable)
+    return `Non-refundable: cancelling costs ${describePenalty(p.nonRefundablePenalty ?? { kind: 'percent_of_stay', percent: 100 })}.`;
+  if (p.tiers.length === 0) return 'Free cancellation.';
+  return p.tiers
+    .map(
+      (t) =>
+        `From ${t.deadline.daysBeforeArrival} day(s) before arrival at ${t.deadline.time}: ${describePenalty(t.penalty)}`,
+    )
+    .join('; ');
+}

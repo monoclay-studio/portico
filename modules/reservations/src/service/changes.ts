@@ -45,10 +45,12 @@ import {
 import {
   addTotals,
   cancellationPenalty,
+  describeCancellationPolicy,
   nightlyGross,
   penaltyAmount,
   rangeTotals,
   requiredDeposit,
+  termsDigest,
   zeroTotals,
 } from '../domain/terms';
 import { PreviewStaleError } from '../errors';
@@ -295,6 +297,17 @@ function nightEffects(
       availability,
     };
   });
+}
+
+function agreedTermsOf(targets: ReadonlyArray<{ from: LocalDate; to: LocalDate; terms: TermsSnapshot }>) {
+  return targets.map((t) => ({
+    from: t.from,
+    to: t.to,
+    digest: termsDigest(t.terms),
+    ratePlanId: t.terms.ratePlanId,
+    cancellation: describeCancellationPolicy(t.terms.policies.cancellation),
+    guarantee: [...t.terms.policies.guarantee.required],
+  }));
 }
 
 function stayLabel(stay: StayRecord | null, index: number): string {
@@ -827,6 +840,7 @@ async function stayEffect(
     nights,
     totals: { before: totalsOf(c.currency, before), after: totalsOf(c.currency, after) },
     inclusions: { before: inclusionNames(before), after: inclusionNames(after) },
+    agreedTerms: agreedTermsOf(after),
     assignment,
   };
 }
@@ -1031,6 +1045,7 @@ async function buildPlan(
       nights,
       totals: { before: zeroTotals(c.currency), after: totalsOf(c.currency, after) },
       inclusions: { before: [], after: inclusionNames(after) },
+      agreedTerms: agreedTermsOf(after),
       assignment: {
         status: ns.input.unitId ? 'kept' : 'none',
         unitId: ns.input.unitId ?? null,
@@ -1446,6 +1461,22 @@ export async function commitChange(
       'This change was already committed. Reload the booking to see it; preview again for a further change.',
     );
   }
+  // A preview and its alternatives are mutually exclusive (R-18): once one is committed the others are superseded.
+  const family = row.parent_token ?? row.token;
+  const committedSibling = await db(tx)
+    .selectFrom('reservations.change_previews')
+    .select(['token'])
+    .where((eb) => eb.or([eb('token', '=', family), eb('parent_token', '=', family)]))
+    .where('token', '!=', row.token)
+    .where('status', '=', 'committed')
+    .executeTakeFirst();
+  if (committedSibling || row.status === 'superseded') {
+    throw new BusinessRuleError(
+      'preview_superseded',
+      'Another option from the same preview was already committed, so this one no longer applies. Preview again if a further change is needed.',
+      { committed: committedSibling?.token ?? null },
+    );
+  }
   const request = row.request as ChangeRequest;
   if (row.expires_at.getTime() < tx.now.getTime()) {
     throw new StaleSignal({ reason: 'This preview has expired.', freshPreview: null, differences: [] });
@@ -1491,6 +1522,13 @@ export async function commitChange(
     return forwarded;
   }
   const { bookingId, keys } = await applyPlan(deps, tx, plan, row.token);
+  await db(tx)
+    .updateTable('reservations.change_previews')
+    .set({ status: 'superseded' })
+    .where((eb) => eb.or([eb('token', '=', family), eb('parent_token', '=', family)]))
+    .where('token', '!=', row.token)
+    .where('status', '=', 'open')
+    .execute();
   await db(tx)
     .updateTable('reservations.change_previews')
     .set({ status: 'committed', committed_at: tx.now })
