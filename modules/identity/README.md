@@ -21,24 +21,35 @@ factor, and SSO is bound to `(issuer, sub)` with DNS-verified domains. Every pro
 a regression test that asserts the attack is refused: `test/review-regressions.test.ts`,
 `test/review-sso-regressions.test.ts`, `test/isolation.test.ts`, `apps/api/test/review-regressions.test.ts`.
 
+**Second review (ADR-0017 amendment 1, rules 12-15).** The second review found account pre-hijacking: an
+organization could create a global identity with a password it chose for an email it did not own. Now no
+organization ever sets a password; every person is invited and sets their first password from an emailed link, which
+verifies the email and wipes anything set before. Invitations are seen and accepted only with a verified email and
+before they expire, onboarding cannot be blocked by another organization, and SSO's issuer, allow-list, MFA trust and
+enforcement are root changes. The second review's attacks (N-1 … N-9 and the HTTP capture of a new live
+organization's first administrator) are regression tests that assert refusal (`test/review2-regressions.test.ts`,
+`apps/api/test/review-regressions.test.ts`), and the first review's 11 attacks stay refused
+(`test/review2-original-attacks.test.ts`).
+
 ## Capabilities
 
 | Capability | Spec | Status | Readiness | Evidence |
 |---|---|---|---|---|
 | Sign-in, sessions bound to one organization, lockout (wave 0) | IDN-R01/R02 | kept, extended | R3 | `test/identity.test.ts` |
 | TOTP MFA: enrolment with `otpauth://` URI, field-encrypted secret, ±1 step drift, replay protection (a time step is accepted at most once, enforced by a guarded UPDATE), 10 hashed single-use recovery codes | IDN-R03 | done | R3 | `src/domain/totp.test.ts` (RFC 4226/6238 vectors), `test/mfa.test.ts` |
-| Second factor at sign-in for enrolled members (`mfa_required` challenge, 5 minutes, 5 attempts per challenge) plus a **per-person** failure counter across challenges and step-ups: 5 → 1-minute delay, 10 → 15 minutes and a high `mfa_bruteforce_suspected` alert (person and admins told), 20 → 24-hour lock; reset only by a successful second factor | IDN-R02/R03, ADR-0017 §8 | done | R3 | `test/mfa.test.ts`, `test/review-regressions.test.ts` "P1-7", HTTP test |
+| Second factor at sign-in for enrolled members (`mfa_required` challenge, 5 minutes, 5 attempts per challenge) plus a **per-person** failure counter across challenges, step-ups, credential proofs and enrolment confirmation, reserved atomically before each check (concurrent attempts serialize on the person, R2-P2-1): 5 → 1-minute delay, 10 → 15 minutes and a high `mfa_bruteforce_suspected` alert (person and admins told), 20 → 24-hour lock; reset only by a successful second factor | IDN-R02/R03, ADR-0017 §8 | done | R3 | `test/mfa.test.ts`, `test/review-regressions.test.ts` "P1-7", HTTP test |
 | Central step-up: sensitive (⚑) permissions need MFA **enrolled** and a recent verification (`mfaStepUpWindowMinutes`, default 15). The enrolment grace (policy, ≤ 72 h, anchored to the person's first activation anywhere) only defers "MFA for everyone"; ⚑ permissions never take effect during it | IDN-R03, IDN-I04, ADR-0017 §8 | done (see design) | R3 | `src/domain/permissions.test.ts`, `test/mfa.test.ts`, `test/review-regressions.test.ts` "P1-2", HTTP test |
 | Changing a global credential needs proof of the existing one: enrolling/replacing/disabling TOTP and regenerating recovery codes need the current code or a recovery code (or the current password before any factor exists); an SSO session never counts | ADR-0017 §4 | done | R3 | `test/mfa.test.ts`, `test/review-regressions.test.ts` "P0-2", `test/review-sso-regressions.test.ts` |
 | WebAuthn / passkeys | IDN-R02 | LATER (same factor table, `kind = 'webauthn'`) | R1 | — |
-| Enterprise SSO: OIDC authorization code + PKCE (confidential client), discovery, JWKS with key-rotation refetch, nonce/issuer/audience/expiry checks (`requiredClaims` exp, iat, sub, nonce), login bound to the starting browser (`browserBinding`), email-domain allow-list, `email_verified === true` required, identity bound to `(issuer, sub)` after the first link, linking a person who also works elsewhere only for a **DNS-TXT-verified domain** (`/v1/sso/domains`), JIT provisioning, group → role mapping with reconciliation, "SSO required" with anti-lockout and 1–3 exempt accounts, IdP-asserted MFA (`amr` or `trustIdpMfa`); IdP calls SSRF-safe (public https only, pinned DNS, no redirects, 1 MB) and outside database transactions | IDN-R08, ADR-0017 §5 | done | **R3 — fake IdP only**; R4 needs real Entra ID/Okta/Google test tenants | `test/sso-scim.test.ts`, `test/review-sso-regressions.test.ts`, `src/net/address-policy.test.ts` |
+| Enterprise SSO: OIDC authorization code + PKCE (confidential client), discovery, JWKS with key-rotation refetch, nonce/issuer/audience/expiry checks (`requiredClaims` exp, iat, sub, nonce), login bound to the starting browser (`browserBinding`), email-domain allow-list, `email_verified === true` required, identity bound to `(issuer, sub)` after the first link, linking a person who also works elsewhere only for a **DNS-TXT-verified domain** (`/v1/sso/domains`) — checked whenever SSO would create or activate a membership; a person who already holds credentials is linked only after proving them (`POST /v1/me/sso/link` from a password session); a refused sign-in persists nothing; issuer, allow-list, `trustIdpMfa` and SSO-required are **root changes** (organization-wide `*`), and an issuer change resets domain verification, drops the old issuer's links and alerts every administrator (rule 15); JIT provisioning, group → role mapping with reconciliation, "SSO required" with anti-lockout and 1–3 exempt accounts, IdP-asserted MFA (`amr` or `trustIdpMfa`); IdP calls SSRF-safe (public https only, pinned DNS, no redirects, 1 MB) and outside database transactions | IDN-R08, ADR-0017 §5, rule 15 | done | **R3 — fake IdP only**; R4 needs real Entra ID/Okta/Google test tenants | `test/sso-scim.test.ts`, `test/review-sso-regressions.test.ts`, `src/net/address-policy.test.ts` |
 | SAML 2.0 | IDN-R08 | LATER, reusing the same group → role model (`identity.group_role_mappings`) | R1 | — |
-| SCIM 2.0 Users (create, get, `eq` filters, replace, patch, deactivate/reactivate, delete) and Groups (create, get, list, patch members/rename, delete) driving roles through the same mappings; a person who works elsewhere is provisioned `invited` (never activated by SCIM); the last administrator cannot be deprovisioned; deactivation revokes the person's API keys | IDN-R08, ADR-0017 §2/§6 | done | R3 (no IdP connector tested) | `test/sso-scim.test.ts`, HTTP test |
+| SCIM 2.0 Users (create, get, `eq` filters, replace, patch, deactivate/reactivate, delete) and Groups (create, get, list, patch members/rename, delete) driving roles through the same mappings; a person who works elsewhere is provisioned `invited` (never activated by SCIM); the last administrator cannot be deprovisioned — neither by user deactivation/deletion nor by a group change (R2-P2-3, also for SSO groups: the role is kept and a high `last_administrator_kept` alert raised); deactivation revokes the person's API keys | IDN-R08, ADR-0017 §2/§6 | done | R3 (no IdP connector tested) | `test/sso-scim.test.ts`, HTTP test |
 | Permission catalog `GET /v1/permissions` (grouped by module, scope kind, ⚑ flags) | IDN-R09 | done | R3 | HTTP test |
 | Custom roles from the catalog: create (keys and wildcards validated), clone templates, preview ("N members gain …"), versioned edits (If-Match), archive when unused; system templates immutable | IDN-R10 | done | R3 | `test/roles-lifecycle.test.ts`, HTTP test |
-| Grant guardrails: no self-grant, no escalation (grantor must hold every permission of the role across the scope); role and API-client editors cannot add permissions they lack; **power ordering** — revoke, suspend, remove, password reset and MFA reset only for members whose permissions the actor also holds; no change may remove the last active organization-wide administrator; reserved role keys (templates, `portico_*`) | IDN-R14, IDN-I03, ADR-0017 §6 | done | R3 | `test/roles-lifecycle.test.ts`, `test/review-regressions.test.ts` "P1-6", "P2-15" |
-| Invitations (token, 7-day expiry, Notifier honouring environment safety), acceptance with first password, rehire. Adding an **existing** person (create, invite, SCIM, JIT without a verified domain) makes an `invited` membership the person accepts while signed in (`GET /v1/me/invitations`, `POST /v1/me/invitations/:id/accept`) or with their own credentials on the link; their password is never set. Links go only to the person: responses carry `delivery.mode` (`queued` / `simulated` / `sandbox`) and never the link; simulated messages land in the operator mailbox (`GET /v1/operator/mailbox`, link field-encrypted) | IDN-R06, ADR-0017 §2/§3 | done | R3 (delivery R1) | `test/roles-lifecycle.test.ts`, `test/review-regressions.test.ts` "P0-1", `apps/api/test/review-regressions.test.ts` |
-| Password reset (self-service without account enumeration; admin-sent **only for sole-organization members**), single-use 60-minute token, sessions and the person's API keys revoked in **every** organization | IDN-R05, ADR-0017 §1 | done | R3 | `test/roles-lifecycle.test.ts`, `test/review-regressions.test.ts` |
+| Grant guardrails: no self-grant, no escalation (grantor must hold every permission of the role across the scope); role and API-client editors cannot add permissions they lack; **power ordering** — revoke, suspend, remove, transfer (role assignment at both properties, no self-transfer, R2-P2-2), password reset and MFA reset only for members whose permissions the actor also holds; no change may remove the last active organization-wide administrator; reserved role keys (templates, `portico_*`) | IDN-R14, IDN-I03, ADR-0017 §6 | done | R3 | `test/roles-lifecycle.test.ts`, `test/review-regressions.test.ts` "P1-6", "P2-15" |
+| **No organization sets a password** (ADR-0017 rule 12): `createUser`/`POST /v1/users` invite every person (same answer for new and existing emails) and refuse `initialPassword` (`password_not_allowed`); a person's first password is chosen from the emailed link, which sets `users.email_verified_at`; the **first verification wipes every earlier credential everywhere** (password, factors, recovery codes, SSO links, sessions, API keys). A verified-domain SSO sign-in also verifies. Only `seedDemoMember` sets a password: a system process, in a demo organization, for `*.portico.invalid` | ADR-0017 rules 12-14 | done | R3 | `test/review2-regressions.test.ts` "R2-P0-1", "R2-P1-2", `apps/api/test/review-regressions.test.ts` |
+| Invitations (token, 7-day expiry, Notifier honouring environment safety), acceptance with first password, rehire. In-app listing and acceptance need a **verified email** and an **unexpired** invitation (rule 13); the first-password decision depends on credentials, never on memberships (rule 14). Adding an **existing** person (create, invite, SCIM, JIT without a verified domain) makes an `invited` membership the person accepts while signed in (`GET /v1/me/invitations`, `POST /v1/me/invitations/:id/accept`) or with their own credentials on the link; their password is never set. Links go only to the person: responses carry `delivery.mode` (`queued` / `simulated` / `sandbox`) and never the link; simulated messages land in the operator mailbox (`GET /v1/operator/mailbox`, link field-encrypted) | IDN-R06, ADR-0017 §2/§3 | done | R3 (delivery R1) | `test/roles-lifecycle.test.ts`, `test/review-regressions.test.ts` "P0-1", `apps/api/test/review-regressions.test.ts` |
+| Password reset (self-service without account enumeration, also reaching people who only hold invitations; admin-sent **only for sole-organization members**), single-use 60-minute token, sessions and the person's API keys revoked in **every** organization | IDN-R05, ADR-0017 §1 | done | R3 | `test/roles-lifecycle.test.ts`, `test/review-regressions.test.ts` |
 | Admin MFA reset (lost device) only for sole-organization members and only with power over them; sessions and API keys revoked | ADR-0017 §1/§9 | done | R3 | `test/mfa.test.ts`, `test/review-regressions.test.ts` "P0-2" |
 | Transfer between properties as one previewed, audited operation (immediate or scheduled) | IDN-R07 | done | R3 | `test/roles-lifecycle.test.ts` |
 | Time-limited assignments (`startsAt`/`endsAt` enforced per request) | IDN-R11 | done | R3 | `test/roles-lifecycle.test.ts` |
@@ -125,7 +136,13 @@ every audit row's `actor` JSON (tested). FOUNDATION_REQUESTS FR-1 proposes first
 | ADR-0017 §1: no organization resets the password or MFA of a person who also belongs elsewhere (invitations count) | `test/review-regressions.test.ts` "P0-1", "P0-2" |
 | ADR-0017 §2: an existing person is never activated or given a password by another organization | `test/review-regressions.test.ts`, `test/identity.test.ts` "scenario 17", HTTP test |
 | ADR-0017 §3: no response or stored idempotent response contains an `inv.`/`prt.` link or an API token | `test/review-regressions.test.ts`, `apps/api/test/review-regressions.test.ts`, `apps/api/test/identity-enterprise.test.ts` |
-| ADR-0017 §5: an IdP cannot assert a person of an unverified domain who works elsewhere; `(issuer, sub)` wins over the email claim | `test/review-sso-regressions.test.ts` |
+| ADR-0017 §5: an IdP cannot assert a person of an unverified domain who works elsewhere — whenever a membership would be created or activated, even through an existing link; `(issuer, sub)` wins over the email claim | `test/review-sso-regressions.test.ts`, `test/review2-regressions.test.ts` "R2-P1-3" |
+| Rule 12: no credential set before a person proved their email survives that proof; no organization chooses a password | `test/review2-regressions.test.ts` "R2-P0-1" |
+| Rule 13: an unverified identity sees and accepts no invitation; expired invitations are refused | `test/review2-regressions.test.ts` "ghost identity", "P3-3" |
+| Rule 14: another organization's invitation never blocks onboarding; resets reach invited-only people | `test/review2-regressions.test.ts` "R2-P1-2" |
+| Rule 15: SSO root settings need organization-wide `*`; credentialed people are linked only with their proof | `test/review2-regressions.test.ts` "R2-P1-1", `test/review-sso-regressions.test.ts` |
+| A refused SSO sign-in persists no user and no link | `test/review2-regressions.test.ts` "R2-P1-3" |
+| The second-factor limit holds under concurrency | `test/review2-regressions.test.ts` "R2-P2-1" |
 | A TOTP code or recovery code is accepted once even under concurrent challenges | `test/review-regressions.test.ts` "P2-13" |
 
 ## Scenarios covered
@@ -164,6 +181,19 @@ Emitted: `identity.mfa.enrolled|disabled`, `identity.membership.invited|activate
 
 Configuration: `PORTICO_APP_BASE_URL`, `PORTICO_SSO_REDIRECT_URI`, `PORTICO_OPERATORS`, `PORTICO_FIELD_KEY*`.
 Jobs: `IDENTITY_JOBS` (`identity.purgeLoginAttempts`), registered in the composition root.
+
+## Contract changes for ADR-0017 amendment 1 (second review, breaking)
+- `createUser(tx, input, ports)` lives in lifecycle, always returns `{ userId, status: 'invited', invitationExpiresAt,
+  delivery }` and sends the invitation; `initialPassword` → `password_not_allowed`. `createUserResponse.status` is
+  `'invited'`. `seedDemoMember(tx, { email, displayName, password, roles })` is the only password-setting path.
+- `confirmTotp` returns an `Outcome` (failures counted and capped at 5 per pending factor).
+- `memberDetail.mfa` is null while the person is invited.
+- New: `POST /v1/me/sso/link` (`startSsoLink`), `identity.users.email_verified_at`, `sso_login_states.link_user_id`,
+  `mfa_factors.confirm_failures`, definer functions `first_email_verification`, `credential_summary`,
+  `purge_orphan_sso_links`, job `identity.purgeOrphanSsoLinks`, alert rules `sso_root_change` and
+  `last_administrator_kept`.
+- `apps/api` `provisionOrganization(database, input, operator, ports)` requires the notifier (unless demo seeding) and
+  returns `adminStatus` / `delivery`.
 
 ## Contract changes in the fix round (breaking, for ADR-0017)
 - `createUser` returns `{ userId, status: 'active' | 'invited' }`; `initialPassword` for an existing person →
@@ -214,6 +244,17 @@ their own memberships — trial access never implies live access. SSO/SCIM are g
 - Review P2-4 (partly): SSO-required now needs ≥ 1 active exempt account; a changed connection is not yet
   test-signed-in before saving while SSO is required.
 - Review P2-12: identity declares no `recordTypes`/`SearchProvider` for staff members yet.
+- Rule 15's "second administrator approves" path for SSO root changes is not built; only the stricter branch
+  (organization-wide `*`) is accepted, so a delegated SSO manager cannot change root settings at all.
+- A person who signs in ONLY through SSO at organization A (unverified domain) and later verifies their email
+  elsewhere loses A's link (first-verification wipe); A re-links them only after domain verification or their proof.
+- R2-P2-4: a determined administrator who controls a second mailbox can still create a second identity (inherent);
+  with no organization-set passwords it is no longer free or invisible (the person must accept from that mailbox).
+  Approver-age or created-by checks were not added.
+- R2-P3-5: domain verification is reset on an issuer change but not re-checked periodically.
+- R2-P3-7: API keys survive their creator's role revocation (they are revoked on suspension, password reset and MFA
+  reset); re-checking key permissions against the creator's current grants is not built.
+- R2-P2-6 (turbo cache) is a repository setting outside this module; gates run with `--force`.
 - `docs/parity/identity.md` missing (outside this module's write scope).
 
 ## Open questions for the owner
