@@ -732,6 +732,12 @@ export const openingDepositsInput = z.object({
         externalRef: z.string().max(120).optional(),
         amountMinor: z.number().int(),
         /**
+         * Review R2-P1-3: the booking is not (yet) in Portico reservations — its deposit is carried as a legacy balance,
+         * frozen for new money until the booking exists here. Without this flag a row for a booking reservations does
+         * not know is rejected, and so is a row for another property's booking.
+         */
+        legacyNotMigrated: z.literal(true).optional(),
+        /**
          * Tax the previous system already declared on this deposit (time of supply = receipt). It is released, not
          * declared again, when the deposit is applied — so migrated prepaid bookings are not taxed twice.
          */
@@ -764,6 +770,8 @@ export const openingImportReport = z.object({
   providedClosingMinor: z.number().int(),
   differenceMinor: z.number().int(),
   rejected: z.array(z.object({ row: z.number().int(), bookingId: z.string(), reason: z.string() })),
+  /** Rows imported as legacy balances of bookings not (yet) in Portico (frozen for new money). */
+  legacyCount: z.number().int().optional(),
   entryId: uuid.nullable(),
   suspenseBalanceMinor: z.number().int(),
   explanation: z.string(),

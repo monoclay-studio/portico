@@ -924,8 +924,9 @@ async function applyLinkEvent(
       created_at: tx.now,
     })
     .execute();
-  await postPaymentLedger(d, tx, id);
+  // Review R2-P1-2: credit the request before finance posts (its balance sync then sees this payment on the link).
   await creditPaymentRequest(tx, r.id, o.amountMinor);
+  await postPaymentLedger(d, tx, id);
   await tx.emit({
     type: PaymentsEvents.paymentSucceeded,
     propertyId: r.property_id,

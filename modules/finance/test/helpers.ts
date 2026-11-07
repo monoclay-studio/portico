@@ -3,7 +3,7 @@ import { Decimal, type Money, money, newId, type RequestContext, systemAuthorize
 import { platform, platformManifest } from '@portico/platform';
 import { createTestDatabase, type TestDatabase, testContext } from '@portico/testing';
 import {
-  type CollectionRequest,
+  type BalanceSyncRequest,
   createFinance,
   type FinancePorts,
   type FinanceService,
@@ -17,7 +17,9 @@ export interface Harness {
   t: TestDatabase;
   finance: FinanceService;
   ports: FinancePorts;
-  collections: CollectionRequest[];
+  /** Every balance sync finance asked for (review R2-P1-2), and the fake's open request per folio. */
+  collections: BalanceSyncRequest[];
+  openRequests: Map<string, number>;
   tax: FakeTax;
   /** Fake payer directory (guests): payer id → name. */
   payerNames: Map<string, string>;
@@ -122,7 +124,9 @@ export class FakeTax {
 
 export async function startHarness(): Promise<Harness> {
   const t = await createTestDatabase(sourcesFromManifests([platformManifest, financeManifest]));
-  const collections: CollectionRequest[] = [];
+  const collections: BalanceSyncRequest[] = [];
+  /** Fake payments: one open balance request per folio, kept equal to the outstanding amount. */
+  const openRequests = new Map<string, number>();
   const payerNames = new Map<string, string>();
   /** Fake booking directory (reservations): tests register the bookings they take deposits for. */
   const bookings = new Map<string, { propertyId: string; status: string }>();
@@ -170,9 +174,17 @@ export async function startHarness(): Promise<Harness> {
       },
     },
     payments: {
-      async requestCollection(_tx, input) {
+      async syncBalanceRequest(_tx, input) {
         collections.push(input);
-        return { status: 'requested' };
+        const before = openRequests.get(input.folioId) ?? 0;
+        const want = input.outstanding.amountMinor;
+        if (want === before) return { status: before ? 'unchanged' : 'none', openMinor: before };
+        if (want === 0) {
+          openRequests.delete(input.folioId);
+          return { status: 'cancelled', openMinor: 0 };
+        }
+        openRequests.set(input.folioId, want);
+        return { status: before ? 'amended' : 'requested', openMinor: want };
       },
     },
     payers: {
@@ -182,7 +194,7 @@ export async function startHarness(): Promise<Harness> {
       },
     },
   };
-  return { t, finance: createFinance(ports), ports, collections, tax, payerNames, bookings };
+  return { t, finance: createFinance(ports), ports, collections, openRequests, tax, payerNames, bookings };
 }
 
 export interface Org {

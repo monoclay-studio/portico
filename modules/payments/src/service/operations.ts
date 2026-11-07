@@ -941,8 +941,10 @@ async function applyPayment(
   }
 
   if (to === 'succeeded') {
+    // Review R2-P1-2: credit the link first, so finance's posting (which keeps a departed folio's balance request
+    // equal to its debt) sees the request as already paid by this payment.
+    if (p.payment_request_id) await creditPaymentRequest(tx, p.payment_request_id, collected);
     await postPaymentLedger(d, tx, p.id);
-    if (p.payment_request_id) await creditPaymentRequest(tx, p.payment_request_id, p.amount_minor);
     if (p.virtual_card_id) {
       await db(tx)
         .updateTable('payments.virtual_cards')

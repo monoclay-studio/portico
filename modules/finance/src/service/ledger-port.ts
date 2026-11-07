@@ -308,23 +308,61 @@ export async function describeTarget(
 }
 
 /**
- * Refuse a port call whose target belongs to another property or legal entity than the scope the calling module
- * authorized (ADR-0015 §3), or that nobody knows: an unknown booking is refused like an unknown folio (review P1-1).
+ * THE predicate for money on a ledger target (ADR-0015 §3; review P1-1, R2-P1-3, AP-44). Finance applies it when it
+ * posts, and payments asks it BEFORE any card is charged (LedgerPort `assertTargetUsable`), so the pre-check and the
+ * posting can never disagree:
+ *  - a folio must exist and belong to the scope;
+ *  - a booking must be one reservations knows, at the scope's property and legal entity, and any deposits finance
+ *    already holds for it must be held there too (an import or repair at another property blocks new money until
+ *    finance moves them);
+ *  - `outflow` (refunds, adjustments of money already received) also accepts an imported legacy deposit of a booking
+ *    reservations does not know yet, so it can be paid back; new money never goes to one (`inflow`).
  */
 export async function assertTargetInScope(
   tx: TxContext,
   deps: Deps,
   ref: { type: 'folio' | 'booking'; id: string },
   scope: { propertyId: string; legalEntityId: string },
+  direction: 'inflow' | 'outflow' = 'inflow',
 ): Promise<void> {
-  const owner = await describeTarget(tx, deps, ref);
-  if (!owner) {
-    if (ref.type === 'folio') throw new ValidationError('folio_not_found', 'The folio was not found.');
-    throw new BusinessRuleError(
-      'ledger_target_unknown',
-      'Portico has no booking with this reference, so the money could not be held for it. Check the booking code, or record the payment on the booking it belongs to. Nothing was posted.',
-      { ref },
-    );
+  let owner: { propertyId: string; legalEntityId: string };
+  if (ref.type === 'folio') {
+    const f = await db(tx)
+      .selectFrom('finance.folios')
+      .select(['property_id', 'legal_entity_id'])
+      .where('id', '=', ref.id)
+      .executeTakeFirst();
+    if (!f) throw new ValidationError('folio_not_found', 'The folio was not found.');
+    owner = { propertyId: f.property_id, legalEntityId: f.legal_entity_id };
+  } else {
+    const booking = await deps.ports.bookings.describeBooking(tx, ref.id);
+    const acct = await db(tx)
+      .selectFrom('finance.deposit_accounts')
+      .select(['property_id', 'legal_entity_id'])
+      .where('booking_id', '=', ref.id)
+      .executeTakeFirst();
+    if (!booking) {
+      if (direction === 'inflow' || !acct) {
+        throw new BusinessRuleError(
+          'ledger_target_unknown',
+          acct
+            ? "This booking's deposit was imported from the previous system, but the booking is not in Portico yet. No new money is taken for it until the booking is migrated. Nothing was charged or posted."
+            : 'Portico has no booking with this reference, so the money could not be held for it. Check the booking code, or record the payment on the booking it belongs to. Nothing was posted.',
+          { ref },
+        );
+      }
+      owner = { propertyId: acct.property_id, legalEntityId: acct.legal_entity_id };
+    } else {
+      const p = await deps.ports.platform.getProperty(tx, booking.propertyId);
+      owner = { propertyId: p.id, legalEntityId: p.legalEntityId };
+      if (acct && (acct.property_id !== owner.propertyId || acct.legal_entity_id !== owner.legalEntityId)) {
+        throw new BusinessRuleError(
+          'deposit_account_conflict',
+          "This booking's deposits are held at another property or hotel company. Finance must move them to the booking's property before more money is taken for it. Nothing was charged or posted.",
+          { ref },
+        );
+      }
+    }
   }
   if (owner.propertyId !== scope.propertyId || owner.legalEntityId !== scope.legalEntityId) {
     throw new BusinessRuleError(

@@ -100,29 +100,52 @@ export interface TaxPort {
   getRulePackStatus(tx: TxContext, propertyId: string): Promise<{ verified: boolean; note?: string }>;
 }
 
-export interface CollectionRequest {
+/**
+ * Review R2-P1-2: what finance asks payments after any change to a departed folio's balance — keep the folio's ONE
+ * open balance request equal to what it owes now.
+ */
+export interface BalanceSyncRequest {
   propertyId: string;
   folioId: string;
-  amount: Money;
-  reason: 'late_charge';
-  ref: { type: string; id: string };
-  idempotencyKey: string;
+  /** What the folio owes now (0 when settled or in credit). */
+  outstanding: Money;
+  /** Why the balance changed (late charge, correction, transfer…), for the request and the audit. */
+  reason: string;
   /** The folio payer's name, for the payment request payments creates. */
   payerName?: string;
   /** The folio payer (review P3-5), so payments can address the request to the guest or company. */
   payer?: { type: string; id?: string };
 }
 
+export interface BalanceSyncResult {
+  /**
+   * `requested` / `amended` / `reissued` / `cancelled` / `unchanged` / `none`: the open request now asks for
+   * `openMinor`. `deferred`: a payment is still being confirmed, nothing changed. `not_possible` / `unavailable`:
+   * payments refused or is not connected — nothing was requested.
+   */
+  status:
+    | 'requested'
+    | 'amended'
+    | 'reissued'
+    | 'cancelled'
+    | 'unchanged'
+    | 'none'
+    | 'deferred'
+    | 'not_possible'
+    | 'unavailable';
+  /** What the open payment request asks for after the sync — only what payments ACCEPTED (0 when none). */
+  openMinor: number;
+  requestId?: string | null;
+  detail?: string;
+}
+
 export interface PaymentsPort {
   /**
-   * Ask payments to arrange collection (MIT charge on card on file if the agreed terms allow, otherwise a
-   * payment request). Records intent only, in the same transaction; any provider call happens later through
-   * payments' provider-operation journal. Returns 'unavailable' when payments is not connected.
+   * Keep the departed folio's one open balance request equal to its debt (create, amend, re-issue or close it).
+   * Records intent only, in the same transaction; links are created after commit. Never throws for a business
+   * refusal: returns `not_possible` with the reason (the posting is never lost).
    */
-  requestCollection(
-    tx: TxContext,
-    input: CollectionRequest,
-  ): Promise<{ status: 'requested' | 'not_possible' | 'unavailable'; detail?: string }>;
+  syncBalanceRequest(tx: TxContext, input: BalanceSyncRequest): Promise<BalanceSyncResult>;
 }
 
 /** Payer particulars for folios and tax invoices (guests for people; companies/agencies when that module exists). */

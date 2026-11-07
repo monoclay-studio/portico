@@ -286,6 +286,9 @@ export function financeLedgerForPayments(service: FinanceService) {
   return {
     describeTarget: (tx: TxContext, ref: { type: 'folio' | 'booking'; id: string }) =>
       service.describeTarget(d(tx, null), ref),
+    /** Review R2-P1-3: the posting predicate itself, asked before any card is charged (new money). */
+    assertTargetUsable: (tx: TxContext, ref: { type: 'folio' | 'booking'; id: string }, s: LedgerScope) =>
+      service.assertTargetInScope(d(tx, s.propertyId), ref, scope(s), 'inflow'),
     async recordPayment(
       tx: TxContext,
       input: LedgerScope & {
@@ -360,7 +363,7 @@ export function financeLedgerForPayments(service: FinanceService) {
         cashWithoutSession: 'flag' as const,
       };
       if (input.folioId) {
-        await service.assertTargetInScope(t, { type: 'folio', id: input.folioId }, scope(input));
+        await service.assertTargetInScope(t, { type: 'folio', id: input.folioId }, scope(input), 'outflow');
         return {
           postingId: (await service.recordRefund(t, { folioId: input.folioId, ...common })).postingId,
         };
@@ -370,7 +373,7 @@ export function financeLedgerForPayments(service: FinanceService) {
           'target_required',
           'A refund needs the folio or booking of the original payment.',
         );
-      await service.assertTargetInScope(t, { type: 'booking', id: input.bookingId }, scope(input));
+      await service.assertTargetInScope(t, { type: 'booking', id: input.bookingId }, scope(input), 'outflow');
       // Deposit still held → deposit refund; already applied to a folio → refund on that folio.
       const held = await service.getDeposits(t, input.bookingId);
       if (held && held.balance.amountMinor >= input.amount.amountMinor) {
@@ -427,7 +430,7 @@ export function financeLedgerForPayments(service: FinanceService) {
           'target_required',
           'An adjustment needs the folio or booking of the payment.',
         );
-      await service.assertTargetInScope(t, target, scope(input));
+      await service.assertTargetInScope(t, target, scope(input), 'outflow');
       const { clearing: _c, propertyId: _p, legalEntityId: _l, ...rest } = input;
       return { postingId: (await service.recordPaymentAdjustment(t, rest)).postingId };
     },

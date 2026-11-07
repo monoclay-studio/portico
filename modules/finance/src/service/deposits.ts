@@ -16,8 +16,9 @@ import type { LineDraft } from '../domain/ledger';
 import { fromRatesTaxLine, normalizeLedgerKey, type PostingTax } from '../domain/tax-map';
 import type { PaymentMethodKind } from '../domain/types';
 import type { DepositAccountsTable } from '../tables';
+import { syncDepartedFolios } from './departed-folios';
 import { prepareDestination } from './folios';
-import { describeTarget } from './ledger-port';
+import { assertTargetInScope, describeTarget } from './ledger-port';
 import { chargeCodeByCode } from './setup';
 import {
   accountId,
@@ -53,10 +54,10 @@ const declaredOf = (a: Selectable<DepositAccountsTable>): DeclaredMap =>
   (a.declared_tax ?? {}) as DeclaredMap;
 
 /**
- * The property of a booking's deposit (review P1-1). The owner comes from reservations (booking directory); a
- * deposit is refused for a booking that exists nowhere, and for a booking of another property than the caller's.
- * Only a deposit account finance already holds for a booking reservations does not know (opening balances imported
- * from a previous system) is used as is. Never "whichever property takes the first deposit".
+ * The property of a booking's deposit (review P1-1, R2-P1-3). The owner comes from reservations (booking directory);
+ * the deposit must then pass THE ledger-target predicate (`assertTargetInScope`, the one payments also asks before
+ * charging): a booking that exists nowhere, a booking of another property than the caller's, or a booking whose
+ * deposits are held at another property is refused. Never "whichever property takes the first deposit".
  */
 async function resolveDepositProperty(
   tx: TxContext,
@@ -65,33 +66,23 @@ async function resolveDepositProperty(
   propertyId?: string,
 ): Promise<string> {
   const owner = await describeTarget(tx, deps, { type: 'booking', id: bookingId });
-  if (!owner) {
+  const at = propertyId ?? owner?.propertyId;
+  if (!at) {
     throw new BusinessRuleError(
       'ledger_target_unknown',
       'Portico has no booking with this reference, so the deposit could not be held for it. Check the booking code, or record the payment on the booking it belongs to. Nothing was posted.',
       { bookingId },
     );
   }
-  if (propertyId && propertyId !== owner.propertyId) {
-    throw new BusinessRuleError(
-      'scope_mismatch',
-      'This booking belongs to another property. Take the deposit at the property that owns the booking. Nothing was posted.',
-      { bookingId, propertyId },
-    );
-  }
-  const acct = await db(tx)
-    .selectFrom('finance.deposit_accounts')
-    .select(['property_id', 'legal_entity_id'])
-    .where('booking_id', '=', bookingId)
-    .executeTakeFirst();
-  if (acct && (acct.property_id !== owner.propertyId || acct.legal_entity_id !== owner.legalEntityId)) {
-    throw new BusinessRuleError(
-      'scope_mismatch',
-      "This booking's deposits are held at another property or legal entity. Finance must move them before more is taken. Nothing was posted.",
-      { bookingId },
-    );
-  }
-  return owner.propertyId;
+  const property = await deps.ports.platform.getProperty(tx, at);
+  await assertTargetInScope(
+    tx,
+    deps,
+    { type: 'booking', id: bookingId },
+    { propertyId: property.id, legalEntityId: property.legalEntityId },
+    'inflow',
+  );
+  return property.id;
 }
 
 async function lockDepositAccount(
@@ -670,6 +661,12 @@ export async function applyDeposits(
       amount: money(amount, cur),
     },
   });
+  // Review R2-P1-2: a deposit applied to a departed folio lowers what it owes; its balance request follows.
+  await syncDepartedFolios(tx, deps, [input.toFolioId], {
+    reason: 'Deposit applied',
+    entryId: claim.entryId,
+    businessDate,
+  });
   return { entryId: claim.entryId, applied: money(amount, cur), postingIds, replayed: false };
 }
 
@@ -994,14 +991,15 @@ export async function importOpeningDeposits(
         .execute()
     ).map((a) => a.system_key),
   );
-  input.items.forEach((it, i) => {
+  let legacyCount = 0;
+  for (const [i, it] of input.items.entries()) {
     if (seen.has(it.bookingId)) {
       rejected.push({
         row: i + 1,
         bookingId: it.bookingId,
         reason: 'Duplicate booking in this file — only the first row was imported.',
       });
-      return;
+      continue;
     }
     if (it.amountMinor <= 0) {
       rejected.push({
@@ -1010,7 +1008,41 @@ export async function importOpeningDeposits(
         reason:
           'A held deposit must be positive. Check the source system for refunds or overdrafts on this booking.',
       });
-      return;
+      continue;
+    }
+    // Review R2-P1-3: a deposit account exists only for a booking its owning module confirms belongs to this
+    // property (and legal entity), or — explicitly flagged — for a booking not migrated yet (frozen for new money).
+    const booking = await deps.ports.bookings.describeBooking(tx, it.bookingId);
+    if (booking && booking.propertyId !== input.propertyId) {
+      rejected.push({
+        row: i + 1,
+        bookingId: it.bookingId,
+        reason:
+          'This booking belongs to another property in Portico. Import its deposit at the property that owns the booking.',
+      });
+      continue;
+    }
+    if (!booking && !it.legacyNotMigrated) {
+      rejected.push({
+        row: i + 1,
+        bookingId: it.bookingId,
+        reason:
+          'Portico has no booking with this id. Import the bookings first, or mark the row legacyNotMigrated to carry the deposit as a legacy balance (no new money is taken for it until the booking is migrated).',
+      });
+      continue;
+    }
+    const held = await db(tx)
+      .selectFrom('finance.deposit_accounts')
+      .select(['property_id', 'legal_entity_id'])
+      .where('booking_id', '=', it.bookingId)
+      .executeTakeFirst();
+    if (held && (held.property_id !== input.propertyId || held.legal_entity_id !== property.legalEntityId)) {
+      rejected.push({
+        row: i + 1,
+        bookingId: it.bookingId,
+        reason: "This booking's deposits are already held at another property or hotel company.",
+      });
+      continue;
     }
     const taxes: DeclaredTax[] = (it.declaredTaxes ?? [])
       .filter((t) => t.amountMinor > 0)
@@ -1029,7 +1061,7 @@ export async function importOpeningDeposits(
         bookingId: it.bookingId,
         reason: `Declared tax ${unknown.map((t) => `"${t.accountKey}"`).join(', ')} is not a tax account in the chart. Map it to an existing tax account (e.g. tgst) and import the row again.`,
       });
-      return;
+      continue;
     }
     if (taxes.reduce((s, t) => s + t.amountMinor, 0) >= it.amountMinor) {
       rejected.push({
@@ -1037,11 +1069,12 @@ export async function importOpeningDeposits(
         bookingId: it.bookingId,
         reason: 'The tax declared on this deposit is not smaller than the deposit. Check the source system.',
       });
-      return;
+      continue;
     }
     seen.add(it.bookingId);
+    if (!booking) legacyCount++;
     accepted.push({ bookingId: it.bookingId, amountMinor: it.amountMinor, taxes });
-  });
+  }
   const total = accepted.reduce((s, a) => s + a.amountMinor, 0);
   const difference = input.providedClosingMinor - total;
   const importId = newId(tx.now.getTime());
@@ -1161,6 +1194,7 @@ export async function importOpeningDeposits(
     status,
     currency: input.currency,
     importedCount: accepted.length,
+    ...(legacyCount ? { legacyCount } : {}),
     importedTotalMinor: total,
     providedClosingMinor: input.providedClosingMinor,
     differenceMinor: difference,

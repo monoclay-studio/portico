@@ -1,4 +1,4 @@
-import { type Selectable, sql, type TxContext, withSavepoint } from '@portico/db';
+import { type Selectable, sql, type TxContext } from '@portico/db';
 import {
   BusinessRuleError,
   ConflictError,
@@ -22,6 +22,7 @@ import { proportional, splitComponents } from '../domain/split';
 import { fromRatesTaxLine, normalizeLedgerKey, type PostingTax } from '../domain/tax-map';
 import type { ChargeGroup, PaymentMethodKind, RuleCap, RuleSelector } from '../domain/types';
 import type { AllowanceInstancesTable, ChargeCodesTable } from '../tables';
+import { syncDepartedFolios } from './departed-folios';
 import { assertSameProperty, defaultFolio, prepareDestination, reopenInPlace } from './folios';
 import { chargeCodeByCode, chargeGroupMap } from './setup';
 import {
@@ -741,65 +742,14 @@ export async function postCharge(
 
   const folioIds = [...new Set(postings.map((p) => p.folioId))];
   if (departure) {
-    for (const folioId of folioIds) {
-      const share = postings.filter((p) => p.folioId === folioId).reduce((s, p) => s + p.amountMinor, 0);
-      const f = await loadFolio(tx, folioId);
-      // Review P1-3: ask the guest for what the folio actually owes after this charge — never the full charge on a
-      // folio still in credit (e.g. an applied deposit larger than the stay's charges).
-      const owed = await db(tx)
-        .selectFrom('finance.postings')
-        .select(sql<string>`coalesce(sum(amount_minor), 0)`.as('b'))
-        .where('folio_id', '=', folioId)
-        .executeTakeFirstOrThrow();
-      const due = Math.max(0, Math.min(share, Number(owed.b)));
-      // A refused or failed collection request never loses the late charge (ADR-0015 §6): it is listed instead.
-      const collection: { status: string; detail?: string } =
-        due > 0
-          ? await withSavepoint(tx, 'finance_collection', () =>
-              deps.ports.payments.requestCollection(tx, {
-                propertyId: input.propertyId,
-                folioId,
-                amount: money(due, f.currency),
-                reason: 'late_charge',
-                ref: { type: 'journal_entry', id: claim.entryId },
-                idempotencyKey: `${idempotencyKey}:collect:${folioId}`,
-                payerName: f.payer_name,
-                ...(f.payer_type !== 'house'
-                  ? { payer: { type: f.payer_type, ...(f.payer_id ? { id: f.payer_id } : {}) } }
-                  : {}),
-              }),
-            ).catch((err: unknown) => ({
-              status: 'failed',
-              detail:
-                err instanceof DomainError
-                  ? err.message
-                  : 'Payments could not record the collection request. Arrange collection manually.',
-            }))
-          : share > 0
-            ? {
-                status: 'covered_by_credit',
-                detail: 'The folio is still in credit after this charge; nothing to collect.',
-              }
-            : { status: 'not_possible', detail: 'Nothing to collect' };
-      await raiseException(tx, {
-        propertyId: input.propertyId,
-        kind: 'late_charge',
-        severity: due > 0 ? 'urgent' : 'routine',
-        ref: { type: 'folio', id: folioId },
-        message:
-          due > 0
-            ? `Charge "${input.description}" (${share} ${currency} minor units) was posted after departure to ${f.payer_name}'s folio, which now owes ${due} ${f.currency} minor units. Collect payment from the guest or the card on file.`
-            : `Charge "${input.description}" (${share} ${currency} minor units) was posted after departure to ${f.payer_name}'s folio; the folio is still in credit, so nothing is collected. Review the folio before refunding the credit.`,
-        details: {
-          entryId: claim.entryId,
-          departedOn: departure.departedOn,
-          collection: collection.status,
-          amountRequested: due,
-          ...(collection.detail ? { collectionDetail: collection.detail } : {}),
-        },
-        businessDate,
-      });
-    }
+    // Review P1-3 / R2-P1-2: the folio's one balance request follows what the folio owes after this charge (never the
+    // full charge on a folio in credit, never a second request beside an open one) — and the exception says what was
+    // actually requested.
+    await syncDepartedFolios(tx, deps, folioIds, {
+      reason: `Late charge "${input.description}"`,
+      entryId: claim.entryId,
+      businessDate,
+    });
   }
 
   const allowanceTotal = blocks.reduce((s, b) => s + b.comps.reduce((x, y) => x + y, 0), 0);
@@ -1013,6 +963,12 @@ export async function recordPayment(
       businessDate,
     },
   });
+  // Review R2-P1-2: a payment on a departed folio brings its open balance request down with it.
+  await syncDepartedFolios(tx, deps, [folio.id], {
+    reason: `Payment received (${input.method})`,
+    entryId: claim.entryId,
+    businessDate,
+  });
   return {
     entryId: claim.entryId,
     postingIds: [postingId as string],
@@ -1168,6 +1124,12 @@ export async function recordRefund(
       refundRef: input.refundRef,
       businessDate,
     },
+  });
+  // Review R2-P1-2: money paid back makes a departed folio owe again; its balance request follows.
+  await syncDepartedFolios(tx, deps, [folio.id], {
+    reason: 'Refund',
+    entryId: claim.entryId,
+    businessDate,
   });
   return {
     entryId: claim.entryId,
@@ -1508,6 +1470,12 @@ export async function transferPostings(
       currency,
     },
   });
+  // Review R2-P1-2: a transfer in or out changes what both folios owe; their balance requests follow.
+  await syncDepartedFolios(tx, deps, [from.id, to.id], {
+    reason: `Transfer (${input.reason})`,
+    entryId: claim.entryId,
+    businessDate,
+  });
   return { entryId: claim.entryId, postingIds, replayed: false };
 }
 
@@ -1752,6 +1720,12 @@ export async function adjustPosting(
       reasonCode: input.reasonCode,
       relatesToBusinessDate: p.business_date,
     },
+  });
+  // Review R2-P1-2: a corrected charge changes what a departed folio owes; its balance request follows.
+  await syncDepartedFolios(tx, deps, [p.folio_id], {
+    reason: `Correction (${input.reasonCode}): ${input.note}`,
+    entryId: claim.entryId,
+    businessDate,
   });
   return { entryId: claim.entryId, postingIds, replayed: false };
 }
@@ -2005,6 +1979,12 @@ export async function reverseEntry(
       reasonCode: input.reasonCode,
       relatesToBusinessDate: entry.business_date,
     },
+  });
+  // Review R2-P1-2: a reversed charge (e.g. posted to the wrong room) must not stay requested from the guest.
+  await syncDepartedFolios(tx, deps, [...new Set(postings.map((x) => x.folio_id))], {
+    reason: `Reversal (${input.reasonCode}): ${input.note}`,
+    entryId: claim.entryId,
+    businessDate,
   });
   return { entryId: claim.entryId, postingIds, replayed: false };
 }

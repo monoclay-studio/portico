@@ -17,6 +17,8 @@ describe('S18: imported deposits vs the previous system closing balance', () => 
   it('reports the difference and the rejected rows; never plugs the gap', async () => {
     const org = await setupOrg(h);
     const [b1, b2, b3] = [newId(), newId(), newId()];
+    // S18 migration order: the bookings are migrated into reservations first (review R2-P1-3).
+    for (const b of [b1, b2, b3]) h.bookings.set(b, { propertyId: org.propertyId, status: 'confirmed' });
     const input = {
       propertyId: org.propertyId,
       importRef: `opera-deposits-2026-11-06-${org.tenantId.slice(-6)}`,
@@ -74,13 +76,15 @@ describe('S18: imported deposits vs the previous system closing balance', () => 
 
   it('a matching import is reconciled', async () => {
     const org = await setupOrg(h);
+    const booking = newId();
+    h.bookings.set(booking, { propertyId: org.propertyId, status: 'confirmed' });
     const report = await org.run((tx) =>
       h.finance.importOpeningDeposits(tx, {
         propertyId: org.propertyId,
         importRef: `csv-${org.tenantId}`,
         currency: 'USD',
         providedClosingMinor: 5000,
-        items: [{ bookingId: newId(), amountMinor: 5000 }],
+        items: [{ bookingId: booking, amountMinor: 5000 }],
         idempotencyKey: 'k',
       }),
     );
@@ -108,6 +112,7 @@ describe('S18: imported deposits vs the previous system closing balance', () => 
   it('migrated deposits keep the tax the previous system declared, so prepaid stays are not taxed twice (F-09)', async () => {
     const org = await setupOrg(h);
     const [b1, b2] = [newId(), newId()];
+    for (const b of [b1, b2]) h.bookings.set(b, { propertyId: org.propertyId, status: 'confirmed' });
     const report = await org.run((tx) =>
       h.finance.importOpeningDeposits(tx, {
         propertyId: org.propertyId,

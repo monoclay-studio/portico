@@ -1,32 +1,42 @@
 /**
- * Finance's `PaymentsPort.requestCollection` (late charges after departure), implemented by payments in the owning
- * direction: finance calls it inside its posting transaction (already in a savepoint) and payments records INTENT
- * only — a payment request (link) for the folio, created `open`; the provider link is made after commit. Nothing is
- * charged here. A business refusal (no payment account, a collection already in flight on the folio, scope) is
- * returned as `not_possible` with the reason, so the late charge is still posted and listed for staff.
+ * Finance's `PaymentsPort.syncBalanceRequest` (charges after departure), implemented by payments in the owning
+ * direction. Finance calls it inside its posting transaction (under the folio lock, in a savepoint) after EVERY change
+ * to a departed folio's balance; payments keeps the folio's ONE open balance request equal to what the folio owes —
+ * creating, amending, re-issuing or closing it (review R2-P1-2). Intent only: links are made after commit, nothing is
+ * charged here. A business refusal (no payment account, scope) is returned as `not_possible` with the reason and
+ * `openMinor: 0`, so the posting is kept and the exception never claims a request that does not exist.
  *
- * Gap (recorded): a merchant-initiated charge on the card on file when the agreed terms allow it (S10) needs the
+ * Gap (recorded, Q156): a merchant-initiated charge on the card on file when the agreed terms allow it (S10) needs the
  * stay's agreed terms and the card's MIT mandate; until then collection is always by payment request.
  */
 import { type TxContext, withSavepoint } from '@portico/db';
 import { DomainError, type Money } from '@portico/kernel';
 import type { PaymentsService } from './service';
 
-export interface FinanceCollectionRequest {
+export interface FinanceBalanceSync {
   propertyId: string;
   folioId: string;
-  amount: Money;
-  reason: 'late_charge';
-  ref: { type: string; id: string };
-  idempotencyKey: string;
+  outstanding: Money;
+  reason: string;
   /** The folio payer's name (finance knows it), for the payment request. */
   payerName?: string;
   /** The folio payer (finance's types: guest / company / agency), so the request is addressed to them (P3-5). */
   payer?: { type: string; id?: string };
 }
 
+export type FinanceBalanceSyncStatus =
+  | 'requested'
+  | 'amended'
+  | 'reissued'
+  | 'cancelled'
+  | 'unchanged'
+  | 'none'
+  | 'deferred'
+  | 'not_possible'
+  | 'unavailable';
+
 /** Finance's payer → payments' payer (glossary § Payer: finance `guest` = payments `guest_profile`). */
-function payerOf(input: FinanceCollectionRequest): {
+function payerOf(input: FinanceBalanceSync): {
   type: 'guest_profile' | 'company' | 'agency' | 'other';
   id?: string;
   name: string;
@@ -37,36 +47,31 @@ function payerOf(input: FinanceCollectionRequest): {
   return type !== 'other' && input.payer?.id ? { type, id: input.payer.id, name } : { type: 'other', name };
 }
 
-/** Days a late-charge payment request stays open before it expires. */
-const LATE_CHARGE_REQUEST_DAYS = 7;
-
 export function paymentsCollectionsForFinance(service: Pick<PaymentsService, 'provider'>) {
   return {
-    async requestCollection(
+    async syncBalanceRequest(
       tx: TxContext,
-      input: FinanceCollectionRequest,
-    ): Promise<{ status: 'requested' | 'not_possible' | 'unavailable'; detail?: string }> {
+      input: FinanceBalanceSync,
+    ): Promise<{
+      status: FinanceBalanceSyncStatus;
+      openMinor: number;
+      requestId?: string | null;
+      detail?: string;
+    }> {
       try {
-        const r = await withSavepoint(tx, 'payments_collection', () =>
-          service.provider.createPaymentRequest(tx, {
+        return await withSavepoint(tx, 'payments_balance_sync', () =>
+          service.provider.syncBalanceRequest(tx, {
             propertyId: input.propertyId,
+            folioId: input.folioId,
+            outstanding: { amountMinor: input.outstanding.amountMinor, currency: input.outstanding.currency },
             payer: payerOf(input),
-            amount: { amountMinor: input.amount.amountMinor, currency: input.amount.currency },
-            purpose: 'balance',
-            ref: { type: 'folio', id: input.folioId },
-            expiresAt: new Date(tx.now.getTime() + LATE_CHARGE_REQUEST_DAYS * 86_400_000),
-            idempotencyKey: input.idempotencyKey,
-            description: 'Charges posted after departure',
+            reason: input.reason,
           }),
         );
-        return {
-          status: 'requested',
-          detail: `Payment request ${r.id} created for the late charges; send the link to the guest.`,
-        };
       } catch (err) {
         if (err instanceof DomainError && err.status < 500)
-          return { status: 'not_possible', detail: err.message };
-        if (err instanceof DomainError) return { status: 'unavailable', detail: err.message };
+          return { status: 'not_possible', openMinor: 0, detail: err.message };
+        if (err instanceof DomainError) return { status: 'unavailable', openMinor: 0, detail: err.message };
         throw err;
       }
     },

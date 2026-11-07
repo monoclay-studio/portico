@@ -120,11 +120,11 @@ describe('S10: late restaurant charge after check-out', () => {
     );
     expect(h.collections.filter((c) => c.folioId === s.guestFolioId)).toEqual([
       expect.objectContaining({
-        reason: 'late_charge',
-        amount: usd(7722),
-        idempotencyKey: `pos:grill:4411:${s.stayId}:collect:${s.guestFolioId}`,
+        reason: expect.stringMatching(/^Late charge/),
+        outstanding: usd(7722),
       }),
     ]);
+    expect(h.openRequests.get(s.guestFolioId)).toBe(7722);
     // A retried POS delivery changes nothing.
     expect((await lateDinner(org, s.stayId)).replayed).toBe(true);
     const checks = await org.run((tx) =>
@@ -140,25 +140,30 @@ describe('S10: late restaurant charge after check-out', () => {
     const org = await setupOrg(h);
     const s = await checkedOutStay(org, false);
     await advanceBusinessDate(org, '2026-11-07');
-    const original = h.ports.payments.requestCollection;
+    const original = h.ports.payments.syncBalanceRequest;
     // A database error inside payments aborts the statement; without a savepoint the whole charge would be lost.
-    h.ports.payments.requestCollection = async (tx) => {
+    h.ports.payments.syncBalanceRequest = async (tx) => {
       await sql`select 1 / 0`.execute(tx.db);
-      return { status: 'requested' };
+      return { status: 'requested', openMinor: 7722 };
     };
     try {
       const res = await lateDinner(org, s.stayId);
       expect(res.folioId).toBe(s.guestFolioId);
     } finally {
-      h.ports.payments.requestCollection = original;
+      h.ports.payments.syncBalanceRequest = original;
     }
     const f = await org.run((tx) => h.finance.getFolio(tx, s.guestFolioId));
     expect(f.balance.amountMinor).toBe(7722);
     const exceptions = await org.run((tx) => h.finance.listExceptions(tx, { propertyId: org.propertyId }));
-    expect(exceptions.find((e) => e.kind === 'late_charge')?.details).toMatchObject({
-      collection: 'failed',
+    // Review R2-P1-2: a failed request is never recorded as requested, and the item stays urgent.
+    const late = exceptions.find((e) => e.kind === 'late_charge');
+    expect(late?.details).toMatchObject({
+      collection: 'not_possible',
+      amountRequested: 0,
+      owedMinor: 7722,
       collectionDetail: expect.stringMatching(/Arrange collection manually/),
     });
+    expect(late?.severity).toBe('urgent');
     await assertLedgerIntegrity(h, org);
   });
 
@@ -237,5 +242,116 @@ describe('S10: late restaurant charge after check-out', () => {
       staff,
     );
     expect(ok.replayed).toBe(false);
+  });
+});
+
+describe('R2-P1-2: the departed folio’s ONE balance request follows every change to what it owes', () => {
+  const lateCharge = (
+    org: Awaited<ReturnType<typeof setupOrg>>,
+    stayId: string,
+    minor: number,
+    what: string,
+  ) =>
+    org.run((tx) =>
+      h.finance.postCharge(tx, {
+        propertyId: org.propertyId,
+        target: { type: 'stay', id: stayId },
+        chargeCode: 'FOOD',
+        amount: usd(minor),
+        serviceDate: '2026-11-07',
+        description: what,
+        sourceRef: { type: 'pos_check', id: newId() },
+        idempotencyKey: `pos:${newId()}`,
+      }),
+    );
+  const lateItem = async (org: Awaited<ReturnType<typeof setupOrg>>, folioId: string) =>
+    (
+      await org.run((tx) => h.finance.listExceptions(tx, { propertyId: org.propertyId, status: 'open' }))
+    ).find((e) => e.kind === 'late_charge' && e.ref.id === folioId);
+
+  it('three late charges: the request tracks the full debt, the item stays urgent and states it', async () => {
+    const org = await setupOrg(h);
+    const s = await checkedOutStay(org, false);
+    for (const what of ['A', 'B', 'C']) await lateCharge(org, s.stayId, 6000, `Spa ${what}`);
+    const f = await org.run((tx) => h.finance.getFolio(tx, s.guestFolioId));
+    expect(h.openRequests.get(s.guestFolioId)).toBe(f.balance.amountMinor);
+    const item = await lateItem(org, s.guestFolioId);
+    expect(item).toMatchObject({ severity: 'urgent' });
+    expect(item?.details).toMatchObject({
+      owedMinor: f.balance.amountMinor,
+      amountRequested: f.balance.amountMinor,
+    });
+  });
+
+  it('sibling: reversing the late charge cancels its request and closes the item', async () => {
+    const org = await setupOrg(h);
+    const s = await checkedOutStay(org, false);
+    const posted = await lateCharge(org, s.stayId, 20000, 'Minibar (wrong room)');
+    expect(h.openRequests.get(s.guestFolioId)).toBeGreaterThan(0);
+    await org.run((tx) =>
+      h.finance.reverseEntry(tx, {
+        entryId: posted.entryId,
+        reasonCode: 'posting_error',
+        note: 'Charged to the wrong room',
+        idempotencyKey: `rev:${newId()}`,
+      }),
+    );
+    expect(h.openRequests.has(s.guestFolioId)).toBe(false);
+    expect(await lateItem(org, s.guestFolioId)).toBeUndefined();
+  });
+
+  it('sibling: a partial correction amends the request down; a transfer out to the company folio cancels it', async () => {
+    const org = await setupOrg(h);
+    const s = await checkedOutStay(org, false);
+    const posted = await lateCharge(org, s.stayId, 20000, 'Dinner');
+    const before = h.openRequests.get(s.guestFolioId) as number;
+    await org.run((tx) =>
+      h.finance.adjustPosting(tx, {
+        postingId: posted.postingIds[0] as string,
+        amountMinor: 5000,
+        reasonCode: 'goodwill',
+        note: 'Cold soup',
+        idempotencyKey: `adj:${newId()}`,
+      }),
+    );
+    const after = h.openRequests.get(s.guestFolioId) as number;
+    expect(after).toBeLessThan(before);
+    expect(after).toBe((await org.run((tx) => h.finance.getFolio(tx, s.guestFolioId))).balance.amountMinor);
+    const company = await org.run((tx) =>
+      h.finance.openFolio(tx, {
+        propertyId: org.propertyId,
+        owner: { type: 'stay', id: s.stayId },
+        payer: { type: 'company', name: 'Acme Travel' },
+        label: 'Company',
+      }),
+    );
+    await org.run((tx) =>
+      h.finance.transferPostings(tx, {
+        fromFolioId: s.guestFolioId,
+        toFolioId: company.folioId,
+        amountMinor: after,
+        reason: 'Company pays the dinner',
+        idempotencyKey: `tr:${newId()}`,
+      }),
+    );
+    expect(h.openRequests.has(s.guestFolioId)).toBe(false);
+  });
+
+  it('sibling: a payment on the departed folio brings the request down to what is still owed', async () => {
+    const org = await setupOrg(h);
+    const s = await checkedOutStay(org, false);
+    await lateCharge(org, s.stayId, 20000, 'Dinner');
+    const owed = (await org.run((tx) => h.finance.getFolio(tx, s.guestFolioId))).balance.amountMinor;
+    await org.run((tx) =>
+      h.finance.recordPayment(tx, {
+        folioId: s.guestFolioId,
+        amount: usd(10000),
+        paymentRef: { type: 'payment', id: newId() },
+        method: 'card',
+        provider: 'simulator',
+        idempotencyKey: `pay:${newId()}`,
+      }),
+    );
+    expect(h.openRequests.get(s.guestFolioId)).toBe(owed - 10000);
   });
 });

@@ -2,7 +2,7 @@ export * from './contracts';
 export { seedPaymentsDemo } from './demo-seed';
 export { explainDecline } from './domain/declines';
 export { PaymentsEvents } from './events';
-export { type FinanceCollectionRequest, paymentsCollectionsForFinance } from './finance-collections';
+export { type FinanceBalanceSync, paymentsCollectionsForFinance } from './finance-collections';
 export { paymentsJobs } from './jobs';
 export * from './manifest';
 export type {

@@ -37,9 +37,10 @@ export function unavailableFinancePorts(): {
       },
     },
     payments: {
-      async requestCollection() {
+      async syncBalanceRequest() {
         return {
           status: 'unavailable',
+          openMinor: 0,
           detail: 'The payments module is not connected; arrange collection manually.',
         };
       },

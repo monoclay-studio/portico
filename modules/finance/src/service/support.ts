@@ -526,9 +526,8 @@ export async function raiseException(
     values (${newId()}, ${tx.tenantId}, ${input.propertyId}, ${input.kind}, ${input.severity}, ${input.ref.type},
             ${input.ref.id}, ${input.message}, ${JSON.stringify(input.details ?? {})}, ${input.businessDate})
     on conflict (tenant_id, kind, ref_type, ref_id) where status = 'open'
-    do update set message = excluded.message, details = excluded.details, version = finance.exceptions.version + 1`.execute(
-    tx.db,
-  );
+    do update set message = excluded.message, details = excluded.details, severity = excluded.severity,
+                  version = finance.exceptions.version + 1`.execute(tx.db);
 }
 
 export function displayName(f: Pick<FolioRow, 'payer_name' | 'label'>): string {
