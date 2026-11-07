@@ -125,3 +125,20 @@ describe('MFA step-up policy', () => {
     expect(none.explainDenial('finance.posting.correct')).toBeNull(); // not granted at all → plain 403
   });
 });
+
+describe('role templates', () => {
+  it('general manager gets an explicit guest permission list without documents, health data, export or erasure', async () => {
+    const { ROLE_TEMPLATES } = await import('./role-templates');
+    const gm = ROLE_TEMPLATES.find((r) => r.key === 'general_manager');
+    expect(gm?.permissions).not.toContain('guests.*');
+    for (const k of [
+      'guests.document.read',
+      'guests.document.manage',
+      'guests.sensitive.read',
+      'guests.privacy.export',
+      'guests.privacy.erase',
+    ])
+      expect(gm?.permissions.some((p) => entryCovers(p, k))).toBe(false);
+    expect(gm?.permissions).toContain('guests.profile.update');
+  });
+});

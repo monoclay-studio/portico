@@ -14,4 +14,5 @@ export {
 export * from './manifest';
 export type * from './ports';
 export * from './routes';
+export { platformSearch } from './search';
 export type { PlatformDB } from './tables';

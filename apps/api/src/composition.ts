@@ -3,11 +3,16 @@
  * Each module contributes: a manifest (migrations + permissions), an HTTP module, event subscriptions and
  * port bindings. Keep one block per module to make parallel work merge cleanly.
  */
-import type { PorticoDatabase, TxEventSubscription } from '@portico/db';
+import {
+  CORE_JOBS,
+  type PorticoDatabase,
+  type ScheduledJob,
+  type SearchProvider,
+  type TxEventSubscription,
+} from '@portico/db';
 import type { Authenticator, HttpModule } from '@portico/http';
 import {
   fetchOidcHttp,
-  fieldCipherFromEnv,
   fieldEncryptedSecretStore,
   type IdentityPorts,
   identity,
@@ -18,9 +23,16 @@ import {
   outboxNotifier,
   unknownGeo,
 } from '@portico/identity';
-import type { ModuleManifest } from '@portico/kernel';
-import { type PlatformPorts, platform, platformHttp, platformManifest } from '@portico/platform';
+import { fieldCryptoFromEnv, type ModuleManifest } from '@portico/kernel';
+import {
+  type PlatformPorts,
+  platform,
+  platformHttp,
+  platformManifest,
+  platformSearch,
+} from '@portico/platform';
 import { createTrialForOrganization, provisioningHttp } from './provisioning';
+import { recordsHttp } from './records-routes';
 
 export const MANIFESTS: readonly ModuleManifest[] = [
   platformManifest,
@@ -32,6 +44,9 @@ export interface Composition {
   authenticator: Authenticator;
   httpModules: HttpModule[];
   subscriptions: TxEventSubscription[];
+  searchProviders: SearchProvider[];
+  /** Periodic background jobs run by apps/worker (each module contributes its own). */
+  jobs: ScheduledJob[];
   identityPorts: IdentityPorts;
   platformPorts: PlatformPorts;
 }
@@ -59,7 +74,8 @@ export function compose(database: PorticoDatabase, options: CompositionOptions =
   const platformModule = platformHttp({ database, ports: platformPorts });
 
   // ── identity ──
-  const cipher = fieldCipherFromEnv(env);
+  // Field encryption (TOTP secrets, PKCE verifiers, SSO client secrets) from the single kernel key source.
+  const { cipher } = fieldCryptoFromEnv(env);
   const appBaseUrl = env.PORTICO_APP_BASE_URL ?? 'http://localhost:5173';
   const identityPorts: IdentityPorts = {
     propertyIdsInScope: platform.propertyIdsInScope,
@@ -87,10 +103,16 @@ export function compose(database: PorticoDatabase, options: CompositionOptions =
   // ── provisioning (operator console: trials for prospects) ──
   const provisioningModule = provisioningHttp({ database, ports: identityPorts });
 
+  // ── cross-module experience: global search, summaries, record history ──
+  const searchProviders: SearchProvider[] = [platformSearch];
+  const recordsModule = recordsHttp({ database, manifests: MANIFESTS, searchProviders });
+
   return {
     authenticator: identityAuthenticator(database, identityPorts),
-    httpModules: [platformModule, identityModule, provisioningModule],
+    httpModules: [platformModule, identityModule, provisioningModule, recordsModule],
     subscriptions: [],
+    searchProviders,
+    jobs: [...CORE_JOBS],
     identityPorts,
     platformPorts,
   };
@@ -100,5 +122,3 @@ export function compose(database: PorticoDatabase, options: CompositionOptions =
 export function permissionCatalog() {
   return MANIFESTS.flatMap((m) => m.permissions);
 }
-
-export { identity };

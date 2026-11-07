@@ -6,6 +6,20 @@ export const platformManifest: ModuleManifest = {
   name: 'platform',
   schema: 'platform',
   migrationsDir: join(dirname(fileURLToPath(import.meta.url)), '..', 'migrations'),
+  recordTypes: [
+    {
+      type: 'property',
+      label: 'Property',
+      readPermission: 'platform.property.read',
+      route: '/settings/properties/:id',
+    },
+    {
+      type: 'legal_entity',
+      label: 'Legal entity',
+      readPermission: 'platform.property.read',
+      route: '/settings/legal-entities/:id',
+    },
+  ],
   permissions: [
     {
       key: 'platform.organization.manage',

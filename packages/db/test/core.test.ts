@@ -188,3 +188,51 @@ describe('outbox', () => {
     expect(note.counter).toBe(1);
   });
 });
+
+describe('scheduled jobs', () => {
+  it('runs a job once per interval even when several workers race for it', async () => {
+    const { runDueJobs } = await import('../src');
+    let runs = 0;
+    const job = {
+      name: `test.job.${Date.now()}`,
+      intervalSeconds: 3600,
+      run: async () => {
+        runs++;
+      },
+    };
+    await Promise.all([runDueJobs(t.db, [job]), runDueJobs(t.db, [job]), runDueJobs(t.db, [job])]);
+    expect(runs).toBe(1);
+    await runDueJobs(t.db, [job]);
+    expect(runs).toBe(1); // interval not elapsed
+  });
+
+  it('expires stored idempotency responses (they may contain personal data)', async () => {
+    const ctx = testContext();
+    await runIdempotent(t.db, ctx, { scope: 'POST /pii', key: 'k-exp', request: {} }, async () => ({
+      status: 201,
+      body: { name: 'Guest Name' },
+    }));
+    await sql`update core.idempotency_keys set expires_at = now() - interval '1 day' where key = 'k-exp'`.execute(
+      t.admin.kysely,
+    );
+    const { rows } = await sql<{ n: number }>`select core.purge_expired_idempotency_keys(100) as n`.execute(
+      t.db.kysely,
+    );
+    expect(rows[0]?.n).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe('idempotency is bound to the caller', () => {
+  it('never replays a stored response to a different user', async () => {
+    const owner = testContext();
+    const other = { ...testContext({ tenantId: owner.tenantId }), tenantId: owner.tenantId };
+    const run = (ctx: typeof owner) =>
+      runIdempotent(t.db, ctx, { scope: 'POST /guests', key: 'k-actor', request: { a: 1 } }, async () => ({
+        status: 201,
+        body: { secret: 'pii' },
+      }));
+    await run(owner);
+    expect((await run(owner)).replayed).toBe(true);
+    await expect(run(other)).rejects.toThrow(/different user or integration/);
+  });
+});

@@ -125,6 +125,9 @@ named from `PORTICO_TEST_DB_PREFIX` (agents: set a unique prefix so parallel run
     standalone — document each module's standalone dependencies in its spec.
 16. **Provenance is visible.** Data shown to users carries its provenance: `live`, `simulated`, `copied` (trial),
     `delayed` (stale beyond SLA), `incomplete`, `external` (received from another system, with last-sync time).
+17. **Universal record contract.** Primary records expose `status` (per family), `allowedActions` (with
+    disabled reasons), `issues`, `owner`, `links`; modules declare `recordTypes` and a `SearchProvider`
+    (domain-map § Universal record contract). This is what makes modules feel like one product.
 
 ## 5. Money, time and finance principles (non-negotiable)
 
@@ -155,6 +158,10 @@ named from `PORTICO_TEST_DB_PREFIX` (agents: set a unique prefix so parallel run
 A feature is **not** done because a screen exists. Done means: working behavior, persisted records, correct
 permissions, error handling, audit trail, tests (unit + integration), and evidence from the relevant
 operational scenarios in `docs/scenarios/`.
+
+A **module** is not complete until its competitive parity matrix and edge-case catalogue pass the gate
+(`docs/parity/README.md`, `node tools/parity-report.mjs --gate <module>`): every P0 capability and P0 edge case
+`tested`, every P1 row at least `specified` or explicitly `deferred`/`different` with a visible reason.
 
 Every capability and integration's readiness is tracked in `docs/readiness/readiness-register.md` on the
 owner's scale (operational-readiness brief §2):
@@ -199,6 +206,11 @@ No compliance badges, certifications or partner logos without evidence and permi
   Each integration test creates its own tenant via `createTestTenant()` — no shared mutable fixtures.
 
 ## 10. UX principles (for every screen)
+
+Experience architecture (one product, not modules; learning & help anchors): `docs/product/experience-architecture.md`.
+Visual direction: `docs/product/design-direction.md` (simple, minimal, calm — **power before prettiness**).
+Interaction rules: `docs/product/ux-principles.md`.
+
 
 Current state, history, outstanding issues, owner and next actions visible on every important record.
 Facts vs pending vs estimates vs suggestions vs external data are visually distinct. Failed actions never look

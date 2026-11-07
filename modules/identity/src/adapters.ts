@@ -1,11 +1,5 @@
 import { type TxContext, typed } from '@portico/db';
-import {
-  assertExternalEffectAllowed,
-  type FieldCipher,
-  localFieldCipher,
-  NotFoundError,
-  newId,
-} from '@portico/kernel';
+import { assertExternalEffectAllowed, type FieldCipher, NotFoundError, newId } from '@portico/kernel';
 import type { GeoIpResolver, Notifier, OidcHttpClient, SecretStore } from './ports';
 import type { IdentityDB } from './tables';
 
@@ -121,14 +115,3 @@ export function fetchOidcHttp(opts: { timeoutMs?: number } = {}): OidcHttpClient
 
 /** Placeholder GeoIP: knows no countries, so the new-country rule stays inert until a real source is bound. */
 export const unknownGeo: GeoIpResolver = { countryOf: () => null };
-
-/**
- * Field cipher from configuration (`PORTICO_FIELD_KEY`, base64). Development and tests fall back to a fixed local
- * key with a warning; production refuses to start without a key (KMS envelope encryption is the target, ADR-0011).
- */
-export function fieldCipherFromEnv(env: Record<string, string | undefined>): FieldCipher {
-  const key = env.PORTICO_FIELD_KEY;
-  if (key) return localFieldCipher(key, env.PORTICO_FIELD_KEY_ID ?? 'env');
-  if (env.NODE_ENV === 'production') throw new Error('PORTICO_FIELD_KEY is required in production');
-  return localFieldCipher(Buffer.from('portico-development-only-field-key').toString('base64'), 'dev');
-}
