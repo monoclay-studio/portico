@@ -19,27 +19,25 @@ export interface ChainLink {
 export class BatchChain {
   private readonly links = new Map<string, ChainLink[]>();
 
-  /** Base version to compare against the server for a mutation on `entityKey`, or a skip decision. */
+  /**
+   * Base version to compare against the server for a mutation on `entityKey`, or a skip decision. Links are
+   * followed in batch order: a link built on the current base moves the base to the version it produced, so
+   * chains of several changes (and side effects on the same record) resolve to the latest produced version.
+   * `clientBase` of a link is the EFFECTIVE base it was evaluated against.
+   */
   resolve(
     entityKey: string,
     baseVersion: number | null,
   ): { kind: 'evaluate'; base: number | null } | { kind: 'skip'; dependsOn: string } {
-    const chain = this.links.get(entityKey) ?? [];
-    // Walk the chain from the most recent link; a link with the same client base is the one this mutation
-    // was built on top of (the device did not know the server version the earlier change produced).
-    for (let i = chain.length - 1; i >= 0; i--) {
-      const link = chain[i];
-      if (!link) continue;
-      const builtOn =
-        link.clientBase === baseVersion ||
-        (link.resultVersion !== null && link.resultVersion === baseVersion);
-      if (!builtOn) continue;
-      if (link.outcome === 'applied' || link.outcome === 'pending') {
-        return { kind: 'evaluate', base: link.resultVersion ?? baseVersion };
+    let base = baseVersion;
+    for (const link of this.links.get(entityKey) ?? []) {
+      const applied = link.outcome === 'applied' || link.outcome === 'pending';
+      if (link.clientBase === base) {
+        if (!applied) return { kind: 'skip', dependsOn: link.clientMutationId };
+        base = link.resultVersion ?? base;
       }
-      return { kind: 'skip', dependsOn: link.clientMutationId };
     }
-    return { kind: 'evaluate', base: baseVersion };
+    return { kind: 'evaluate', base };
   }
 
   record(entityKey: string, link: ChainLink): void {

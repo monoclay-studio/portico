@@ -122,6 +122,9 @@ export async function startHarness(clockStart: string = START): Promise<Harness>
   const t = await createTestDatabase(sourcesFromManifests([platformManifest, operationsManifest]), {
     clock: clock as Clock,
   });
+  // Idle pool clients are terminated when the test database is dropped; that is expected during teardown.
+  t.db.pool.on('error', () => {});
+  t.admin.pool.on('error', () => {});
   const inventory = new FakeInventory();
   const ports: OperationsPorts = { platform: platformPort(), inventory };
   return {

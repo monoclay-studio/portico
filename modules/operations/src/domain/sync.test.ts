@@ -7,8 +7,11 @@ describe('offline batch chaining', () => {
     expect(chain.resolve('task:1', 3)).toEqual({ kind: 'evaluate', base: 3 });
     chain.record('task:1', { clientMutationId: 'm1', clientBase: 3, outcome: 'applied', resultVersion: 4 });
     expect(chain.resolve('task:1', 3)).toEqual({ kind: 'evaluate', base: 4 });
-    chain.record('task:1', { clientMutationId: 'm2', clientBase: 3, outcome: 'applied', resultVersion: 5 });
+    chain.record('task:1', { clientMutationId: 'm2', clientBase: 4, outcome: 'applied', resultVersion: 5 });
     expect(chain.resolve('task:1', 3)).toEqual({ kind: 'evaluate', base: 5 });
+    // A side effect on the same record (e.g. the unit moved by a task change) chains the same way.
+    chain.record('task:1', { clientMutationId: 'm3', clientBase: 5, outcome: 'applied', resultVersion: 6 });
+    expect(chain.resolve('task:1', 3)).toEqual({ kind: 'evaluate', base: 6 });
   });
 
   it('a change built on a rejected change is skipped (it assumed a state that never happened)', () => {

@@ -49,7 +49,7 @@ interface SideEffect {
   before: number;
   after: number;
 }
-type Processed = { result: SyncMutationResult; sideEffects: SideEffect[] };
+type Processed = { result: SyncMutationResult; sideEffects: SideEffect[]; effectiveBase: number | null };
 
 function entityOf(m: SyncMutation): { type: 'unit' | 'task'; id: string } | null {
   if ('unitId' in m) return { type: 'unit', id: m.unitId };
@@ -87,12 +87,14 @@ export async function applySyncBatch(
     if (entity?.type === 'task') touchedTasks.add(entity.id);
     let result: SyncMutationResult;
     let sideEffects: SideEffect[] = [];
+    let effectiveBase: number | null = baseOf(m);
     try {
       const processed = await withTenantTx(database, ctx, (tx) =>
         processMutation(d, tx, input, m, chain, key),
       );
       result = processed.result;
       sideEffects = processed.sideEffects;
+      effectiveBase = processed.effectiveBase;
     } catch (err) {
       // Unexpected failure: nothing (including the dedupe record) was committed; the device may retry as is.
       result = {
@@ -115,7 +117,7 @@ export async function applySyncBatch(
       const status = result.status === 'duplicate' ? (result.originalStatus ?? 'applied') : result.status;
       chain.record(key, {
         clientMutationId: m.clientMutationId,
-        clientBase: baseOf(m),
+        clientBase: effectiveBase,
         outcome: status,
         resultVersion: result.resultVersion,
       });
@@ -199,6 +201,7 @@ async function processMutation(
         message: `Not applied: it depends on an earlier change from this device (${resolved.dependsOn}) that was not applied. Review the current state and repeat it if still needed.`,
       }),
       sideEffects: [],
+      effectiveBase: base,
     };
   }
   const effectiveBase = resolved.base;
@@ -300,11 +303,11 @@ async function processMutation(
     .set({
       outcome: result.status as Outcome,
       result_version: result.resultVersion,
-      result: JSON.stringify({ ...result, _sideEffects: sideEffects }),
+      result: JSON.stringify({ ...result, _sideEffects: sideEffects, _effectiveBase: effectiveBase }),
     })
     .where('client_mutation_id', '=', m.clientMutationId)
     .execute();
-  return { result, sideEffects };
+  return { result, sideEffects, effectiveBase };
 }
 
 function duplicateOf(
@@ -322,9 +325,13 @@ function duplicateOf(
           'This client mutation id was already used for a different change. The device must generate a new id per change.',
       }),
       sideEffects: [],
+      effectiveBase: null,
     };
   }
-  const { _sideEffects, ...stored } = row.result as SyncMutationResult & { _sideEffects?: SideEffect[] };
+  const { _sideEffects, _effectiveBase, ...stored } = row.result as SyncMutationResult & {
+    _sideEffects?: SideEffect[];
+    _effectiveBase?: number | null;
+  };
   return {
     result: {
       ...stored,
@@ -332,6 +339,7 @@ function duplicateOf(
       originalStatus: stored.status as Exclude<SyncMutationResult['status'], 'duplicate'>,
     },
     sideEffects: _sideEffects ?? [],
+    effectiveBase: _effectiveBase ?? stored.baseVersion,
   };
 }
 
