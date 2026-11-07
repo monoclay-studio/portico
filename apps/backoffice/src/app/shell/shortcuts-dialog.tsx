@@ -1,46 +1,38 @@
-import { Dialog, isApplePlatform, Kbd } from '@portico/ui';
+import { Dialog, Kbd } from '@portico/ui';
 import { useTranslation } from 'react-i18next';
+import { SHORTCUTS, type ShortcutDef } from '../shortcuts';
 
+/** The ? overlay renders the one shortcut registry, grouped. */
 export function ShortcutsDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
   const { t } = useTranslation();
-  const mod = isApplePlatform() ? '⌘' : 'Ctrl';
-  const rows: Array<[string[], string]> = [
-    [[mod, 'K'], t('shortcuts.palette')],
-    [['/'], t('shortcuts.search')],
-    [['?'], t('shortcuts.help')],
-    [['G', 'A'], t('shortcuts.goArrivals')],
-    [['G', 'H'], t('shortcuts.goHousekeeping')],
-    [['G', 'T'], t('shortcuts.goTimeline')],
-    [['G', 'U'], t('shortcuts.goUsers')],
-    [['G', 'P'], t('shortcuts.switchProperty')],
-    [['↑', '↓', '←', '→', 'Enter'], t('shortcuts.tableNav')],
-    [['Esc'], t('shortcuts.closeDialog')],
-  ];
+  const groups: ShortcutDef['group'][] = ['global', 'goTo', 'record', 'lists'];
   return (
-    <Dialog open={open} onOpenChange={onOpenChange} title={t('shortcuts.title')} description={t('shortcuts.description')}>
-      <table className="w-full text-sm">
-        <caption className="pt-sr-only">{t('shortcuts.title')}</caption>
-        <thead className="pt-sr-only">
-          <tr>
-            <th scope="col">Keys</th>
-            <th scope="col">Action</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map(([keys, label]) => (
-            <tr key={label} className="border-b border-line last:border-b-0">
-              <td className="py-2 pe-4 whitespace-nowrap">
-                <span className="inline-flex gap-1">
-                  {keys.map((k) => (
-                    <Kbd key={k}>{k}</Kbd>
-                  ))}
-                </span>
-              </td>
-              <td className="py-2">{label}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+    <Dialog open={open} onOpenChange={onOpenChange} size="lg" title={t('shortcuts.title')} description={t('shortcuts.description')}>
+      <div className="grid gap-6 sm:grid-cols-2">
+        {groups.map((g) => (
+          <section key={g} aria-labelledby={`sc-${g}`}>
+            <h3 id={`sc-${g}`} className="mb-1 text-sm font-semibold">
+              {t(`shortcuts.groups.${g}`)}
+            </h3>
+            <table className="w-full text-sm">
+              <tbody>
+                {SHORTCUTS.filter((s) => s.group === g).map((s) => (
+                  <tr key={s.id} className="border-b border-line last:border-b-0" data-shortcut={s.id}>
+                    <td className="py-1.5 pe-3">{t(s.labelKey)}</td>
+                    <td className="py-1.5 text-end whitespace-nowrap">
+                      <span className="inline-flex gap-1">
+                        {s.display.map((k) => (
+                          <Kbd key={k}>{k}</Kbd>
+                        ))}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </section>
+        ))}
+      </div>
     </Dialog>
   );
 }

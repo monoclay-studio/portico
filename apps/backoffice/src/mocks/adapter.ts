@@ -22,9 +22,17 @@ import {
   type PropertySimulation,
   previewExtension,
   type SimProperty,
+  type SimStayDetail,
+  type SimToday,
   SimulatedProblem,
+  type SimUnitDetail,
+  type SimWorkItem,
   simulateProperty,
+  stayDetail,
   timelineFor,
+  todayFor,
+  unitDetail,
+  workItemsFor,
 } from './maldives';
 
 export interface WorkspaceDataSource {
@@ -34,6 +42,10 @@ export interface WorkspaceDataSource {
   timeline(p: SimProperty, from: LocalDate, days: number): Promise<Sourced<TimelineView>>;
   previewExtension(p: SimProperty, stayId: string, nights: number): Promise<Sourced<StayChangePreview>>;
   commitExtension(p: SimProperty, previewToken: string, stayId: string, nights: number): Promise<Sourced<{ stayId: string; departure: LocalDate }>>;
+  stay(p: SimProperty, stayId: string): Promise<Sourced<SimStayDetail | null>>;
+  unit(p: SimProperty, unitId: string): Promise<Sourced<SimUnitDetail | null>>;
+  myWork(p: SimProperty): Promise<Sourced<SimWorkItem[]>>;
+  today(p: SimProperty): Promise<Sourced<SimToday>>;
 }
 
 const SOURCE = 'Simulator — module not yet connected (wave 1)';
@@ -61,6 +73,10 @@ export function createSimulatedSource(opts: { latencyMs?: number; now?: () => Da
     housekeeping: (p) => wrap(housekeepingRow.array().parse(housekeepingFor(sim(p)))),
     timeline: (p, from, days) => wrap(timelineView.parse(timelineFor(sim(p), from, days))),
     previewExtension: (p, stayId, nights) => wrap(stayChangePreview.parse(previewExtension(sim(p), stayId, nights, now()))),
+    stay: (p, id) => wrap(stayDetail(sim(p), id)),
+    unit: (p, id) => wrap(unitDetail(sim(p), id)),
+    myWork: (p) => wrap(workItemsFor(sim(p))),
+    today: (p) => wrap(todayFor(sim(p))),
     async commitExtension(p, _token, stayId, nights) {
       try {
         const s = commitExtension(sim(p), stayId, nights);
@@ -77,3 +93,4 @@ export function createSimulatedSource(opts: { latencyMs?: number; now?: () => Da
 }
 
 export { SimulatedProblem };
+export type { SimStayDetail, SimToday, SimUnitDetail, SimWorkItem };

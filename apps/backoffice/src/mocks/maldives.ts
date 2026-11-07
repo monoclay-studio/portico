@@ -262,7 +262,9 @@ export function simulateProperty(property: SimProperty, now: Date = new Date()):
         holds.push({ id: `hold-${u.id}-${from}`, unitId: u.id, kind: 'hold', from, to, label: `Option ${code(r).slice(0, 5)}`, flags: [] });
         continue;
       }
-      const status: SimStay['status'] = to <= bd ? 'departed' : from < bd ? 'in_house' : 'expected';
+      // Departing today: about a third have not checked out yet (late check-out / seaplane later today).
+      const status: SimStay['status'] =
+        to < bd || (to === bd && r.chance(0.65)) ? 'departed' : from < bd ? 'in_house' : 'expected';
       const adults = Math.min(u.maxAdults, r.chance(0.8) ? 2 : r.int(1, u.maxAdults));
       const childrenAges = u.maxAdults >= 3 && r.chance(0.25) ? [r.int(2, 12)] : [];
       const guestName = GUESTS[guestIdx++ % GUESTS.length] as string;
@@ -607,7 +609,7 @@ export function previewExtension(sim: PropertySimulation, stayId: string, extraN
       ...(assignedBusy ? { attention: 'danger' as const } : free - 1 <= 0 ? { attention: 'warning' as const } : {}),
     };
   });
-  const unitConflict = availability.some((a) => a.attention === 'danger');
+  const unitConflict = availability.some((a) => 'attention' in a && a.attention === 'danger');
   const paid = s.depositMinor;
   return {
     token: `pv-${s.id}-${extraNights}`,
@@ -681,4 +683,211 @@ export function commitExtension(sim: PropertySimulation, stayId: string, extraNi
   }
   s.to = newTo;
   return s;
+}
+
+// ───────────────────────── record views (universal record anatomy, simulated) ─────────────────────────
+
+export interface SimStayDetail {
+  stayId: string;
+  bookingCode: string;
+  guestName: string;
+  unitId: string | null;
+  unitName: string | null;
+  unitTypeName: string;
+  from: LocalDate;
+  to: LocalDate;
+  status: ArrivalRow['stayStatus'];
+  adults: number;
+  childrenAges: number[];
+  vip: boolean;
+  nightlyRate: Money;
+  arrival: ArrivalRow | null;
+  history: Array<{ at: string; action: string; actor: { kind: string; label: string }; reason: string | null }>;
+}
+
+export function stayDetail(sim: PropertySimulation, stayId: string): SimStayDetail | null {
+  const s = sim.stays.find((x) => x.id === stayId);
+  if (!s) return null;
+  const unit = sim.units.find((u) => u.id === s.unitId) ?? null;
+  const arrival = arrivalsFor(sim).find((a) => a.stayId === stayId) ?? null;
+  const tz = sim.property.timezone;
+  const booked = addDays(s.from, -30 - (s.bookingCode.charCodeAt(0) % 40));
+  const history = [
+    { at: at(sim, booked, '09:14'), action: 'reservations.booking.confirm', actor: { kind: 'user', label: 'Reservations agent' }, reason: null },
+    { at: at(sim, addDays(booked, 1), '11:02'), action: 'payments.paymentRequest.create', actor: { kind: 'user', label: 'Reservations agent' }, reason: 'Deposit 30% per agreed terms' },
+    { at: at(sim, addDays(s.from, -3), '16:40'), action: 'reservations.stay.arrivalDetails.update', actor: { kind: 'system', label: 'Pre-arrival form' }, reason: null },
+    ...(unit ? [{ at: at(sim, addDays(s.from, -1), '18:05'), action: 'inventory.assignment.create', actor: { kind: 'user', label: 'Aishath (front desk)' }, reason: null }] : []),
+    ...(s.status === 'in_house' ? [{ at: at(sim, s.from, '11:20'), action: 'reservations.stay.checkIn', actor: { kind: 'user', label: 'Ahmed (front desk)' }, reason: null }] : []),
+  ];
+  void tz;
+  return {
+    stayId: s.id,
+    bookingCode: s.bookingCode,
+    guestName: s.guestName,
+    unitId: unit?.id ?? null,
+    unitName: unit?.number ?? null,
+    unitTypeName: s.unitTypeName,
+    from: s.from,
+    to: s.to,
+    status: s.status,
+    adults: s.adults,
+    childrenAges: s.childrenAges,
+    vip: s.vip,
+    nightlyRate: money(s.rate, sim.property.baseCurrency),
+    arrival,
+    history,
+  };
+}
+
+export interface SimUnitDetail {
+  row: HousekeepingRow;
+  stays: TimelineItemView[];
+}
+
+export function unitDetail(sim: PropertySimulation, unitId: string): SimUnitDetail | null {
+  const row = housekeepingFor(sim).find((r) => r.unitId === unitId);
+  if (!row) return null;
+  const bd = sim.property.businessDate;
+  const stays = timelineFor(sim, addDays(bd, -3), 21).items.filter((i) => i.unitId === unitId);
+  return { row, stays };
+}
+
+/** Records needing someone, across modules (My work inbox) — simulated until operations/integration merge. */
+export interface SimWorkItem {
+  id: string;
+  kind: 'exception' | 'task' | 'approval' | 'handover';
+  module: string;
+  title: string;
+  detail: string;
+  priority: 'urgent' | 'high' | 'normal' | 'low';
+  department: string;
+  assignee: string | null;
+  dueAt: string | null;
+  record: { type: string; id: string; title: string } | null;
+}
+
+export function workItemsFor(sim: PropertySimulation): SimWorkItem[] {
+  const bd = sim.property.businessDate;
+  const items: SimWorkItem[] = [];
+  for (const a of arrivalsFor(sim)) {
+    const b = a.readiness.blockingReason;
+    if (b && a.stayStatus === 'expected') {
+      items.push({
+        id: `ex-${a.stayId}`,
+        kind: 'exception',
+        module: b.key === 'unit_condition' ? 'Housekeeping' : b.key === 'guarantee' ? 'Payments' : 'Front desk',
+        title: `${a.guestName}: ${b.message.split(' — ')[0]}`,
+        detail: b.message,
+        priority: b.key === 'unit_condition' || b.key === 'guarantee' ? 'urgent' : 'high',
+        department: b.owner ?? 'Front desk',
+        assignee: a.owner,
+        dueAt: a.eta,
+        record: { type: 'stay', id: a.stayId, title: `${a.guestName} · ${a.bookingCode}` },
+      });
+    }
+  }
+  for (const r of housekeepingFor(sim).filter((x) => x.topPriority === 'urgent' || x.topPriority === 'high').slice(0, 6)) {
+    items.push({
+      id: `task-${r.unitId}`,
+      kind: 'task',
+      module: 'Housekeeping',
+      title: `${r.condition === 'failed_inspection' ? 'Re-clean' : 'Clean & inspect'} ${r.unitNumber}`,
+      detail: r.priorityReasons.join(' · '),
+      priority: r.topPriority ?? 'normal',
+      department: 'Housekeeping',
+      assignee: r.assigneeName,
+      dueAt: r.expectedReadyAt,
+      record: { type: 'unit', id: r.unitId, title: r.unitNumber },
+    });
+  }
+  items.push(
+    {
+      id: 'appr-rate',
+      kind: 'approval',
+      module: 'Rates',
+      title: 'Approve rate override: Water Villa, 3 nights at −15%',
+      detail: 'Requested by Reservations agent for a returning honeymoon couple',
+      priority: 'normal',
+      department: 'Management',
+      assignee: null,
+      dueAt: at(sim, bd, '17:00'),
+      record: null,
+    },
+    {
+      id: 'handover-night',
+      kind: 'handover',
+      module: 'Front desk',
+      title: 'Night shift handover: 2 items to acknowledge',
+      detail: 'Late arrival via speedboat after 22:00; minibar charge disputed in Villa 118',
+      priority: 'normal',
+      department: 'Front desk',
+      assignee: null,
+      dueAt: at(sim, bd, '08:00'),
+      record: null,
+    },
+  );
+  const rank = { urgent: 0, high: 1, normal: 2, low: 3 } as const;
+  return items.sort((a, b) => rank[a.priority] - rank[b.priority] || (a.dueAt ?? '').localeCompare(b.dueAt ?? ''));
+}
+
+/** "Today" overview figures (all derived from the same simulation as the boards). */
+export interface SimToday {
+  businessDate: LocalDate;
+  occupancy: { occupied: number; sellable: number; outOfOrder: number; lastWeek: { occupied: number; sellable: number } };
+  arrivals: { total: number; ready: number; checkedIn: number; blocked: number; attention: number; lastWeek: number };
+  departures: { total: number; checkedOut: number };
+  inHouse: { units: number; guests: number };
+  exceptions: { open: number; urgent: number; yesterday: number };
+  pendingVerification: { count: number; amount: Money };
+  forecast: Array<{ unitTypeName: string; nights: Array<{ date: LocalDate; occupied: number; sellable: number }> }>;
+}
+
+function occupiedOn(sim: PropertySimulation, date: LocalDate, typeName?: string) {
+  const units = sim.units.filter((u) => !typeName || u.typeName === typeName);
+  const ids = new Set(units.map((u) => u.id));
+  const ooo = sim.blocks.filter((b) => ids.has(b.unitId) && b.from <= date && date < b.to).length;
+  const occupied = sim.stays.filter((s) => s.unitId && ids.has(s.unitId) && s.from <= date && date < s.to).length;
+  return { occupied, sellable: units.length - ooo, outOfOrder: ooo };
+}
+
+export function todayFor(sim: PropertySimulation): SimToday {
+  const bd = sim.property.businessDate;
+  const arrivals = arrivalsFor(sim);
+  const departing = sim.stays.filter((s) => s.to === bd);
+  const inHouse = sim.stays.filter((s) => s.from <= bd && bd < s.to && (s.status === 'in_house' || s.from === bd));
+  const pending = arrivals.filter((a) => a.paymentStatus === 'pending_verification');
+  const work = workItemsFor(sim).filter((w) => w.kind === 'exception');
+  const tonight = occupiedOn(sim, bd);
+  const lw = occupiedOn(sim, addDays(bd, -7));
+  const types = [...new Set(sim.units.map((u) => u.typeName))];
+  return {
+    businessDate: bd,
+    occupancy: { ...tonight, lastWeek: { occupied: lw.occupied, sellable: lw.sellable } },
+    arrivals: {
+      total: arrivals.length,
+      ready: arrivals.filter((a) => a.readiness.ready && a.stayStatus === 'expected').length,
+      checkedIn: arrivals.filter((a) => a.stayStatus === 'in_house').length,
+      blocked: arrivals.filter((a) => !a.readiness.ready).length,
+      attention: arrivals.filter((a) => a.readiness.ready && a.stayStatus === 'expected' && a.readiness.checks.some((c) => c.status === 'attention')).length,
+      lastWeek: sim.stays.filter((s) => s.from === addDays(bd, -7)).length,
+    },
+    departures: { total: departing.length, checkedOut: departing.filter((_, i) => i % 3 !== 2).length },
+    inHouse: { units: inHouse.length, guests: inHouse.reduce((n, s) => n + s.adults + s.childrenAges.length, 0) },
+    exceptions: { open: work.length + 2, urgent: work.filter((w) => w.priority === 'urgent').length, yesterday: work.length + 4 },
+    pendingVerification: {
+      count: pending.length + 1,
+      amount: money(
+        pending.reduce((n, a) => n + Math.round(a.balance.amountMinor * 0.3), 0) + 48_000,
+        sim.property.baseCurrency,
+      ),
+    },
+    forecast: types.map((t) => ({
+      unitTypeName: t,
+      nights: Array.from({ length: 14 }, (_, i) => {
+        const date = addDays(bd, i);
+        const o = occupiedOn(sim, date, t);
+        return { date, occupied: o.occupied, sellable: o.sellable };
+      }),
+    })),
+  };
 }

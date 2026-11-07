@@ -36,6 +36,9 @@ export interface TimelineProps {
   isWeekend?: (date: LocalDate) => boolean;
   /** Labels for stay statuses/blocks used in announcements. */
   describeItem?: (item: TimelineItem) => string;
+  helpKey?: string;
+  /** Highlight one item (e.g. opened from a link). */
+  highlightId?: string | undefined;
 }
 
 const LABEL_WIDTH = 168;
@@ -83,6 +86,8 @@ export function Timeline({
   maxHeight = '70vh',
   isWeekend,
   describeItem,
+  helpKey,
+  highlightId,
 }: TimelineProps) {
   const { strings, locale, dir, density } = useUi();
   const s = strings.timeline;
@@ -203,7 +208,7 @@ export function Timeline({
   });
 
   return (
-    <div className="flex min-w-0 flex-col gap-2">
+    <div className="flex min-w-0 flex-col gap-2" data-help-key={helpKey}>
       {onRangeChange && (
         <div className="flex items-center gap-2">
           <Button
@@ -378,6 +383,7 @@ export function Timeline({
                           p.clippedEnd ? '' : 'rounded-e-md',
                           p.clippedStart && p.clippedEnd && 'rounded-none',
                           p.item.alert && 'ring-2 ring-danger-solid',
+                          p.item.id === highlightId && 'ring-2 ring-focus ring-offset-1',
                         )}
                         style={{
                           insetInlineStart:

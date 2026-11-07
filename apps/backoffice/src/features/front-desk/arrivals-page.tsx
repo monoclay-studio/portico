@@ -13,7 +13,6 @@ import {
   useUi,
 } from '@portico/ui';
 import { useQuery } from '@tanstack/react-query';
-import { useNavigate, useSearch } from '@tanstack/react-router';
 import { CircleCheck, CircleX, ConciergeBell, DoorClosed, Star, Timer } from 'lucide-react';
 import { type ReactNode, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -25,8 +24,10 @@ import type { ArrivalRow } from '../../mocks/contracts';
 import { PageHeader } from '../common/page-header';
 import { toSimProperty } from '../common/sim-property';
 import { SimulatedNote } from '../common/simulated-note';
-import { useSavedViews } from '../common/use-saved-views';
-import { ArrivalDrawer } from './arrival-drawer';
+import { builtInView, useSavedViews } from '../common/use-saved-views';
+import { learning } from '../../learning/progress';
+import { RecordLink } from '../../records/entity-link';
+import { useRecordNav } from '../../records/use-record-nav';
 import { EtaCell } from './eta';
 import { ReadinessCell } from './readiness';
 
@@ -52,8 +53,7 @@ export function ArrivalsPage() {
   const { t, i18n } = useTranslation();
   const { strings } = useUi();
   const { property, me } = useApp();
-  const search = useSearch({ from: '/app/front-desk/arrivals' });
-  const navigate = useNavigate({ from: '/front-desk/arrivals' });
+  const nav = useRecordNav();
   const phone = useMediaQuery(PHONE_QUERY);
   const query = useQuery({
     queryKey: ['sim', property?.id, property?.businessDate, 'arrivals'],
@@ -65,20 +65,10 @@ export function ArrivalsPage() {
 
   const builtIn = useMemo<SavedView[]>(
     () => [
-      { id: 'all', name: t('arrivals.viewAll'), builtIn: true, state: { sort: { columnId: 'eta', direction: 'asc' }, filters: {}, search: '', hidden: [] } },
-      {
-        id: 'blocked',
-        name: t('arrivals.viewBlocked'),
-        builtIn: true,
-        state: { sort: { columnId: 'eta', direction: 'asc' }, filters: { readiness: 'blocked' }, search: '', hidden: [] },
-      },
-      { id: 'vip', name: t('arrivals.viewVip'), builtIn: true, state: { sort: { columnId: 'eta', direction: 'asc' }, filters: { vip: 'yes' }, search: '', hidden: [] } },
-      {
-        id: 'seaplane',
-        name: t('arrivals.viewSeaplane'),
-        builtIn: true,
-        state: { sort: { columnId: 'eta', direction: 'asc' }, filters: { transport: 'seaplane' }, search: '', hidden: ['nights'] },
-      },
+      builtInView('all', t('arrivals.viewAll'), { sort: { columnId: 'eta', direction: 'asc' }, filters: {}, search: '', hidden: [] }),
+      builtInView('blocked', t('arrivals.viewBlocked'), { sort: { columnId: 'eta', direction: 'asc' }, filters: { readiness: 'blocked' }, search: '', hidden: [] }),
+      builtInView('vip', t('arrivals.viewVip'), { sort: { columnId: 'eta', direction: 'asc' }, filters: { vip: 'yes' }, search: '', hidden: [] }),
+      builtInView('seaplane', t('arrivals.viewSeaplane'), { sort: { columnId: 'eta', direction: 'asc' }, filters: { transport: 'seaplane' }, search: '', hidden: ['nights'] }),
     ],
     [t],
   );
@@ -103,7 +93,7 @@ export function ArrivalsPage() {
               )}
               <span className="truncate">{r.guestName}</span>
             </span>
-            <span className="truncate font-mono text-xs text-ink-muted">
+            <span className="pt-code truncate text-xs text-ink-muted">
               {r.bookingCode}
               {r.flags.length > 0 && ` · ${r.flags.join(', ')}`}
             </span>
@@ -118,7 +108,15 @@ export function ArrivalsPage() {
         width: 'minmax(9rem, 1fr)',
         cell: (r) => (
           <span className="flex min-w-0 flex-col leading-tight">
-            {r.unitName ? <span className="font-medium">{r.unitName}</span> : <span className="font-medium text-danger-fg">{t('arrivals.unassigned')}</span>}
+            {r.unitName && r.unitId ? (
+              <span className="pt-code font-medium">
+                <RecordLink type="unit" id={r.unitId}>
+                  {r.unitName}
+                </RecordLink>
+              </span>
+            ) : (
+              <span className="font-medium text-danger-fg">{t('arrivals.unassigned')}</span>
+            )}
             <span className="truncate text-xs text-ink-muted">{r.unitTypeName}</span>
           </span>
         ),
@@ -187,8 +185,12 @@ export function ArrivalsPage() {
   );
 
   if (!property) return <EmptyState title={t('app.noProperties')} />;
-  const selected = rows.find((r) => r.stayId === search.stay) ?? null;
-  const open = (r: ArrivalRow) => void navigate({ search: { stay: r.stayId } });
+  const openTop = nav.trail[0];
+  const selected = openTop?.type === 'stay' ? (rows.find((r) => r.stayId === openTop.id) ?? null) : null;
+  const open = (r: ArrivalRow) => {
+    learning.event('record:open');
+    nav.openFresh('stay', r.stayId);
+  };
   const count = (f: (r: ArrivalRow) => boolean) => rows.filter(f).length;
 
   return (
@@ -197,6 +199,7 @@ export function ArrivalsPage() {
         title={t('arrivals.title')}
         subtitle={t('arrivals.subtitle', { count: rows.length, date: formatLocalDate(property.businessDate, i18n.resolvedLanguage) })}
         meta={query.data && <ProvenanceBadge provenance={query.data.provenance} lastSyncedAt={query.data.generatedAt} />}
+        helpKey="frontDesk.arrivals"
       />
       <SimulatedNote module="reservations + operations" />
       {query.isPending && <SkeletonList rows={8} />}
@@ -253,7 +256,8 @@ export function ArrivalsPage() {
               views={visibleViews}
               onSaveView={saved.onSaveView}
               onDeleteView={saved.onDeleteView}
-              rowHeight={52}
+              rowLines={2}
+              helpKey="frontDesk.arrivals.board"
               rowClassName={(r) => (!r.readiness.ready ? 'border-s-4 border-s-danger-solid' : undefined)}
               toolbar={
                 <Button size="sm" variant="ghost" onClick={() => void query.refetch()} loading={query.isFetching}>
@@ -263,13 +267,6 @@ export function ArrivalsPage() {
             />
           )}
         </>
-      )}
-      {selected && (
-        <ArrivalDrawer
-          row={selected}
-          property={property}
-          onClose={() => void navigate({ search: {} })}
-        />
       )}
     </div>
   );

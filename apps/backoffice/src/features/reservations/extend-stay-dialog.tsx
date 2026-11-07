@@ -97,7 +97,7 @@ export function ExtendStayDialog({
         {data && (
           <ChangePreview
             title={t('timeline.previewHeading')}
-            provenance={<ProvenanceBadge provenance={preview.data.provenance} />}
+            provenance={<ProvenanceBadge provenance={preview.data?.provenance ?? 'simulated'} />}
             sections={data.sections}
             consequences={data.consequences}
             validUntil={formatTime(data.validUntil, property.timezone)}

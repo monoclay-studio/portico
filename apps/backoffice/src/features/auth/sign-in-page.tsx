@@ -6,6 +6,7 @@ import { type FormEvent, useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api, type LoginResponse } from '../../api';
 import { problemFromUnknown } from '../../api/errors';
+import { rememberOrgChoices } from '../../api/org-choices';
 import { sessionStore } from '../../api/session';
 import { PRODUCT_NAME, VENDOR_NAME } from '../../config';
 
@@ -43,10 +44,12 @@ export function SignInPage() {
       api.login({ email, password, ...(organizationId ? { organizationId } : {}) }),
     onSuccess: ({ data }) => {
       if (data.status === 'select_organization') {
+        rememberOrgChoices(data.organizations);
         setChoices(data.organizations);
         setOrgId(data.organizations[0]?.id ?? null);
         return;
       }
+      if (!choices) rememberOrgChoices([data.organization]);
       sessionStore.set({ token: data.token, expiresAt: data.expiresAt, userId: data.userId, organization: data.organization });
       setPassword('');
       const target = search.redirect && search.redirect.startsWith('/') && !search.redirect.startsWith('//') ? search.redirect : '/';

@@ -1,4 +1,4 @@
-import type { SavedView } from '@portico/ui';
+import { EMPTY_VIEW_STATE, type SavedView, type TableViewState } from '@portico/ui';
 import { useCallback, useMemo, useState } from 'react';
 
 /**
@@ -33,4 +33,9 @@ export function useSavedViews(tableId: string, userId: string, builtIn: readonly
     onSaveView: (v: SavedView) => persist([...own, v]),
     onDeleteView: (id: string) => persist(own.filter((v) => v.id !== id)),
   };
+}
+
+/** A product-shipped view; unspecified state falls back to the empty view. */
+export function builtInView(id: string, name: string, state: Partial<TableViewState>): SavedView {
+  return { id, name, builtIn: true, state: { ...EMPTY_VIEW_STATE, ...state } };
 }

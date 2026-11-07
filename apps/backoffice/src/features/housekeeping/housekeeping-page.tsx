@@ -23,7 +23,9 @@ import type { HousekeepingRow } from '../../mocks/contracts';
 import { PageHeader } from '../common/page-header';
 import { toSimProperty } from '../common/sim-property';
 import { SimulatedNote } from '../common/simulated-note';
-import { useSavedViews } from '../common/use-saved-views';
+import { builtInView, useSavedViews } from '../common/use-saved-views';
+import { learning } from '../../learning/progress';
+import { useRecordNav } from '../../records/use-record-nav';
 
 const PRIORITY_RANK = { urgent: 0, high: 1, normal: 2, low: 3 } as const;
 
@@ -33,6 +35,7 @@ export function HousekeepingPage() {
   const { strings } = useUi();
   const { property, me } = useApp();
   const phone = useMediaQuery(PHONE_QUERY);
+  const nav = useRecordNav();
   const query = useQuery({
     queryKey: ['sim', property?.id, property?.businessDate, 'housekeeping'],
     queryFn: () => workspaceSource.housekeeping(toSimProperty(property as NonNullable<typeof property>)),
@@ -44,19 +47,9 @@ export function HousekeepingPage() {
 
   const builtIn = useMemo<SavedView[]>(
     () => [
-      {
-        id: 'arrivals-first',
-        name: t('housekeeping.viewArrivalsFirst'),
-        builtIn: true,
-        state: { sort: { columnId: 'priority', direction: 'asc' }, filters: {}, search: '', hidden: [] },
-      },
-      { id: 'all', name: t('housekeeping.viewAll'), builtIn: true, state: { sort: { columnId: 'unit', direction: 'asc' }, filters: {}, search: '', hidden: [] } },
-      {
-        id: 'failed',
-        name: t('housekeeping.viewFailed'),
-        builtIn: true,
-        state: { sort: null, filters: { condition: 'failed_inspection' }, search: '', hidden: [] },
-      },
+      builtInView('arrivals-first', t('housekeeping.viewArrivalsFirst'), { sort: { columnId: 'priority', direction: 'asc' }, filters: {}, search: '', hidden: [] }),
+      builtInView('all', t('housekeeping.viewAll'), { sort: { columnId: 'unit', direction: 'asc' }, filters: {}, search: '', hidden: [] }),
+      builtInView('failed', t('housekeeping.viewFailed'), { sort: null, filters: { condition: 'failed_inspection' }, search: '', hidden: [] }),
     ],
     [t],
   );
@@ -120,7 +113,7 @@ export function HousekeepingPage() {
               <span className="truncate text-xs text-ink-muted">{r.arrival.guestLabel}</span>
             </span>
           ) : r.departureToday ? (
-            <span className="text-xs text-ink-muted">{t('housekeeping.reasons')}: {t('arrivals.stayStatus')} ↦</span>
+            <span className="text-xs text-ink-muted">{t('housekeeping.departureToday')}</span>
           ) : (
             <span className="text-ink-subtle">—</span>
           ),
@@ -183,6 +176,7 @@ export function HousekeepingPage() {
         title={t('housekeeping.title')}
         subtitle={t('housekeeping.subtitle', { units: rows.length, arrivals: notReadyArrivals })}
         meta={query.data && <ProvenanceBadge provenance={query.data.provenance} lastSyncedAt={query.data.generatedAt} />}
+        helpKey="housekeeping.board"
       />
       <SimulatedNote module="operations" />
       {query.isPending && <SkeletonList rows={8} />}
@@ -202,7 +196,12 @@ export function HousekeepingPage() {
               {[...rows]
                 .sort((a, b) => (a.topPriority ? PRIORITY_RANK[a.topPriority] : 9) - (b.topPriority ? PRIORITY_RANK[b.topPriority] : 9))
                 .map((r) => (
-                  <li key={r.unitId} className="flex flex-col gap-1.5 rounded-lg border border-line bg-surface p-3">
+                  <li key={r.unitId}>
+                    <button
+                      type="button"
+                      onClick={() => nav.openFresh('unit', r.unitId)}
+                      className="flex w-full flex-col gap-1.5 rounded-lg border border-line bg-surface p-3 text-start"
+                    >
                     <span className="flex items-center justify-between font-semibold">
                       {r.unitNumber}
                       <StatusBadge vocabulary="condition" value={r.condition} size="md" />
@@ -211,6 +210,7 @@ export function HousekeepingPage() {
                       <StatusBadge vocabulary="occupancy" value={r.occupancy} />
                       {r.topPriority && <span>{t(`housekeeping.priorities.${r.topPriority}`)} · {r.priorityReasons.join(' · ')}</span>}
                     </span>
+                    </button>
                   </li>
                 ))}
             </ul>
@@ -223,7 +223,13 @@ export function HousekeepingPage() {
               views={saved.views}
               onSaveView={saved.onSaveView}
               onDeleteView={saved.onDeleteView}
-              rowHeight={52}
+              rowLines={2}
+              helpKey="housekeeping.board.table"
+              onRowActivate={(r) => {
+                learning.event('record:open');
+                nav.openFresh('unit', r.unitId);
+              }}
+              selectedRowId={nav.trail[0]?.type === 'unit' ? nav.trail[0].id : null}
             />
           )}
         </>

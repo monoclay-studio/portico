@@ -37,6 +37,41 @@ export type RoleSummary = z.infer<typeof roleSummary>;
 
 const items = <T extends z.ZodType>(s: T) => z.object({ items: z.array(s) });
 
+/**
+ * Cross-module experience endpoints on main (apps/api/src/records-routes.ts). The API declares these schemas
+ * inline (no module contracts.ts yet), so they are mirrored here exactly.
+ */
+export const searchHit = z.object({
+  type: z.string(),
+  id: z.string(),
+  title: z.string(),
+  subtitle: z.string().optional(),
+  status: z.record(z.string(), z.string()).optional(),
+  propertyId: z.string().nullable(),
+  score: z.number(),
+  matched: z.string().optional(),
+  label: z.string().optional(),
+  route: z.string().optional(),
+});
+export type SearchHit = z.infer<typeof searchHit>;
+export const recordSummary = searchHit.omit({ score: true });
+export type RecordSummaryDto = z.infer<typeof recordSummary>;
+export const recordHistory = z.object({
+  type: z.string(),
+  id: z.string(),
+  items: z.array(
+    z.object({
+      at: z.string(),
+      action: z.string(),
+      actor: z.object({ kind: z.string(), label: z.string() }),
+      reason: z.string().nullable(),
+      before: z.unknown(),
+      after: z.unknown(),
+    }),
+  ),
+});
+export type RecordHistoryDto = z.infer<typeof recordHistory>;
+
 export function endpoints(api: ApiClient) {
   return {
     login: (body: LoginRequest) =>
@@ -73,6 +108,16 @@ export function endpoints(api: ApiClient) {
         schema: z.object({ userId: z.uuid() }),
       }),
     roles: () => api.request({ path: '/roles', schema: items(roleSummary) }),
+    search: (q: string, opts: { types?: string[]; limit?: number; signal?: AbortSignal } = {}) =>
+      api.request({
+        path: `/search?${new URLSearchParams({ q, ...(opts.types ? { types: opts.types.join(',') } : {}), limit: String(opts.limit ?? 10) })}`,
+        schema: z.object({ query: z.string(), items: z.array(searchHit) }),
+        ...(opts.signal ? { signal: opts.signal } : {}),
+      }),
+    recordSummary: (type: string, id: string) =>
+      api.request({ path: `/records/${encodeURIComponent(type)}/${encodeURIComponent(id)}/summary`, schema: recordSummary }),
+    recordHistory: (type: string, id: string) =>
+      api.request({ path: `/records/${encodeURIComponent(type)}/${encodeURIComponent(id)}/history`, schema: recordHistory }),
   };
 }
 

@@ -16,6 +16,7 @@ import { cn } from '../../lib/cn';
 import { useUi } from '../../provider';
 import { fmt } from '../../strings';
 import { Button } from '../button';
+import { type FilterChip, FilterChips } from '../filter-chips';
 import { Input } from '../input';
 import { Select } from '../select';
 import {
@@ -58,6 +59,8 @@ export interface DataTableProps<Row> {
   /** Optional visual emphasis for rows (e.g. a blocker). Do not rely on it alone — include text in a cell. */
   rowClassName?: (row: Row) => string | undefined;
   selectedRowId?: string | null;
+  /** Stable help anchor for this table (`<module>.<screen>.<element>`). */
+  helpKey?: string;
 }
 
 /**
@@ -81,6 +84,7 @@ export function DataTable<Row>({
   toolbar,
   rowClassName,
   selectedRowId,
+  helpKey,
 }: DataTableProps<Row>) {
   const { strings, dir, density } = useUi();
   const s = strings.dataTable;
@@ -173,6 +177,22 @@ export function DataTable<Row>({
   const selectFilters = columns.filter((c) => c.filter === 'select');
   const textFilters = columns.filter((c) => c.filter === 'text');
   const anyFilter = state.search !== '' || Object.values(state.filters).some((v) => v !== '');
+  const chips: FilterChip[] = [
+    ...(state.search.trim()
+      ? [{ id: 'search', label: `“${state.search.trim()}”`, onRemove: () => update({ search: '' }) }]
+      : []),
+    ...Object.entries(state.filters)
+      .filter(([, v]) => v !== '')
+      .map(([id, v]) => {
+        const col = columns.find((c) => c.id === id);
+        const label = col ? (distinctValues(rows, col).find((o) => o.value === v)?.label ?? v) : v;
+        return {
+          id,
+          label: `${col?.header ?? id}: ${label}`,
+          onRemove: () => update({ filters: { ...state.filters, [id]: '' } }),
+        };
+      }),
+  ];
 
   return (
     <div className="flex min-w-0 flex-col gap-2">
@@ -359,6 +379,12 @@ export function DataTable<Row>({
         </div>
       </div>
 
+      <FilterChips
+        chips={chips}
+        viewName={currentView?.name}
+        modified={modified}
+        onClearAll={() => update({ search: '', filters: {} })}
+      />
       <p className="pt-sr-only" id={`${gridId}-hint`}>
         {s.keyboardHint}
       </p>
