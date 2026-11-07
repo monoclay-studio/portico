@@ -8,7 +8,7 @@ non-blocking** process. Spec `docs/specs/day-close.md` (DCL-R01–R09, DCL-I01�
 
 - **Done:** the module (engine, readiness, nine steps, scheduler, reports, records, search, HTTP, demo seed), wired in
   `apps/api/src/composition.ts`, with module tests on a real database (real platform, rates and finance) and an HTTP
-  test through the composed app. Main merged @ `6d18714`.
+  test through the composed app. Main merged @ `344dff8`.
 - **In progress:** nothing.
 - **Next steps:** bind the stubbed provider functions when their owners ship them (§ Contract requests); re-run the
   scenarios through `apps/api/test/scenarios/` once `feat/integration-step` binds reservations' rates/finance ports.
