@@ -196,7 +196,7 @@ export function DataTable<Row>({
   ];
 
   return (
-    <div className="flex min-w-0 flex-col gap-2">
+    <div className="flex min-w-0 flex-col gap-2" data-help-key={helpKey}>
       <div
         className="flex flex-wrap items-end gap-2"
         role="toolbar"

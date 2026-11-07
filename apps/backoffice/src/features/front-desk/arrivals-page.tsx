@@ -258,7 +258,7 @@ export function ArrivalsPage() {
       )}
       {query.data && (
         <>
-          <div className="mb-4 flex flex-wrap gap-2" aria-label={t('arrivals.readiness')} role="group">
+          <section className="mb-4 flex flex-wrap gap-2" aria-label={t('arrivals.readiness')}>
             <Stat
               icon={<CircleCheck />}
               tone="text-success-fg"
@@ -283,7 +283,7 @@ export function ArrivalsPage() {
               label={t('arrivals.summaryDelayed')}
               value={count((r) => r.arrivalDetails.estimatedAt !== r.arrivalDetails.scheduledAt)}
             />
-          </div>
+          </section>
           {rows.length === 0 ? (
             <EmptyState
               icon={<ConciergeBell />}

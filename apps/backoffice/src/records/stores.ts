@@ -51,18 +51,24 @@ function makeStore(prefix: string, max: number) {
     has(userId: string, ref: Pick<RecordRef, 'type' | 'id'>) {
       return read(userId).some((r) => r.type === ref.type && r.id === ref.id);
     },
-    use(userId: string): RecordRef[] {
-      return useSyncExternalStore(
-        (l) => {
-          listeners.add(l);
-          return () => listeners.delete(l);
-        },
-        () => read(userId),
-        () => [],
-      );
+    subscribe(l: () => void) {
+      listeners.add(l);
+      return () => listeners.delete(l);
     },
   };
 }
 
 export const recentRecords = makeStore('recent', 8);
 export const pinnedRecords = makeStore('pinned', 12);
+
+type RecordStore = ReturnType<typeof makeStore>;
+
+/** Subscribe to a recent/pinned list for a staff member. */
+export function useRecordRefs(store: RecordStore, userId: string): RecordRef[] {
+  return useSyncExternalStore(
+    store.subscribe,
+    () => store.read(userId),
+    () => EMPTY_REFS,
+  );
+}
+const EMPTY_REFS: RecordRef[] = [];

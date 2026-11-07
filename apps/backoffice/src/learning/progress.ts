@@ -67,14 +67,15 @@ export const learning = {
   dismissChecklist(userId: string) {
     write(userId, { ...read(userId), checklistDismissed: true });
   },
-  use(userId: string): Progress {
-    return useSyncExternalStore(
-      (l) => {
-        listeners.add(l);
-        return () => listeners.delete(l);
-      },
-      () => read(userId),
-      () => EMPTY,
-    );
-  },
 };
+
+export function useLearningProgress(userId: string): Progress {
+  return useSyncExternalStore(
+    (l) => {
+      listeners.add(l);
+      return () => listeners.delete(l);
+    },
+    () => read(userId),
+    () => EMPTY,
+  );
+}

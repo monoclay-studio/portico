@@ -39,6 +39,7 @@ export function HistoryTimeline({
         const changed = changedFields(e);
         return (
           <li
+            // biome-ignore lint/suspicious/noArrayIndexKey: two audit entries can share a timestamp and action
             key={`${e.at}-${i}`}
             className="relative flex gap-3 pb-3 last:pb-0"
             data-history-action={e.action}

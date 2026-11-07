@@ -17,7 +17,7 @@ import { DropdownMenu } from 'radix-ui';
 import { useTranslation } from 'react-i18next';
 import { LOCALES, type LocaleCode, setLocale } from '../../i18n';
 import { useApp } from '../app-context';
-import { type Density, density as densityStore } from '../density';
+import { type Density, density as densityStore, useDensity } from '../density';
 import { setTheme, type ThemeChoice, useTheme } from '../theme';
 
 const itemClass =
@@ -27,7 +27,7 @@ export function UserMenu({ onSignOut }: { onSignOut: () => void }) {
   const { t, i18n } = useTranslation();
   const { me, organization, openShortcuts } = useApp();
   const theme = useTheme();
-  const density = densityStore.use();
+  const density = useDensity();
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger asChild>

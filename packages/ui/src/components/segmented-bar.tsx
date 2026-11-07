@@ -53,46 +53,38 @@ export function SegmentedBar({
   const nf = new Intl.NumberFormat(locale);
   return (
     <figure className="flex flex-col gap-2" aria-label={label}>
-      <div className="flex h-7 w-full gap-0.5" role="list">
+      <ul className="flex h-7 w-full gap-0.5">
         {visible.map((s) => {
           const share = pct(s.value);
           const name = `${s.label}: ${nf.format(s.value)} of ${nf.format(total)}${unit ? ` ${unit}` : ''} (${share}%)`;
           const inner = (
-            <span className="pt-data truncate px-1.5 normal-case font-semibold">
-              {share >= 12 ? `${share}%` : ''}
-            </span>
+            <>
+              <span aria-hidden className="pt-data truncate px-1.5 font-semibold normal-case">
+                {share >= 12 ? `${share}%` : ''}
+              </span>
+              <span className="pt-sr-only">{name}</span>
+            </>
           );
+          const cls = cn('flex h-full w-full items-center rounded-sm', fill[s.kind]);
           return (
-            <Tooltip key={s.id} content={name}>
-              {onSelect ? (
-                <button
-                  type="button"
-                  role="listitem"
-                  aria-label={name}
-                  onClick={() => onSelect(s)}
-                  className={cn(
-                    'flex h-full min-w-1 items-center rounded-sm hover:brightness-110',
-                    fill[s.kind],
-                  )}
-                  style={{ flexGrow: s.value, flexBasis: 0 }}
-                >
-                  {inner}
-                </button>
-              ) : (
-                <span
-                  role="listitem"
-                  aria-label={name}
-                  tabIndex={0}
-                  className={cn('flex h-full min-w-1 items-center rounded-sm', fill[s.kind])}
-                  style={{ flexGrow: s.value, flexBasis: 0 }}
-                >
-                  {inner}
-                </span>
-              )}
-            </Tooltip>
+            <li key={s.id} className="flex min-w-1" style={{ flexGrow: s.value, flexBasis: 0 }}>
+              <Tooltip content={name}>
+                {onSelect ? (
+                  <button
+                    type="button"
+                    onClick={() => onSelect(s)}
+                    className={cn(cls, 'hover:brightness-110')}
+                  >
+                    {inner}
+                  </button>
+                ) : (
+                  <span className={cls}>{inner}</span>
+                )}
+              </Tooltip>
+            </li>
           );
         })}
-      </div>
+      </ul>
       <figcaption>
         <span className="pt-sr-only">{strings.chart.legend}: </span>
         <ul className="flex flex-wrap gap-x-4 gap-y-1">

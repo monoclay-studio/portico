@@ -5,7 +5,7 @@ import { useTranslation } from 'react-i18next';
 import { useApp } from '../../app/app-context';
 import { resolveHelp } from '../../learning/help-map';
 import { type LearningPath, type LessonKind, pathsFor } from '../../learning/paths';
-import { learning } from '../../learning/progress';
+import { learning, useLearningProgress } from '../../learning/progress';
 import { PageHeader } from '../common/page-header';
 import { FirstRunChecklist } from './first-run-checklist';
 import { PractiseInTraining } from './practise-in-training';
@@ -87,7 +87,7 @@ function PathCard({ path, done, userId }: { path: LearningPath; done: readonly s
 export function LearnPage() {
   const { t } = useTranslation();
   const { me, property } = useApp();
-  const progress = learning.use(me.userId);
+  const progress = useLearningProgress(me.userId);
   const { recommended, others } = pathsFor(
     me.roles.map((r) => r.key),
     property?.profile,

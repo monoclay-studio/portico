@@ -35,14 +35,15 @@ export const density = {
   toggle() {
     density.set(read() === 'compact' ? 'comfortable' : 'compact');
   },
-  use(): Density {
-    return useSyncExternalStore(
-      (l) => {
-        listeners.add(l);
-        return () => listeners.delete(l);
-      },
-      read,
-      () => 'compact',
-    );
-  },
 };
+
+export function useDensity(): Density {
+  return useSyncExternalStore(
+    (l) => {
+      listeners.add(l);
+      return () => listeners.delete(l);
+    },
+    read,
+    () => 'compact',
+  );
+}

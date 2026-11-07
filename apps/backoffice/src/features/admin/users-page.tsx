@@ -99,6 +99,7 @@ export function UsersPage() {
   };
   const errorFor = (k: string) => problem?.errors?.find((e) => e.path === `/${k}`)?.message;
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: propName derives from `properties`, which is listed
   const columns = useMemo<ColumnDef<UserSummary>[]>(
     () => [
       {
@@ -133,7 +134,6 @@ export function UsersPage() {
         ),
       },
     ],
-    // biome-ignore lint/correctness/useExhaustiveDependencies: propName derives from properties
     [t, properties],
   );
 

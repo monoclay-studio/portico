@@ -22,7 +22,7 @@ import { toSimProperty } from '../../features/common/sim-property';
 import { LOCALES, setLocale } from '../../i18n';
 import { learning } from '../../learning/progress';
 import { definitionFor } from '../../records/registry';
-import { pinnedRecords, recentRecords } from '../../records/stores';
+import { pinnedRecords, recentRecords, useRecordRefs } from '../../records/stores';
 import { useRecordNav } from '../../records/use-record-nav';
 import { useApp } from '../app-context';
 import { effectiveTheme, setTheme, useTheme } from '../theme';
@@ -65,8 +65,8 @@ export function GlobalPalette({
   const theme = useTheme();
   const [query, setQuery] = useState('');
   const q = useDebounced(query.trim(), 150);
-  const recent = recentRecords.use(me.userId);
-  const pinned = pinnedRecords.use(me.userId);
+  const recent = useRecordRefs(recentRecords, me.userId);
+  const pinned = useRecordRefs(pinnedRecords, me.userId);
 
   useEffect(() => {
     if (open) {
@@ -92,6 +92,7 @@ export function GlobalPalette({
     if (definitionFor(type)) nav.openFresh(type, id);
   };
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: openRecord closes over the record trail, which is read fresh on select
   const commands = useMemo<PaletteCommand[]>(() => {
     const list: PaletteCommand[] = [];
     const typeLabel = (type: string) => t(`records.types.${type}`, { defaultValue: type });
@@ -214,7 +215,6 @@ export function GlobalPalette({
       );
     }
     return list;
-    // biome-ignore lint/correctness/useExhaustiveDependencies: openRecord is stable enough per render
   }, [
     q,
     mode,

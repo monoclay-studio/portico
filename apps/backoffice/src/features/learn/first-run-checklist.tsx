@@ -4,13 +4,13 @@ import { CircleCheck, CircleDashed, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useApp } from '../../app/app-context';
 import { checklistFor } from '../../learning/paths';
-import { learning } from '../../learning/progress';
+import { learning, useLearningProgress } from '../../learning/progress';
 
 /** Guided first-run checklist per role; items tick themselves off as the person uses the product. */
 export function FirstRunChecklist() {
   const { t } = useTranslation();
   const { me } = useApp();
-  const progress = learning.use(me.userId);
+  const progress = useLearningProgress(me.userId);
   const list = checklistFor(me.roles.map((r) => r.key));
   if (!list || progress.checklistDismissed) return null;
   const role = me.roles.find((r) => r.key === list.roleKey)?.name ?? list.roleKey;

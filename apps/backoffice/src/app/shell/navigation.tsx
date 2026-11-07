@@ -4,7 +4,7 @@ import { Pin } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { PRODUCT_NAME } from '../../config';
 import { RecordLink } from '../../records/entity-link';
-import { pinnedRecords } from '../../records/stores';
+import { pinnedRecords, useRecordRefs } from '../../records/stores';
 import { useApp } from '../app-context';
 import { type Workspace, workspaceOf } from '../workspaces';
 import { NAV_ICONS, WORKSPACE_ICONS } from './nav-icons';
@@ -70,7 +70,7 @@ export function SectionList({
 }) {
   const { t } = useTranslation();
   const { me } = useApp();
-  const pinned = pinnedRecords.use(me.userId);
+  const pinned = useRecordRefs(pinnedRecords, me.userId);
   return (
     <nav
       aria-label={workspace ? t(workspace.labelKey) : t('app.mainNav')}

@@ -134,7 +134,6 @@ function Multiple({
               : ''}
         </span>
       </div>
-      {/* biome-ignore lint/a11y/noNoninteractiveTabindex: focus lets keyboard users read each column (arrow keys) */}
       <div
         role="group"
         aria-labelledby={`${id}-t`}

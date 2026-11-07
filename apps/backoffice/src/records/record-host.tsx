@@ -8,7 +8,7 @@ import { useApp } from '../app/app-context';
 import { ExtendStayDialog } from '../features/reservations/extend-stay-dialog';
 import { RecordLink } from './entity-link';
 import { definitionFor, type RecordCtx, serverHistory } from './registry';
-import { pinnedRecords, recentRecords } from './stores';
+import { pinnedRecords, recentRecords, useRecordRefs } from './stores';
 import { useRecordNav } from './use-record-nav';
 
 const titles = new Map<string, string>();
@@ -26,7 +26,7 @@ export function RecordHost() {
   const def = top ? definitionFor(top.type) : undefined;
   const ctx: RecordCtx = { app, t, lng: i18n.resolvedLanguage ?? 'en', queryClient };
   const userId = app.me.userId;
-  const pinned = pinnedRecords.use(userId);
+  const pinned = useRecordRefs(pinnedRecords, userId);
 
   const record = useQuery({
     queryKey: ['record', app.session.organization.id, app.property?.id, top?.type, top?.id],

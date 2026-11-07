@@ -60,9 +60,7 @@ export function SignInPage() {
       });
       setPassword('');
       const target =
-        search.redirect && search.redirect.startsWith('/') && !search.redirect.startsWith('//')
-          ? search.redirect
-          : '/';
+        search.redirect?.startsWith('/') && !search.redirect.startsWith('//') ? search.redirect : '/';
       void navigate({ to: target });
     },
   });

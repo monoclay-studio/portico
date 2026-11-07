@@ -14,7 +14,8 @@
         "src/components/timeline/timeline.tsx",
         "src/components/combobox.tsx",
         "src/components/command-palette.tsx",
-        "src/components/date-picker.tsx"
+        "src/components/date-picker.tsx",
+        "src/components/small-multiples.tsx"
       ],
       "linter": {
         "rules": {
@@ -23,14 +24,21 @@
             "useFocusableInteractive": "off",
             "noNoninteractiveElementToInteractiveRole": "off",
             "useKeyWithClickEvents": "off",
-            "noStaticElementInteractions": "off"
+            "noStaticElementInteractions": "off",
+            "noNoninteractiveTabindex": "off"
           }
         }
       }
     },
     {
       "includes": ["src/styles/base.css"],
-      "linter": { "rules": { "complexity": { "noImportantStyles": "off" } } }
+      "linter": {
+        "rules": {
+          "complexity": {
+            "noImportantStyles": "off"
+          }
+        }
+      }
     }
   ]
 }
