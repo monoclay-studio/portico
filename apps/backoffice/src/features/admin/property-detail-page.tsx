@@ -96,6 +96,42 @@ export function PropertyDetailPage() {
     void queryClient.invalidateQueries({ queryKey: scopeKey(session, 'properties') });
   };
 
+  /**
+   * 409 version_conflict: load the latest version and who changed it, then show the three-way comparison.
+   * Used for the first save and again if a re-apply meets yet another change (P2-7). If loading the latest
+   * version fails, the person still gets an explanation (never an unhandled rejection).
+   */
+  const openConflict = async (original: Editable, mine: Editable, expected: number, failure: unknown) => {
+    try {
+      const latest = await api.property(propertyId);
+      const latestVersion = latest.version ?? latest.data.version;
+      const history = await api.recordHistory('property', propertyId).catch(() => null);
+      const lastChange = history?.data.items.filter((i) => i.action === 'platform.property.update').at(-1);
+      const rows = classifyConflict(original, mine, pick(latest.data), KEYS).map((r) => ({
+        ...r,
+        label: t(`admin.fields.${r.key}`),
+        ...(r.key === 'profile' ? { format: (v: unknown) => t(`profiles.${String(v)}`) } : {}),
+      }));
+      setConflict({
+        rows,
+        latest: latest.data,
+        latestVersion,
+        expected,
+        ...(lastChange
+          ? {
+              changedBy: lastChange.actor.label,
+              changedAt: formatRelative(lastChange.at, new Date(), i18n.resolvedLanguage),
+            }
+          : {}),
+      });
+    } catch {
+      setConflict(null);
+      setProblem(problemFromUnknown(failure, 'property-save'));
+    }
+  };
+  const isVersionConflict = (e: unknown) =>
+    isApiError(e) && e.status === 409 && e.code === 'version_conflict';
+
   const save = useMutation({
     mutationFn: async (v: { patch: PropertyUpdate; version: number }) =>
       api.updateProperty(propertyId, v.patch, v.version),
@@ -106,33 +142,8 @@ export function PropertyDetailPage() {
       toast({ tone: 'success', title: t('admin.savedProperty', { version }) });
     },
     onError: async (e, vars) => {
-      if (isApiError(e) && e.status === 409 && e.code === 'version_conflict' && base && form) {
-        const latest = await api.property(propertyId);
-        const latestVersion = latest.version ?? latest.data.version;
-        const history = await api.recordHistory('property', propertyId).catch(() => null);
-        const lastChange = history?.data.items.filter((i) => i.action === 'platform.property.update').at(-1);
-        const rows = classifyConflict(
-          base.value,
-          { ...base.value, ...vars.patch } as Editable,
-          pick(latest.data),
-          KEYS,
-        ).map((r) => ({
-          ...r,
-          label: t(`admin.fields.${r.key}`),
-          ...(r.key === 'profile' ? { format: (v: unknown) => t(`profiles.${String(v)}`) } : {}),
-        }));
-        setConflict({
-          rows,
-          latest: latest.data,
-          latestVersion,
-          expected: vars.version,
-          ...(lastChange
-            ? {
-                changedBy: lastChange.actor.label,
-                changedAt: formatRelative(lastChange.at, new Date(), i18n.resolvedLanguage),
-              }
-            : {}),
-        });
+      if (isVersionConflict(e) && base && form) {
+        await openConflict(base.value, { ...base.value, ...vars.patch } as Editable, vars.version, e);
         return;
       }
       setProblem(problemFromUnknown(e, 'property-save'));
@@ -140,13 +151,42 @@ export function PropertyDetailPage() {
   });
 
   const reapply = useMutation({
-    mutationFn: async (v: { patch: PropertyUpdate; version: number }) =>
+    mutationFn: async (v: { patch: PropertyUpdate; version: number; original: Editable; mine: Editable }) =>
       api.updateProperty(propertyId, v.patch, v.version),
     onSuccess: (r) => {
       accept(r.data, r.version ?? r.data.version);
       setConflict(null);
       toast({ tone: 'success', title: t('admin.conflictResolved') });
     },
+    onError: async (e, vars) => {
+      // Someone changed it AGAIN while this person was re-applying: compare against the newest version.
+      if (isVersionConflict(e)) await openConflict(vars.original, vars.mine, vars.version, e);
+    },
+  });
+
+  /**
+   * The save's answer never arrived (outcome unknown): ask Portico what is saved now, instead of guessing.
+   * Applied → accept it; untouched → the edits are still here to save again; changed by someone else → conflict.
+   */
+  const verify = useMutation({
+    mutationFn: () => api.property(propertyId),
+    onSuccess: async (latest) => {
+      if (!base || !form) return;
+      const version = latest.version ?? latest.data.version;
+      const saved = pick(latest.data);
+      const wanted = diff(base.value, form) as Record<string, unknown>;
+      const applied = Object.entries(wanted).every(([k, v]) => saved[k as keyof Editable] === v);
+      setProblem(null);
+      if (applied && version !== base.version) {
+        accept(latest.data, version);
+        toast({ tone: 'success', title: t('admin.verifiedSaved', { version }) });
+      } else if (version === base.version) {
+        toast({ tone: 'info', title: t('admin.verifiedNotSaved') });
+      } else {
+        await openConflict(base.value, form, base.version, null);
+      }
+    },
+    onError: (e) => setProblem(problemFromUnknown(e, 'property-verify')),
   });
 
   const dirty = useMemo(
@@ -250,6 +290,18 @@ export function PropertyDetailPage() {
             <ProblemAlert
               problem={problem}
               onRetry={() => save.mutate({ patch: diff(base.value, form), version: base.version })}
+              actions={
+                problem.outcome === 'unknown' ? (
+                  <Button
+                    size="sm"
+                    variant="primary"
+                    loading={verify.isPending}
+                    onClick={() => verify.mutate()}
+                  >
+                    {t('admin.checkSaved')}
+                  </Button>
+                ) : undefined
+              }
             />
           </div>
         )}
@@ -281,13 +333,20 @@ export function PropertyDetailPage() {
           onReapply={(keys) => {
             const patch: Record<string, unknown> = {};
             for (const r of conflict.rows) if (keys.includes(r.key)) patch[r.key] = r.mine;
+            const original = pick(conflict.latest);
+            const mine = { ...original, ...(patch as Partial<Editable>) };
             // Re-apply on top of the latest version; the form shows the merged result while saving.
-            setBase({ value: pick(conflict.latest), version: conflict.latestVersion });
-            setForm({ ...pick(conflict.latest), ...(patch as Partial<Editable>) });
-            reapply.mutate({ patch: patch as PropertyUpdate, version: conflict.latestVersion });
+            setBase({ value: original, version: conflict.latestVersion });
+            setForm(mine);
+            reapply.mutate({
+              patch: patch as PropertyUpdate,
+              version: conflict.latestVersion,
+              original,
+              mine,
+            });
           }}
         >
-          {reapply.isError && (
+          {reapply.isError && !isVersionConflict(reapply.error) && (
             <ProblemAlert problem={problemFromUnknown(reapply.error, 'property-reapply')} />
           )}
         </ConflictDialog>

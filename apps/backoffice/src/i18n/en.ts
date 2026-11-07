@@ -468,6 +468,10 @@ export const en = {
     propertySettingsHelp:
       'Changes are saved with the version you opened. If someone else saved first, you will see both versions and can re-apply yours.',
     savedProperty: 'Property saved (version {{version}})',
+    checkSaved: 'Check what was saved',
+    verifiedSaved: 'Confirmed: your changes were saved (version {{version}}).',
+    verifiedNotSaved:
+      'Confirmed: your changes were not saved. They are still in the form — save again when ready.',
     conflictResolved: 'Your changes were re-applied on top of the latest version.',
     discarded: 'Your edits were discarded. Showing the saved version.',
     legalEntitiesTitle: 'Legal entities',

@@ -18,9 +18,15 @@ export function scopeKey(s: Scope, ...rest: readonly unknown[]): unknown[] {
 export const queries = {
   me: (s: Scope) => queryOptions({ queryKey: scopeKey(s, 'me'), queryFn: async () => (await api.me()).data }),
   organization: (s: Scope) =>
-    queryOptions({ queryKey: scopeKey(s, 'organization'), queryFn: async () => (await api.organization()).data }),
+    queryOptions({
+      queryKey: scopeKey(s, 'organization'),
+      queryFn: async () => (await api.organization()).data,
+    }),
   properties: (s: Scope) =>
-    queryOptions({ queryKey: scopeKey(s, 'properties'), queryFn: async () => (await api.properties()).data.items }),
+    queryOptions({
+      queryKey: scopeKey(s, 'properties'),
+      queryFn: async () => (await api.properties()).data.items,
+    }),
   property: (s: Scope, id: string) =>
     queryOptions({
       queryKey: scopeKey(s, 'property', id),

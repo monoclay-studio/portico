@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { createApiClient } from './client';
 import { isApiError } from './errors';
-import { IntentKeys, stableStringify } from './intent';
+import { fingerprintOf, IntentKeys, stableStringify } from './intent';
 
 function mockFetch(status: number, body: unknown, headers: Record<string, string> = {}) {
   return vi.fn(
@@ -72,13 +72,15 @@ describe('API client', () => {
     }
   });
 
-  it('explains non-problem failures and network failures with a reference id', async () => {
+  it('explains non-problem failures with a reference id; a failed read is safe to repeat', async () => {
     const e1 = await client(mockFetch(503, undefined))
       .request({ path: '/p', schema: z.unknown() })
       .catch((x: unknown) => x);
     expect(isApiError(e1) && e1.problem).toMatchObject({
       status: 503,
       retryable: true,
+      safeToRetry: true,
+      retryBasis: 'read',
       correlationId: 'req-0000001',
     });
     const broken = vi.fn(async () => {
@@ -91,9 +93,74 @@ describe('API client', () => {
     expect(isApiError(e2) && e2.problem).toMatchObject({
       code: 'network_error',
       retryable: true,
+      safeToRetry: true,
       correlationId: 'req-0000001',
     });
+    expect(isApiError(e2) && e2.problem.outcome).toBeUndefined();
     expect(reach).toHaveBeenCalledWith(false);
+  });
+
+  it('P1-2: a write whose answer never arrived is pending verification — never "nothing was sent"', async () => {
+    const broken = vi.fn(async () => {
+      throw new TypeError('Failed to fetch');
+    });
+    const e = await client(broken as never)
+      .request({ method: 'PATCH', path: '/p', body: { a: 1 }, schema: z.unknown(), ifMatch: 3 })
+      .catch((x: unknown) => x);
+    expect(isApiError(e) && e.problem).toMatchObject({
+      code: 'network_error',
+      outcome: 'unknown',
+      safeToRetry: false,
+      retryable: false,
+    });
+    expect(isApiError(e) && e.problem.detail).toMatch(/could not confirm whether this was saved/);
+    expect(isApiError(e) && e.problem.detail).not.toMatch(/nothing was sent/i);
+    // With an Idempotency-Key the same request may be repeated: it cannot be applied twice.
+    const keyed = await client(broken as never)
+      .request({ method: 'POST', path: '/p', body: { a: 1 }, schema: z.unknown(), idempotencyKey: 'k1' })
+      .catch((x: unknown) => x);
+    expect(isApiError(keyed) && keyed.problem).toMatchObject({
+      outcome: 'unknown',
+      safeToRetry: true,
+      retryBasis: 'idempotency_key',
+    });
+    // A gateway error without a problem body on a write: the request may have reached the API.
+    const gateway = await client(mockFetch(504, undefined))
+      .request({ method: 'POST', path: '/p', body: {}, schema: z.unknown() })
+      .catch((x: unknown) => x);
+    expect(isApiError(gateway) && gateway.problem).toMatchObject({ status: 504, outcome: 'unknown' });
+  });
+
+  it('P1-2: gives up after the timeout; a caller abort is not reported as a failure', async () => {
+    vi.useFakeTimers();
+    try {
+      const hanging = vi.fn(
+        (_url: string, init: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            init.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+          }),
+      );
+      const reach = vi.fn();
+      const pending = client(hanging as never, { onReachability: reach })
+        .request({ path: '/slow', schema: z.unknown(), timeoutMs: 5000 })
+        .catch((x: unknown) => x);
+      await vi.advanceTimersByTimeAsync(5001);
+      const e = await pending;
+      expect(isApiError(e) && e.problem).toMatchObject({ code: 'request_timeout', safeToRetry: true });
+      expect(isApiError(e) && e.problem.detail).toMatch(/within 5 seconds/);
+      expect(reach).toHaveBeenCalledWith(false);
+
+      const caller = new AbortController();
+      const cancelled = client(hanging as never)
+        .request({ path: '/slow', schema: z.unknown(), signal: caller.signal })
+        .catch((x: unknown) => x);
+      caller.abort();
+      const c = await cancelled;
+      expect(isApiError(c)).toBe(false);
+      expect(c).toBeInstanceOf(DOMException);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('never trusts an unexpected response shape', async () => {
@@ -135,6 +202,13 @@ describe('IntentKeys (Idempotency-Key per user intent)', () => {
     k.settle();
     expect(k.pendingKey).toBeNull();
     expect(k.keyFor({ name: 'Azure Atoll' })).toBe('key-3');
+  });
+  it('keeps only a hash of the payload (it may hold an initial password)', () => {
+    const k = new IntentKeys(() => 'key-1');
+    k.keyFor({ email: 'a@b.invalid', password: 'correct horse battery staple' });
+    expect(JSON.stringify(k)).not.toContain('correct horse');
+    expect(fingerprintOf({ a: 1, b: 2 })).toBe(fingerprintOf({ b: 2, a: 1 }));
+    expect(fingerprintOf({ a: 1 })).not.toBe(fingerprintOf({ a: 2 }));
   });
   it('stable stringify sorts object keys but not arrays', () => {
     expect(stableStringify({ b: [2, 1], a: 1 })).toBe('{"a":1,"b":[2,1]}');
