@@ -19,7 +19,7 @@ Template:
 
 ---
 
-### Q1 — Final product name and brand                       Status: open
+### Q1 — Final product name and brand                       Status: answered 2026-11-07 — **Portico** (D1)
 **Context:** "Portico" is the repository/working name; the brief says the name is not final. The name appears in UI, emails, booking engine, API docs and legal documents.
 **Question:** What is the product's public name (and is a brand/visual identity coming)?
 **Default we are proceeding with:** "Portico" everywhere, sourced from one configuration constant (`PRODUCT_NAME`) and one design-token set, so renaming is a config change plus copy review.
@@ -27,15 +27,16 @@ Template:
 **Blocks:** nothing in development. Blocks domain purchase, email sender verification, public website.
 **Raised by / date:** orchestrator, 2026-11-07
 
-### Q2 — Payment processing for Maldivian hotel legal entities    Status: open (verification in progress)
+### Q2 — Payment processing for Maldivian hotel legal entities    Status: open — facts verified 2026-11-07, decision pending
 **Context:** You chose "hotel is merchant via Stripe Connect". Stripe is believed **not** to onboard businesses incorporated in the Maldives (to be verified from Stripe's official country list). If so, a Maldivian resort cannot be the merchant of record on a Stripe connected account, and Monoclay's US Stripe account cannot collect on its behalf (that would make Monoclay a payment intermediary — a separate regulated business).
 **Question:** For Maldives hotels, are you willing to integrate local acquirers/gateways (e.g. Bank of Maldives "BML Connect", MIB, other) and/or allow hotels to use processors they already have — with Stripe Connect used where hotels' legal entities are eligible (e.g. groups with entities in supported countries)?
 **Default we are proceeding with:** provider-agnostic payment domain; a full **simulator** provider for development and demo; a Stripe Connect adapter (direct charges) built and sandbox-tested; local-acquirer adapters researched and added to the dependency register as "quote required / unverified".
 **If the answer differs:** only the adapter priority changes; the payment domain is unaffected.
 **Blocks:** live guest payments for a Maldives pilot. Nothing in development.
+**Update 2026-11-07 (verified on stripe.com/global and docs.stripe.com):** the Maldives is not a Stripe-supported country; Connect cross-border payouts work only between the US, UK, EEA, Canada and Switzerland; accounts under a recipient service agreement cannot process payments. Owner confirmed Monoclay LLC (Delaware, Stripe Atlas) runs Portico (D10) — its Stripe account serves Portico's SaaS billing and Connect for eligible (non-Maldivian) hotel entities. For Maldivian hotels the remaining decision is: **which local gateway(s) to integrate first** (e.g. Bank of Maldives' BML Connect) — until then, hotels use their own terminal and Portico records and reconciles (Route D, being built).
 **Raised by / date:** orchestrator, 2026-11-07
 
-### Q3 — Commercial plans and prices                         Status: open
+### Q3 — Commercial plans and prices                         Status: open — owner will set prices after seeing costs (D11)
 **Context:** You want different pricing for small vs large customers. The product enforces this through editions + entitlements (features and limits) — the prices themselves are commercial decisions.
 **Question:** Approve the edition structure (Essentials / Professional / Resort / Enterprise — proposed in `docs/product/editions.md`) and set prices, or tell us your intended model (per room, per property, flat, usage).
 **Default we are proceeding with:** editions as feature/limit bundles with prices stored as configuration, no prices published anywhere.
