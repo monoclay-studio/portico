@@ -5,6 +5,12 @@ set -uo pipefail
 REPO=${REPO:-/home/user/portico}
 TRAILER=$'\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nClaude-Session: https://claude.ai/code/session_01XDtqZDkxkzHxUrbV9kDsKR'
 cd "$REPO" || exit 1
+# Chronicle first (docs/chronicle/README.md): agent transcripts live in the container and are lost when it is reclaimed.
+SESSION_LOG=${SESSION_LOG:-$(ls -t "$HOME"/.claude/projects/*portico*/*.jsonl 2>/dev/null | head -1)}
+if [ -n "$SESSION_LOG" ] && [ -f "$SESSION_LOG" ]; then
+  python3 -I tools/chronicle/extract.py "$SESSION_LOG" "$REPO" && python3 -I tools/chronicle/snapshot.py \
+    && echo "chronicle refreshed from $SESSION_LOG"
+fi
 git worktree list --porcelain | awk '/^worktree /{print $2}' | while read -r wt; do
   br=$(git -C "$wt" branch --show-current 2>/dev/null)
   [ -z "$br" ] && continue

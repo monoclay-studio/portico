@@ -95,3 +95,40 @@ A trial organization costs nothing to create, so the paths were reachable by any
   launch-gate item in the readiness register.
 - Domain verification adds a setup step for enterprise SSO. That is the industry norm and the price of linking
   existing accounts safely.
+
+## Amendment 1 — email-verified identities (2026-11-07, after the second steward review)
+
+The second review (`docs/orchestration/reviews/review-identity-plus-2.md`) found that §2's exception allowed account
+pre-hijacking. Under it, an organization could create a brand-new global identity, with a password it chose, for an
+email address it did not own. It could then accept a real hotel's later invitation as that person. This amendment
+replaces that exception and adds three rules.
+
+12. **No organization ever sets a password.** `initialPassword` is removed from `createUser`, `POST /v1/users` and
+    live provisioning.
+    - A new person is created **without credentials**, in state `email_unverified`.
+    - Their first password is set only through a link sent to their email address. The link proves control of the
+      address and sets `email_verified_at`.
+    - **First verification wipes every credential that existed before it**: password, MFA factors, recovery codes,
+      SSO links and sessions. Anything set before the person proved their email cannot survive.
+    - Demo and test seeding may set passwords only for system processes, only in the `demo` environment, and only for
+      reserved fictitious domains (`*.portico.invalid`).
+13. **Accepting a membership needs a verified email.** Invitations are listed and accepted only by an identity whose
+    email is verified. They expire with their invitation.
+14. **Onboarding cannot be blocked by another organization.** Whether a person can set a first password depends on
+    their credentials, not their memberships. A person with no password, no active factor and no SSO link may set a
+    first password through an emailed link from **any** organization's invitation. Unaccepted invitations elsewhere
+    never block this. A password reset reaches people who only hold invitations.
+15. **SSO configuration is a root change.** Changing the issuer, the email allow-list, `trustIdpMfa` or
+    SSO-required needs one of:
+    - organization-wide `*` held by the editor;
+    - a second administrator's approval.
+
+    On an issuer change:
+    - domain verification resets to "re-confirm";
+    - all admins are alerted;
+    - an existing member who holds a password, factor or link elsewhere is never linked through a new issuer until
+      they prove it once.
+
+    SSO creates or activates a membership only after every check in §5 passes. A refused sign-in persists neither the
+    user nor the link. The verified-domain check runs whenever a membership would be created or activated, not only
+    for new links.
