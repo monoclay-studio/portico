@@ -20,7 +20,7 @@ non-blocking** process. Spec `docs/specs/day-close.md` (DCL-R01–R09, DCL-I01�
 |---|---|---|
 | **≤ 2 minutes of the auditor's attention** on a day with nothing blocking: one page, one press | `GET …/readiness` answers in one sentence ("Ready to close: nothing open."); one `POST …/runs` runs every step; nothing else needs a person | `test/lifecycle-and-security.test.ts` › "a day with nothing blocking: readiness says so in one sentence; one Start closes the day; nobody else acts" (asserts the only user-attributed Day Close audit actions are the start, the advance and the completion of that one press). Staff validation of the 2 minutes: **not done** (R3 only) |
 | **Nobody logged out** | Day Close never touches identity sessions and takes no global lock: only its own executors serialize, on the run row; the advance takes a per-property advisory lock | `test/concurrency.test.ts` › "lands before the advance on D, after it on D+1, …" (a bar posting and another user's readiness read succeed mid-run) |
-| **Zero duplicate postings after any interruption** | Every item's progress commits in the same transaction as its effects; done items are never re-executed; finance keys (`room:{stay}:{night}`, `inclusion:{stay}:{inclusion}:{night}`, `penalty:no_show:{stay}`) are unique; the advance and its step completion commit together; a dead executor's lease expires before anyone else may take over | `test/scenario-s09-day-close-interrupted.test.ts`; `test/kill-and-resume.test.ts` (real `kill -9`); `test/chaos-every-step.test.ts` (27 crash points over 26 consecutive days; final check: no ledger key twice, one advance, one report and one day-closed announcement per date) |
+| **Zero duplicate postings after any interruption** | Every item's progress commits in the same transaction as its effects; done items are never re-executed; finance keys (`room:{stay}:{night}`, `inclusion:{stay}:{inclusion}:{night}`, `penalty:no_show:{stay}`) are unique; the advance and its step completion commit together; a dead executor's lease expires before anyone else may take over | `test/scenario-s09-day-close-interrupted.test.ts`; `test/kill-and-resume.test.ts` (real `kill -9`); `test/chaos-every-step.test.ts` (24 crash points over 24 consecutive dates; final check: no ledger key twice, one advance, one report and one day-closed announcement per date) |
 
 ## Capabilities (spec) — status and readiness
 
@@ -106,7 +106,7 @@ dates and counts — no guest names. Consumed: none.
 | Port | Functions | Binding |
 |---|---|---|
 | `PlatformPort` | getProperty, getBusinessDate, **advanceBusinessDate (acting user)**, resolvePolicy, setPropertyPolicy, getDataAuthority, hasEntitlement, listProperties, listDepartments | **real** platform |
-| `ReservationsPort` | listInHouseStaysForNight, listDueArrivals, listDueDepartures, markNoShow (adapter refuses a stay of another property) | **real** (`reservationsProvider`, system scope after Day Close authorized). Note: on main reservations' own rates/finance ports are stubs, so `markNoShow` with a fee and terms in rates' canonical form arrive with `feat/integration-step` |
+| `ReservationsPort` | listInHouseStaysForNight, listDueArrivals, listDueDepartures, markNoShow (the composition adapter refuses a stay of another property — code only: no stay can be created in the composed app on main, so it is untested there; the module fake enforces the same rule) | **real** (`reservationsProvider`, system scope after Day Close authorized). Note: on main reservations' own rates/finance ports are stubs, so `markNoShow` with a fee and terms in rates' canonical form arrive with `feat/integration-step` |
 | `RatesPort` | verifyTerms, postingPlan, allowances | **real** rates |
 | `FinancePort` | postCharge, defaultFolio, grantAllowance, closeAllowances, getUnbalancedItems (`financeProvider(finance, 'dayClose')`); integrityReport, trialBalance, dailyRevenue (system scope, CR-9) | **real** finance |
 | `PaymentsPort` | listUnresolved | **real** payments |
@@ -141,9 +141,12 @@ dates and counts — no guest names. Consumed: none.
 ## Adoption modes and data authority
 
 Day Close runs only where Portico is authoritative for `reservations` and `charges`: a start is refused with
-`external_system_of_record` naming the system (`test/lifecycle-and-security.test.ts` › "refuses a start … in connected
-mode …"). When only `accounting` is external, the close runs fully and requests the journal export. Owns no
-data-authority domain. Trial organizations close days with every external effect simulated (environment safety).
+`external_system_of_record` naming the system — both domains tested in `test/lifecycle-and-security.test.ts` ›
+"refuses a start … in connected mode …". When only `accounting` is external, the close runs fully and requests the journal export. Owns no
+data-authority domain. In non-live organizations Day Close's notification requests carry the kernel's effect mode
+(`simulate`; tested for a demo organization in `test/lifecycle-and-security.test.ts` › "a demo organization closes its
+day with notifications simulated, never sent"); fee collection and journal export are decided by payments and
+integration under their own environment checks.
 
 ## Known gaps
 

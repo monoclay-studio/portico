@@ -156,6 +156,25 @@ describe('lifecycle', () => {
     ).rejects.toMatchObject({
       code: 'external_system_of_record',
     });
+    // Charges kept in another system: refused the same way.
+    const charges = await setupOrg(h);
+    await charges.run((tx) =>
+      platform.setDataAuthority(
+        { ...tx, actor: { kind: 'system', process: 'test' }, authz: systemAuthorizer },
+        {
+          propertyId: charges.propertyId,
+          domain: 'charges',
+          authority: 'external',
+          connectionId: newId(),
+          systemName: 'Infor HMS',
+          writeMode: 'read_only',
+          reason: 'connected mode',
+        },
+      ),
+    );
+    await expect(
+      charges.run((tx) => h.service.createRun(tx, { propertyId: charges.propertyId }), charges.auditor),
+    ).rejects.toMatchObject({ code: 'external_system_of_record', details: { domain: 'charges' } });
     const connect = await setupOrg(h, { planCode: 'connect' });
     await expect(
       connect.run((tx) => h.service.createRun(tx, { propertyId: connect.propertyId }), connect.auditor),
@@ -295,5 +314,23 @@ describe('environment safety and immutability', () => {
           .execute(),
       ),
     ).rejects.toThrow(/never redone/);
+    await expect(
+      tx((t) =>
+        t.db
+          .updateTable('day_close.steps')
+          .set({ status: 'pending' })
+          .where('status', '=', 'completed')
+          .execute(),
+      ),
+    ).rejects.toThrow(/never re-run/);
+    await expect(
+      tx((t) =>
+        t.db
+          .updateTable('day_close.runs')
+          .set({ status: 'running' })
+          .where('status', '=', 'completed')
+          .execute(),
+      ),
+    ).rejects.toThrow(/cannot change/);
   });
 });
