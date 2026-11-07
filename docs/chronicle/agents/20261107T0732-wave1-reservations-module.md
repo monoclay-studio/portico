@@ -1,7 +1,7 @@
 # Agent run: Wave1: reservations module
 
 - Started: 2026-11-07T07:32:35.563Z · last activity: 2026-11-07T12:15:03.424Z
-- Turns: 755 · tool uses: 444 · output tokens: 1,618,460
+- Turns: 426 · tool uses: 444 · output tokens: 653,149
 - Type: general-purpose
 
 ## Brief (2026-11-07T07:32:35.563Z)

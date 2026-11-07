@@ -1,0 +1,23 @@
+# Build context for apps/*/Dockerfile is the repository root. Keep it small and free of secrets.
+**/node_modules
+**/dist
+**/coverage
+**/.turbo
+**/.vite
+**/*.tsbuildinfo
+**/*.log
+playwright-report
+test-results
+.git
+.github
+**/.env
+**/.env.*
+!**/.env.example
+docs
+infra/terraform
+infra/ci
+**/.terraform
+**/*.tfstate
+**/*.tfstate.*
+**/*.tfvars
+**/.DS_Store

@@ -1,0 +1,11 @@
+# Copy to terraform.tfvars (git-ignored). Values marked OWNER are decisions only the owner can make.
+region              = "ap-south-1"         # OWNER (Q4)
+allowed_account_ids = ["000000000000"]     # OWNER: the AWS account designated for Portico
+budget_monthly_usd  = 25                   # OWNER (Q22): ceiling that triggers the stop action
+budget_alert_emails = ["owner@example.invalid"]
+oncall_emails       = ["owner@example.invalid"]
+# domain_name       = "portico.example"    # OWNER (Q1) — optional for the demo
+# route53_zone_id   = "Z0000000000000000000"
+# github_repository    = "monoclay-studio/portico"
+# github_repository_id = 000000000   # immutable id (envs/github output repository_ids)
+# github_owner_id      = 000000000   # OWNER: confirm the repository allowed to deploy

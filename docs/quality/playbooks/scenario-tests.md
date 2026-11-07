@@ -50,6 +50,9 @@ L3 exists to catch cross-module breaks. It can do that only if it never runs on 
 - *(Superseded wording, kept for history:)* **v3, consistency as invariants everywhere.** Run the global consistency checks after **every** scenario, and also
   after the demo seed and after each L4 lab refresh. A seed that breaks an invariant is caught before a tester sees
   contradictory numbers (cf. the simulator contradictions in round 1, `review-backoffice.md` P2-1).
+- **v4 (round-3 addition), the harness uses the real ports.** Scenario helpers that set up state (for example
+  `makeExternal`, which completes a data-authority transition) bind the composition's ports, never `{}`, and act as
+  a real user with the setup role. Prompted by E-093 (re-review #3 R3-P3-4).
 - **v4, a negative path per binding.** For each bound port, a scenario variant runs the AP-01 wrong-property probe and
   the AP-38 external-authority probe through the real path. v1 asked for these per binding; v4 makes them part of the
   scenario proof and reports them in the manifest.

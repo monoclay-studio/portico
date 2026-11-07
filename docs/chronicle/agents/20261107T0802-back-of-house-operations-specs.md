@@ -1,7 +1,7 @@
 # Agent run: Back-of-house operations specs
 
 - Started: 2026-11-07T08:02:08.311Z · last activity: 2026-11-07T11:18:40.744Z
-- Turns: 118 · tool uses: 80 · output tokens: 502,812
+- Turns: 60 · tool uses: 80 · output tokens: 206,082
 - Type: general-purpose
 
 ## Brief (2026-11-07T08:02:08.311Z)

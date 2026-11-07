@@ -1,0 +1,224 @@
+{
+  "_source": "AWS Price List Bulk API offer files (https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/<offer>/current/ap-south-1/index.json; CloudFront: the global offer). Downloaded 2026-11-07. On-demand USD, no free tier, no taxes. ESTIMATE INPUTS — re-check with the AWS Pricing Calculator before authorizing spend.",
+  "_publicationDates": {
+    "AmazonEC2": "2026-11-07",
+    "AmazonVPC": "2026-11-05",
+    "AWSELB": "2026-11-05",
+    "AmazonCloudWatch": "2026-11-04",
+    "AmazonRoute53": "2026-11-04",
+    "AmazonS3": "2026-11-04",
+    "AmazonSES": "2026-11-04",
+    "AmazonRDS": "2026-10-29",
+    "awskms": "2026-10-26",
+    "AmazonECS": "2026-10-19",
+    "AmazonCloudFront": "2026-10-19",
+    "AWSBackup": "2026-10-14",
+    "awswaf": "2026-09-14",
+    "AWSSecretsManager": "2026-09-11",
+    "AmazonECR": "2026-09-11"
+  },
+  "prices": {
+    "ec2_t4g_small_hour": {
+      "usd": 0.0112,
+      "unit": "hour",
+      "usagetype": "APS3-BoxUsage:t4g.small (Linux, shared)",
+      "offer": "AmazonEC2"
+    },
+    "ebs_gp3_gb_month": {
+      "usd": 0.0912,
+      "unit": "GB-month",
+      "usagetype": "APS3-EBS:VolumeUsage.gp3",
+      "offer": "AmazonEC2"
+    },
+    "nat_gateway_hour": {
+      "usd": 0.056,
+      "unit": "hour",
+      "usagetype": "APS3-NatGateway-Hours",
+      "offer": "AmazonEC2"
+    },
+    "nat_gateway_gb": {
+      "usd": 0.056,
+      "unit": "GB",
+      "usagetype": "APS3-NatGateway-Bytes",
+      "offer": "AmazonEC2"
+    },
+    "public_ipv4_hour": {
+      "usd": 0.005,
+      "unit": "hour",
+      "usagetype": "APS3-PublicIPv4:InUseAddress / IdleAddress",
+      "offer": "AmazonVPC"
+    },
+    "vpc_interface_endpoint_hour": {
+      "usd": 0.013,
+      "unit": "endpoint-AZ-hour",
+      "usagetype": "APS3-VpcEndpoint-Hours",
+      "offer": "AmazonVPC"
+    },
+    "fargate_arm_vcpu_hour": {
+      "usd": 0.02383,
+      "unit": "vCPU-hour",
+      "usagetype": "APS3-Fargate-ARM-vCPU-Hours:perCPU",
+      "offer": "AmazonECS"
+    },
+    "fargate_arm_gb_hour": {
+      "usd": 0.00261,
+      "unit": "GB-hour",
+      "usagetype": "APS3-Fargate-ARM-GB-Hours",
+      "offer": "AmazonECS"
+    },
+    "alb_hour": { "usd": 0.0239, "unit": "hour", "usagetype": "APS3-LoadBalancerUsage", "offer": "AWSELB" },
+    "alb_lcu_hour": { "usd": 0.008, "unit": "LCU-hour", "usagetype": "APS3-LCUUsage", "offer": "AWSELB" },
+    "rds_pg_t4g_small_hour": {
+      "usd": 0.042,
+      "unit": "hour",
+      "usagetype": "APS3-InstanceUsage:db.t4g.small (PostgreSQL, Single-AZ)",
+      "offer": "AmazonRDS"
+    },
+    "rds_pg_t4g_small_multiaz_hour": {
+      "usd": 0.084,
+      "unit": "hour",
+      "usagetype": "APS3-Multi-AZUsage:db.t4g.small (PostgreSQL)",
+      "offer": "AmazonRDS"
+    },
+    "rds_gp3_gb_month": {
+      "usd": 0.131,
+      "unit": "GB-month",
+      "usagetype": "APS3-RDS:GP3-Storage (PostgreSQL)",
+      "offer": "AmazonRDS"
+    },
+    "rds_multiaz_gp3_gb_month": {
+      "usd": 0.262,
+      "unit": "GB-month",
+      "usagetype": "APS3-RDS:Multi-AZ-GP3-Storage",
+      "offer": "AmazonRDS"
+    },
+    "aurora_serverless_v2_acu_hour": {
+      "usd": 0.18,
+      "unit": "ACU-hour",
+      "usagetype": "APS3-Aurora:ServerlessV2Usage (PostgreSQL)",
+      "offer": "AmazonRDS"
+    },
+    "aurora_t4g_medium_hour": {
+      "usd": 0.093,
+      "unit": "hour",
+      "usagetype": "APS3-InstanceUsage:db.t4g.medium (Aurora PostgreSQL)",
+      "offer": "AmazonRDS"
+    },
+    "aurora_storage_gb_month": {
+      "usd": 0.11,
+      "unit": "GB-month",
+      "usagetype": "APS3-Aurora:StorageUsage",
+      "offer": "AmazonRDS"
+    },
+    "aurora_io_million": {
+      "usd": 0.22,
+      "unit": "million I/O",
+      "usagetype": "APS3-Aurora:StorageIOUsage",
+      "offer": "AmazonRDS"
+    },
+    "aurora_backup_gb_month": {
+      "usd": 0.023,
+      "unit": "GB-month",
+      "usagetype": "APS3-Aurora:BackupUsage (beyond free allocation)",
+      "offer": "AmazonRDS"
+    },
+    "backup_xregion_aurora_gb": {
+      "usd": 0.086,
+      "unit": "GB",
+      "usagetype": "APS3-APS2-CrossRegion-WarmBytes-Aurora",
+      "offer": "AWSBackup"
+    },
+    "secret_month": {
+      "usd": 0.4,
+      "unit": "secret-month",
+      "usagetype": "APS3-AWSSecretsManager-Secrets",
+      "offer": "AWSSecretsManager"
+    },
+    "kms_key_month": {
+      "usd": 1.0,
+      "unit": "key-month",
+      "usagetype": "ap-south-1-KMS-Keys",
+      "offer": "awskms"
+    },
+    "waf_web_acl_month": {
+      "usd": 5.0,
+      "unit": "web-ACL-month",
+      "usagetype": "APS3-WebACLV2",
+      "offer": "awswaf"
+    },
+    "waf_rule_month": { "usd": 1.0, "unit": "rule-month", "usagetype": "APS3-RuleV2", "offer": "awswaf" },
+    "waf_million_requests": {
+      "usd": 0.6,
+      "unit": "million requests",
+      "usagetype": "APS3-RequestV2-Tier1",
+      "offer": "awswaf"
+    },
+    "cloudfront_in_gb": {
+      "usd": 0.109,
+      "unit": "GB",
+      "usagetype": "IN-DataTransfer-Out-Bytes (first 10 TB)",
+      "offer": "AmazonCloudFront"
+    },
+    "cloudfront_in_https_10k": {
+      "usd": 0.012,
+      "unit": "10k HTTPS requests",
+      "usagetype": "IN-Requests-Tier2-HTTPS",
+      "offer": "AmazonCloudFront"
+    },
+    "logs_ingest_gb": {
+      "usd": 0.67,
+      "unit": "GB",
+      "usagetype": "APS3-DataProcessing-Bytes / VendedLog-Bytes (first 10 TB)",
+      "offer": "AmazonCloudWatch"
+    },
+    "logs_storage_gb_month": {
+      "usd": 0.03,
+      "unit": "GB-month",
+      "usagetype": "APS3-TimedStorage-ByteHrs",
+      "offer": "AmazonCloudWatch"
+    },
+    "alarm_month": {
+      "usd": 0.1,
+      "unit": "alarm-month",
+      "usagetype": "APS3-CW:AlarmMonitorUsage",
+      "offer": "AmazonCloudWatch"
+    },
+    "custom_metric_month": {
+      "usd": 0.3,
+      "unit": "metric-month",
+      "usagetype": "APS3-CW:MetricMonitorUsage (first 10k)",
+      "offer": "AmazonCloudWatch"
+    },
+    "route53_zone_month": {
+      "usd": 0.5,
+      "unit": "zone-month",
+      "usagetype": "HostedZone (first 25)",
+      "offer": "AmazonRoute53"
+    },
+    "route53_https_check_month": {
+      "usd": 2.75,
+      "unit": "check-month",
+      "usagetype": "Health-Check-Non-AWS 0.75 + Health-Check-Option-Non-AWS (HTTPS) 2.00",
+      "offer": "AmazonRoute53"
+    },
+    "dns_firewall_million": {
+      "usd": 0.6,
+      "unit": "million queries",
+      "usagetype": "APS3-DNS-FirewallQueries",
+      "offer": "AmazonRoute53"
+    },
+    "s3_gb_month": {
+      "usd": 0.025,
+      "unit": "GB-month",
+      "usagetype": "APS3-TimedStorage-ByteHrs (first 50 TB)",
+      "offer": "AmazonS3"
+    },
+    "ecr_gb_month": {
+      "usd": 0.1,
+      "unit": "GB-month",
+      "usagetype": "APS3-TimedStorage-ByteHrs",
+      "offer": "AmazonECR"
+    },
+    "ses_email": { "usd": 0.0001, "unit": "email", "usagetype": "APS3-Recipients", "offer": "AmazonSES" }
+  }
+}

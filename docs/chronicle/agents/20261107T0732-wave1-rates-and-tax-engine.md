@@ -1,7 +1,7 @@
 # Agent run: Wave1: rates and tax engine
 
 - Started: 2026-11-07T07:32:35.545Z · last activity: 2026-11-07T12:06:37.267Z
-- Turns: 596 · tool uses: 332 · output tokens: 1,710,008
+- Turns: 292 · tool uses: 332 · output tokens: 627,709
 - Type: general-purpose
 
 ## Brief (2026-11-07T07:32:35.545Z)

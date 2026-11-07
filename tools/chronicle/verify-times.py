@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Refuse timeline entries whose time is typed rather than derived (orchestrator v3, O3-1).
+"""Refuse timeline entries whose time is typed rather than derived (orchestrator v3, O3-1; round-3 `now` rule, E-115).
 
 Every NEW line in docs/chronicle/01-timeline.md (staged diff) that starts an entry with a time — `- **HH:MM` — must
 carry a source token printed by tools/chronicle/when.py: `<!-- t: <source> @ <ISO-8601 UTC> ... -->`, and HH:MM must
@@ -25,6 +25,11 @@ for line in diff.splitlines():
     t = token.search(line)
     if not t:
         bad.append(f'no source token: {line[1:120]}')
+        continue
+    src = re.search(r'<!--\s*t:\s*([^@\s]*)', line).group(1)
+    title = line[m.end():].lstrip(' —-').lower()
+    if src == 'now' and title.startswith(('owner', 'resumed', 'resume')):
+        bad.append(f'`now` dates the record, not the event (use when.py owner/trigger): {line[1:120]}')
         continue
     iso = t.group(1)
     if not iso.endswith('Z'):

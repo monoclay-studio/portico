@@ -1,0 +1,9 @@
+{
+  "name": "portico-tsx-runtime",
+  "private": true,
+  "description": "Runtime TypeScript loader for the api/worker images. Versions must match the pnpm-workspace.yaml catalog (tsx) and tsx's esbuild range.",
+  "dependencies": {
+    "esbuild": "0.28.2",
+    "tsx": "4.23.15"
+  }
+}

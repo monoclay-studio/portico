@@ -129,6 +129,12 @@ protect that hotel, not by usage:
 Trade-off of T2: a database-zone failure means minutes-to-hours of downtime (restore from backup) instead of an
 automatic failover. Acceptable for a small guesthouse pilot with a paper fallback; not for a 120-villa resort.
 
+**Update 2026-11-07 (infra security fix round, merged):** T2 now defaults to private tasks behind one NAT gateway
+(Q158). That is ≈ **$163/month**: the NAT adds about $45 and saves about $7 of task IPs. Public task IPs remain a
+lean-only opt-in at ≈ $124. Resilient is ≈ $408 quiet and $539 busy (≈ $335 with RDS Multi-AZ instead of Aurora).
+Account security (CloudTrail and alarms) costs about $0.05; GuardDuty is usage-based and not estimated. All figures
+are list-price estimates from `infra/README.md`, not yet checked in the AWS Pricing Calculator.
+
 **AWS Free Tier — verified 2026-11-07 on [aws.amazon.com/free](https://aws.amazon.com/free/):** new accounts get
 **$100 in credits immediately and up to $100 more** by using key services — up to **$200 over 6 months** on the
 Free plan. A Free-plan account **closes after 6 months or when credits run out**, whichever comes first, unless
