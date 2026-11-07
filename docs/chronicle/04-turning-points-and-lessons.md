@@ -50,7 +50,10 @@ regression test made from the reviewer's attack.
 - **Build caches can lie.** Turbo served a cached typecheck that hid a real type error twice; it was caught both times.
   Since then, verification runs `--force`.
 - **Pipe output hides failures.** One commit went in while lint was failing because the output was piped through
-  `tail`. Since then, exit codes are checked before every commit.
+  `tail`. Since then, exit codes are checked before every commit. It happened twice more on 2026-11-07 (a formatting
+  slip and generated JSON). A git pre-commit hook was considered but declined by the session's safety policy (a
+  persistent hook runs on every future commit). Instead the orchestrator commits to main through
+  `tools/commit-checked.sh`, which commits only when lint passes.
 - **Tests that pass alone can time out in parallel.** The demo-seed test needed a larger budget under 10 parallel
   packages on 4 CPUs.
 - **Usage limits are a planning input.** The first two 5-hour windows were exhausted by about 9 concurrent agents. A
