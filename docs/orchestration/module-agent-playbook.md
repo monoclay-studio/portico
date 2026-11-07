@@ -80,3 +80,6 @@ never stop to ask questions — decide using the docs, record genuine owner ques
 **Self-check (quality steward, 2026-11-07):** before you say done, and in every fix round, run
 `docs/quality/playbooks/module-builder-self-check.md` and put its tables in your final reply. Never pipe a gate's
 output; read its exit code.
+
+**Checkpoint commits:** a `wip(<branch>): usage-limit checkpoint` commit may already be pushed. Build on top of
+it; never amend, reset or rebase it away (the branch would no longer fast-forward).
