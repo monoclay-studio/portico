@@ -59,7 +59,9 @@ proves useless is marked *retired* with a date, never deleted.
 - **Seen in:**
   - payments P0-2: a Stripe account could be registered by any org, and `route_webhook` returned 2 rows, of which it
     took `rows[0]`;
-  - identity P0-2(b): an email domain on an SSO allow-list without proof of ownership.
+  - identity P0-2(b): an email domain on an SSO allow-list without proof of ownership;
+  - identity P1-8: SSO matched people by the mutable `email` claim, not by `(issuer, sub)`, and accepted a missing
+    `email_verified` (the "nOAuth" class).
 - **Probe:** register the same external identifier in tenant 2. Examples: provider account id, webhook endpoint, SSO
   issuer or domain, OTA hotel code, channel property id, door-lock site id. The registration must be refused, or must
   require proof of ownership. Inbound routing on that identifier must resolve to exactly one tenant. Status fields that
@@ -71,9 +73,15 @@ proves useless is marked *retired* with a date, never deleted.
 - **Seen in:**
   - rates R-04: the client declared its own channel, `bookingDate` and `companyId`;
   - payments P1-8: `initiator: 'customer'` bypassed the merchant-initiated-transaction agreement;
-  - payments P0-2: the tenant set `status: active` and the application fee.
+  - payments P0-2: the tenant set `status: active` and the application fee;
+  - rates R-05: the terms "hash" was an unkeyed SHA-256 described as tamper detection, and `/v1/quotes/reprice`
+    accepted client-supplied terms and returned them freshly sealed.
 - **Probe:** list every request field that changes eligibility, price, liability or authority. Send each one forged.
-  The server must derive it from the principal, the record or configuration, or reject it.
+  The server must derive it from the principal, the record or configuration, or reject it. Also send back a
+  server-issued document (sealed terms, a preview token, a signed link) with one field changed. The server must verify
+  a **keyed** seal before using it, and must never re-seal content the client supplied.
+- **Also SSO:** after the first link, match people on `(issuer, sub)`, never on a mutable attribute, and require
+  `email_verified === true`.
 - **Applies to:** rates, payments, reservations (channel ingestion), integration, identity.
 
 ### AP-05 · Ungated secondary endpoint, or a route reachable by the wrong role
@@ -316,6 +324,27 @@ proves useless is marked *retired* with a date, never deleted.
   net. Fees are booked as an expense, never as a guest adjustment.
 - **Applies to:** payments, finance, accounting.
 
+### AP-29 · Time semantics and deadlines: the wrong clock, or a deadline that nothing enforces
+- **Seen in:**
+  - operations P1-7: escalation was anchored on `created_at`, so tomorrow's day plan escalated 15 minutes after it was
+    generated, and preventive work was due at 23:59 **UTC** rather than in property time;
+  - reservations R-10: late-checkout and early-check-in fees were posted with a future service date, which finance
+    refuses;
+  - inventory INV-07: an expired overbooking allowance left a cell oversold, with no conflict raised until something
+    else touched it ("lazy expiry");
+  - rates R-16: the quote estimate across a rate change;
+  - CLAUDE.md §5: business date, stay date, service date, `occurred_at` and revenue date are all distinct.
+- **Probe:**
+  1. Run the module with a property in a non-UTC time zone (Maldives is UTC+5) and a clock set to 23:30 local, then
+     to 00:30.
+  2. Check every SLA, due time, escalation, posting date and report against the **property's** business date and
+     time zone, never UTC and never `created_at`.
+  3. For every expiry or deadline (holds, allowances, previews, invitations, links, grace periods), advance the clock
+     past it **without touching the record**. A job must record the transition, its conflict or issue, and its event.
+     It must not wait for the next command.
+- **Applies to:** operations, inventory, reservations, finance (business date vs service date), rates, identity
+  (expiries), day-close.
+
 ### AP-28 · The same money is collected twice through two channels
 - **Seen in:** payments P1-2: a paid deposit link plus a desk charge.
 - **Probe:** open a payment link for a purpose, then collect the same purpose at the desk, and by automation. The second
@@ -329,9 +358,12 @@ proves useless is marked *retired* with a date, never deleted.
 ### AP-30 · An event is lost because the dedupe marker commits before processing
 - **Seen in:** payments P0-3: a failure after the dedupe commit made every redelivery answer "duplicate", and the
   dispute was never recorded.
+- **Also seen in:** integration F6. The vendor was acknowledged before the record was applied, so "applied" did not
+  mean applied. Consumer failures went dead silently after 12 attempts.
 - **Probe:** inject a failure after the dedupe marker and before the effect (throw, deadlock, process kill), then
   redeliver. The event must be processed. There must also be a backstop job that lists provider events since the
-  cursor.
+  cursor. Acknowledge the sender only **after** the effect commits. A consumer's final failure raises an issue that
+  someone owns; it never just stops.
 - **Applies to:** payments webhooks, integration inbound, the outbox consumers of every module.
 - **Canary:** C-L2-05.
 
@@ -402,8 +434,15 @@ proves useless is marked *retired* with a date, never deleted.
   - inventory INV-03: no availability authority check on sale, hold or assignment;
   - reservations R-07/R-08: read-only mode still wrote locally, check-in authorized the card before the authority
     check, and forward mode created duplicate forwarded changes.
+- **Also seen in:**
+  - operations P1-4: acknowledging a forwarded work order changed nothing, so return to service was impossible;
+  - operations P1-5/P1-6: housekeeping next to an external PMS had no inbound stays contract, and every PMS-side status
+    was refused.
 - **Probe:** set each governed domain to external, in read-only and in forward mode. Try every write and every external
-  effect. All must be refused or forwarded **before** any effect. A repeated forward must not duplicate.
+  effect. All must be refused or forwarded **before** any effect. A repeated forward must not duplicate. In
+  **connected mode**, run the round trip end to end: forward, the external system acknowledges, the change takes
+  effect in Portico; and an inbound change from the system of record is applied. A module that claims it can run
+  standalone next to another system must show this loop working, not just a refusal.
 - **Applies to:** every module that writes governed domains (CLAUDE.md §4.15).
 
 ### AP-39 · A concurrent duplicate insert aborts the whole transaction
@@ -427,7 +466,10 @@ proves useless is marked *retired* with a date, never deleted.
 - **Seen in:**
   - reservations R-11: the fake payments decided synchronously, while the real flow is two-phase;
   - reservations R-14: the fakes never checked permissions;
-  - inventory: the fake did not model composites.
+  - inventory: the fake did not model composites;
+  - backoffice P1-6: the simulated data layer was validated against **its own copies** of the module contracts, so it
+    drifted from the real ones without anyone noticing (an `HH:MM` ETA and a nullable readiness would crash the
+    board).
 - **Probe:** a checklist for each fake. Does it check permissions and scope? Is it two-phase where the provider is? Does
   it return the real refusal codes and model the real states (composites, nullables)? Then re-run the module's
   scenarios against the real provider once it is bound.
@@ -466,9 +508,14 @@ proves useless is marked *retired* with a date, never deleted.
 - **Seen in:**
   - identity R2-P2-2 (E-006): power ordering on revoke and suspend, but not on `transferMember`;
   - identity R2-P2-3 (E-007): last-admin protection on SCIM user delete, but not on group reconciliation;
-  - identity R2-P1-3 (E-003): the domain gate on new links only.
+  - identity R2-P1-3 (E-003): the domain gate on new links only;
+  - inventory INV-04: selling checked residence (composite) commitments, but assigning a component villa did not;
+  - operations P1-12: return to service was enforced in operations, but inventory's own route could release the same
+    block directly. The state change could be reached **through another module's API**.
 - **Probe:** for each guard added, grep every entry point that makes **the same state change**: routes, services,
-  SCIM, SSO, jobs, events and imports. Probe each one.
+  SCIM, SSO, jobs, events and imports, **including other modules' routes and ports that change the same record**.
+  Probe each one. An invariant that one module owns must be enforced where the record lives, or the other paths must
+  be closed.
 - **Applies to:** every fix round.
 - **Canary:** C-L2-13.
 
