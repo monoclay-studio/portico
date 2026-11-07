@@ -5,7 +5,7 @@
  */
 import { sql } from '@portico/db';
 import { financeForReservations } from '@portico/finance';
-import { newId, type RequestContext, staticAuthorizer } from '@portico/kernel';
+import { newId, type RequestContext } from '@portico/kernel';
 import { platform } from '@portico/platform';
 import type { Booking } from '@portico/reservations';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
