@@ -84,7 +84,6 @@ import {
   reservationsJobs,
   reservationsManifest,
   reservationsService,
-  unavailablePort,
 } from '@portico/reservations';
 
 import { recordsHttp } from './records-routes';

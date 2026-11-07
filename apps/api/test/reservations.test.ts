@@ -80,7 +80,7 @@ describe('reservations in the API composition', () => {
     expect(quote.json()).toMatchObject({
       code: 'module_not_available',
       retryable: true,
-      detail: expect.stringMatching(/rates module is not available/),
+      detail: expect.stringMatching(/rates module, which is not connected yet/),
     });
     const search = await h.app.inject({ method: 'GET', url: '/v1/search?q=ABCDEFGH', headers: auth });
     expect(search.statusCode).toBe(200);
