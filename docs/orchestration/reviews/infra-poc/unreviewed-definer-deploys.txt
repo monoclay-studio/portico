@@ -1,0 +1,12 @@
+# PoC (reviewer, infra @0facbba + main): a migration run as portico_owner adds a SECURITY DEFINER function over a
+# cross-tenant directory table (identity.user_tenants: which person belongs to which organization) and grants it to
+# portico_app. The deploy's grants step (bootstrap-roles.mjs grants, deploy-cell.sh step 4) only WARNS and exits 0, so
+# deploy-cell.sh rolls the services; only the monthly restore drill fails, weeks later.
+## grants phase:
+exit code: 0
+"unreviewed":["identity.zz_memberships_all()"]
+"level":"warn","msg":"unreviewed SECURITY DEFINER functions executable by portico_app"
+## a request handler (portico_app_blue, no tenant context) reads every tenant's memberships:
+13 rows across 2 tenants
+## the monthly restore drill catches it:
+DRILL FAIL: portico_app can execute unreviewed SECURITY DEFINER functions: identity.zz_memberships_all()
