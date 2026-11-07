@@ -125,6 +125,14 @@ tracked in `finance.md`, not here. Rows are `specified` (ANL-Rnn or another spec
 
 ## Evidence sources (all verified 2026-11-07)
 
+Verification method: pages on docs.oracle.com, docs.mews.com, help.mews.com, api.apaleo.com, apaleo.dev and
+docs.stripe.com were fetched and read on 2026-11-07. Pages on hosts this environment's proxy blocks
+(central.xero.com, quickbooks.intuit.com, help.rguest.com, docs.infor.com, apaleo.zendesk.com,
+mewssystems.freshdesk.com, Toast, Omniboost, Stayntouch, Clock, TrustRadius, oracle.com marketing) were verified
+2026-11-07 through web-search results showing the page and its content, or through `docs/research/` citations;
+re-open them before any external use. Third-party pages (Omniboost, Stayntouch, Clock, TrustRadius) describe a
+competitor's behaviour indirectly and are weaker evidence than the vendor's own documentation.
+
 [op-rpt-mgr]: https://docs.oracle.com/en/industries/hospitality/opera-cloud/26.2/ocsuh/t_reports_configure_definable_managers_report.htm
 [op-rpt-fin]: https://docs.oracle.com/en/industries/hospitality/opera-cloud/26.2/ocsuh/c_reports_financials.htm
 [op-rpt-eod]: https://docs.oracle.com/en/industries/hospitality/opera-cloud/26.2/ocsuh/c_reports_end_of_day.htm

@@ -145,6 +145,14 @@ rows that Day Close depends on cite `feat/finance-core` @ `232be3a` (under revie
 
 ## Evidence sources (all verified 2026-11-07)
 
+Verification method: pages on docs.oracle.com, docs.mews.com, help.mews.com, api.apaleo.com, apaleo.dev and
+docs.stripe.com were fetched and read on 2026-11-07. Pages on hosts this environment's proxy blocks
+(central.xero.com, quickbooks.intuit.com, help.rguest.com, docs.infor.com, apaleo.zendesk.com,
+mewssystems.freshdesk.com, Toast, Omniboost, Stayntouch, Clock, TrustRadius, oracle.com marketing) were verified
+2026-11-07 through web-search results showing the page and its content, or through `docs/research/` citations;
+re-open them before any external use. Third-party pages (Omniboost, Stayntouch, Clock, TrustRadius) describe a
+competitor's behaviour indirectly and are weaker evidence than the vendor's own documentation.
+
 [op-eod]: https://docs.oracle.com/en/industries/hospitality/opera-cloud/26.2/ocsuh/c_endofday_procedures.htm
 [op-eod-run]: https://docs.oracle.com/en/industries/hospitality/opera-cloud/26.2/ocsuh/t_endofday_running_end_of_day.htm
 [op-ia]: https://docs.oracle.com/en/industries/hospitality/opera-cloud/26.2/ocsuh/c_endofday_income_audit.htm

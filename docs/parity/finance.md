@@ -475,6 +475,14 @@ full-service hotels, resorts or groups; P2 = differentiator or rare.
 
 ## Evidence sources (all verified 2026-11-07)
 
+Verification method: pages on docs.oracle.com, docs.mews.com, help.mews.com, api.apaleo.com, apaleo.dev and
+docs.stripe.com were fetched and read on 2026-11-07. Pages on hosts this environment's proxy blocks
+(central.xero.com, quickbooks.intuit.com, help.rguest.com, docs.infor.com, apaleo.zendesk.com,
+mewssystems.freshdesk.com, Toast, Omniboost, Stayntouch, Clock, TrustRadius, oracle.com marketing) were verified
+2026-11-07 through web-search results showing the page and its content, or through `docs/research/` citations;
+re-open them before any external use. Third-party pages (Omniboost, Stayntouch, Clock, TrustRadius) describe a
+competitor's behaviour indirectly and are weaker evidence than the vendor's own documentation.
+
 OPERA Cloud 26.2 User Guide (`docs.oracle.com/en/industries/hospitality/opera-cloud/26.2/ocsuh/`):
 
 [op-ar]: https://docs.oracle.com/en/industries/hospitality/opera-cloud/26.2/ocsuh/c_accounts_receivable_accounts_receivable_ch.htm
@@ -644,7 +652,7 @@ Apaleo, Mews, Agilysys, Infor, NetSuite, Oracle Simphony:
 [mw-outletitems]: https://docs.mews.com/connector-api/operations/outletitems
 [mw-payreq-api]: https://docs.mews.com/connector-api/operations/paymentrequests
 [mw-ehw]: https://mewssystems.freshdesk.com/support/solutions/articles/31000129871-editable-history-window
-[mw-trial-balance]: https://help.mews.com/s/article/The-Trial-balance-in-Mews-Operations-1
+[mw-trial-balance]: https://help.mews.com/s/article/Understanding-the-new-Ledgers-and-Trial-balance-in-Mews-Operations
 [mw-deposit-ledger]: https://help.mews.com/s/article/The-Deposit-ledger-in-Mews-Operations-1
 [mw-city-ledger]: https://help.mews.com/s/article/The-City-ledger
 [mw-ledger-activity]: https://help.mews.com/s/article/The-Ledger-activity-report-in-Mews-Operations

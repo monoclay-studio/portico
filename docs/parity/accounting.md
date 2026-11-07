@@ -186,6 +186,14 @@ and the PMS ledgers of Mews and Apaleo. Evidence links at the end; **all verifie
 
 ## Evidence sources (all verified 2026-11-07)
 
+Verification method: pages on docs.oracle.com, docs.mews.com, help.mews.com, api.apaleo.com, apaleo.dev and
+docs.stripe.com were fetched and read on 2026-11-07. Pages on hosts this environment's proxy blocks
+(central.xero.com, quickbooks.intuit.com, help.rguest.com, docs.infor.com, apaleo.zendesk.com,
+mewssystems.freshdesk.com, Toast, Omniboost, Stayntouch, Clock, TrustRadius, oracle.com marketing) were verified
+2026-11-07 through web-search results showing the page and its content, or through `docs/research/` citations;
+re-open them before any external use. Third-party pages (Omniboost, Stayntouch, Clock, TrustRadius) describe a
+competitor's behaviour indirectly and are weaker evidence than the vendor's own documentation.
+
 [xero-rec]: https://central.xero.com/0/article/Reconcile-your-bank-account
 [xero-findmatch]: https://central.xero.com/0/article/Reconcile-a-bank-statement-line-using-Find-Match
 [xero-bankrule]: https://central.xero.com/0/article/Create-a-bank-rule
@@ -233,7 +241,7 @@ and the PMS ledgers of Mews and Apaleo. Evidence links at the end; **all verifie
 [mw-acct-uc]: https://docs.mews.com/connector-api/use-cases/accounting
 [mw-ledger-activity]: https://help.mews.com/s/article/The-Ledger-activity-report-in-Mews-Operations
 [mw-ledger-reconcile]: https://help.mews.com/s/article/How-to-reconcile-your-Ledgers-in-Mews-Operations
-[mw-trial-balance]: https://help.mews.com/s/article/The-Trial-balance-in-Mews-Operations-1
+[mw-trial-balance]: https://help.mews.com/s/article/Understanding-the-new-Ledgers-and-Trial-balance-in-Mews-Operations
 [ag-fiscal-auto]: https://help.rguest.com/stay/UserGuide/Automatically%20Closing%20a%20Fiscal.htm
 [ag-fiscal-man]: https://help.rguest.com/stay/UserGuide/Manually%20Closing%20a%20Fiscal.htm
 [inf-cashier-bank]: https://docs.infor.com/hms/3.8/en-us/hmsolh/pages/cashierbankingreport_help.html
