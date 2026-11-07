@@ -1,3 +1,4 @@
+import { mfaChallengeFailureReason } from '@portico/identity/contracts';
 import { ApiError } from '../../api/errors';
 
 /**
@@ -25,7 +26,9 @@ export function secondStepFailure(e: unknown, now = new Date()): SecondStepFailu
     };
   }
   if (e.status === 401) {
-    if (details.reason === 'invalid_code')
+    // The reasons are identity's vocabulary (contracts), imported rather than copied.
+    const reason = mfaChallengeFailureReason.safeParse(details.reason);
+    if (reason.success && reason.data === mfaChallengeFailureReason.enum.invalid_code)
       return {
         kind: 'wrong_code',
         triesLeft: typeof details.attemptsRemaining === 'number' ? details.attemptsRemaining : null,

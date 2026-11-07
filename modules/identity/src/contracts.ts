@@ -100,6 +100,12 @@ export const mfaChallengeRequest = z
     (v) => !!v.code !== !!v.recoveryCode,
     'Send either a code from the authenticator app or a recovery code.',
   );
+/**
+ * Why POST /v1/auth/login/mfa refused a code (401 `unauthenticated`, `details.reason`): `invalid_code` → try again
+ * (`details.attemptsRemaining`); `challenge_expired` → the sign-in request is over, enter the password again.
+ */
+export const mfaChallengeFailureReason = z.enum(['invalid_code', 'challenge_expired']);
+export type MfaChallengeFailureReason = z.infer<typeof mfaChallengeFailureReason>;
 export const stepUpRequest = secondFactor;
 export const stepUpResponse = z.object({ verifiedAt: z.string(), method: z.enum(['totp', 'recovery_code']) });
 export const totpEnrolResponse = z.object({ factorId: z.uuid(), secret: z.string(), otpauthUri: z.string() });

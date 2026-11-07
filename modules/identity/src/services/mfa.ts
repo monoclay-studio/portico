@@ -17,6 +17,7 @@ import {
   UnauthenticatedError,
   ValidationError,
 } from '@portico/kernel';
+import type { MfaChallengeFailureReason } from '../contracts';
 import { generateRecoveryCodes, hashRecoveryCode } from '../domain/recovery-codes';
 import { alertDedupeKey } from '../domain/security-rules';
 import { base32Decode, generateTotpSecret, provisioningUri, verifyTotp } from '../domain/totp';
@@ -808,7 +809,7 @@ export async function createMfaChallenge(
  * say what to do next: `invalid_code` → try again (with `attemptsRemaining`), `challenge_expired` → enter the
  * password again. Neither reveals anything about the person that the password step had not already proven.
  */
-export type MfaChallengeFailure = 'challenge_expired' | 'invalid_code';
+export type MfaChallengeFailure = MfaChallengeFailureReason;
 
 export class MfaChallengeError extends DomainError {
   constructor(reason: MfaChallengeFailure, attemptsRemaining?: number) {
