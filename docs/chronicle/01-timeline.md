@@ -414,3 +414,19 @@ Each agent's brief and report are in `agents/`.
   - 87 module tests and 2 HTTP tests. The § 5.4 mutation table has 22 guards, all red.
   - P0 parity rows still open: 57 → 11.
   - 17 contract requests went to the other modules. The steward review waits for the usage rule.
+- **23:27 — Migration module ("Move to Portico") increments 1–2 built** <!-- t: agent-ac5ae1ef01ad9bd99 @ 2026-11-07T23:27:11.349Z (Build migration module (increments 1–2)) -->; branch `feat/migration` pushed, every gate green.
+  - **Decision:** a new module (`modules/migration`), not part of integration. It writes into every data-owning
+    module, so it uses integration only through ports.
+  - **Proven in tests:**
+    - The same-day guesthouse path: rehearse in a trial org, reconcile twice, second-person authorization and switch,
+      cutover, rollback window.
+    - Zero duplicate reservations, guarded by a database unique key per source key and tested with five racing
+      importers, crash resume and delta sync.
+    - A card number in any cell refuses the whole upload.
+  - 95 module tests and 3 HTTP tests.
+  - **Limits:**
+    - Reservations has no migration import yet (MIG-CR-1), so a real run stops honestly at that step.
+    - The vendor export layouts (Little Hotelier, Cloudbeds, eZee) are unverified.
+    - The parity gate fails on 3 P0 rows that need the real contracts.
+  - The agent's open questions became Q162 (source-data retention, default 30 days; Monoclay co-sign).
+  - The steward review waits for the usage rule.

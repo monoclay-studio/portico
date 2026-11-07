@@ -161,7 +161,7 @@
     1. If the integration-step fix round 4 reported: a focused re-review #5 (steward v2.1, re-review variant), then
        merge if clean. Otherwise resume it with "your WIP was committed and pushed as `<sha>`; build on top of it".
     2. Steward reviews of distribution and day-close (in parallel). Then fix rounds, then merge.
-    3. Migration: resume or review, depending on its report.
+    3. Steward review of migration (`feat/migration` @ 45be8b9, built 23:27: 95 module tests, gates green; MIG-CR-1 blocks real runs), in parallel with item 2.
     4. After integration-step merges:
        - the backoffice real-data round (the pending-fixes UX 2a lines);
        - payments collection plans with finance receipts (MIRA 3-day rule);

@@ -658,3 +658,24 @@ before the first production deployment; nothing is deployed today (`infra/README
 instruction.
 **Blocks:** the first production deployment only.
 **Raised by / date:** infrastructure workstream (security fix round), 2026-11-07
+
+### Q162 — How long migration keeps a hotel's source data, and Monoclay's co-sign on production cutovers      Status: open
+**Context:** A migration ("Move to Portico", D13) holds the uploaded source files and staged records: guest names,
+contacts and booking history from the old system. They are needed for reconciliation, rehearsal and the rollback
+window, then no longer. Separately, a production cutover switches the hotel's system of record. Today it needs a
+second authorized person at the hotel plus the platform activation scope.
+**Question:**
+- (a) How long after a migration ends may Portico keep the source data? Keys, hashes and reconciliation reports are
+  kept either way. (Related: Q63, trial copies.)
+- (b) Should a Monoclay operator also co-sign every production cutover (FR-MIG-3)?
+**Default we are proceeding with:**
+- (a) source personal data is purged **30 days** after the migration ends; keys, hashes and reports are kept; a
+  guest's data export includes what a migration still holds;
+- (b) no operator co-sign until an operator actor exists; the gate records the hotel's second authorized person plus
+  the platform activation scope.
+**Implemented by:** `modules/migration` on `feat/migration` (README § Privacy; the purge after retention is tested
+with a scan for personal data). (b) is pending-fixes "platform FR-MIG-3".
+**If the answer differs:** (a) is a configuration value; (b) adds an operator approval step to the production gate,
+about a day of platform and migration work.
+**Blocks:** nothing in development. (b) blocks the first production migration only if the answer is yes.
+**Raised by / date:** migration module agent, 2026-11-07
