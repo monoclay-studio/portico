@@ -216,3 +216,147 @@ billing is not activated for live customers until this is answered.
 **Blocks:** choosing the RS-2 POS/ERP/lock vendors; any readiness level above R6 (needs a named hotel).
 **Raised by / date:** Integration & Adoption lead, 2026-11-07
 
+### Q80 — Door-lock vendor partner programmes and key issuance for pilots    Status: open
+**Context:** The guest-journey audit found no module for keys (`docs/journey/gap-register.md` JG-01; new spec `docs/specs/access.md`). Issuing keys from Portico requires each lock vendor's PMS interface or cloud API (ASSA ABLOY Vostio/Visionline, Salto Space, dormakaba Ambiance and others), usually under a partner agreement, an SDK or interface licence and sometimes per-door or per-key fees paid by the hotel; on-premise lock servers also need the local connector (Q62). Which systems Maldivian resorts use is unconfirmed (Q64).
+**Question:** May we apply to lock vendors' partner programmes (accepting NDAs and, once a hotel is ready, interface fees that the hotel or Monoclay pays), and which vendor should be first once discovery names the pilot's lock system?
+**Default we are proceeding with:** build the vendor-neutral `access` module with the **manual key log**, mechanical-key register, key rules for room moves/extensions/checkout and a lock **simulator** (all usable at a pilot without any vendor agreement); no partner applications or agreements; first vendor chosen after Q64 discovery.
+**If the answer differs:** declining keeps key issuance manual (encode in the lock vendor's software, record in Portico) — acceptable for a pilot but weaker at check-in; approving moves one lock connector into wave 3.
+**Blocks:** live key issuance from Portico (R4+ for any lock vendor). Not blocking the pilot (manual path) or development.
+**Raised by / date:** guest-journey audit, 2026-11-07
+
+### Q81 — Tour-operator contracting in the first pilot slice    Status: open
+**Context:** Maldivian resorts (and many guesthouses selling through Malé DMCs) are believed to earn most room nights through tour-operator contracts with seasons, net rates per market, supplements, allotments with release periods, combinable offers and stop-sales [assumption — Q64]. The specs had only net rates and simple allotments; the audit proposes a `contracting` module (`docs/specs/contracting.md`) that compiles contracts into rates and allotments and checks every tour-operator voucher against the contract. Loading contracts is labour-intensive; some vendors offer it as a service.
+**Question:** (a) Confirm that contracting belongs in the first pilot slice (it moves contracts, offers, allotments and the contract check into wave 2 and pushes other wave-2 items back); (b) should Monoclay offer contract loading as an onboarding service, and on what terms?
+**Default we are proceeding with:** contracting is P0 for any resort pilot and for guesthouses that sell through DMCs; wave 2 includes contracts, offers with combinability, allotments/release, stop-sale notices and the contract check; statements and rate sheets in wave 3; contract loading is done by the hotel in Portico with Monoclay guidance, no paid service defined.
+**If the answer differs:** if not in the pilot slice, the pilot must be a property with little tour-operator business (or accept manual pricing of vouchers, a known source of errors); a loading service changes onboarding cost and the cost model.
+**Blocks:** a resort pilot's pricing accuracy for tour-operator bookings. Development proceeds on the default.
+**Raised by / date:** guest-journey audit, 2026-11-07
+
+### Q82 — Review platforms: access, the paid reviews add-on and publishing replies    Status: open
+**Context:** Answering OTA, Google and TripAdvisor reviews from Portico (`docs/specs/crm-marketing.md` §3.4) needs the channel hub's messaging-and-reviews add-on (planning baseline +US$7 per property per month, readiness brief §5, per-channel support unverified) and API access from Google (Business Profile) and TripAdvisor, each with its own terms. Publishing a reply is a public statement on the hotel's behalf.
+**Question:** May we (a) enable the hub's reviews add-on for pilot properties at that cost, (b) apply for Google Business Profile and TripAdvisor API access, and (c) publish replies through APIs after staff approval?
+**Default we are proceeding with:** review aggregation and reply drafting built against simulators and manual import; replies are approved in Portico and then copied to the platform by staff ("copy and open extranet"); no add-on activation or API applications.
+**If the answer differs:** approving adds per-property cost (pass-through per Q45) and API publication (`reputation.publish` effect, live only with authorization).
+**Blocks:** automatic review import and API reply publication. Not blocking the reputation workflow itself.
+**Raised by / date:** guest-journey audit, 2026-11-07
+
+### Q83 — Gift vouchers: tax point, expiry rules and launch    Status: open
+**Context:** Selling gift vouchers (`docs/specs/crm-marketing.md` §3.6; finance SCR-26) creates a liability on the hotel's books. The tax point for vouchers under MIRA's time-of-supply rule (earlier of invoice or payment), whether monetary and experience vouchers are treated differently, and any consumer-law limits on expiry are unverified for the Maldives and other markets.
+**Question:** Can the Maldives tax/legal adviser (Q20 scope) confirm the TGST treatment of monetary and experience vouchers and any rules on voucher expiry and unredeemed balances?
+**Default we are proceeding with:** vouchers are P2; built as hotel-merchant stored-value liabilities with a configurable tax point per voucher type (default: tax at redemption for monetary vouchers, at sale for experience vouchers — marked `unverified`), configurable expiry and breakage, and no live voucher sale until verified.
+**If the answer differs:** configuration change of the voucher tax rule and expiry policy.
+**Blocks:** live voucher sales. Nothing in development.
+**Raised by / date:** guest-journey audit, 2026-11-07
+
+### Q84 — Guest-facing AI (automatic answers to guests)    Status: open
+**Context:** Hotels increasingly use AI to answer guest questions in chat, WhatsApp and the booking engine. Portico's AI is staff-facing: drafts are suggestions a person sends (AI-R03/R04). Letting AI answer guests directly would speed replies at night but sends model output to guests without review, adds per-message AI cost, and processes guest messages with an AI provider (Q25).
+**Question:** Should Portico offer automatic AI answers to guests (limited to approved property content and live tool results, never inventing availability, prices or policies), or keep AI to staff-approved drafts only?
+**Default we are proceeding with:** staff-approved drafts only; no automatic guest-facing AI answers (`docs/journey/gap-register.md` JG-57, P2).
+**If the answer differs:** an `ai` capability for gated auto-replies with per-property opt-in, budget caps, evaluation and an "answered by AI" label; cost model update.
+**Blocks:** nothing in development.
+**Raised by / date:** guest-journey audit, 2026-11-07
+
+### Q85 — Paid flight-status data for arrival and departure tracking    Status: open
+**Context:** Seaplane transfers fly in daylight only and are scheduled around international flights; late arrivals need transit nights in Malé/Hulhumalé (`docs/journey/guest-journey-coverage.md` §1.4). Automatic flight-status updates would keep ETAs, transfers and arrival preparation current, but flight-data APIs are paid per query or per property.
+**Question:** May we budget a flight-status data provider (choice after price comparison) for resort properties, passed through or included?
+**Default we are proceeding with:** manual ETA updates by the transfer desk (RES-R39) and operator information; the integration workflow `flightStatus` is designed but no provider is contracted.
+**If the answer differs:** a connector for one provider; cost per property in the cost model.
+**Blocks:** automatic flight tracking only.
+**Raised by / date:** guest-journey audit, 2026-11-07
+
+### Q86 — Incident, medical and security records: scope, legal duties and retention    Status: open
+**Context:** The audit adds an incident/security log, minimal medical-visit records (no clinical notes) and an emergency muster list (`docs/specs/guest-services.md` §3.4–3.5). These hold sensitive personal data; Maldivian duties to notify authorities (police, Ministry of Tourism, health) after incidents, rules for keeping such records, and retention periods are unconfirmed.
+**Question:** Can the Maldives adviser (Q20 scope) confirm incident-notification duties for tourist establishments and the retention rules for incident, medical and security records?
+**Default we are proceeding with:** incident and medical records restricted by permission, append-only, retained 7 years by default (configurable), no clinical notes, no automatic submissions; notification fields are free text references.
+**If the answer differs:** retention and field requirements change as configuration; possibly a report format for authority notifications (file, never an automatic submission without authorization).
+**Blocks:** privacy notice wording for these records at a pilot. Nothing in development.
+**Raised by / date:** guest-journey audit, 2026-11-07
+
+### Q87 — Loyalty: recognition only, or a points programme    Status: open
+**Context:** Groups expect guest recognition across properties; some want a points programme. Points create a financial liability (accrual, redemption, breakage), terms and conditions, and possibly tax questions, and compete with brand programmes some hotels already belong to.
+**Question:** Should Portico offer a points programme for hotel groups, or recognition tiers and benefits only?
+**Default we are proceeding with:** recognition tiers and benefits (`docs/specs/crm-marketing.md` CRM-R16–R18) and capture of external programme numbers; points programme LATER and only after this answer.
+**If the answer differs:** a points ledger in `finance` (liability and breakage like vouchers) and programme management in `crm` (medium effort).
+**Blocks:** nothing now.
+**Raised by / date:** guest-journey audit, 2026-11-07
+
+### Q100 — Back-of-house scope, sequencing and the vision wording          Status: open
+**Context:** You asked for Portico to also cover accounting, room charges, F&B, procurement and the rest of back-of-house. The brief (§12) and the vision ("No shallow clones of payroll, procurement or ERP") warn against shallow versions. Seven deep, staged modules are proposed (`docs/backofhouse/README.md`): accounting, F&B POS, procurement, stock, workforce, concessions, utilities — each coexisting with systems a hotel keeps.
+**Question:** (a) Do you confirm this scope and the build order BOH-0…BOH-5? (b) Do you agree that back-of-house work starts only after the pilot slice (Q26) is green, except the small ledger contracts (BOH-0)? (c) May the vision line be reworded as in CR-01 and recorded as decision D12?
+**Default we are proceeding with:** specs only; BOH-0 contract changes proposed for the next finance iteration; no back-of-house build before the pilot slice; vision unchanged until you confirm.
+**If the answer differs:** a resort-first pilot moves BOH-1 (POS) into wave 3; dropping modules removes specs, no rework elsewhere.
+**Blocks:** engineering capacity planning for wave 4. Nothing in the pilot slice.
+**Raised by / date:** back-of-house product architect, 2026-11-07
+
+### Q101 — Payroll: integrate (export) or build                          Status: open
+**Context:** Payroll gross-to-net in the Maldives involves employee withholding tax (MIRA 601, monthly by the 15th, computed after pension contributions), pension (7% employer / 7% employee), multi-currency pay and annual reconciliations; groups add other countries. Building it adds legal liability and requires storing salaries and bank accounts. Trade-offs: `docs/specs/workforce.md` §15.
+**Question:** Do you accept that Portico does **not** compute payroll, and instead exports approved payroll inputs (hours, leave, days worked, service-charge shares) to payroll providers and checks the payroll journal that comes back?
+**Default we are proceeding with:** export to payroll providers; revisit only if discovery (Q64) shows Maldivian hotels lack adequate payroll providers.
+**If the answer differs:** a "Maldives payroll pack" becomes a new module with adviser sign-off (several months), plus the IDN-R13 change in Q102 widened to salaries and bank accounts.
+**Blocks:** nothing now.
+**Raised by / date:** back-of-house product architect, 2026-11-07
+
+### Q102 — Pay-related data in Portico (identity rule IDN-R13)          Status: open
+**Context:** IDN-R13 says "salary-like data never stored". Service-charge distribution is computed in Portico from the ledger, so per-employee shares and days worked exist in Portico. Labour forecasting uses department cost bands, not individual salaries.
+**Question:** May Portico store per-employee service-charge shares and days worked (field-restricted, audited per read), while never storing individual salaries or salary bank accounts?
+**Default we are proceeding with:** yes as described, behind `workforce.serviceCharge.readIndividual` ⚑; no salaries or bank accounts (CR-21).
+**If the answer differs:** service-charge runs are computed and exported without persisting per-employee lines (weaker audit evidence for the Labour Relations Authority) or the feature is dropped.
+**Blocks:** workforce service-charge build (BOH-4).
+**Raised by / date:** back-of-house product architect, 2026-11-07
+
+### Q103 — Service-charge distribution rules and payout currency           Status: open
+**Context:** Found via search-indexed sources (2026-11-07): tourism businesses levy at least 10% service charge; the Regulation on Service Charge (2021/R-41) allows at most a 1% administrative deduction from the service charge collected per month; a law-firm guide describes shares by days worked (paid leave and holidays counted), while press reports describe equal distribution; distribution is due before the end of the following month. An Employment Act amendment requiring payment in the currency collected was accepted by Parliament in April 2026 and sent to committee; enactment was not found. Some resort groups pay in MVR since January 2026. Sources in `docs/specs/workforce.md`.
+**Question:** With a Maldivian adviser: (a) posted (levied) or collected basis? (b) days-worked or equal shares? (c) are temporary/agency staff eligible? (d) which payout currency may a hotel choose today, and with what employee consent?
+**Default we are proceeding with:** rules as data marked `unverified`; posted basis with the collected basis computed alongside; days-worked shares; deduction ≤ 1%; pools per collection currency, paid in the collection currency unless the property records another policy with consent.
+**If the answer differs:** rule-pack data change; no code change expected.
+**Blocks:** live use of service-charge runs. Development proceeds.
+**Raised by / date:** back-of-house product architect, 2026-11-07
+
+### Q104 — Concession partners: agent or principal, tax and invoice presentation   Status: open
+**Context:** Dive centres, spas and boutiques run by partners charge guests to the villa bill. If the hotel collects as **agent**, the amounts are a liability to the partner and the partner reports its own TGST; if the hotel is **principal**, they are hotel revenue and the partner invoices the hotel. The guest invoice wording and the MIRA 206 treatment differ.
+**Question:** Which model(s) must Portico support for Maldivian resorts, and how must agent collections appear on the hotel's tax invoice and return?
+**Default we are proceeding with:** agent model by default (liability "due to concessionaire", separate invoice section naming the partner and its TIN), principal model as an option; marked `unverified`.
+**If the answer differs:** charge-code mapping and invoice template change (configuration and template work).
+**Blocks:** live concession settlements.
+**Raised by / date:** back-of-house product architect, 2026-11-07
+
+### Q105 — USALI materials and wording                                     Status: open
+**Context:** The chart-of-accounts templates and statements follow the publicly described USALI 12th Revised Edition structure (effective 1 January 2026, new sustainability and all-inclusive sections). Line-level definitions and the revenue and expense dictionary are HFTP publications. Claiming compliance without them would breach the no-unsupported-claims rule.
+**Question:** May Monoclay buy the USALI 12th Revised Edition (and, if useful, the HFTP dictionary subscription), and do you accept the wording "USALI-aligned" (never "USALI-compliant") until an accountant has reviewed the templates?
+**Default we are proceeding with:** no purchase; "USALI-aligned" wording; templates built from public descriptions and labelled for review.
+**If the answer differs:** a small purchase (quote required); template detail improves; claims still need review.
+**Blocks:** detailed line mapping and the sustainability section; nothing else.
+**Raised by / date:** back-of-house product architect, 2026-11-07
+
+### Q106 — Maldives back-of-house items for the tax/legal adviser (extends Q20)   Status: open
+**Context:** Back-of-house adds questions the adviser list (Q20, Q41) does not yet contain.
+**Question:** Please add to the adviser engagement: (1) input-tax and import-GST recovery for tourism-sector registrants and the boxes of MIRA 206/205; (2) withholding tax on payments to non-residents (e.g. foreign OTA commissions, foreign suppliers); (3) whether per-device receipt series and receipt issue after an offline sale (within 3 days) satisfy tax-invoice rules; (4) GST on staff purchases and staff meals; (5) GST on utility and housing recharges to partners; (6) employment rule pack values (hours, Ramadan hours, rest days, leave types); (7) statutory financial-statement presentation; (8) halal/alcohol import permits and alcohol sale limits by establishment type.
+**Default we are proceeding with:** all as data marked `unverified`; live issuance and return filing from Portico data blocked until verified.
+**If the answer differs:** data changes in rule packs and templates.
+**Blocks:** live use of the affected features in the Maldives. Development proceeds.
+**Raised by / date:** back-of-house product architect, 2026-11-07
+
+### Q107 — Bank statements and supplier payment instructions with Maldivian banks   Status: open
+**Context:** Bank reconciliation and payment runs need statement files and payment-instruction formats from the hotel's banks (e.g. BML, MIB). Formats and any APIs are unverified. Portico never moves money; it prepares instructions the bank executes.
+**Question:** May we ask Maldivian banks (with a pilot hotel's consent) for statement export formats (CSV/MT940/CAMT.053) and bulk-payment file formats, and later evaluate statement feeds or payment APIs (which would need bank agreements)?
+**Default we are proceeding with:** generic CSV statement import with mapping profiles and a generic payment CSV; no bank contact or agreement; payment files watermarked outside live.
+**If the answer differs:** bank-specific profiles added; an API path would add a `bank.payment` effect and a dependency-register entry.
+**Blocks:** bank-specific formats only.
+**Raised by / date:** back-of-house product architect, 2026-11-07
+
+### Q108 — POS hardware and on-site support                               Status: open
+**Context:** Portico POS runs in the browser on tablets with offline operation, but outlets also need printers, KDS screens, cash drawers and sometimes an on-site outlet hub (a local connector) for kitchens that must keep working when the internet drops. That creates support duties similar to Q62.
+**Question:** (a) Does Monoclay support a tested hardware list (hotel buys the hardware, Monoclay never resells)? (b) What support hours apply to POS incidents at night (bars, dinner service)?
+**Default we are proceeding with:** hotel-procured hardware; a short tested list with evidence; business-hours support assumed (as Q21/Q62); documented manual fallbacks; no resale.
+**If the answer differs:** hardware partnership or resale changes the commercial model and support costs.
+**Blocks:** a live POS pilot (R7+). Development proceeds.
+**Raised by / date:** back-of-house product architect, 2026-11-07
+
+### Q109 — Packaging of back-of-house modules                             Status: open
+**Context:** New entitlement keys are proposed (CR-29) for accounting, POS, procurement, stock, workforce, concessions and utilities, including a "Guesthouse books" add-on and Connect packs SM-11…SM-15 for hotels keeping their PMS.
+**Question:** Approve the packaging approach (add-ons in Essentials/Professional, POS included in Resort, all included in Enterprise, Connect packs), with prices set later (Q3)?
+**Default we are proceeding with:** keys and packaging as configuration; no prices; never gate ERP export, offline POS, environment safety or audit.
+**If the answer differs:** configuration change only.
+**Blocks:** pricing page and quotes; nothing in development.
+**Raised by / date:** back-of-house product architect, 2026-11-07
+
