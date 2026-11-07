@@ -1,7 +1,7 @@
 {
   "name": "portico",
   "private": true,
-  "description": "Portico — cloud hospitality management platform by Monoclay",
+  "description": "Portico \u2014 cloud hospitality management platform by Monoclay",
   "license": "UNLICENSED",
   "type": "module",
   "packageManager": "pnpm@10.28.0",
@@ -12,14 +12,15 @@
     "build": "turbo run build",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test --concurrency=2",
-    "lint": "biome check .",
+    "lint": "biome check . && node tools/check-boundaries.mjs",
     "format": "biome format --write .",
     "migrate": "pnpm --filter @portico/api migrate",
     "db:up": "bash tools/db-up.sh",
     "dev:api": "pnpm --filter @portico/api dev",
     "dev:worker": "pnpm --filter @portico/worker dev",
     "dev:backoffice": "pnpm --filter @portico/backoffice dev",
-    "seed:demo": "pnpm --filter @portico/api seed:demo"
+    "seed:demo": "pnpm --filter @portico/api seed:demo",
+    "lint:boundaries": "node tools/check-boundaries.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "catalog:",
