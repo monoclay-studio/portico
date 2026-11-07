@@ -140,3 +140,29 @@ function humanize(entity: string): string {
   const s = entity.replace(/[_-]+/g, ' ');
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
+
+/** A collaborating module is not wired in this deployment yet (port bound to `unavailablePort`). */
+export class ModuleUnavailableError extends DomainError {
+  constructor(module: string, operation?: string) {
+    super(
+      'module_not_available',
+      `This needs the ${module} module, which is not connected yet${operation ? ` (${operation})` : ''}. Nothing was changed. Try again after it is enabled, or ask an administrator.`,
+      { status: 503, retryable: true, details: { module, ...(operation ? { operation } : {}) } },
+    );
+  }
+}
+
+/**
+ * Bind a port to this placeholder until its provider module is composed: every call throws
+ * ModuleUnavailableError with the same code everywhere (`module_not_available`).
+ */
+export function unavailablePort<T extends object>(module: string): T {
+  return new Proxy({} as T, {
+    get(_target, prop) {
+      if (prop === 'then') return undefined; // not a thenable
+      return () => {
+        throw new ModuleUnavailableError(module, String(prop));
+      };
+    },
+  });
+}

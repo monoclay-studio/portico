@@ -2,7 +2,7 @@ import type { Authorizer } from '@portico/kernel';
 
 /**
  * MFA policy for staff sessions, evaluated centrally inside the Authorizer so that no module has to know about
- * MFA: `requirePermission(ctx, 'finance.posting.correct')` simply fails when step-up is missing.
+ * MFA: `requirePermission(ctx, <sensitive permission>)` simply fails when step-up is missing.
  *
  * Rules (organization security policy):
  *  1. A sensitive (⚑) permission is effective only for a member who has MFA enrolled (TOTP factor, or a session

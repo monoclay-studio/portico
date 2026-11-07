@@ -7,6 +7,7 @@ export interface AppOptions {
   logger?: boolean | { level: string };
   corsOrigins?: string[];
   rateLimit?: false | { max: number; timeWindow: string };
+  trustedProxies?: readonly string[];
 }
 
 export async function buildApp(opts: AppOptions): Promise<PorticoApp> {
@@ -18,6 +19,7 @@ export async function buildApp(opts: AppOptions): Promise<PorticoApp> {
     ...(opts.corsOrigins ? { corsOrigins: opts.corsOrigins } : {}),
     ...(opts.rateLimit !== undefined ? { rateLimit: opts.rateLimit } : {}),
     openApi: { title: 'Portico API', version: '1.0.0' },
+    ...(opts.trustedProxies ? { trustedProxies: opts.trustedProxies } : {}),
     readiness: async () => {
       await sql`select 1`.execute(opts.database.kysely);
     },

@@ -14,6 +14,11 @@ const schema = z.object({
   APP_DB_DEV_PASSWORD: z.string().optional(),
   /** Operator token for the internal provisioning endpoint. Endpoint disabled when unset. */
   OPERATOR_TOKEN: z.string().min(32).optional(),
+  /**
+   * Comma-separated addresses/CIDRs of the reverse proxies in front of the API (behind the AWS ALB: the VPC
+   * CIDR). Only these may set the client IP via X-Forwarded-For. Empty = trust none (default, local dev).
+   */
+  TRUSTED_PROXY_CIDRS: z.string().default(''),
 });
 
 export type Config = z.infer<typeof schema>;
