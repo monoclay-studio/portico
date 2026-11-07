@@ -130,6 +130,14 @@ begin
      and has_function_privilege('portico_app', p.oid, 'execute')
      and p.oid::regprocedure::text not in (
        'identity.login_lookup(text)', 'identity.record_login_result(uuid,boolean)', 'identity.ensure_user(uuid,text)',
+       'identity.record_login_attempt(text,text,boolean,integer)', 'identity.credential_epoch_for_email(text)',
+       'identity.credential_summary(uuid)', 'identity.first_email_verification(uuid,timestamp with time zone)',
+       'identity.lock_person(uuid)', 'identity.memberships_elsewhere(uuid,uuid)', 'identity.pending_invitations(uuid)',
+       'identity.revoke_sessions_everywhere(uuid,text)', 'identity.claim_verified_domain(text,uuid,timestamp with time zone)',
+       'identity.release_verified_domain(text,uuid)', 'identity.verified_domain_holder(text)',
+       'identity.record_domain_check(uuid,text,boolean,timestamp with time zone)',
+       'identity.raise_platform_alert(uuid,text,text,jsonb,text)', 'identity.list_platform_alerts(integer)',
+       'identity.deposit_simulated_message(uuid,uuid,text,text,text,text,text)', 'identity.read_dev_mailbox(text,integer)',
        'platform.tenant_environment(uuid)', 'platform.tenant_summaries(uuid[])',
        'payments.route_webhook(text,text,boolean)');
   if bad is not null then raise exception 'DRILL FAIL: portico_app can execute unreviewed SECURITY DEFINER functions: %', bad; end if;

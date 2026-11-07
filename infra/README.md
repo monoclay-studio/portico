@@ -15,8 +15,11 @@ state, no image build has ever happened. Readiness: **R2–R3 for the code, R1 f
   blind-index and terms-seal keys and the payment-simulator secret generated into Secrets Manager **without ever
   entering Terraform state** (write-only attributes); `TRUSTED_PROXY_CIDRS`; `PORTICO_APP_BASE_URL`; SES settings;
   Stripe Connect TEST/LIVE placeholders with guard rails; operator token refused in production.
-- `portico_worker` DB role (group + blue/green logins) for apps/worker; the job-routing `SECURITY DEFINER` functions
-  are granted to it only (`bootstrap-roles.mjs grants`, run after every migration, self-verifying).
+- `portico_worker` DB role (group + blue/green logins) for apps/worker; the 18 job-routing `SECURITY DEFINER` functions
+  are granted to it only, plus `payments.route_webhook` which stays on the API role until request 1 (§ Requests)
+  (`bootstrap-roles.mjs grants`, run after every migration, self-verifying). Its drift check
+  caught the 19 new `SECURITY DEFINER` functions identity-plus brought when it merged mid-session; each was reviewed
+  and classified (3 worker-only jobs, 16 API).
 - `infra/db/verify-roles.sh`: **38/38** checks on a SCRAM-auth PostgreSQL 16, using the production runtime layout
   (`pnpm deploy --prod` + pinned tsx, read-only files, no writable TMPDIR).
 - `infra/ci/deploy.yml.example` + `infra/ci/deploy-cell.sh` (tested offline: **27/27**, fake AWS CLI).
@@ -132,7 +135,7 @@ appends the address it saw. The CloudFront list comes from the AWS-managed prefi
 | `terraform test` — cell: demo, lean, resilient, inactive staging, runtime contract, 8 guard rails | **15/15 pass** | mocked AWS provider; real `random` (ephemeral resources cannot be mocked) |
 | `terraform test` — database: master-username guard | **2/2 pass** | mocked AWS provider |
 | Mutation checks | a `0.0.0.0/0` trusted proxy is refused; removing the smoke-test rollback fails the deploy test | done by hand, reverted |
-| Role model end to end (`infra/db/verify-roles.sh`) | **38/38** | SCRAM PostgreSQL 16.15; runtime from `pnpm deploy --prod` + tsx 4 (read-only, no TMPDIR): bootstrap → 16 migrations as `portico_owner` → grants, then grants and roles each twice concurrently → probes → API `/health/ready` as `portico_app_blue` (and refusal without the seal key) → demo seed → worker ran 12 jobs as `portico_worker_blue`, 0 failed, outbox drained → worker as `portico_app_blue` refused → restore-drill SQL passes, and catches a re-granted routing function and an unbalanced journal entry |
+| Role model end to end (`infra/db/verify-roles.sh`) | **38/38** | SCRAM PostgreSQL 16.15; runtime from `pnpm deploy --prod` + tsx 4 (read-only, no TMPDIR): bootstrap → 19 migrations (main incl. identity-plus) as `portico_owner` → grants, then grants and roles each twice concurrently → probes → API `/health/ready` as `portico_app_blue` (and refusal without the seal key) → demo seed → worker ran all 15 jobs as `portico_worker_blue` (incl. identity's login-attempt purge, orphan-SSO-link purge and SSO domain re-check), 0 failed, outbox drained → worker as `portico_app_blue` refused → restore-drill SQL passes, and catches a re-granted routing function and an unbalanced journal entry |
 | Deploy script (`infra/ci/test/deploy-cell.test.sh`) | **27/27** | fake AWS CLI + fake skopeo + local HTTP server: order of steps, digest checks, refused mutable tag, failed migration, ECS rollback, failed smoke test, demo host |
 | Workflow file | parses; every action pinned to a commit SHA (resolved with `git ls-remote`, tags ≥ 2 weeks old) | never run on GitHub |
 | Dockerfiles | reviewed statically; runtime layout exercised (row above) | **NOT built** — no Docker daemon |

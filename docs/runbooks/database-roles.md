@@ -21,7 +21,7 @@ Related: ADR-0002 (RLS), ADR-0004 (outbox worker), `infra/db/bootstrap-roles.mjs
 
 Why a separate worker role: the routing functions (`payments.tenants_for_jobs`, `integration.claim_due_tenants`,
 `inventory.tenants_with_*`, `operations.job_properties`, `guests.tenants_with_*`, `reservations.due_booking_expiries`,
-`core.claim_*` …) return cross-tenant routing metadata. Request handlers never need them, so the API's role cannot
+`identity.purge_login_attempts`, `identity.purge_orphan_sso_links`, `identity.sso_domains_due`, `core.claim_*` …) return cross-tenant routing metadata. Request handlers never need them, so the API's role cannot
 call them (payments review P3-5). The list lives in `ROUTING_FUNCTIONS` in `bootstrap-roles.mjs`.
 
 **Pending (outside infra):** `payments.route_webhook` (the public Stripe webhook route, before any tenant context)

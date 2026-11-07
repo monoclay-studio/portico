@@ -79,15 +79,40 @@ export const ROUTING_FUNCTIONS = {
     'guests.tenants_with_expired_documents(date)',
     'guests.tenants_with_active_profiles()',
     'reservations.due_booking_expiries(timestamp with time zone)',
+    // identity maintenance jobs (IDENTITY_JOBS, ssoDomainRecheckJob)
+    'identity.purge_login_attempts(integer, integer)',
+    'identity.purge_orphan_sso_links()',
+    'identity.sso_domains_due(timestamp with time zone)',
   ],
   workerAndApp: ['payments.route_webhook(text, text, boolean)'],
 };
 
-/** Reviewed SECURITY DEFINER functions the API itself must call (sign-in before a tenant exists, tenant lookups). */
+/**
+ * Reviewed SECURITY DEFINER functions the API itself must call: sign-in before a tenant exists, tenant lookups, and
+ * identity's cross-organization safety checks (ADR-0017: memberships elsewhere, verified-domain ownership, credential
+ * epochs, platform alerts, the simulated-message mailbox). Each returns or changes only what its caller is entitled
+ * to; reviewed in the identity steward reviews. The worker inherits these through portico_app.
+ */
 export const APP_DEFINER_FUNCTIONS = [
   'identity.login_lookup(text)',
   'identity.record_login_result(uuid, boolean)',
   'identity.ensure_user(uuid, text)',
+  'identity.record_login_attempt(text, text, boolean, integer)',
+  'identity.credential_epoch_for_email(text)',
+  'identity.credential_summary(uuid)',
+  'identity.first_email_verification(uuid, timestamp with time zone)',
+  'identity.lock_person(uuid)',
+  'identity.memberships_elsewhere(uuid, uuid)',
+  'identity.pending_invitations(uuid)',
+  'identity.revoke_sessions_everywhere(uuid, text)',
+  'identity.claim_verified_domain(text, uuid, timestamp with time zone)',
+  'identity.release_verified_domain(text, uuid)',
+  'identity.verified_domain_holder(text)',
+  'identity.record_domain_check(uuid, text, boolean, timestamp with time zone)', // also the re-check job
+  'identity.raise_platform_alert(uuid, text, text, jsonb, text)',
+  'identity.list_platform_alerts(integer)',
+  'identity.deposit_simulated_message(uuid, uuid, text, text, text, text, text)',
+  'identity.read_dev_mailbox(text, integer)',
   'platform.tenant_environment(uuid)',
   'platform.tenant_summaries(uuid[])',
 ];
