@@ -109,7 +109,7 @@ describe('credential expiry and rotation', () => {
     expect((await tx(h, ctx, (t) => integration.getConnection(t, h.deps, conn.id))).state).toBe('error');
 
     // A new key: recovered; the old secret is destroyed; held money action waits for a person (no blind replay).
-    const newKey = account.issueKey(new Date(h.clock.now().getTime() + 365 * DAY));
+    const newKey = await account.issueKey(new Date(h.clock.now().getTime() + 365 * DAY));
     c = await tx(h, ctx, (t) => integration.getConnection(t, h.deps, conn.id));
     c = await integration.rotateCredential(h.t.db, h.deps, ctx, c.id, c.version, {
       credentials: { accountId: account.accountId, apiKey: newKey },
@@ -146,7 +146,7 @@ describe('credential expiry and rotation', () => {
     expect(preview.impact.hotelFunctions[0]?.effect).toMatch(/No interruption expected/);
     let c = await tx(h, org.ctx, (t) => integration.getConnection(t, h.deps, conn.id));
     c = await integration.rotateCredential(h.t.db, h.deps, org.ctx, c.id, c.version, {
-      credentials: { accountId: account.accountId, apiKey: account.issueKey(null) },
+      credentials: { accountId: account.accountId, apiKey: await account.issueKey(null) },
       label: 'Rotated',
     });
     expect(c.state).toBe('monitoring');

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { effectOf } from '../domain/outbound-policy';
 import { createConnectorRegistry, PmsSimulatorHub } from './catalogue';
 
-const registry = createConnectorRegistry({ pmsSimulator: new PmsSimulatorHub() });
+const registry = createConnectorRegistry({ pmsSimulator: new PmsSimulatorHub({} as never) });
 
 describe('connector registry invariants (catalogue honesty)', () => {
   it('every declared write operation has an explicit effect class', () => {

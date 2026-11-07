@@ -18,7 +18,7 @@ describe('tenant isolation', () => {
   it('another organization cannot read or modify connections, mappings, exceptions or credentials by id', async () => {
     const victim = await setupOrg(h);
     const { conn, account } = await activeSimulatorConnection(h, victim);
-    account.createReservation(h.clock.now(), { roomTypeCode: 'ZZ' });
+    await account.createReservation(h.clock.now(), { roomTypeCode: 'ZZ' });
     await integration.runSync(h.t.db, h.deps, victim.ctx, conn.id, { trigger: 'manual' });
     const [ex] = await tx(h, victim.ctx, (t) =>
       integration.listExceptions(t, { connectionId: conn.id, status: 'unresolved' }),
@@ -110,7 +110,7 @@ describe('permissions and property scope', () => {
   it('shows technical detail only with integration.technical.read; staff see plain English', async () => {
     const org = await setupOrg(h);
     const { conn, account } = await activeSimulatorConnection(h, org);
-    account.createReservation(h.clock.now(), { roomTypeCode: 'QQ' });
+    await account.createReservation(h.clock.now(), { roomTypeCode: 'QQ' });
     await integration.runSync(h.t.db, h.deps, org.ctx, conn.id, { trigger: 'manual' });
     const staff = userCtx(org, [
       { permission: 'integration.connection.read', propertyIds: [org.propertyId] },
@@ -135,7 +135,7 @@ describe('permissions and property scope', () => {
   it('exceptions can be owned by a person or department and appear in "My work"', async () => {
     const org = await setupOrg(h);
     const { conn, account } = await activeSimulatorConnection(h, org);
-    account.createReservation(h.clock.now(), { roomTypeCode: 'YY' });
+    await account.createReservation(h.clock.now(), { roomTypeCode: 'YY' });
     await integration.runSync(h.t.db, h.deps, org.ctx, conn.id, { trigger: 'manual' });
     const [ex] = await tx(h, org.ctx, (t) =>
       integration.listExceptions(t, { connectionId: conn.id, status: 'unresolved' }),

@@ -32,7 +32,7 @@ describe('integration.dueWork scheduled job', () => {
     const ran = await runDueJobs(h.t.db, integrationJobs(h.deps, { onError: (_t, e) => errors.push(e) }));
     expect(ran).toEqual(['integration.dueWork']);
     expect(errors).toEqual([]);
-    expect(account.appliedCommands().map((a) => a.idempotencyKey)).toEqual(['rs:101:VC']);
+    expect((await account.appliedCommands()).map((a) => a.idempotencyKey)).toEqual(['rs:101:VC']);
     const runs = await tx(h, org.ctx, (t) => integration.listSyncRuns(t, conn.id));
     expect(runs[0]).toMatchObject({ trigger: 'periodic', status: 'succeeded' });
     const c = await tx(h, org.ctx, (t) => integration.getConnection(t, h.deps, conn.id));
@@ -44,5 +44,25 @@ describe('integration.dueWork scheduled job', () => {
       h.t.admin.kysely,
     );
     expect(new Date(schedule.rows[0]?.next_due_at ?? 0).getTime()).toBeGreaterThan(h.clock.now().getTime());
+  });
+
+  it('PROBE-10: a worker process (its own registry and hub over the same database) sees the same simulator', async () => {
+    const org = await setupOrg(h);
+    const { conn } = await activeSimulatorConnection(h, org);
+    const { PmsSimulatorHub, createConnectorRegistry, runTenantWork } = await import('../src');
+    const workerHub = new PmsSimulatorHub(h.t.db); // apps/worker calls compose() again
+    const workerDeps = {
+      ...h.deps,
+      connectors: createConnectorRegistry({ pmsSimulator: workerHub }),
+      simulators: { pms: workerHub },
+    };
+    const res = await runTenantWork(h.t.db, workerDeps, org.ctx);
+    expect(res.errors).toEqual([]);
+    const c = await tx(h, org.ctx, (t) => integration.getConnection(t, h.deps, conn.id));
+    expect(c.state).toBe('monitoring');
+    const ex = await tx(h, org.ctx, (t) =>
+      integration.listExceptions(t, { connectionId: conn.id, status: 'unresolved' }),
+    );
+    expect(ex.map((e) => e.code)).not.toContain('credential_rejected');
   });
 });

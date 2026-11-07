@@ -60,12 +60,12 @@ describe('trial organizations read but never write', () => {
         }),
       ),
     ).rejects.toMatchObject({ code: 'workflow_not_in_scope' });
-    expect(account.appliedCommands()).toHaveLength(0);
+    expect(await account.appliedCommands()).toHaveLength(0);
   });
 
   it('even an approved write workflow is blocked by the environment policy in a trial', async () => {
     // Simulate a misconfigured scope reaching enqueue: the environment policy is the last line of defense.
-    const org = await setupOrg(h, { environment: 'live' });
+    const org = await setupOrg(h, { environment: 'sandbox' });
     const { conn } = await activeSimulatorConnection(h, org);
     const trialCtx = { ...org.ctx, environment: 'trial' as const };
     await expect(
@@ -104,12 +104,19 @@ describe('demo and live', () => {
     expect(run.provenance).toBe('simulated');
   });
 
-  it('a simulator in a live organization is still never "live" and needs no activation scope', async () => {
+  it('a live organization can never use a simulator, let alone make it a system of record (F8)', async () => {
     const org = await setupOrg(h, { environment: 'live' });
-    const before = h.scopeCalls.length;
-    const { conn } = await activeSimulatorConnection(h, org);
-    await integration.runSync(h.t.db, h.deps, org.ctx, conn.id, { trigger: 'manual' });
-    expect(conn.integrationStatus).toBe('tested');
-    expect(h.scopeCalls.length).toBe(before);
+    await expect(
+      tx(h, org.ctx, (t) => integration.createPmsSimulator(t, h.deps, { seed: true })),
+    ).rejects.toMatchObject({ code: 'simulator_not_in_live' });
+    await expect(
+      tx(h, org.ctx, (t) =>
+        integration.createConnection(t, h.deps, {
+          connectorKey: 'pms.simulator',
+          name: 'Fake',
+          propertyIds: [org.propertyId],
+        }),
+      ),
+    ).rejects.toMatchObject({ code: 'simulator_not_in_live' });
   });
 });

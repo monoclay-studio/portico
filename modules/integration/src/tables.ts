@@ -388,6 +388,14 @@ export interface WebhookAttemptsTable {
   error: string | null;
 }
 
+export interface SimAccountsTable {
+  tenant_id: string;
+  account_id: string;
+  state: unknown;
+  created_at: Date;
+  updated_at: Date;
+}
+
 export interface TenantScheduleTable {
   tenant_id: string;
   next_due_at: Ts;
@@ -416,4 +424,5 @@ export interface IntegrationDB {
   'integration.webhook_deliveries': WebhookDeliveriesTable;
   'integration.webhook_attempts': WebhookAttemptsTable;
   'integration.tenant_schedule': TenantScheduleTable;
+  'integration.sim_accounts': SimAccountsTable;
 }

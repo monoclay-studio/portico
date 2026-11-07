@@ -15,7 +15,7 @@ describe('connect alongside: the 9-step setup journey on the simulated PMS', () 
     const org = await setupOrg(h);
     const ctx = org.ctx;
     const ids = catalogIds(org.propertyId);
-    const { account, apiKey } = h.hub.createAccount(org.tenantId, { seedAt: h.clock.now() });
+    const { account, apiKey } = await h.hub.createAccount(org.tenantId, { seedAt: h.clock.now() });
 
     // 1. Select
     let conn = await tx(h, ctx, (t) =>
@@ -289,7 +289,7 @@ describe('connect alongside: the 9-step setup journey on the simulated PMS', () 
       freshnessTargetSeconds: 120,
     });
     // The vendor acknowledged after commit: nothing left to deliver.
-    expect(account.pendingCount()).toBe(0);
+    expect(await account.pendingCount()).toBe(0);
     // The connection disconnect is refused while it is the system of record (INT-I04).
     expect(conn.allowedActions.find((a) => a.action === 'disconnect')).toMatchObject({ enabled: false });
     expect(conn.allowedActions.find((a) => a.action === 'disconnect')?.reason).toMatch(/system of record/);

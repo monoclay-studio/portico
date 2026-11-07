@@ -58,6 +58,7 @@ import { loadLookup, onReconnected, translateRecord } from './exchange';
 import { refreshHealth } from './health';
 import { fingerprintOf, issuesFor, mappingRows } from './mappings';
 import { asConnectorError, explainConnectorError, prepareCall } from './runtime';
+import { assertSimulatorsAllowed } from './simulators';
 import { connectionView } from './views';
 
 // ───────────────────────────── Create, read, list ─────────────────────────────
@@ -79,6 +80,7 @@ export async function createConnection(
   }
   const propertyIds = [...new Set(input.propertyIds)];
   requireOnConnection(tx, { property_ids: propertyIds }, P.connectionManage);
+  if (reg.definition.isSimulator) assertSimulatorsAllowed(tx);
   for (const id of propertyIds) await deps.ports.platform.getProperty(tx, id);
   const id = newId(tx.now.getTime());
   let row: ConnectionRow;
@@ -371,6 +373,14 @@ export async function compatibilityReport(
   }
   for (const c of await authorityConflicts(tx, deps, conn, scope)) {
     checks.push({ code: 'authority_conflict', outcome: 'blocking', message: c, responsibleParty: 'hotel' });
+  }
+  if (def.isSimulator && tx.environment === 'live' && scope.authority.length > 0) {
+    checks.push({
+      code: 'simulator_authority_in_live',
+      outcome: 'blocking',
+      message: 'A simulated system can never be the system of record in a live organization.',
+      responsibleParty: null,
+    });
   }
   if (def.isSimulator) {
     checks.push({
@@ -1047,6 +1057,7 @@ export async function activate(
       'Mappings changed after validation or preview. Validate and preview again before activating.',
     );
   }
+  if (def.isSimulator) assertSimulatorsAllowed(tx);
   if (
     tx.environment === 'trial' &&
     (scope.workflows.some((w) => writesWorkflow(w.operations)) ||

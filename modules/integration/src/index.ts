@@ -4,6 +4,7 @@ export {
   type PmsSimulatorAccount,
   PmsSimulatorHub,
   pmsSimulatorDefinition,
+  SimAccountHandle,
 } from './connectors/pms-simulator';
 export {
   type AdapterContext,

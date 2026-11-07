@@ -41,17 +41,17 @@ describe('S02: duplicated, reordered and delayed inbound updates', () => {
   it('a reservation delivered twice, then modified and cancelled has exactly one effect per revision', async () => {
     const org = await setupOrg(h);
     const { conn, account } = await activeSimulatorConnection(h, org);
-    const r = account.createReservation(h.clock.now(), { reservationId: 'R5001', roomTypeCode: 'BV' });
-    account.setFaults({ duplicateNext: 2 });
+    const r = await account.createReservation(h.clock.now(), { reservationId: 'R5001', roomTypeCode: 'BV' });
+    await account.setFaults({ duplicateNext: 2 });
     const first = await integration.runSync(h.t.db, h.deps, org.ctx, conn.id, {
       trigger: 'manual',
       workflow: 'reservations',
     });
     expect(first.counts).toMatchObject({ applied: 3, duplicates: 2 });
     // The vendor resends (no acknowledgement reached it, or it simply repeats) — still one effect.
-    account.modifyReservation(h.clock.now(), r.reservationId, { departure: '2026-12-06' });
-    account.cancelReservation(h.clock.now(), r.reservationId);
-    account.setFaults({ duplicateNext: 2, reorderNext: true });
+    await account.modifyReservation(h.clock.now(), r.reservationId, { departure: '2026-12-06' });
+    await account.cancelReservation(h.clock.now(), r.reservationId);
+    await account.setFaults({ duplicateNext: 2, reorderNext: true });
     const second = await integration.runSync(h.t.db, h.deps, org.ctx, conn.id, {
       trigger: 'manual',
       workflow: 'reservations',
@@ -71,7 +71,7 @@ describe('S02: duplicated, reordered and delayed inbound updates', () => {
     expect(log.filter((e) => e.outcome === 'duplicate').length).toBe(4);
     expect(log.every((e) => e.provenance === 'simulated')).toBe(true);
     // CL-04: duplicates were acknowledged too, so the vendor stops resending.
-    expect(account.pendingCount('reservations')).toBe(0);
+    expect(await account.pendingCount('reservations')).toBe(0);
   });
 
   it('an older revision arriving after a newer one is stored as stale and not applied', async () => {
@@ -126,8 +126,8 @@ describe('S02: duplicated, reordered and delayed inbound updates', () => {
     const org = await setupOrg(h);
     const { conn, account } = await activeSimulatorConnection(h, org);
     await integration.runSync(h.t.db, h.deps, org.ctx, conn.id, { trigger: 'manual' });
-    account.setFaults({ delaySeconds: 600 });
-    account.createReservation(h.clock.now(), { reservationId: 'R8001' });
+    await account.setFaults({ delaySeconds: 600 });
+    await account.createReservation(h.clock.now(), { reservationId: 'R8001' });
     const early = await integration.runSync(h.t.db, h.deps, org.ctx, conn.id, {
       trigger: 'manual',
       workflow: 'reservations',
@@ -146,11 +146,11 @@ describe('S02: duplicated, reordered and delayed inbound updates', () => {
     expect(res?.lastMessageLatencySeconds).toBeGreaterThanOrEqual(600);
 
     // Missed revision: the vendor jumps from revision 1 to 3 (revision 2 never arrives).
-    account.setFaults({ delaySeconds: 0 });
-    account.modifyReservation(h.clock.now(), 'R8001', { adults: 3 });
+    await account.setFaults({ delaySeconds: 0 });
+    await account.modifyReservation(h.clock.now(), 'R8001', { adults: 3 });
     // Drop revision 2 from the vendor queue to simulate a lost message.
-    account.acknowledge('reservations', [{ externalId: 'R8001', revision: '2' }]);
-    account.modifyReservation(h.clock.now(), 'R8001', { adults: 2 });
+    await account.acknowledge('reservations', [{ externalId: 'R8001', revision: '2' }]);
+    await account.modifyReservation(h.clock.now(), 'R8001', { adults: 2 });
     await integration.runSync(h.t.db, h.deps, org.ctx, conn.id, {
       trigger: 'manual',
       workflow: 'reservations',
@@ -184,8 +184,8 @@ describe('S02: duplicated, reordered and delayed inbound updates', () => {
   it('an unknown room type is held (never guessed), raises one exception, and is applied once mapped', async () => {
     const org = await setupOrg(h);
     const { conn, account } = await activeSimulatorConnection(h, org);
-    account.createReservation(h.clock.now(), { reservationId: 'R9001', roomTypeCode: 'PV' });
-    account.createReservation(h.clock.now(), { reservationId: 'R9002', roomTypeCode: 'PV' });
+    await account.createReservation(h.clock.now(), { reservationId: 'R9001', roomTypeCode: 'PV' });
+    await account.createReservation(h.clock.now(), { reservationId: 'R9002', roomTypeCode: 'PV' });
     const run = await integration.runSync(h.t.db, h.deps, org.ctx, conn.id, {
       trigger: 'manual',
       workflow: 'reservations',
@@ -225,7 +225,7 @@ describe('S02: duplicated, reordered and delayed inbound updates', () => {
   it('amounts in another currency are held, never converted', async () => {
     const org = await setupOrg(h);
     const { conn, account } = await activeSimulatorConnection(h, org);
-    account.createReservation(h.clock.now(), { reservationId: 'R9500', currency: 'EUR' });
+    await account.createReservation(h.clock.now(), { reservationId: 'R9500', currency: 'EUR' });
     const run = await integration.runSync(h.t.db, h.deps, org.ctx, conn.id, {
       trigger: 'manual',
       workflow: 'reservations',

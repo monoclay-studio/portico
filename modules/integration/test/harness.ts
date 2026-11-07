@@ -48,7 +48,7 @@ export async function startHarness(): Promise<Harness> {
   const t = await createTestDatabase(sourcesFromManifests([platformManifest, integrationManifest]), {
     clock,
   });
-  const hub = new PmsSimulatorHub();
+  const hub = new PmsSimulatorHub(t.db);
   const sent: WebhookRequest[] = [];
   const transport = { respond: async (_req: WebhookRequest) => ({ status: 200 }) };
   const scopeCalls: Harness['scopeCalls'] = [];
@@ -194,12 +194,13 @@ export async function setupOrg(
     properties?: Array<{ code: string; name: string; currency?: string }>;
   } = {},
 ): Promise<Org> {
-  const ctx = testContext({ environment: opts.environment ?? 'live' });
+  // Default: a sandbox organization (simulators are never available in live ones — F8).
+  const ctx = testContext({ environment: opts.environment ?? 'sandbox' });
   await withTenantTx(h.t.db, ctx, (tx) =>
     platform.provisionOrganization(tx, {
       name: 'Lagoon Collection',
       slug: `lagoon-${ctx.tenantId.slice(-12)}`,
-      environment: opts.environment ?? 'live',
+      environment: opts.environment ?? 'sandbox',
       planCode: 'enterprise',
     }),
   );
@@ -291,7 +292,7 @@ export async function activeSimulatorConnection(
     name?: string;
   } = {},
 ) {
-  const { account, apiKey } = h.hub.createAccount(org.tenantId, {
+  const { account, apiKey } = await h.hub.createAccount(org.tenantId, {
     seedAt: h.clock.now(),
     keyExpiresAt: opts.keyExpiresAt ?? null,
     readOnlyKey: opts.readOnlyKey ?? false,

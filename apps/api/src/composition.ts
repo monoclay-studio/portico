@@ -134,7 +134,7 @@ export function compose(database: PorticoDatabase): Composition {
     ledgerAccount: 'finance',
     outlet: 'platform (outlets)',
   });
-  const pmsSimulators = new PmsSimulatorHub();
+  const pmsSimulators = new PmsSimulatorHub(database);
   const fieldCrypto = fieldCryptoFromEnv();
   const integrationDeps: IntegrationDeps = {
     ports: {

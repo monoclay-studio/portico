@@ -7,9 +7,11 @@
  * It is never a working integration with a real PMS (CLAUDE.md §7): data exchanged with it is labeled
  * "simulated". State lives in memory, per organization, outside Portico's database — like a real external system.
  */
-import { randomToken } from '@portico/kernel';
+import { type PorticoDatabase, type TxContext, typed, withTenantTx } from '@portico/db';
+import { BusinessRuleError, newId, randomToken, sha256Hex, systemContext } from '@portico/kernel';
 import { z } from 'zod';
 import type { SimulatorFaults } from '../contracts';
+import type { IntegrationDB } from '../tables';
 import {
   type AdapterContext,
   type ConnectorAdapter,
@@ -111,6 +113,22 @@ export function defaultSimProperty(): SimProperty {
   };
 }
 
+export const SIM_LIMITS = { accountsPerOrganization: 5, queue: 2000, history: 500, applied: 1000 } as const;
+
+type SimMessageJson = Omit<SimMessage, 'occurredAt'> & { occurredAt: string };
+export interface SimState {
+  property: SimProperty;
+  keys: Array<[string, { expiresAt: string | null; readOnly: boolean }]>;
+  reservations: SimReservation[];
+  roomStatus: Array<[string, { code: string; revision: number }]>;
+  queue: SimMessageJson[];
+  history: SimMessageJson[];
+  applied: Array<Omit<SimAppliedCommand, 'appliedAt'> & { appliedAt: string }>;
+  faults: Required<SimulatorFaults>;
+  seq: number;
+  honorsIdempotencyKeys: boolean;
+}
+
 export class PmsSimulatorAccount {
   readonly accountId: string;
   readonly property: SimProperty;
@@ -138,14 +156,15 @@ export class PmsSimulatorAccount {
     this.property = property;
   }
 
+  /** Issues an API key; only its hash is kept (like a real vendor would). */
   issueKey(expiresAt: Date | null, opts: { readOnly?: boolean } = {}): string {
     const key = `simk_${randomToken(24)}`;
-    this.keys.set(key, { expiresAt, readOnly: opts.readOnly ?? false });
+    this.keys.set(sha256Hex(key), { expiresAt, readOnly: opts.readOnly ?? false });
     return key;
   }
 
   revokeKey(key: string): void {
-    this.keys.delete(key);
+    this.keys.delete(sha256Hex(key));
   }
 
   setFaults(patch: SimulatorFaults): Required<SimulatorFaults> {
@@ -275,6 +294,47 @@ export class PmsSimulatorAccount {
   private push(m: SimMessage) {
     this.queue.push(m);
     this.history.push(m);
+    // Bounded like a real vendor feed: the oldest undelivered messages are lost when the backlog overflows.
+    if (this.queue.length > SIM_LIMITS.queue) this.queue.splice(0, this.queue.length - SIM_LIMITS.queue);
+    if (this.history.length > SIM_LIMITS.history)
+      this.history.splice(0, this.history.length - SIM_LIMITS.history);
+  }
+
+  toState(): SimState {
+    const msg = (m: SimMessage) => ({ ...m, occurredAt: m.occurredAt.toISOString() });
+    return {
+      property: this.property,
+      keys: [...this.keys].map(([k, v]) => [
+        k,
+        { expiresAt: v.expiresAt?.toISOString() ?? null, readOnly: v.readOnly },
+      ]),
+      reservations: [...this.reservations.values()],
+      roomStatus: [...this.roomStatus],
+      queue: this.queue.map(msg),
+      history: this.history.map(msg),
+      applied: this.applied
+        .slice(-SIM_LIMITS.applied)
+        .map((a) => ({ ...a, appliedAt: a.appliedAt.toISOString() })),
+      faults: this.faults,
+      seq: this.seq,
+      honorsIdempotencyKeys: this.honorsIdempotencyKeys,
+    };
+  }
+
+  static fromState(accountId: string, st: SimState): PmsSimulatorAccount {
+    const a = new PmsSimulatorAccount(accountId, st.property);
+    for (const [k, v] of st.keys)
+      a.keys.set(k, { expiresAt: v.expiresAt ? new Date(v.expiresAt) : null, readOnly: v.readOnly });
+    for (const r of st.reservations) a.reservations.set(r.reservationId, r);
+    for (const [k, v] of st.roomStatus) a.roomStatus.set(k, v);
+    const msg = (m: SimState['queue'][number]): SimMessage => ({ ...m, occurredAt: new Date(m.occurredAt) });
+    a.queue.push(...st.queue.map(msg));
+    a.history.push(...st.history.map(msg));
+    a.applied.push(...st.applied.map((x) => ({ ...x, appliedAt: new Date(x.appliedAt) })));
+    a.faults = st.faults;
+    a.seq = st.seq;
+    a.honorsIdempotencyKeys = st.honorsIdempotencyKeys;
+    return a;
   }
 
   // ── API surface used by the adapter (faults applied here) ──
@@ -282,7 +342,7 @@ export class PmsSimulatorAccount {
   checkAccess(apiKey: unknown, now: Date): { expiresAt: Date | null; readOnly: boolean } {
     if (this.faults.outage)
       throw new ConnectorError('outage', 'The simulated PMS is unavailable (HTTP 503).');
-    const key = typeof apiKey === 'string' ? this.keys.get(apiKey) : undefined;
+    const key = typeof apiKey === 'string' ? this.keys.get(sha256Hex(apiKey)) : undefined;
     if (!key) throw new ConnectorError('auth', 'The simulated PMS did not recognise the API key.');
     if (this.faults.credentialExpired || (key.expiresAt && key.expiresAt.getTime() <= now.getTime())) {
       throw new ConnectorError('auth', 'The simulated PMS rejected the API key because it has expired.');
@@ -461,19 +521,70 @@ function localDate(at: Date, timeZone: string): string {
   return parts;
 }
 
-/** In-memory registry of simulated PMS accounts, isolated per organization. */
+/**
+ * The simulated PMS's own storage. State is persisted per account in `integration.sim_accounts` (tenant-isolated),
+ * so the API and the worker — and every replica — see the same "external system". It is still treated as an
+ * external system: the adapter talks to it in its own transactions, outside Portico's commands.
+ */
 export class PmsSimulatorHub {
-  private readonly accounts = new Map<string, PmsSimulatorAccount>();
-  private counter = 0;
+  constructor(private readonly database: PorticoDatabase) {}
 
-  createAccount(
+  private ctx(tenantId: string) {
+    return systemContext(tenantId, 'pms-simulator', 'sandbox', newId());
+  }
+
+  /** Run `fn` on an account's state (row-locked); saves the state when `write`. Throws when the account is unknown. */
+  async run<T>(
     tenantId: string,
-    opts: { property?: SimProperty; keyExpiresAt?: Date | null; readOnlyKey?: boolean; seedAt?: Date } = {},
-  ): { account: PmsSimulatorAccount; apiKey: string } {
-    const accountId = `sim-${++this.counter}-${randomToken(4).toLowerCase()}`;
+    accountId: string,
+    fn: (a: PmsSimulatorAccount) => T,
+    opts: { write: boolean; tx?: TxContext },
+  ): Promise<T> {
+    const body = async (tx: TxContext) => {
+      const db = typed<IntegrationDB>(tx.db);
+      let q = db.selectFrom('integration.sim_accounts').select(['state']).where('account_id', '=', accountId);
+      if (opts.write) q = q.forUpdate();
+      const row = await q.executeTakeFirst();
+      if (!row) throw new SimulatorAccountNotFound(accountId);
+      const account = PmsSimulatorAccount.fromState(accountId, row.state as SimState);
+      // A vendor may apply an action and THEN fail to answer (timeout fault): state is saved either way.
+      let outcome: { ok: true; value: T } | { ok: false; error: unknown };
+      try {
+        outcome = { ok: true, value: fn(account) };
+      } catch (error) {
+        outcome = { ok: false, error };
+      }
+      if (opts.write) {
+        await db
+          .updateTable('integration.sim_accounts')
+          .set({ state: JSON.stringify(account.toState()), updated_at: tx.now })
+          .where('account_id', '=', accountId)
+          .execute();
+      }
+      return outcome;
+    };
+    const outcome = opts.tx
+      ? await body(opts.tx)
+      : await withTenantTx(this.database, this.ctx(tenantId), body);
+    if (!outcome.ok) throw outcome.error;
+    return outcome.value;
+  }
+
+  async createAccount(
+    tenantId: string,
+    opts: {
+      property?: SimProperty;
+      keyExpiresAt?: Date | null;
+      readOnlyKey?: boolean;
+      seedAt?: Date;
+      tx?: TxContext;
+    } = {},
+  ): Promise<{ account: SimAccountHandle; apiKey: string }> {
+    const accountId = `sim-${randomToken(6)
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, 'x')}`;
     const account = new PmsSimulatorAccount(accountId, opts.property ?? defaultSimProperty());
     const apiKey = account.issueKey(opts.keyExpiresAt ?? null, { readOnly: opts.readOnlyKey ?? false });
-    this.accounts.set(`${tenantId}:${accountId}`, account);
     if (opts.seedAt) {
       account.createReservation(opts.seedAt, { guestName: 'A. Sample', roomTypeCode: 'BV' });
       account.createReservation(opts.seedAt, {
@@ -483,11 +594,110 @@ export class PmsSimulatorHub {
       });
       account.setRoomStatus(opts.seedAt, '101', 'VD');
     }
-    return { account, apiKey };
+    const insert = async (tx: TxContext) => {
+      const db = typed<IntegrationDB>(tx.db);
+      const count = await db
+        .selectFrom('integration.sim_accounts')
+        .select((eb) => eb.fn.countAll<number>().as('n'))
+        .executeTakeFirstOrThrow();
+      if (Number(count.n) >= SIM_LIMITS.accountsPerOrganization) {
+        throw new BusinessRuleError(
+          'simulator_limit',
+          `An organization can have at most ${SIM_LIMITS.accountsPerOrganization} simulated systems. Reuse an existing one.`,
+        );
+      }
+      await db
+        .insertInto('integration.sim_accounts')
+        .values({
+          tenant_id: tx.tenantId,
+          account_id: accountId,
+          state: JSON.stringify(account.toState()),
+          created_at: tx.now,
+          updated_at: tx.now,
+        })
+        .execute();
+    };
+    if (opts.tx) await insert(opts.tx);
+    else await withTenantTx(this.database, this.ctx(tenantId), insert);
+    return { account: new SimAccountHandle(this, tenantId, accountId, account.property), apiKey };
   }
 
-  get(tenantId: string, accountId: string): PmsSimulatorAccount | undefined {
-    return this.accounts.get(`${tenantId}:${accountId}`);
+  /** A handle for an existing account, or null when it does not exist in this organization. */
+  async get(tenantId: string, accountId: string, tx?: TxContext): Promise<SimAccountHandle | null> {
+    try {
+      const property = await this.run(tenantId, accountId, (a) => a.property, {
+        write: false,
+        ...(tx ? { tx } : {}),
+      });
+      return new SimAccountHandle(this, tenantId, accountId, property);
+    } catch (err) {
+      if (err instanceof SimulatorAccountNotFound) return null;
+      throw err;
+    }
+  }
+}
+
+export class SimulatorAccountNotFound extends Error {
+  constructor(accountId: string) {
+    super(`Simulated PMS account ${accountId} does not exist in this organization.`);
+  }
+}
+
+/** Async handle used by tests, demo seeding and the simulator control API. */
+export class SimAccountHandle {
+  constructor(
+    private readonly hub: PmsSimulatorHub,
+    readonly tenantId: string,
+    readonly accountId: string,
+    readonly property: SimProperty,
+  ) {}
+  private w<T>(fn: (a: PmsSimulatorAccount) => T, tx?: TxContext) {
+    return this.hub.run(this.tenantId, this.accountId, fn, { write: true, ...(tx ? { tx } : {}) });
+  }
+  private r<T>(fn: (a: PmsSimulatorAccount) => T, tx?: TxContext) {
+    return this.hub.run(this.tenantId, this.accountId, fn, { write: false, ...(tx ? { tx } : {}) });
+  }
+  createReservation(
+    now: Date,
+    input: Parameters<PmsSimulatorAccount['createReservation']>[1] = {},
+    tx?: TxContext,
+  ) {
+    return this.w((a) => a.createReservation(now, input), tx);
+  }
+  modifyReservation(
+    now: Date,
+    id: string,
+    patch: Parameters<PmsSimulatorAccount['modifyReservation']>[2],
+    tx?: TxContext,
+  ) {
+    return this.w((a) => a.modifyReservation(now, id, patch), tx);
+  }
+  cancelReservation(now: Date, id: string, tx?: TxContext) {
+    return this.w((a) => a.cancelReservation(now, id), tx);
+  }
+  setRoomStatus(now: Date, roomNumber: string, statusCode: string, tx?: TxContext) {
+    return this.w((a) => a.setRoomStatus(now, roomNumber, statusCode), tx);
+  }
+  postCharge(now: Date, input: Parameters<PmsSimulatorAccount['postCharge']>[1], tx?: TxContext) {
+    return this.w((a) => a.postCharge(now, input), tx);
+  }
+  setFaults(patch: SimulatorFaults, tx?: TxContext) {
+    return this.w((a) => a.setFaults(patch), tx);
+  }
+  getFaults(tx?: TxContext) {
+    return this.r((a) => a.getFaults(), tx);
+  }
+  issueKey(expiresAt: Date | null, opts: { readOnly?: boolean } = {}) {
+    return this.w((a) => a.issueKey(expiresAt, opts));
+  }
+  acknowledge(workflow: string, records: ReadonlyArray<{ externalId: string; revision: string }>) {
+    return this.w((a) => a.acknowledge(workflow, records));
+  }
+  pendingCount(workflow?: string, tx?: TxContext) {
+    return this.r((a) => a.pendingCount(workflow), tx);
+  }
+  appliedCommands(tx?: TxContext) {
+    return this.r((a) => [...a.appliedCommands()], tx);
   }
 }
 
@@ -647,13 +857,30 @@ export const pmsSimulatorDefinition: ConnectorDefinition = {
 };
 
 export function pmsSimulatorAdapter(hub: PmsSimulatorHub): ConnectorAdapter {
-  const account = (ctx: AdapterContext): PmsSimulatorAccount => {
-    const accountId = typeof ctx.credential?.accountId === 'string' ? ctx.credential.accountId : '';
-    const a = hub.get(ctx.tenantId, accountId);
-    if (!a)
-      throw new ConnectorError('auth', 'This simulated PMS account does not exist in your organization.');
-    a.checkAccess(ctx.credential?.apiKey, ctx.now);
-    return a;
+  const accountId = (ctx: AdapterContext) =>
+    typeof ctx.credential?.accountId === 'string' ? ctx.credential.accountId : '';
+  /** One call to the "external system": its own transaction, faults and access checks applied first. */
+  const call = async <T>(
+    ctx: AdapterContext,
+    fn: (a: PmsSimulatorAccount) => T,
+    write: boolean,
+  ): Promise<T> => {
+    try {
+      return await hub.run(
+        ctx.tenantId,
+        accountId(ctx),
+        (a) => {
+          a.checkAccess(ctx.credential?.apiKey, ctx.now);
+          return fn(a);
+        },
+        { write },
+      );
+    } catch (err) {
+      if (err instanceof SimulatorAccountNotFound) {
+        throw new ConnectorError('auth', 'This simulated PMS account does not exist in your organization.');
+      }
+      throw err;
+    }
   };
   const toRecord = (m: SimMessage): InboundRecord => ({
     workflow: m.workflow,
@@ -667,48 +894,52 @@ export function pmsSimulatorAdapter(hub: PmsSimulatorHub): ConnectorAdapter {
   });
   return {
     async testCredentials(ctx) {
-      const a = hub.get(
-        ctx.tenantId,
-        typeof ctx.credential?.accountId === 'string' ? ctx.credential.accountId : '',
+      return call(
+        ctx,
+        (a) => {
+          const { expiresAt, readOnly } = a.checkAccess(ctx.credential?.apiKey, ctx.now);
+          return {
+            accountLabel: a.property.name,
+            expiresAt: expiresAt ? expiresAt.toISOString() : null,
+            scopes: readOnly ? ['read'] : ['read', 'write'],
+            readOnly,
+          };
+        },
+        false,
       );
-      if (!a)
-        throw new ConnectorError('auth', 'This simulated PMS account does not exist in your organization.');
-      const { expiresAt, readOnly } = a.checkAccess(ctx.credential?.apiKey, ctx.now);
-      return {
-        accountLabel: a.property.name,
-        expiresAt: expiresAt ? expiresAt.toISOString() : null,
-        scopes: readOnly ? ['read'] : ['read', 'write'],
-        readOnly,
-      };
     },
-    async discover(ctx) {
-      return account(ctx).entities();
-    },
-    async pull(ctx, req) {
-      const records = account(ctx).pull(req.workflow, ctx.now).map(toRecord);
-      return { records, cursor: null };
-    },
+    discover: (ctx) => call(ctx, (a) => a.entities(), false),
+    // Pull mutates the vendor's fault counters (duplicates/reorder are "one-shot"), so it is a write on the simulator.
+    pull: async (ctx, req) => ({
+      records: await call(ctx, (a) => a.pull(req.workflow, ctx.now).map(toRecord), true),
+      cursor: null,
+    }),
     async acknowledge(ctx, req) {
-      account(ctx).acknowledge(req.workflow, req.records);
+      await call(ctx, (a) => a.acknowledge(req.workflow, req.records), true);
     },
-    async sample(ctx, req) {
-      return account(ctx).recent(req.workflow, req.limit).map(toRecord);
-    },
-    async send(ctx, req) {
-      const a = hub.get(
-        ctx.tenantId,
-        typeof ctx.credential?.accountId === 'string' ? ctx.credential.accountId : '',
-      );
-      if (!a)
-        throw new ConnectorError('auth', 'This simulated PMS account does not exist in your organization.');
-      if (a.checkAccess(ctx.credential?.apiKey, ctx.now).readOnly) {
-        throw new ConnectorError('auth', 'The simulated PMS refused a change: this API key is read-only.');
-      }
-      return { externalRef: a.apply(req, ctx.now) };
-    },
-    async lookup(ctx, req) {
-      const found = account(ctx).findApplied(req.idempotencyKey);
-      return { found: found !== undefined, externalRef: found?.externalRef ?? null };
-    },
+    sample: (ctx, req) => call(ctx, (a) => a.recent(req.workflow, req.limit).map(toRecord), false),
+    send: (ctx, req) =>
+      call(
+        ctx,
+        (a) => {
+          if (a.checkAccess(ctx.credential?.apiKey, ctx.now).readOnly) {
+            throw new ConnectorError(
+              'auth',
+              'The simulated PMS refused a change: this API key is read-only.',
+            );
+          }
+          return { externalRef: a.apply(req, ctx.now) };
+        },
+        true,
+      ),
+    lookup: (ctx, req) =>
+      call(
+        ctx,
+        (a) => {
+          const found = a.findApplied(req.idempotencyKey);
+          return { found: found !== undefined, externalRef: found?.externalRef ?? null };
+        },
+        false,
+      ),
   };
 }

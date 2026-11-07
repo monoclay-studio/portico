@@ -59,10 +59,10 @@ describe('S20: connection outage during a busy shift', () => {
     expect(await integration.dispatchOutbound(h.t.db, h.deps, ctx, conn.id)).toMatchObject({
       acknowledged: 1,
     });
-    expect(account.appliedCommands()).toHaveLength(1);
+    expect(await account.appliedCommands()).toHaveLength(1);
 
     // Outage starts.
-    account.setFaults({ outage: true });
+    await account.setFaults({ outage: true });
     await enqueue(charge(2));
     await enqueue({
       workflow: 'reservations',
@@ -88,7 +88,7 @@ describe('S20: connection outage during a busy shift', () => {
       await integration.dispatchOutbound(h.t.db, h.deps, ctx, conn.id);
     }
     // Nothing reached the vendor during the outage; risky actions were not even attempted while interrupted.
-    expect(account.appliedCommands()).toHaveLength(1);
+    expect(await account.appliedCommands()).toHaveLength(1);
     let health = await tx(h, ctx, (t) => integration.getConnectionHealth(t, h.deps, conn.id));
     expect(health.overall).toBe('degraded');
     expect(health.urgent.map((s) => s.code)).toEqual(
@@ -122,7 +122,7 @@ describe('S20: connection outage during a busy shift', () => {
     expect(health.overall).toBe('down');
 
     // The vendor comes back: the next successful exchange is a reconnection.
-    account.setFaults({ outage: false });
+    await account.setFaults({ outage: false });
     const back = await integration.runSync(h.t.db, h.deps, ctx, conn.id, { trigger: 'manual' });
     expect(back.status).toBe('succeeded');
     expect(await commands(org.tenantId)).toMatchObject({
@@ -141,7 +141,7 @@ describe('S20: connection outage during a busy shift', () => {
     // Dispatch sends only the latest room status; the held actions stay held.
     const d = await integration.dispatchOutbound(h.t.db, h.deps, ctx, conn.id);
     expect(d).toMatchObject({ acknowledged: 1 });
-    expect(account.appliedCommands().map((a) => a.idempotencyKey)).toEqual([
+    expect((await account.appliedCommands()).map((a) => a.idempotencyKey)).toEqual([
       'folio-posting:P1',
       'rs:101:INS',
     ]);
@@ -180,7 +180,7 @@ describe('S20: connection outage during a busy shift', () => {
     expect(await integration.dispatchOutbound(h.t.db, h.deps, ctx, conn.id)).toMatchObject({
       acknowledged: 1,
     });
-    expect(account.appliedCommands().map((a) => a.idempotencyKey)).toEqual([
+    expect((await account.appliedCommands()).map((a) => a.idempotencyKey)).toEqual([
       'folio-posting:P1',
       'rs:101:INS',
       'folio-posting:P2',
@@ -212,12 +212,12 @@ describe('S20: connection outage during a busy shift', () => {
         ...charge(3),
       }),
     );
-    account.setFaults({ timeoutNextCommand: true });
+    await account.setFaults({ timeoutNextCommand: true });
     expect(await integration.dispatchOutbound(h.t.db, h.deps, ctx, conn.id)).toMatchObject({
       pendingVerification: 1,
     });
     // The vendor DID apply it, but Portico could not know.
-    expect(account.appliedCommands()).toHaveLength(1);
+    expect(await account.appliedCommands()).toHaveLength(1);
     const [pending] = await tx(h, ctx, (t) => integration.listOutbound(t, conn.id, 'pending_verification'));
     expect(pending).toBeDefined();
     const health = await tx(h, ctx, (t) => integration.getConnectionHealth(t, h.deps, conn.id));
@@ -227,7 +227,9 @@ describe('S20: connection outage during a busy shift', () => {
       verifiedAlreadyApplied: 1,
       acknowledged: 0,
     });
-    expect(account.appliedCommands().filter((a) => a.idempotencyKey === 'folio-posting:P3')).toHaveLength(1);
+    expect(
+      (await account.appliedCommands()).filter((a) => a.idempotencyKey === 'folio-posting:P3'),
+    ).toHaveLength(1);
     const log = await tx(h, ctx, (t) =>
       integration.listExchanges(t, conn.id, { limit: 10, workflow: 'charges' }),
     );
@@ -245,7 +247,7 @@ describe('S20: connection outage during a busy shift', () => {
         ...charge(4),
       }),
     );
-    account.setFaults({ rejectNextCommand: true });
+    await account.setFaults({ rejectNextCommand: true });
     expect(await integration.dispatchOutbound(h.t.db, h.deps, org.ctx, conn.id)).toMatchObject({
       rejected: 1,
     });
@@ -301,6 +303,6 @@ describe('S20: connection outage during a busy shift', () => {
     expect(c.state).toBe('active'); // resumes to the remembered operational state
     const [cmd] = await tx(h, ctx, (t) => integration.listOutbound(t, c.id));
     expect(cmd?.status).toBe('needs_revalidation');
-    expect(account.appliedCommands()).toHaveLength(0);
+    expect(await account.appliedCommands()).toHaveLength(0);
   });
 });

@@ -490,6 +490,20 @@ create table integration.webhook_attempts (
 select core.enable_tenant_isolation('integration.webhook_attempts');
 
 ---------------------------------------------------------------------------------------------------------
+-- Simulated PMS storage (pms.simulator). Conceptually the storage of an EXTERNAL system, kept here so every API and
+-- worker process shares it. Never read by Portico's own commands: only by the simulator adapter.
+---------------------------------------------------------------------------------------------------------
+create table integration.sim_accounts (
+  tenant_id   uuid not null,
+  account_id  text not null,
+  state       jsonb not null,           -- property, hashed API keys, reservations, room status, bounded feed
+  created_at  timestamptz not null,
+  updated_at  timestamptz not null,
+  primary key (tenant_id, account_id)
+);
+select core.enable_tenant_isolation('integration.sim_accounts');
+
+---------------------------------------------------------------------------------------------------------
 -- Append-only history and grants
 ---------------------------------------------------------------------------------------------------------
 select core.apply_standard_grants('integration');
