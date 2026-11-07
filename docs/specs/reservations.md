@@ -290,12 +290,12 @@ relocation cases for affected assignments), `inventory.conflict.detected`, `inve
 
 ## 8. Permissions
 
-`reservations.booking.read` · `reservations.booking.create` · `reservations.booking.modify` ·
+`reservations.booking.read` · `reservations.booking.create` · `reservations.booking.update` ·
 `reservations.booking.cancel` · `reservations.booking.waivePenalty` ⚑ · `reservations.booking.reinstate` ⚑ ·
 `reservations.stay.checkIn` · `reservations.stay.checkOut` · `reservations.stay.checkoutWithBalance` ⚑ ·
 `reservations.stay.reverseCheckIn` ⚑ · `reservations.stay.move` · `reservations.stay.complimentary` ⚑ ·
 `reservations.stay.houseUse` ⚑ · `reservations.stay.overridePrice` ⚑ · `reservations.stay.skipCheckInStep` ⚑ ·
-`reservations.stay.markNoShow` · `reservations.channelBooking.overrideLocally` ⚑ · `reservations.relocation.manage` ·
+`reservations.stay.noShow` · `reservations.channelBooking.overrideLocally` ⚑ · `reservations.relocation.manage` ·
 `reservations.handover.manage` · `reservations.waitlist.manage`.
 
 ## 9. UX surfaces
@@ -352,3 +352,29 @@ All follow `docs/product/ux-principles.md`.
 
 Q43 (registration requirements affect check-in steps). Product decisions: confirmation code format; no
 auto-merge of concurrent edits in wave 1; non-guaranteed auto-release off by default.
+
+## 14. Adoption modes
+
+- **Standalone alongside an external PMS:** yes, as a **mirror**. Housekeeping, messaging, transfers/activities,
+  analytics and the AI assistant need arrivals, departures and in-house stays; in connected mode reservations is
+  the read model that provides them.
+- **Hard dependencies:** `platform`, `identity`, `inventory` (unit catalog), `guests`; `integration` for feeds.
+  Full (authoritative) mode additionally needs `rates`, `finance`, `payments`.
+- **Connected mode** (`reservations` authority external):
+  - Reads: bookings, stays, occupants, assigned units, statuses, ETA/arrival details from the PMS connector (live
+    or periodic, as declared by the connector's workflow capability), each with provenance `external` and the
+    last-sync time; `delayed` when beyond the connection's freshness SLA; `incomplete` when the connector cannot
+    supply a field (e.g. no occupant ages).
+  - Writes: commands go through `assertWritable(reservations)`. With `forward`, create/modify/cancel/check-in/
+    check-out/room-move are sent to the PMS and shown as **pending** until acknowledged; with `read_only` they
+    are hidden or disabled with the system name. Change previews show only what Portico can know and label the
+    rest "calculated by <system>".
+  - Disabled: agreed-terms snapshots, payment schedules, Day Close, relocation of inventory conflicts (shown as
+    information), waitlist.
+  - Still Portico-owned: handover items, guest commitments, waiting-guest tracking, arrival-readiness view
+    (combining mirrored stays with Portico housekeeping), exceptions.
+- **Data-authority domains:** owns `reservations` when authoritative; respects `availability` (no local
+  consumption when external), `charges`, `payments`, `roomStatus`.
+- **Trial:** a copied operation ("your yesterday") with provenance `copied`; read-only connection keeps the copy
+  fresh; discrepancies between Portico's interpretation and the PMS (e.g. stay status, nights, balances) are
+  listed for investigation, never silently corrected (adoption brief §4).

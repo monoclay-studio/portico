@@ -78,7 +78,7 @@ grids (`groups`, which creates rate plans here); channel rate mapping (`distribu
   Revenue for an included component is allocated to its charge code (revenue split) when the night is posted.
 - **RAT-R14** [MUST] **Meal plans** (room only, B&B, half board, full board, all inclusive, custom) are
   inclusion sets with display names; a meal plan never hard-codes outlets.
-- **RAT-R15** [MUST] **Allowance** (`rates.allowances`): monetary or quantity entitlement (e.g. $100 dining
+- **RAT-R15** [MUST] **Allowance** (`rates.packages`): monetary or quantity entitlement (e.g. $100 dining
   credit per night, 2 spa treatments per stay), period (`per_night` | `per_stay`), eligible charge codes/outlets,
   exclusions, remainder policy (`forfeit` → breakage revenue at period end; `carry_within_stay`), per-person or
   per-unit. Consumption is recorded by finance (`allowanceRef` on postings).
@@ -221,7 +221,7 @@ price grid shape).
 
 `rates.ratePlan.read` · `rates.ratePlan.manage` · `rates.price.manage` · `rates.restriction.manage` ·
 `rates.restriction.override` ⚑ · `rates.promotion.manage` · `rates.package.manage` · `rates.policy.manage` ·
-`rates.taxRule.manage` ⚑ · `rates.taxRule.activate` ⚑ · `rates.quote.create` · `rates.recommendation.apply`.
+`rates.taxRule.manage` ⚑ · `rates.taxRule.activate` ⚑ · `rates.quote.read` · `rates.recommendation.apply`.
 
 ## 9. UX surfaces
 
@@ -277,3 +277,22 @@ price grid shape).
 
 Q41 (Maldives computation details), Q42 (tax point). Product decisions: max derivation depth 3; new nights in
 extensions priced at current rates by default; tax residue assigned to net.
+
+## 14. Adoption modes
+
+- **Standalone alongside an external PMS:** partially. The **tax and fee engine** is usable standalone (e.g. by
+  `resort` for activity and transfer pricing, or by the booking engine) and the rate catalog can be mirrored for
+  reporting; selling rooms with Portico prices requires Portico to be authoritative for `rates`.
+- **Hard dependencies:** `platform` (classification, currencies), `inventory` (unit types).
+- **Connected mode** (`rates` authority external):
+  - Reads: rate plan codes/names and, where the connector supports it, nightly prices and restrictions
+    (provenance `external`) for analytics, comparison and the pricing assistant's recommendations.
+  - Writes: price and restriction edits are forwarded only if the connector declares `rates: update`; otherwise
+    disabled with "Rates are managed in <system>". Recommendations remain available as **suggestions** the hotel
+    applies in its own system.
+  - Quotes for rooms are disabled; terms snapshots are not created (agreed terms live in the external system and
+    are mirrored on stays as received).
+- **Data-authority domains:** owns `rates`; tax rules are always Portico data (they compute Portico-originated
+  charges) and are never overwritten by an external system.
+- **Trial:** copied rate plans and prices are labelled `copied`; Portico's quote for a copied booking is compared
+  with the price the PMS recorded, and differences are listed (e.g. tax compounding differences) for review.

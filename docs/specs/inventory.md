@@ -239,7 +239,7 @@ transaction. Inventory consumes nothing asynchronously in wave 1.
 
 ## 8. Permissions
 
-`inventory.unitType.manage` · `inventory.unit.manage` · `inventory.availability.read` ·
+`inventory.unit.read` · `inventory.unitType.manage` · `inventory.unit.manage` · `inventory.availability.read` ·
 `inventory.availability.explain` · `inventory.hold.create` · `inventory.hold.extend` ·
 `inventory.assignment.manage` · `inventory.assignment.overrideLock` · `inventory.unitBlock.create` ·
 `inventory.unitBlock.release` · `inventory.houseUse.create` ⚑ · `inventory.overbooking.authorize` ⚑ ·
@@ -293,3 +293,23 @@ units at once: OOO dialog supports multi-unit selection by location. Unit featur
 
 None for the owner. Product decisions: hold defaults (§3.4); composite types are sold assignment-first; OOO
 never refused for sold-out nights (a broken unit cannot be "unavailable to break").
+
+## 14. Adoption modes
+
+- **Standalone alongside an external PMS:** yes, in **catalog-and-mirror** form. Unit types and units are always
+  held in Portico (created from `integration` mappings or setup), because housekeeping, maintenance, messaging,
+  transfers and analytics need a unit catalog even when the PMS sells the inventory.
+- **Hard dependencies:** `platform`, `identity`; `integration` (mappings `unitType`, `unit`) in connected mode.
+- **Connected mode** (`availability` authority external):
+  - Reads: unit types/units (mapped), occupancy and assignments (from the PMS reservation feed via reservations'
+    mirror), availability counts if the connector supports them (provenance `external`, last-sync time).
+  - Disabled: `consume`, holds, overbooking allowances, conflicts — `assertWritable(availability)` returns
+    `external_system_of_record` (read_only) or the action is forwarded (`forward`, e.g. an out-of-order block
+    sent to the PMS and effective only when acknowledged).
+  - Assignments mirror the PMS (read-only) unless the connector supports forwarding room assignment.
+  - Explanations show "Availability is managed in <system>; last update 14:02" instead of a local formula.
+- **Data-authority domains:** owns `availability` when Portico is authoritative; respects `reservations` (no
+  local consumption when reservations are external) and `maintenance` (OOO/OOS blocks are created by
+  operations; when `maintenance` is external, blocks are mirrored read-only).
+- **Trial:** availability computed from the copied reservations is labelled `copied`; discrepancies against the
+  PMS's own availability (read-only connection) are listed for investigation, never auto-corrected.

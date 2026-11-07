@@ -1,25 +1,27 @@
 # Spec: platform
 
-Status: Draft v1 · 2026-11-07 · Wave 0 → 1 · Schema `platform` · Prefix `PLT`
+Status: Draft v2 · 2026-11-07 · Wave 0 → 1 · Schema `platform` · Prefix `PLT`
+Aligned with the foundation on `main` (commit 02f4e14: `modules/platform`, `packages/kernel/src/environment.ts`).
 
 ## 1. Purpose
 
 `platform` is the root of every other module's world: *who* the organization is, *which* environment we are in,
 *what* properties, legal entities, owners, departments and outlets exist, *what* the organization is entitled
-to use, *which* policy value applies to a property and why, and *what business date* a property is on. It is
-the module that lets one product serve a 6-room guesthouse and a multi-brand group without either seeing the
-other's complexity.
+to use, *which* policy value applies to a property and why, *which system is the system of record* for each data
+domain, and *what business date* a property is on. It is what lets one product serve a 6-room guesthouse, a hotel
+that keeps its existing PMS and adopts one Portico module, and a multi-brand group.
 
 ## 2. Scope and non-goals
 
-**In scope:** organizations (tenants), environments, brands, regions, properties (profile, classification,
-timezone, currencies, business date, lifecycle), legal entities, owners and unit ownership shares, departments,
-outlets, plans/editions/entitlements/limits/usage meters, policies with inheritance and local overrides, feature
-visibility, environment-safety gate for external effects, configuration templates and property cloning.
+**In scope:** organizations (tenants), environments (`live`, `trial`, `sandbox`, `training`, `demo`), brands,
+regions, properties (profile, classification, timezone, currencies, business date, status), legal entities,
+owners and unit ownership shares, departments, outlets, plans/editions/entitlements/limits/usage meters, policies
+with inheritance and local overrides, feature visibility, **data authority** per property per domain,
+configuration templates and property cloning.
 
-**Non-goals:** staff users and permissions (`identity`); Monoclay's SaaS invoices and subscriptions (`billing`
-reads plans from here but owns money); chart of accounts and invoice series (`finance`, keyed by legal entity);
-unit types and units (`inventory`); owner statements (`finance`, LATER). Platform never stores guest data.
+**Non-goals:** staff users and permissions (`identity`); connections, mappings and sync (`integration` — platform
+only records *which* connection is authoritative); Monoclay's SaaS invoices (`billing`); chart of accounts and
+invoice series (`finance`); unit types and units (`inventory`); owner statements (`finance`, LATER).
 
 ## 3. Capabilities
 
@@ -27,282 +29,273 @@ unit types and units (`inventory`); owner statements (`finance`, LATER). Platfor
 
 - **PLT-R01** [MUST] An organization is the tenant: the hard isolation boundary for data and money. Every
   tenant-owned row in every module carries `tenant_id`; RLS is enabled and forced (architecture rule 4).
-- **PLT-R02** [MUST] Each organization has exactly one `live` environment and may have `training` and `demo`
-  environments. Each environment is a **separate tenant** linked by `environmentGroupId`; they never share rows,
-  sequences, payment accounts or credentials. `limits.environments` bounds how many non-live environments exist.
-- **PLT-R03** [MUST] Every environment carries `kind ∈ {live, training, demo, sandbox}` and the UI shows a
-  persistent, non-dismissable environment banner (colour + text) for every kind except `live`.
-- **PLT-R04** [MUST] `assertExternalEffectAllowed(ctx, effect)` (architecture rule 12) is implemented here.
-  Effects: `card_charge`, `card_refund`, `guest_message`, `channel_publish`, `government_submission`,
-  `fiscal_submission`, `paid_ai`, `production_key_issue`, `payout_instruction`. Matrix:
-
-  | effect \ env | live | training | demo | sandbox |
-  |---|---|---|---|---|
-  | card_charge / card_refund | allowed if a live payment account is configured | simulator | simulator | provider sandbox only |
-  | guest_message | allowed if sender verified and consent rules pass | redirect to staff inbox | blocked (logged) | provider sandbox / blocked |
-  | channel_publish | allowed if connection is `live` | simulator | simulator | provider sandbox |
-  | government / fiscal submission | allowed only with explicit owner authorization flag per property | blocked | blocked | provider test endpoint |
-  | paid_ai | allowed under usage cap | blocked unless cap > 0 | blocked | blocked |
-
-  The function returns `{ mode: 'live' | 'simulated' | 'sandbox' | 'blocked', reason }`; adapters must honour
-  the mode, and results produced in a non-live mode carry the `simulated`/`sandbox` trust marker
-  (`docs/product/ux-principles.md` §3).
-- **PLT-R05** [MUST] Training environments are created by cloning live *configuration* (never guest, payment or
-  financial data) plus generated sample data. Demo environments are created from the Maldives sample datasets
-  (decision D8: guesthouse, ~120-villa resort, 3-property group).
-- **PLT-R06** [MUST] Organization status: `active`, `restricted`, `read_only`, `closed`. Status changes require
-  a Monoclay operator action with reason; `read_only` and `closed` never take effect for a property with
-  in-house guests without 30 days' recorded notice (operations must not stop mid-stay). Data export stays
-  available in every status until deletion (brief §16).
+- **PLT-R02** [MUST] Each organization row has one `environment ∈ {live, trial, sandbox, training, demo}`. A hotel
+  company's live, trial, training and demo environments are **separate organizations (tenants)** linked by an
+  environment group; they never share rows, sequences, payment accounts or credentials.
+- **PLT-R03** [MUST] Every non-live environment shows a persistent, non-dismissable banner naming the environment
+  and what it can and cannot do ("Trial — copy of Lagoon Guesthouse data as of 3 Nov 14:20; read-only link to
+  your PMS; nothing you do here reaches guests, cards, channels or your PMS").
+- **PLT-R04** [MUST] Environment safety uses the kernel policy `effectMode(ctx, effect)` /
+  `assertExternalEffectAllowed(ctx, effect)` (`packages/kernel/src/environment.ts`), effects `payment.charge`,
+  `message.guest`, `message.staff`, `channel.publish`, `government.submit`, `ai.inference`,
+  `credentials.production`, `access.key`, `integration.read`, `integration.write`; modes `live | sandbox |
+  simulate | blocked`. In `live`, effects are additionally subject to configuration (connection active,
+  sender verified, owner authorization flag for `government.submit` per property). Results produced in a
+  non-live mode carry the provenance `simulated` (or `sandbox`) (CLAUDE.md rule 16).
+- **PLT-R05** [MUST] **Trial environment** (adoption brief §3): an isolated organization holding an **authorized
+  copy** of one hotel's data (imported via `integration`), optionally with **read-only** connections to the
+  hotel's real systems (`integration.read` = live, `integration.write` = blocked). Trial data carries provenance
+  `copied` with the copy timestamp. Trials can be **reset** (re-copy), **exported** and **deleted** by the hotel
+  (subject to retention obligations, Q44). A **carry-forward manifest** lists which configuration may be promoted
+  to live (unit types, units, rate structures without prices in effect, policies, charge codes, departments,
+  outlets, mappings reviewed in trial) and which never moves (reservations, guests, money, credentials).
+- **PLT-R06** [MUST] Training environments clone live **configuration** plus generated sample data; demo
+  environments load the Maldives sample datasets (decision D8). Sandbox environments serve integrators.
+- **PLT-R07** [MUST] Organization status `active | suspended | closed` (as implemented). `suspended` is set only
+  by a Monoclay operator with reason and ≥ 30 days' recorded notice when properties have in-house guests; while
+  suspended, creating new bookings and postings is blocked, but check-out, payment collection for existing
+  stays and **data export** remain available. `closed` starts the export-then-deletion schedule (brief §16).
 
 ### 3.2 Portfolio structure
 
-- **PLT-R07** [MUST] Hierarchy: Organization → optional Brands → optional Regions (nestable, max depth 4) →
-  Properties. A property belongs to at most one brand and at most one leaf region. Multi-level hierarchy is
-  `portfolio.hierarchy`; without it an organization has a flat list of properties (policy levels collapse to
-  organization → property).
-- **PLT-R08** [MUST] Moving a property between brands/regions is an audited, previewed operation showing which
-  inherited policy values change as a result.
-- **PLT-R09** [MUST] `limits.properties` is enforced when a property moves to `live` (draft and test properties
-  do not count), with an explanatory error naming the limit and the edition.
+- **PLT-R08** [MUST] Hierarchy: Organization → optional Brands → optional Regions (nestable, max depth 4) →
+  Properties. Multi-level hierarchy and brand/region policy levels are `portfolio.policies`; without it the
+  organization has a flat list of properties and policy levels collapse to organization → property.
+- **PLT-R09** [MUST] Moving a property between brands/regions is audited and previewed (which inherited policy
+  values change).
+- **PLT-R10** [MUST] `limits.properties` counts properties in status `pilot` or `active`; exceeding it at
+  activation returns an explanatory error naming the limit and edition.
 
 ### 3.3 Properties
 
-- **PLT-R10** [MUST] Property attributes: name, short code (unique per organization), profile, classification,
-  timezone (IANA), base currency, accepted currencies, operating legal entity (effective-dated), address/
-  atoll/island, check-in and check-out default times, unit noun defaults (e.g. "Villa", "Room", "Bed"),
-  languages, business date.
-- **PLT-R11** [MUST] **Property profile** ∈ `guesthouse`, `boutique_hotel`, `full_service_hotel`, `resort`,
-  `serviced_apartments`, `hostel` (see `docs/product/editions.md` §4; glossary refinement proposed). The
-  profile supplies **policy defaults** and **feature visibility defaults**; it never grants entitlements.
-  Changing profile is previewed (lists which defaults and visible features change) and never deletes data.
-- **PLT-R12** [MUST] **Classification** is a tax-relevant, effective-dated attribute (Maldives: `resort`,
-  `integrated_resort`, `tourist_vessel`, `uninhabited_island_hotel`, `inhabited_island_guesthouse` with declared
-  room count). Tax rules (`rates`) reference classification, never profile.
-- **PLT-R13** [MUST] Property lifecycle `draft → test → live → archived` (§4.2). `test` behaves like live for
-  configuration validation but external effects are `sandbox`/`simulated`. Go-live runs a readiness checklist
-  supplied by modules (e.g. distribution mapping completeness, tax pack verified, payment account configured)
-  and shows blockers vs warnings.
-- **PLT-R14** [SHOULD] Clone a property's configuration (unit types, rate structure, policies, charge codes,
-  departments, outlets — never units' operational state, guests or money) into a new `draft` property.
-- **PLT-R15** [MUST] Property-scoped **business date** (§3.8).
+- **PLT-R11** [MUST] Property attributes (as implemented, plus): code, name, profile, legal entity, brand/region,
+  country, timezone (IANA), base currency, accepted currencies, classification (jurisdiction key/values), business
+  date, check-in/out times, unit noun defaults, languages, address (atoll/island for the Maldives), version.
+- **PLT-R12** [MUST] **Property profile** ∈ `guesthouse`, `boutique_hotel`, `hotel` (full-service hotel),
+  `resort`, `serviced_apartments`, `hostel`. The profile supplies policy and feature-visibility defaults
+  (`docs/product/editions.md` §5); it never grants entitlements; changing it is previewed and deletes nothing.
+- **PLT-R13** [MUST] **Classification** is the tax-relevant attribute (e.g. `mv.establishmentType`,
+  `mv.inhabitedIsland`, `mv.roomCount`); tax rules reference classification, never profile. Changes are
+  effective-dated (proposed: history table) so historical tax computations stay reproducible.
+- **PLT-R14** [MUST] **Property status** `setup → pilot → active → inactive` (§4.2). `pilot` = controlled live
+  operation with an explicit **pilot scope** (enabled workflows/modules, permitted users, data-authority settings,
+  start/end dates, success criteria) recorded on the property. Activation (`pilot → active` or `setup → active`)
+  runs a readiness checklist contributed by modules (tax pack verified, payment account configured, mappings
+  complete, connections healthy, staff trained flag) and shows blockers vs warnings. **Activation is per
+  property**: a successful pilot at one property never activates another (adoption brief §11).
+- **PLT-R15** [SHOULD] Clone a property's configuration into a new `setup` property; bulk-create properties from
+  a template with validation report (enterprise rollout, adoption brief §11).
 
 ### 3.4 Legal entities and owners
 
-- **PLT-R16** [MUST] Legal entity: legal name, trading name, country, tax registration numbers (e.g. Maldives
-  TIN / TGST registration), base (functional) currency, registered address, fiscal settings reference. A
-  property has exactly one operating legal entity for any instant; changes are effective-dated with a cut-over
-  business date and never rewrite history (finance keys ledgers by legal entity).
-- **PLT-R17** [SHOULD] Owners and unit ownership: an owner (person or company) holds an effective-dated share
-  (basis points, total per unit-period ≤ 10000) of one or more units. Used by `finance` owner accounting
-  (`finance.ownerAccounting`, LATER).
+- **PLT-R16** [MUST] Legal entity: name, legal name, registration number, tax id, country, base (functional)
+  currency, address. A property has exactly one operating legal entity at any time; changes are effective-dated
+  by business date and never rewrite history (finance keys ledgers by legal entity).
+- **PLT-R17** [SHOULD] Owners and effective-dated unit ownership shares (basis points; ≤ 10000 per unit-period)
+  for owner accounting (`owners.accounting`, LATER).
 
 ### 3.5 Departments and outlets
 
-- **PLT-R18** [MUST] Departments per property from a template by profile (Front Office, Reservations,
-  Housekeeping, Engineering, F&B, Finance, Guest Relations, Recreation, Transport). Departments own tasks and
-  conversations; each has an escalation contact role.
+- **PLT-R18** [MUST] Departments per property from a template by profile; departments own tasks and
+  conversations and have an escalation role.
 - **PLT-R19** [MUST] Outlets per property: kind (`restaurant`, `bar`, `spa`, `dive_center`, `excursions`,
-  `boutique`, `transfer_desk`, `in_villa_dining`, `other`), operating hours, default charge codes (finance),
-  default revenue department, and whether it accepts room-charge postings.
+  `boutique`, `transfer_desk`, `in_villa_dining`, `other`), hours, default charge codes, accepts-room-charge flag.
 
 ### 3.6 Plans, entitlements, limits, usage
 
-- **PLT-R20** [MUST] Each organization has a plan = one edition (`essentials`, `professional`, `resort`,
-  `enterprise`) + zero or more add-ons + contract overrides. Entitlements resolve to feature keys (boolean) and
-  limits (numeric). Prices are **not** stored here (Q3; `billing` owns prices as configuration).
-- **PLT-R21** [MUST] Entitlements are evaluated server-side for every gated command and query
-  (`EntitlementError`, code `feature_not_enabled`, message names the feature and who can enable it).
-- **PLT-R22** [MUST] Some entitlements are per property (e.g. `resort.transfers` add-on for one property of a
-  group). Resolution: property-level grant ∪ organization-level grant.
-- **PLT-R23** [MUST] **Downgrade never deletes data.** When an entitlement is removed, existing records of that
-  feature become read-only and remain in exports and reports; open operational commitments (e.g. future
-  transfers) stay visible with a banner explaining the change.
-- **PLT-R24** [MUST] Usage meters (`usage.messages`, `usage.aiCredits`) record metered events per organization
-  and property with a **hard cap** and separate **notification thresholds**. Reaching a hard cap blocks only
-  the metered effect (e.g. paid AI), returns `usage_cap_reached` with recovery text, and never blocks
-  reservations, payments, check-in/out or Day Close (readiness §14, §16; evidence E14).
+- **PLT-R20** [MUST] Each organization has a plan (`essentials`, `professional`, `resort`, `enterprise`, and the
+  proposed `connect` plan for module-only adoption) + add-ons + contract overrides, resolving to feature keys and
+  limits. Canonical keys: `docs/product/editions.md` (which also lists required changes to
+  `modules/platform/src/domain/plans.ts`). Prices are not stored here (Q3).
+- **PLT-R21** [MUST] Entitlements are checked server-side (`requireEntitlement` → `EntitlementError`
+  `feature_not_enabled`).
+- **PLT-R22** [MUST] Property-scoped add-ons (e.g. `resort.transfers` for one property of a group).
+- **PLT-R23** [MUST] **Downgrade never deletes data**; features become read-only with an explanatory banner.
+- **PLT-R24** [MUST] Usage meters (`usage.messages`, `usage.aiCredits`) with hard caps distinct from notification
+  thresholds; reaching a cap blocks only the metered effect (`usage_cap_reached` with recovery text) and never
+  reservations, payments, check-in/out or Day Close (E14).
 
 ### 3.7 Policies, inheritance and local overrides
 
-- **PLT-R25** [MUST] A **policy catalog** is registered by modules: key (e.g. `reservations.checkIn.requireInspected`),
-  type (JSON-schema), default, allowed levels (`organization`, `brand`, `region`, `property`), lockable flag,
-  sensitivity, description, owning module.
-- **PLT-R26** [MUST] Resolution order (most specific wins unless locked): `default` → `profile` → `organization`
-  → `brand` → `region` (outermost to innermost) → `property`. `resolvePolicy` returns the value **and its
-  source**. A property value differing from the inherited value is a **local override** and is always labelled
-  as such in the UI, with the inherited value shown beside it.
-- **PLT-R27** [MUST] A higher level may **lock** a lockable policy (`portfolio.policies`): lower levels cannot
-  set a value; existing lower-level overrides are reported, not silently deleted. Applying a lock offers, per
-  overriding property, *keep override (exempt)* or *remove override*; exemptions are recorded with reason.
-- **PLT-R28** [MUST] **Portfolio change preview** (brief §13): before saving any policy value at
-  organization/brand/region level, show the list of affected properties partitioned into *will change*,
-  *unchanged because overridden locally*, *unchanged because value already equal*, and *exempt*. Saving
-  requires the preview's `previewToken` (stale previews are rejected with 409 and recomputed). Not gated: the
-  preview is a safety feature in every edition.
-- **PLT-R29** [MUST] Every policy value change is versioned (who, when, reason, before/after, effective from).
-  Policies may be **scheduled** (effective at a future instant or business date) — `portfolio.policies`.
-- **PLT-R30** [MUST] **Override report**: per policy and per property, all local overrides with age, author
-  and reason; filterable; exportable. Available in all editions for organizations with ≥ 2 properties.
+- **PLT-R25** [MUST] Policy catalog registered by modules (key, schema, default, allowed levels, lockable,
+  sensitivity, owning module).
+- **PLT-R26** [MUST] Resolution (as implemented): `default → organization → brand → region → property`, returning
+  value, source and `isLocalOverride`. Proposed: a `profile` layer between `default` and `organization`.
+- **PLT-R27** [MUST] Locks (`portfolio.policies`): a higher level can lock a lockable policy; existing overrides are
+  reported and either kept as recorded exemptions or removed — never silently deleted.
+- **PLT-R28** [MUST] **Portfolio change preview** before saving any organization/brand/region value (implemented as
+  `previewPolicyChange`): affected properties partitioned into *will change*, *unchanged — local override*,
+  *unchanged — already equal*, *exempt*. Never gated. Saving with a stale preview → 409 and recompute.
+- **PLT-R29** [MUST] Policy history (who, when, reason, before/after, effective from); scheduled changes and
+  staged rollout groups (`portfolio.policies`; adoption brief §11 "controlled changes that do not disrupt an
+  entire portfolio").
+- **PLT-R30** [MUST] Override report per policy and property (all editions with ≥ 2 properties).
 
 ### 3.8 Business date
 
-- **PLT-R31** [MUST] Each property has a business date (`LocalDate`). It starts at the property's local
-  calendar date at go-live and changes **only** via `advanceBusinessDate(tx, propertyId, expected)`, called only
-  by `day-close`. The call is optimistic: `expected` must equal the current value, else `VersionConflictError`.
-- **PLT-R32** [MUST] Advancing from D to D+1 is rejected if the property's local time is before
-  `dayClose.earliestStartLocalTime` on D (policy, default `22:00`). The business date may lag the calendar date;
-  a lag of ≥ 1 full day raises an exception visible to managers.
-- **PLT-R33** [MUST] Business date advance does not log anyone out and does not block other commands. A command
-  reads the business date inside its transaction; postings are stamped with the business date current at commit.
+- **PLT-R31** [MUST] Business date per property changes only via `advanceBusinessDate(tx, propertyId, expected)`
+  (permission `platform.businessDate.advance`), called by `day-close`; optimistic on `expected`.
+- **PLT-R32** [MUST] Advance from D to D+1 is rejected before `dayClose.earliestStartLocalTime` on D (policy,
+  default `22:00`); a lag ≥ 1 day raises a manager-visible exception.
+- **PLT-R33** [MUST] Advancing never logs anyone out or blocks other commands; postings take the business date
+  current at commit.
+- **PLT-R34** [MUST] When `reservations` authority is external (connected mode), policy
+  `platform.businessDate.source = external` makes the business date **mirror** the external system's (received by
+  `integration` with provenance `external`); Day Close is then disabled for that property.
 
-### 3.9 Feature visibility (progressive disclosure)
+### 3.9 Data authority (system of record)
 
-- **PLT-R34** [MUST] `isFeatureVisible(propertyId, featureKey)` = entitlement granted **and** visibility policy
-  `ui.features.<featureKey>.visible` resolved true (profile supplies defaults; admins can reveal or hide per
-  property). Hidden features disappear from navigation, forms, command palette and search but their data, if
-  any exists, stays reachable from records that reference it.
+- **PLT-R35** [MUST] For each property and domain (`reservations`, `availability`, `rates`, `guestProfiles`,
+  `charges`, `payments`, `roomStatus`, `maintenance`, `accounting`) exactly one authority: `portico` (write mode
+  `exclusive`) or `external` (a connection from `integration`, write mode `forward` or `read_only`). Default:
+  `portico/exclusive` (as implemented: `getDataAuthority`, `listDataAuthority`, `setDataAuthority`).
+- **PLT-R36** [MUST] Every module write in a governed domain calls `assertWritable(tx, propertyId, domain)` →
+  `'portico'` (write locally), `'forward'` (send through `integration`; the change is **pending** until the external
+  system acknowledges, then becomes effective; rejection is shown with the external reason), or throws
+  `external_system_of_record` naming the system to use.
+- **PLT-R37** [MUST] Changing authority (`platform.dataAuthority.manage` ⚑) requires a **preview** listing affected
+  functions per module (each module contributes "what stops/starts working here"), affected open items (e.g.
+  future reservations, unsynced room statuses), and the cutover steps (final change capture, reconciliation run).
+  Moving `reservations` or `availability` between authorities requires a reconciliation report with no unresolved
+  blocking discrepancies (no two systems controlling live inventory — readiness §6).
+- **PLT-R38** [MUST] Coherence rules (validated on save): `availability` external ⇒ `reservations` external;
+  `charges` external ⇒ Portico folios disabled for that property; `payments` external ⇒ Portico payment
+  collection disabled except payment links explicitly forwarded; `roomStatus` and `maintenance` may differ from
+  `reservations`.
+- **PLT-R39** [MUST] Data-authority matrix screen per property and a portfolio view (which system is authoritative
+  per domain per property) — the **source-of-truth responsibility matrix** made live (adoption brief §2, §15).
 
-### 3.10 Configuration templates and import
+### 3.10 Feature visibility
 
-- **PLT-R35** [SHOULD] Property setup wizard by profile: minimal path (guesthouse: 8 steps; resort: guided
-  sections) producing a valid `test` property; each step saves; resumable.
-- **PLT-R36** [SHOULD] Configuration export/import as versioned JSON (used by clone, templates and migration
-  tooling in `integration`).
+- **PLT-R40** [MUST] `isFeatureVisible(propertyId, featureKey)` = entitlement **and** visibility policy
+  `ui.features.<key>.visible` (profile defaults) **and** the module is usable under the property's data authority
+  (e.g. folios hidden when `charges` is external).
 
 ## 4. Entities and states
 
-### 4.1 Core entities
+### 4.1 Entities (implemented tables in `modules/platform/migrations/0001_platform.sql`, plus proposals)
 
-`organization(id, name, status, environment_group_id, kind, plan_id, created_at)` ·
-`brand(id, name)` · `region(id, parent_region_id?, name)` ·
-`property(id, code, name, profile, timezone, base_currency, accepted_currencies[], brand_id?, region_id?,
-lifecycle, business_date, version)` · `property_classification(property_id, classification, room_count?,
-valid_from, valid_to?)` · `property_operator(property_id, legal_entity_id, valid_from_business_date,
-valid_to_business_date?)` · `legal_entity(id, legal_name, country, tax_ids jsonb, base_currency, version)` ·
-`owner(id, kind, name, contact)` · `unit_ownership(unit_id, owner_id, share_bp, valid_from, valid_to?)` ·
-`department(id, property_id, code, name, escalation_role_id?)` · `outlet(id, property_id, code, kind, name,
-accepts_room_charge, default_charge_code?)` · `plan(id, edition, addons[], overrides jsonb)` ·
-`entitlement_grant(scope: org|property, scope_id, key, value)` · `usage_counter(key, period, scope, used, cap,
-notify_at[])` · `policy_definition(key, schema, default, levels[], lockable, module)` · `policy_value(key, level,
-level_id, value, locked, exempt_reason?, effective_from, version, author, reason)`.
+`organizations(id, name, slug, environment, status, plan_code, default_locale)` · `legal_entities` · `brands` ·
+`regions(parent)` · `properties(…, profile, classification jsonb, business_date, status, version)` · `departments` ·
+`policies` · `data_authority(property_id, domain, authority, connection_id, system_name, write_mode,
+effective_from, reason, version)` · `tenant_directory` (environment lookup). Proposed additions:
+`property_classification_history`, `property_pilot_scope(property_id, scope jsonb, starts, ends, criteria)`,
+`outlets`, `owners`, `unit_ownership`, `entitlement_grants(scope, key)`, `usage_counters`, `environment_groups`,
+`trial_manifest(trial_tenant_id, source, copied_at, carry_forward jsonb)`.
 
 ### 4.2 State machines
 
-**Organization status**
+**Organization:** `active ⇄ suspended` (operator, reason, notice) · `active|suspended → closed` (terminal after
+export window).
 
-| from \ to | active | restricted | read_only | closed |
-|---|---|---|---|---|
-| active | — | operator + reason | operator + reason + notice | — |
-| restricted | operator | — | operator + notice | — |
-| read_only | operator | — | — | operator + export window elapsed |
-| closed | — | — | — | — |
+**Property status:** `setup → pilot` (pilot scope defined; checklist for pilot scope passes) · `setup → active` ·
+`pilot → active` (full activation checklist; explicit confirmation by `platform.property.activate` ⚑) ·
+`pilot → setup` (pilot stopped; data retained, live effects stop) · `active → inactive` (no in-house or future
+confirmed stays, folios settled/transferred; read-only) · `inactive → active` (operator only). `active → setup` is
+forbidden.
 
-`restricted`: admin banners only, no functional loss. `read_only`: no new bookings/postings; check-out and
-payment collection for in-house stays remain allowed; exports allowed.
+**Data authority (per property × domain):** `portico/exclusive ⇄ external/read_only ⇄ external/forward`; every
+change is a versioned row change with reason and emits `platform.dataAuthority.changed`.
 
-**Property lifecycle**: `draft → test` (setup validation passes) · `test → live` (go-live checklist, no
-blockers, `limits.properties` not exceeded, explicit confirmation by a user with `platform.property.goLive` ⚑) ·
-`test → draft` (allowed) · `live → archived` (no in-house stays, no future confirmed stays, all folios settled or
-transferred; archived is read-only) · `archived → live` (operator only). `live → test`/`draft` is forbidden.
-
-**Business date**: monotonic `D → D+1` only; no skips (advancing over several days requires several Day
-Close runs, each producing its own statistics snapshot).
+**Business date:** monotonic `D → D+1` only (or mirrored from external when the source policy is `external`).
 
 ## 5. Invariants
 
-- **PLT-I01** No row is readable or writable outside its tenant: every tenant-owned table has `tenant_id NOT NULL`,
-  RLS enabled **and forced**; a query with a mismatched tenant context returns zero rows (test S17).
-- **PLT-I02** Environments of one organization never share a `tenant_id`; no foreign key crosses tenants.
-- **PLT-I03** A property has exactly one operating legal entity for every business date ≥ its go-live date
-  (no gaps, no overlaps — exclusion constraint on `property_operator`).
-- **PLT-I04** A property's business date never decreases and changes by exactly +1 day per advance.
-- **PLT-I05** `resolvePolicy` is deterministic: the same inputs and policy versions return the same value and source.
-- **PLT-I06** A locked policy has no non-exempt lower-level value in effect.
-- **PLT-I07** Count of `live` properties ≤ `limits.properties` at the instant of any go-live.
-- **PLT-I08** Unit ownership shares for any unit and instant sum to ≤ 10000 bp.
-- **PLT-I09** For every external effect performed by an adapter there is an audit/log record of the
-  `assertExternalEffectAllowed` decision; in non-live environments no effect is performed in `live` mode.
-- **PLT-I10** Removing an entitlement never deletes or mutates feature data (only access mode changes).
+- **PLT-I01** No row is readable or writable outside its tenant (RLS forced; S17).
+- **PLT-I02** Environments of one company never share a tenant id; no foreign key crosses tenants.
+- **PLT-I03** A property has exactly one operating legal entity for every business date.
+- **PLT-I04** Business date never decreases; Portico-advanced dates change by exactly +1 day.
+- **PLT-I05** `resolvePolicy` is deterministic for the same inputs and policy versions.
+- **PLT-I06** Exactly one authority row (explicit or default) per property × domain; an `external` authority
+  always references a connection; `portico` always has write mode `exclusive`.
+- **PLT-I07** No module write succeeds in a domain whose authority is `external/read_only` (integration test per
+  module: every governed write path calls `assertWritable`).
+- **PLT-I08** In `trial`, no effect other than `integration.read` runs in `live` mode; `integration.write`,
+  `government.submit`, `credentials.production` are blocked (kernel test exists).
+- **PLT-I09** Count of `pilot`+`active` properties ≤ `limits.properties`.
+- **PLT-I10** Removing an entitlement never deletes or mutates feature data.
 
 ## 6. Cross-module interactions
 
-Provider contract (domain map): `getProperty`, `getBusinessDate`, `advanceBusinessDate`, `getLegalEntity`,
-`hasEntitlement`, `resolvePolicy`. Consumers: every module. Platform calls `identity.authorize` for its own
-commands only. Platform depends on no other module (it is the root of the dependency graph).
+Provider (domain map + implemented): `getProperty`, `listProperties`, `getBusinessDate`, `advanceBusinessDate`,
+`getLegalEntity`, `hasEntitlement`, `requireEntitlement`, `getLimit`, `resolvePolicy`, `previewPolicyChange`,
+`setPolicy`, `propertyIdsInScope`, `getDataAuthority`, `listDataAuthority`, `assertWritable`, `setDataAuthority`.
+Consumers: every module. Platform depends on no module; `integration` registers connections that platform
+references by id only.
 
 ### Proposed contract changes
 
-1. `hasEntitlement(tx, feature, opts?: { propertyId?: Uuid })` — property-scoped add-ons (PLT-R22). Additive.
-2. `resolvePolicy` result `source` adds `'profile'` (PLT-R26). Additive to the union.
-3. New: `getLimit(tx, key, opts?) : Promise<number | 'unlimited'>`.
-4. New: `isFeatureVisible(tx, propertyId, featureKey): Promise<boolean>` (PLT-R34).
-5. New: `recordUsage(tx, { meter, quantity, propertyId?, ref }): Promise<{ allowed: boolean; remaining }>` (PLT-R24).
-6. New: `assertExternalEffectAllowed(ctx, effect): Promise<EffectDecision>` lives in `@portico/db` per CLAUDE.md
-   but reads environment kind and authorization flags owned here — expose `getEnvironment(tx)`.
-7. New: `getPropertyAt(tx, propertyId, businessDate)` returning classification and operating legal entity
-   effective on that date (finance and rates need historical values).
+1. `hasEntitlement(tx, feature, opts?: { propertyId })` for property-scoped add-ons.
+2. `resolvePolicy` source adds `'profile'`.
+3. New `isFeatureVisible(tx, propertyId, featureKey)`; `recordUsage(tx, { meter, quantity, propertyId?, ref })`.
+4. New `getPropertyAt(tx, propertyId, businessDate)` (classification and operator effective then).
+5. New `previewDataAuthorityChange(tx, { propertyId, domain, to })` aggregating module impact statements via a
+   registered `DataAuthorityImpactProvider` port per module.
+6. New `getPilotScope(tx, propertyId)`; `assertInPilotScope(tx, propertyId, workflow)` for pilot-limited workflows.
+7. Domain map should list `platform.dataAuthority.changed` (already emitted by the implementation).
 
 ## 7. Events
 
-Emitted: `platform.property.businessDateAdvanced {propertyId, from, to}` · `platform.policy.changed {key, level,
-levelId, before, after, affectedPropertyIds}` · proposed: `platform.property.lifecycleChanged`,
-`platform.entitlement.changed {key, scope, granted}`, `platform.usage.thresholdReached {meter, scope, percent}`,
-`platform.property.operatorChanged`.
-Consumed: none (root module).
+Emitted: `platform.property.businessDateAdvanced` · `platform.policy.changed` · `platform.dataAuthority.changed`
+(implemented) · proposed: `platform.property.statusChanged`, `platform.entitlement.changed`,
+`platform.usage.thresholdReached`, `platform.property.operatorChanged`, `platform.trial.reset`.
+Consumed: `integration.connection.statusChanged` (proposed) — to flag authorities pointing at a paused or failed
+connection in the authority matrix.
 
 ## 8. Permissions
 
-`platform.organization.read` (org) · `platform.organization.manage` ⚑ (org) · `platform.property.read` ·
-`platform.property.manage` · `platform.property.goLive` ⚑ · `platform.property.archive` ⚑ ·
-`platform.legalEntity.manage` ⚑ (org) · `platform.owner.manage` ⚑ (org) · `platform.department.manage` ·
-`platform.outlet.manage` · `platform.policy.read` · `platform.policy.manageProperty` ⚑ ·
-`platform.policy.managePortfolio` ⚑ (org) · `platform.policy.lock` ⚑ (org) · `platform.plan.read` (org) ·
-`platform.usage.manageCaps` ⚑ (org) · `platform.environment.manage` ⚑ (org).
+Implemented: `platform.organization.manage` ⚑ (org) · `platform.legalEntity.manage` ⚑ (org) ·
+`platform.property.read` · `platform.property.create` ⚑ (org) · `platform.property.update` ·
+`platform.department.manage` · `platform.businessDate.advance` ⚑ · `platform.policy.manage` ⚑ (org) ·
+`platform.policy.override` · `platform.dataAuthority.manage` ⚑ (used by service; add to manifest).
+Proposed: `platform.property.activate` ⚑ · `platform.property.deactivate` ⚑ · `platform.outlet.manage` ·
+`platform.policy.lock` ⚑ (org) · `platform.plan.read` (org) · `platform.usage.manageCaps` ⚑ (org) ·
+`platform.trial.manage` ⚑ (org) · `platform.owner.manage` ⚑ (org).
 
 ## 9. UX surfaces
 
-- **Property settings** with a left index by area; every policy row shows value, source badge
-  (`default`/`profile`/`organization`/`brand`/`region`/`property`), "local override" label and a reset action.
-- **Portfolio policy editor** with the mandatory change preview (PLT-R28) and override report (PLT-R30).
-- **Go-live checklist** listing blockers and warnings contributed by modules, each linking to its fix.
-- **Plan & usage page**: edition, add-ons, limits with current use, usage meters with caps and notifications.
-- **Environment banner** (PLT-R03) and environment switcher (live ⇄ training) that never carries a session's
-  unsaved work across environments.
+Property settings with source badges and "local override" labels; portfolio policy editor with mandatory change
+preview and override report; **data-authority matrix** (domains × systems, write mode, connection health dot,
+"what changes if I switch" preview); activation checklist and pilot-scope editor; plan & usage page;
+environment banner; trial home ("what this trial contains, copied when, what is read-only, reset/export/delete").
 
 ## 10. Proof scenarios and evidence
 
 | ID | Platform must demonstrate |
 |---|---|
-| S16 | Organization-level policy change previewed across 3 properties, one with a local override (stays unchanged and is reported), one exempt from a lock; the change history shows actor/reason; properties' resolved values and sources are correct afterwards. |
-| S17 | Tenant isolation at the database layer: a forged tenant context or guessed IDs return 404/0 rows for every module's tables (platform supplies the tenant context and RLS policy helpers). |
-| E09 | Property scope data (property lists, business dates, settings) is invisible to a user without that property in scope. |
-| E13 | Organization status changes (`restricted`, `read_only`) behave as specified and keep in-house operations and export available. |
-| E14 | Usage cap reached for `usage.aiCredits`/`usage.messages`: metered effect blocked with recovery text; reservations/payments/Day Close unaffected. |
-| S09 (supporting) | `advanceBusinessDate` is optimistic; a duplicate advance attempt fails cleanly. |
+| S16 | Org-level policy change previewed across 3 properties (one local override unchanged and reported, one exempt under lock); history and resolved values correct afterwards. |
+| S17 | Tenant isolation at the DB layer for every module (implemented e2e test extends to new modules). |
+| S20 (supporting) | A connection failure marks authorities that depend on it as degraded in the matrix; writes in `forward` mode queue as pending, never shown as done. |
+| E09 | Property-scoped data invisible without property scope. |
+| E13 | `suspended` organization: new bookings blocked, check-out/payment/export work. |
+| E14 | Usage cap reached: only the metered effect stops. |
+| A01–A04 | Adoption evidence (see `docs/scenarios/README.md` §3): trial isolation, read-only connection, data-authority switch with reconciliation, pilot scope enforcement. |
 
 ## 11. Maldives specifics
 
-- Timezone `Indian/Maldives` (UTC+5, no daylight saving). Business date logic must still be DST-safe for other
-  markets (readiness §17).
-- Base currency is usually USD for resorts and often USD for guesthouses; MVR is an accepted currency for cash
-  and local guests. Legal-entity functional currency may differ from property base currency (finance handles FX).
-- Classification drives Green Tax rate (research 04: $12 resorts, integrated resorts, tourist vessels,
-  uninhabited-island properties and inhabited-island properties > 50 rooms; $6 for ≤ 50 rooms on inhabited
-  islands). Room count is part of the classification record.
-- Address model includes atoll and island; departments template for resorts adds Recreation, Transport and
-  Marine; outlets include `dive_center`, `excursions`, `in_villa_dining`.
+Timezone `Indian/Maldives` (UTC+5, no DST; logic remains DST-safe). Base currency usually USD; MVR accepted.
+Classification drives Green Tax ($12 vs $6 per person-night, research 04). Address includes atoll and island.
+Resort department template adds Recreation, Transport, Marine. Many resorts run an incumbent PMS and would adopt
+Portico first in connected mode (housekeeping, communications, transfers, reporting) — data authority makes that
+safe.
 
 ## 12. Competitive inspirations
 
-- Configure-once portfolio with visible overrides and drift reports — Shiji Daylight (research 01 §5.2, §5.6).
-  Improved: change preview partitions affected properties; locks never silently delete overrides.
-- Never an irreversible global switch — anti-pattern from OPERA profile sharing (research 01 §2.4, §8).
-- Property clone / test / set-live / archive lifecycle — Apaleo (research 02 §3.3.1, §3.6).
-- Tier gating on configuration counts is an anti-pattern — Mews Pro limits (research 02 §2.8 item 5); our
-  limits are properties and units only, never rates, connections or data history.
+Shiji configure-once portfolio with visible overrides (research 01 §5.2); OPERA irreversible switches as
+anti-pattern (research 01 §8); Apaleo clone/test/live/archive lifecycle (research 02 §3.6); Mews tier gating on
+configuration counts as anti-pattern (research 02 §2.8); SiteMinder/Cloudbeds dual-PMS hazard → explicit
+single authority per domain (research 03 §3.3, §9.2 item 7).
 
 ## 13. Open questions
 
-Q3 (edition prices), Q4 (region). Product decisions taken here: business date earliest-start default 22:00;
-max region depth 4; staff accounts are never limited (rationale in editions.md §3).
+Q3 (prices), Q4 (region), Q44 (trial deletion vs retention). Product decisions: earliest Day Close start 22:00;
+region depth 4; activation is always per property.
+
+## 14. Adoption modes
+
+- **Standalone alongside an external PMS:** always present — platform is required by every adoption path
+  (connect alongside, replace selected capabilities, full migration).
+- **Hard dependencies:** none (root module); `identity` for authorization.
+- **Connected mode:** stores the data-authority matrix, mirrors business date when `reservations` is external
+  (PLT-R34), hides features unusable under the current authorities (PLT-R40), and provides trial/pilot lifecycle.
+- **Data-authority domains:** owns the authority registry for all nine domains; owns none of the domain data itself.

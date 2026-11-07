@@ -1,13 +1,14 @@
 # Spec: identity
 
-Status: Draft v1 · 2026-11-07 · Wave 0 → 1 · Schema `identity` · Prefix `IDN`
+Status: Draft v2 · 2026-11-07 · Wave 0 → 1 · Schema `identity` · Prefix `IDN`
+Aligned with the foundation on `main` (`modules/identity`, ADR-0012).
 
 ## 1. Purpose
 
 Decide, for every request, **who** is acting and **whether** they may do this here. Staff users, API clients,
 AI agents acting for a user, and Monoclay support staff all pass through the same authorization path. Hotel
 staff change jobs, properties and shifts constantly; the module must make onboarding, transfers and
-terminations fast and safe, and must make every privileged action attributable.
+membership removals fast and safe, and must make every privileged action attributable.
 
 ## 2. Scope and non-goals
 
@@ -22,9 +23,12 @@ rosters (boundary: identity stores only employment status needed for access); Sa
 
 ### 3.1 Staff users and credentials
 
-- **IDN-R01** [MUST] A staff member belongs to exactly one organization (tenant-owned row). The same email may
-  exist in several organizations as separate accounts; sign-in asks which organization when ambiguous. Never
-  a cross-tenant user row.
+- **IDN-R01** [MUST] (As implemented, ADR-0012.) A **user** is a global person record (unique email, credential,
+  MFA); access to an organization is a tenant-owned **membership** (display name, job title, status, default
+  property). A user sees an organization only through an active membership; sign-in returns
+  `select_organization` when the user has several. Sessions are bound to exactly one organization (tenant id
+  embedded and verified). Management companies and consultants therefore use one login across organizations,
+  but every authorization decision and every audit record is per organization.
 - **IDN-R02** [MUST] Credentials: password (Argon2id, breach-list check, min length 12, no composition rules)
   and/or SSO; passkeys (WebAuthn) [SHOULD]. Login rate-limited per account and per IP; lockout escalates with
   delay rather than hard lock to avoid front-desk denial of service.
@@ -36,10 +40,11 @@ rosters (boundary: identity stores only employment status needed for access); Sa
   permissions not marked `requiresFullAuth` (money movement > policy threshold, user admin, exports).
 - **IDN-R05** [MUST] Sessions: idle timeout by policy (desk default 30 min with PIN re-unlock, mobile 12 h,
   admin 15 min), absolute lifetime, device list, remote sign-out, revoke all sessions on password reset or
-  termination.
-- **IDN-R06** [MUST] **Employment lifecycle:** `invited → active → suspended → terminated`. Termination revokes
-  all sessions, API tokens issued *by* the user and pending delegated AI actions within 60 s; records remain
-  for audit attribution (never deleted while referenced).
+  membership removal.
+- **IDN-R06** [MUST] **Membership lifecycle** (as implemented): `invited → active ⇄ suspended → removed`.
+  Removal revokes the membership's sessions, API tokens issued *by* the user in that organization and pending
+  delegated AI actions within 60 s; records remain for audit attribution. User-level status
+  (`active | locked | disabled`) handles credential lockout and global disablement independently.
 - **IDN-R07** [MUST] **Transfer**: moving a user between properties is a single previewed operation (assignments
   removed/added, effective time), not delete-and-recreate.
 - **IDN-R08** [SHOULD] SSO via OIDC and SAML 2.0 with just-in-time provisioning and group→role mapping
@@ -94,7 +99,11 @@ rosters (boundary: identity stores only employment status needed for access); Sa
 
 ## 4. Entities and states
 
-`user(id, email, display_name, status, mfa_required, locale, version)` · `credential(user_id, kind, …)` ·
+Implemented (`modules/identity/migrations/0001_identity.sql`): `users(id, email, password_hash, status
+active|locked|disabled, failed_logins, locked_until, mfa_secret_enc)` (global) · `memberships(tenant_id, user_id,
+display_name, job_title, status invited|active|suspended|removed, default_property_id, version)` · `roles(key, name,
+permissions[], is_system)` · `role_assignments(user_id, role_id, scope_type organization|brand|region|property,
+scope_id, starts_at, ends_at, granted_by, reason, revoked_at)`. Proposed additions: `credential(user_id, kind, …)` ·
 `device(id, user_id?, kind: desk|mobile|kiosk, property_id?, registered_at, last_seen_at)` ·
 `session(id, user_id, device_id, auth_level: full|pin, created_at, expires_at, revoked_at?)` ·
 `role(id, name, template_key?, permissions[], version)` · `role_assignment(id, user_id, role_id, scope_kind,
@@ -103,9 +112,12 @@ last_used_at)` · `approval_request(id, kind, subject_ref, requested_by, approve
 `elevation(id, user_id, role_id, reason, started_at, ends_at)` · `support_session(id, operator, scope, reason,
 approved_by, starts_at, ends_at)` · `security_event(...)` (append-only).
 
-**User status:** `invited → active` (accepts invite, sets credential/MFA) · `active ⇄ suspended` (admin, reason) ·
-`active|suspended|invited → terminated` (admin, reason; terminal). Terminated users cannot be reactivated;
-rehire creates a new user linked by `previous_user_id`.
+**Membership status:** `invited → active` (accepts invite, sets credential/MFA) · `active ⇄ suspended` (admin,
+reason) · `invited|active|suspended → removed` (admin, reason; terminal for that membership). Rehire creates a new
+membership for the same user. Department scope (`scope_type = department`) is a proposed extension.
+
+**User status:** `active → locked` (failed sign-ins; auto-unlock after `locked_until`) · `active ⇄ disabled`
+(Monoclay operator or the user's sole organization, with reason).
 
 **Approval request:** `pending → approved | declined | expired | withdrawn`. Terminal states are immutable.
 An approval is consumable exactly once by the command that requested it (`consumed_at`).
@@ -116,16 +128,16 @@ An approval is consumable exactly once by the command that requested it (`consum
 
 - **IDN-I01** Every API request except sign-in, public booking-engine endpoints and webhooks with verified
   signatures carries an authenticated actor; every mutating command records `actor` in audit.
-- **IDN-I02** `authorize` returns allow only if an active assignment (now within `validFrom..validTo`) grants
-  the permission for a scope containing the target property; terminated/suspended users have zero effective
-  permissions.
+- **IDN-I02** `authorize` returns allow only if an active membership and an unrevoked assignment (now within
+  `starts_at..ends_at`) grant the permission for a scope containing the target property; suspended/removed
+  memberships and locked/disabled users have zero effective permissions.
 - **IDN-I03** A user cannot create, edit or approve a role assignment for themselves.
 - **IDN-I04** A user with any ⚑ permission has MFA enrolled before that permission becomes effective.
 - **IDN-I05** An approval request is consumed at most once; a consumed or expired approval cannot authorize
   another command.
 - **IDN-I06** Support sessions are bounded in time; no support-operator read occurs outside an approved
   session window (enforced at the auth layer; audit proves it).
-- **IDN-I07** After termination, no session or token of that user authenticates (tested within 60 s).
+- **IDN-I07** After membership removal, no session or token of that user authenticates **for that organization** (tested within 60 s); memberships in other organizations are unaffected.
 - **IDN-I08** API client effective permissions ⊆ the scopes granted at creation; property filter applied to
   every list endpoint (list results never include out-of-scope properties' rows).
 
@@ -145,15 +157,17 @@ Every module registers permissions through its `ModuleManifest`.
 
 ## 7. Events
 
-Emitted: `identity.user.invited|activated|suspended|terminated`, `identity.roleAssignment.changed`,
+Emitted: `identity.membership.invited|activated|suspended|removed`, `identity.roleAssignment.changed`,
 `identity.elevation.started|ended`, `identity.supportSession.started|ended`, `identity.apiClient.created|revoked`.
 Consumed: `platform.property.lifecycleChanged` (archived properties drop from accessible lists).
 
 ## 8. Permissions
 
-`identity.user.read` · `identity.user.manage` ⚑ · `identity.role.manage` ⚑ (org) · `identity.roleAssignment.manage` ⚑ ·
-`identity.apiClient.manage` ⚑ (org) · `identity.device.manage` · `identity.securityLog.read` ⚑ (org) ·
-`identity.supportAccess.approve` ⚑ (org) · `identity.elevation.use` ⚑.
+Implemented: `identity.user.read` (org) · `identity.user.manage` ⚑ (org) · `identity.role.assign` ⚑ ·
+`identity.role.manage` ⚑ (org) · `identity.apiClient.manage` ⚑ (org).
+Proposed: `identity.device.manage` · `identity.securityLog.read` ⚑ (org) · `identity.supportAccess.approve` ⚑ (org) ·
+`identity.elevation.use` ⚑ · `identity.approval.decide` (granted implicitly with the approver permission named on
+each request).
 
 ## 9. UX surfaces
 
@@ -193,3 +207,13 @@ session lifetimes on registered mobile devices are longer, while sensitive actio
 
 None requiring the owner. Product decisions: staff accounts unlimited in every edition (so shared logins are
 never economically motivated); MFA never gated.
+
+## 14. Adoption modes
+
+- **Standalone alongside an external PMS:** always present (every adoption path needs staff sign-in and
+  authorization). A hotel adopting only housekeeping or messaging still gets per-person accounts, roles and audit.
+- **Hard dependencies:** `platform` (organizations, properties, environments).
+- **Connected mode:** unchanged; additionally maps external staff identifiers (e.g. housekeeper codes in the
+  external PMS) to Portico users through `integration` mappings so attribution survives round trips. Trial
+  environments get their own memberships; trial access never implies live access.
+- **Data-authority domains:** none (identity data is always Portico's, or the enterprise IdP's via SSO).

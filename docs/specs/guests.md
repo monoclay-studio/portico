@@ -178,7 +178,7 @@ Consumed: `reservations.stay.checkedIn|checkedOut|noShow|cancelled` (history), `
 
 ## 8. Permissions
 
-`guests.profile.read` · `guests.profile.readShared` · `guests.profile.manage` · `guests.profile.merge` ⚑ ·
+`guests.profile.read` · `guests.profile.readShared` · `guests.profile.update` (create and edit) · `guests.profile.merge` ⚑ ·
 `guests.profile.unmerge` ⚑ · `guests.sensitive.read` ⚑ · `guests.document.read` ⚑ · `guests.document.manage` ⚑ ·
 `guests.privacy.export` ⚑ · `guests.privacy.erase` ⚑ · `guests.company.read` · `guests.company.manage` ·
 `guests.alert.manage` · `guests.note.readPrivate` (department/property-private notes beyond own department).
@@ -222,3 +222,20 @@ registration/reporting are pending Q43.
 ## 13. Open questions
 
 Q43 (registration/document storage), Q44 (retention), Q46 (sharing default).
+
+## 14. Adoption modes
+
+- **Standalone alongside an external PMS:** yes — as the guest context for messaging, housekeeping requests,
+  transfers/activities and analytics.
+- **Hard dependencies:** `platform`, `identity`; `integration` for profile feeds in connected mode.
+- **Connected mode** (`guestProfiles` authority external):
+  - Reads: profiles, contacts, companies/agencies from the PMS (provenance `external`, last-sync time); mapped by
+    external id; Portico profile ids are stable across syncs.
+  - Writes: identity and contact edits are forwarded (`forward`) or disabled (`read_only`) per authority.
+    **Portico extension fields** (preferences, alerts, notes, consent captured in Portico channels) are stored
+    locally, labelled "Portico only — not in <system>", and never pushed unless the connector supports it.
+  - Merge/unmerge is disabled for mirrored profiles (done in the system of record); Portico flags suspected
+    duplicates as an integration exception with the PMS ids.
+  - Consent captured by Portico (e.g. WhatsApp opt-in) is Portico-authoritative evidence even in connected mode.
+- **Data-authority domains:** owns `guestProfiles` when authoritative; never owns payment tokens or fiscal data.
+- **Trial:** copied profiles are labelled `copied`; trial deletion erases them (Q44 retention permitting).
