@@ -41,14 +41,23 @@ export async function buildRunView(deps: Deps, tx: TxContext, run: RunRow): Prom
     .where('run_id', '=', run.id)
     .where('status', '=', 'done')
     .executeTakeFirstOrThrow();
+  // Live progress: counted from the items committed with their effects (never a stale counter).
+  const counts = await db(tx)
+    .selectFrom('day_close.step_items')
+    .select(['step_key', 'status', (eb) => eb.fn.countAll<number>().as('n')])
+    .where('run_id', '=', run.id)
+    .groupBy(['step_key', 'status'])
+    .execute();
+  const count = (step: string, status: string) =>
+    Number(counts.find((c) => c.step_key === step && c.status === status)?.n ?? 0);
   const stepViews: StepView[] = steps.map((s) => {
     const p = {
       key: s.key as StepKey,
       status: s.status as StepStatus,
       total: s.total,
-      done: s.done,
-      failed: s.failed,
-      skipped: s.skipped,
+      done: count(s.key, 'done'),
+      failed: count(s.key, 'failed'),
+      skipped: count(s.key, 'skipped'),
     };
     const err = s.error as { code: string; message: string; retryable: boolean; integrity?: boolean } | null;
     return {
@@ -57,9 +66,9 @@ export async function buildRunView(deps: Deps, tx: TxContext, run: RunRow): Prom
       label: STEP_LABELS[s.key as StepKey],
       status: s.status as StepStatus,
       total: s.total,
-      done: s.done,
-      failed: s.failed,
-      skipped: s.skipped,
+      done: p.done,
+      failed: p.failed,
+      skipped: p.skipped,
       remaining: remaining(p),
       progress: progressLine(p),
       detail: (s.detail as Record<string, unknown>) ?? {},
