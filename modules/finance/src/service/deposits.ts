@@ -135,6 +135,9 @@ async function prepaymentTaxes(
           taxInclusion: { mode: input.priceMode },
           // ADR-0016 §4: the tax point of a prepayment is its receipt.
           taxPointDate: input.date,
+          // Per-guest levies (Green Tax) are due per guest-day, never on a prepayment — and finance does not know
+          // the booking's occupancy (integration-step fix: the engine refused deposits with tax_occupancy_required).
+          valueOnly: true,
         },
       ],
     });

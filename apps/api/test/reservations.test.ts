@@ -3,9 +3,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { type ApiHarness, signedInOrg, startApi } from './helpers';
 
 /**
- * Reservations wired into the real composition root. Inventory, rates, guests, finance, payments and operations
- * are wave-1 modules bound by the orchestrator at merge; until then reservations answers honestly (503
- * module_not_available) instead of pretending. Full behaviour is proven in modules/reservations/test.
+ * Reservations wired into the real composition root over HTTP. Every port is bound to its real provider (the
+ * end-to-end paths are proven in bindings.test.ts and scenarios/); full behaviour in modules/reservations/test.
  */
 let h: ApiHarness;
 beforeAll(async () => {
@@ -49,7 +48,7 @@ describe('reservations in the API composition', () => {
     );
   });
 
-  it('lists (empty) bookings and front desk, and says plainly when a provider module is not installed yet', async () => {
+  it('lists (empty) bookings and front desk, and quotes through the real rates module', async () => {
     const { auth } = await signedInOrg(h);
     const propertyId = await property(auth);
     const list = await h.app.inject({
@@ -76,12 +75,9 @@ describe('reservations in the API composition', () => {
         occupancy: { adults: 2, childrenAges: [] },
       },
     });
-    expect(quote.statusCode).toBe(503);
-    expect(quote.json()).toMatchObject({
-      code: 'module_not_available',
-      retryable: true,
-      detail: expect.stringMatching(/rates module, which is not connected yet/),
-    });
+    // Rates is bound (ratesPortFrom): a property without rate plans has nothing to sell yet — an honest empty quote.
+    expect(quote.statusCode).toBe(200);
+    expect(quote.json()).toEqual({ offers: [] });
     const search = await h.app.inject({ method: 'GET', url: '/v1/search?q=ABCDEFGH', headers: auth });
     expect(search.statusCode).toBe(200);
   });

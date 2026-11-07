@@ -427,3 +427,46 @@ export async function assertGlobalConsistency(
     expect(opts.auditActions.filter((a) => !actions.has(a))).toEqual([]);
   }
 }
+
+/** A simulated card on file (payments, tokens only) at a property of a non-live organization. */
+export async function cardOnFile(
+  s: Scenario,
+  org: ScenarioOrg,
+  propertyId: string,
+  legalEntityId: string,
+  token = 'pm_card_visa',
+) {
+  const p = s.c.services.payments;
+  return org.run(org.setup, async (tx) => {
+    const account = (await p.tx.listAccounts(tx, legalEntityId)).find((a) => a.provider === 'simulator');
+    if (!account) throw new Error('no simulated payment account');
+    return p.tx.createMethod(tx, {
+      accountId: account.id,
+      propertyId,
+      kind: 'card',
+      providerToken: token,
+      brand: 'visa',
+      last4: '4242',
+      owner: { type: 'guest_profile', id: newId() },
+      mitAgreement: false,
+    });
+  });
+}
+
+/** Housekeeping cleans a unit and the supervisor inspects it (operations), so check-in readiness passes. */
+export async function readyUnit(
+  s: Scenario,
+  org: ScenarioOrg,
+  propertyId: string,
+  unitId: string,
+): Promise<void> {
+  const ops = s.c.services.operations;
+  const supervisor = org.staff('housekeeping_supervisor', 'Mariyam', [propertyId]);
+  await org.run(supervisor, async (tx) => {
+    const unit = await ops.getUnit(tx, unitId);
+    if (unit.condition !== 'clean') {
+      await ops.setCondition(tx, unitId, { condition: 'clean' }, { expectedVersion: unit.version });
+    }
+    await ops.recordInspection(tx, unitId, { items: [] });
+  });
+}

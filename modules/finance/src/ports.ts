@@ -60,6 +60,8 @@ export interface RatesChargeLine {
   /** Under agreed terms: commercial rules (e.g. service charge) pinned to the versions agreed at booking. */
   agreedRuleVersionIds?: string[];
   adjustment?: 'supply' | 'reversal' | 'price_adjustment';
+  /** Only value-based rules (prepayments: per-guest levies fall due per guest-day, not on the payment). */
+  valueOnly?: boolean;
 }
 
 export interface RatesComputeTaxesInput {

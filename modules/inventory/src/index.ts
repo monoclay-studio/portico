@@ -4,8 +4,8 @@ export { InventoryUnavailableError, UnitAssignmentConflictError } from './errors
 export * from './events';
 export { createInventoryJobs } from './jobs';
 export * from './manifest';
-export { INVENTORY_PORT_DELEGATION, type InventoryProviderApi, inventoryProvider } from './provider';
 export type { DataAuthorityView, InventoryDataDomain, InventoryPorts, PlatformPort } from './ports';
+export { INVENTORY_PORT_DELEGATION, type InventoryProviderApi, inventoryProvider } from './provider';
 export * from './routes';
 export { inventorySearch } from './search';
 export { createInventoryDemoSeed, type SeededInventory, seedPropertyInventory } from './seed';

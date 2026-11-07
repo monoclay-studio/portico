@@ -111,8 +111,10 @@ describe('staticAuthorizer grant union', () => {
 });
 
 describe('delegateAtProperty (ADR-0015 provider delegation)', () => {
-  it('grants the provider keys at the authorized property only; everything else stays the actor\'s own', () => {
-    const ctx = { authz: staticAuthorizer([{ permission: 'reservations.booking.create', propertyIds: ['P1'] }]) };
+  it("grants the provider keys at the authorized property only; everything else stays the actor's own", () => {
+    const ctx = {
+      authz: staticAuthorizer([{ permission: 'reservations.booking.create', propertyIds: ['P1'] }]),
+    };
     const d = delegateAtProperty(ctx, ['inventory.assignment.manage'], 'P1');
     expect(d.authz.can('inventory.assignment.manage', { propertyId: 'P1' })).toBe(true);
     expect(d.authz.can('inventory.assignment.manage', { propertyId: 'P2' })).toBe(false);

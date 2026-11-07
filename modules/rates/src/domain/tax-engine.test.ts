@@ -779,6 +779,23 @@ describe('tax engine — commercial rules, levies and evidence', () => {
     expect(noFee.taxes.find((t) => t.ruleCode === 'SC')).toBeUndefined();
   });
 
+  it('value-only lines (prepayments) need no occupancy: per-guest levies are left to the stay (integration step)', () => {
+    // Regression (integration step): finance taxes a booking deposit at receipt without knowing the occupancy; with a
+    // per-person Green Tax in force the engine refused it (tax_occupancy_required) and every deposit failed to post.
+    expect(() =>
+      computeLine(maldivesLikeRules(), line({ amountMinor: 10_000, taxPointDate: '2027-02-01' }), {
+        classification: RESORT,
+      }),
+    ).toThrow(/per person per night/);
+    const r = computeLine(
+      maldivesLikeRules(),
+      line({ amountMinor: 10_000, taxPointDate: '2027-02-01', valueOnly: true }),
+      { classification: RESORT },
+    );
+    expect(r.taxes.map((t) => t.basis).every((b) => b === 'percentage' || b === 'banded')).toBe(true);
+    expect(r.taxes.length).toBeGreaterThan(0);
+  });
+
   it('levy-only lines charge per-guest levies alone; quantity rules carry no base but quantity and amount', () => {
     const r = computeLine(
       maldivesLikeRules(),

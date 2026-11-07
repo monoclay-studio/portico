@@ -300,6 +300,11 @@ export const chargeLine = z.object({
   adjustment: z.enum(['supply', 'reversal', 'price_adjustment']).optional(),
   /** Only quantity-based levies apply (e.g. a Green Tax true-up for actual 24-hour blocks). */
   levyOnly: z.boolean().default(false),
+  /**
+   * Only value-based rules apply (e.g. a prepayment / deposit taxed at receipt: per-guest levies fall due per
+   * guest-day, not on the payment, so no occupancy is needed). The opposite of `levyOnly`.
+   */
+  valueOnly: z.boolean().optional(),
 });
 export type ChargeLineInput = z.input<typeof chargeLine>;
 export type ChargeLine = z.output<typeof chargeLine>;

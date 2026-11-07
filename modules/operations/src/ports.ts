@@ -72,7 +72,10 @@ export interface InventoryPort {
     },
   ): Promise<{ blockId: string; affectedAssignments: Array<{ ref: EntityRef; nights: DateRange }> }>;
   /** Returns the released block (unused by operations). */
-  releaseBlock(tx: TxContext, input: { propertyId: string; blockId: string; reason?: string }): Promise<unknown>;
+  releaseBlock(
+    tx: TxContext,
+    input: { propertyId: string; blockId: string; reason?: string },
+  ): Promise<unknown>;
   listUnits(
     tx: TxContext,
     propertyId: string,

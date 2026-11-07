@@ -9,7 +9,9 @@ import type { EntityRef } from '@portico/kernel';
 import { TASK_KINDS, type TaskKind, type TaskPriority, type UnitCondition } from './domain/model';
 import type { OperationsService } from './service';
 
-export function operationsForReservations(service: Pick<OperationsService, 'getUnitCondition' | 'createTask'>) {
+export function operationsForReservations(
+  service: Pick<OperationsService, 'getUnitCondition' | 'createTask'>,
+) {
   return {
     async getUnitCondition(
       tx: TxContext,

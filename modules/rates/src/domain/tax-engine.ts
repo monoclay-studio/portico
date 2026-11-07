@@ -229,6 +229,7 @@ function applicableRules(
     const quantity = isQuantityBased(def.kind);
     if (quantity ? !scope.quantityBased : !scope.valueBased) continue;
     if (!quantity && line.levyOnly) continue;
+    if (quantity && line.valueOnly) continue;
     // A price rebate does not change how many guests stayed: per-guest levies are not touched.
     if (quantity && adjustment === 'price_adjustment') continue;
     if (!def.appliesTo.taxCategories.includes(line.taxCategory)) continue;
