@@ -95,6 +95,15 @@ export async function startHarness(): Promise<Harness> {
     secrets: localSecretStore(localFieldCipher(randomBytes(32).toString('base64'), 'test'), 'test'),
     transport: recording,
     simulators: { pms: hub },
+    net: {
+      // Fake DNS: example partner names resolve to a public documentation-free address; unknown names fail.
+      async resolver(host) {
+        if (host === 'internal.partner.example.com') return [{ address: '10.1.2.3', family: 4 }];
+        if (host.endsWith('.example.com')) return [{ address: '93.184.216.34', family: 4 }];
+        throw Object.assign(new Error(`getaddrinfo ENOTFOUND ${host}`), { code: 'ENOTFOUND' });
+      },
+      allowedPorts: [443],
+    },
   };
   return {
     t,

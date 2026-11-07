@@ -5,6 +5,7 @@
  * Pure logic — no IO.
  */
 import { createHmac, timingSafeEqual } from 'node:crypto';
+import { checkOutboundUrl, type OutboundUrlPolicy } from '../net/address-policy';
 
 export const SIGNATURE_HEADER = 'portico-signature';
 export const SIGNATURE_TOLERANCE_SECONDS = 300;
@@ -110,53 +111,11 @@ export function isPublicEventType(type: string): boolean {
 export type UrlCheck = { ok: true } | { ok: false; reason: string };
 
 /**
- * Basic server-side request forgery protection: https only, no credentials in the URL, no localhost, private,
- * link-local or internal hosts. (DNS rebinding is handled at delivery time by the transport — see README.)
+ * Subscription-time URL check (https, DNS host name, allowed port, no internal names). This alone is NOT the SSRF
+ * defense: every delivery goes through `safeFetch`, which resolves the name, refuses non-public addresses and pins
+ * the connection to the vetted address.
  */
-export function checkEndpointUrl(raw: string): UrlCheck {
-  let u: URL;
-  try {
-    u = new URL(raw);
-  } catch {
-    return { ok: false, reason: 'This is not a valid URL.' };
-  }
-  if (u.protocol !== 'https:') return { ok: false, reason: 'Webhook endpoints must use https://.' };
-  if (u.username || u.password)
-    return { ok: false, reason: 'Do not put credentials in the URL; use the signing secret.' };
-  const host = u.hostname.toLowerCase().replace(/^\[|\]$/g, '');
-  if (
-    host === 'localhost' ||
-    host.endsWith('.localhost') ||
-    host.endsWith('.local') ||
-    host.endsWith('.internal')
-  ) {
-    return { ok: false, reason: 'Webhook endpoints must be reachable on the public internet.' };
-  }
-  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
-  if (v4) {
-    const [a, b] = [Number(v4[1]), Number(v4[2])];
-    const privateRange =
-      a === 10 ||
-      a === 127 ||
-      a === 0 ||
-      (a === 169 && b === 254) ||
-      (a === 172 && b >= 16 && b <= 31) ||
-      (a === 192 && b === 168) ||
-      (a === 100 && b >= 64 && b <= 127) ||
-      a >= 224;
-    if (privateRange)
-      return { ok: false, reason: 'Webhook endpoints cannot be private or reserved IP addresses.' };
-  }
-  if (host.includes(':')) {
-    if (
-      host === '::1' ||
-      host === '::' ||
-      host.startsWith('fc') ||
-      host.startsWith('fd') ||
-      host.startsWith('fe80')
-    ) {
-      return { ok: false, reason: 'Webhook endpoints cannot be private or reserved IP addresses.' };
-    }
-  }
-  return { ok: true };
+export function checkEndpointUrl(raw: string, policy: OutboundUrlPolicy = {}): UrlCheck {
+  const c = checkOutboundUrl(raw, policy);
+  return c.ok ? { ok: true } : { ok: false, reason: c.reason };
 }

@@ -23,7 +23,6 @@ import type { Authenticator, HttpModule } from '@portico/http';
 import { type IdentityPorts, identityAuthenticator, identityHttp, identityManifest } from '@portico/identity';
 import {
   createConnectorRegistry,
-  fetchWebhookTransport,
   type IntegrationDeps,
   integrationHttp,
   integrationJobs,
@@ -33,6 +32,8 @@ import {
   localSecretStore,
   noAuthorityTransitions,
   PmsSimulatorHub,
+  safeWebhookTransport,
+  systemResolver,
   unavailableActivationScope,
   unavailableCatalog,
 } from '@portico/integration';
@@ -182,7 +183,8 @@ export function compose(database: PorticoDatabase): Composition {
     },
     connectors: createConnectorRegistry({ pmsSimulator: pmsSimulators }),
     secrets: localSecretStore(fieldCrypto.cipher, fieldCrypto.keySource),
-    transport: fetchWebhookTransport(),
+    transport: safeWebhookTransport({ resolver: systemResolver, allowedPorts: [443] }),
+    net: { resolver: systemResolver, allowedPorts: [443] },
     simulators: { pms: pmsSimulators },
   };
   const integrationModule = integrationHttp({ database, integration: integrationDeps });

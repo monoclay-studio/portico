@@ -718,7 +718,7 @@ export function integrationHttp(deps: {
         async (req, reply) => {
           const v = requireIfMatch(req);
           const s = await withTenantTx(database, req.ctx, (tx) =>
-            hooks.updateSubscription(tx, req.params.id, v, req.body),
+            hooks.updateSubscription(tx, d, req.params.id, v, req.body),
           );
           setVersion(reply, s.version);
           return s;

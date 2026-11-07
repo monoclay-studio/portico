@@ -40,6 +40,8 @@ import {
   signatureHeader,
 } from '../domain/webhooks';
 import { P } from '../manifest';
+import { OutboundBlockedError } from '../net/address-policy';
+import { vetDestination } from '../net/safe-fetch';
 import type { WebhookDeliveriesTable, WebhookSubscriptionsTable } from '../tables';
 import { actorKey, db, type IntegrationDeps, iso, scheduleTenant } from './common';
 
@@ -89,9 +91,20 @@ export function generateSigningSecret(): string {
   return `whsec_${randomToken(32)}`;
 }
 
-function validateTarget(url: string, eventTypes: readonly string[]): void {
-  const check = checkEndpointUrl(url);
+async function validateTarget(
+  deps: IntegrationDeps,
+  url: string,
+  eventTypes: readonly string[],
+): Promise<void> {
+  const check = checkEndpointUrl(url, { allowedPorts: deps.net.allowedPorts });
   if (!check.ok) throw new ValidationError('invalid_webhook_url', check.reason);
+  // Early feedback: a name that resolves to a private address is refused now. A name that does not resolve yet is
+  // accepted; every delivery re-checks (safeFetch), so this is not the security boundary.
+  try {
+    await vetDestination(url, { allowedPorts: deps.net.allowedPorts, resolver: deps.net.resolver });
+  } catch (err) {
+    if (err instanceof OutboundBlockedError) throw new ValidationError('invalid_webhook_url', err.message);
+  }
   const invalid = invalidPatterns(eventTypes);
   if (invalid.length > 0) {
     throw new ValidationError(
@@ -118,7 +131,7 @@ export async function createSubscription(
   input: WebhookSubscriptionInput,
 ): Promise<WebhookSubscription & { signingSecret: string }> {
   requirePermission(tx, P.webhookManage);
-  validateTarget(input.url, input.eventTypes);
+  await validateTarget(deps, input.url, input.eventTypes);
   for (const p of input.propertyIds) await deps.ports.platform.getProperty(tx, p);
   const secret = generateSigningSecret();
   const secretRef = await deps.secrets.put(tx, { purpose: 'webhook_signing', value: secret });
@@ -187,6 +200,7 @@ export async function getSubscription(tx: TxContext, id: string): Promise<Webhoo
 
 export async function updateSubscription(
   tx: TxContext,
+  deps: IntegrationDeps,
   id: string,
   expectedVersion: number,
   patch: {
@@ -197,7 +211,7 @@ export async function updateSubscription(
 ): Promise<WebhookSubscription> {
   requirePermission(tx, P.webhookManage);
   const before = await loadSub(tx, id);
-  validateTarget(patch.url ?? before.url, patch.eventTypes ?? before.event_types);
+  await validateTarget(deps, patch.url ?? before.url, patch.eventTypes ?? before.event_types);
   const reEnable = patch.status === 'active' && before.status === 'disabled';
   const row = await db(tx)
     .updateTable('integration.webhook_subscriptions')

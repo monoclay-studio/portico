@@ -44,6 +44,7 @@ const NEXT_HINT: Record<ConnectionState, string> = {
   error: 'Fix the credential problem (rotate the credential) first.',
 };
 
+import type { Resolver } from '../net/safe-fetch';
 import type { IntegrationPorts } from '../ports';
 import type { SecretStore } from '../secrets';
 import type { ConnectionsTable, IntegrationDB } from '../tables';
@@ -57,6 +58,8 @@ export interface IntegrationDeps {
   secrets: SecretStore;
   transport: WebhookTransport;
   simulators: { pms: PmsSimulatorHub };
+  /** Outbound network policy: DNS resolver used for configuration-time checks, and the allowed ports. */
+  net: { resolver: Resolver; allowedPorts: readonly number[] };
 }
 
 export type ConnectionRow = Selectable<ConnectionsTable>;

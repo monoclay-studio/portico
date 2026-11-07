@@ -125,7 +125,7 @@ describe('partner webhooks', () => {
     // Fixed endpoint: re-enable and replay the dead delivery (same event id so the partner can deduplicate).
     h.transport.respond = async () => ({ status: 204 });
     s = await tx(h, org.ctx, (t) =>
-      integration.updateSubscription(t, sub.id, s.version, { status: 'active' }),
+      integration.updateSubscription(t, h.deps, sub.id, s.version, { status: 'active' }),
     );
     expect(s.consecutiveFailures).toBe(0);
     const replay = await tx(h, org.ctx, (t) =>
