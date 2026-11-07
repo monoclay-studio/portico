@@ -3,7 +3,7 @@
  * Day Close and channel sync). Safe to run several replicas: claims use SKIP LOCKED leases.
  */
 import { compose, loadConfig } from '@portico/api';
-import { createDatabase, type DispatcherOptions, fanOut, processDeliveries, sql } from '@portico/db';
+import { createDatabase, type DispatcherOptions, fanOut, processDeliveries, runDueJobs, sql } from '@portico/db';
 import type { TenantEnvironment } from '@portico/kernel';
 
 const config = loadConfig();
@@ -12,7 +12,7 @@ const database = createDatabase({
   max: 10,
   applicationName: 'portico-worker',
 });
-const { subscriptions } = compose(database);
+const { subscriptions, jobs } = compose(database);
 
 const environmentCache = new Map<string, { env: TenantEnvironment; at: number }>();
 const options: DispatcherOptions = {
@@ -46,6 +46,9 @@ while (running) {
   try {
     const fanned = await fanOut(database, options);
     const processed = await processDeliveries(database, options);
+    await runDueJobs(database, jobs, (job, err) =>
+      console.error(JSON.stringify({ level: 'error', msg: 'job failed', job, err: String(err) })),
+    );
     if (fanned === 0 && processed === 0) await new Promise((r) => setTimeout(r, 500));
   } catch (err) {
     console.error(JSON.stringify({ level: 'error', msg: 'worker loop error', err: String(err) }));
