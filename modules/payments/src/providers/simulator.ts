@@ -150,11 +150,21 @@ export const SIMULATOR_TEST_TOKENS: readonly SimulatorTestToken[] = [
 const TOKEN_INDEX = new Map(SIMULATOR_TEST_TOKENS.map((t) => [t.token, t]));
 
 export function isSimulatorTestToken(token: string): boolean {
-  return TOKEN_INDEX.has(token);
+  return TOKEN_INDEX.has(simulatorBaseToken(token));
+}
+
+/**
+ * Simulator test tokens are public and shared by everyone, so payments stores each save under its own token
+ * (`<test token>#<scope>`, as a real provider issues a new token per card entry; review R2-P2-1). The scenario is
+ * chosen by the test token part.
+ */
+export function simulatorBaseToken(token: string): string {
+  const i = token.indexOf('#');
+  return i < 0 ? token : token.slice(0, i);
 }
 
 export function scenarioForToken(token: string): SimScenario | undefined {
-  return TOKEN_INDEX.get(token)?.scenario;
+  return TOKEN_INDEX.get(simulatorBaseToken(token))?.scenario;
 }
 
 /** Account-level overrides (tests / demo presenter). Parsed from SimulatorControls.scenarioOverrides. */

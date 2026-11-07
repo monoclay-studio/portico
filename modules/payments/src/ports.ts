@@ -45,6 +45,16 @@ export interface LedgerPort {
    * receive its first deposit, which then binds it to `propertyId`).
    */
   describeTarget(tx: TxContext, ref: { type: 'folio' | 'booking'; id: string }): Promise<LedgerScope | null>;
+  /**
+   * Review R2-P1-3 (AP-44): finance's own posting predicate for new money on this target at this scope, asked BEFORE
+   * any card is charged, so pre-check and posting can never disagree (e.g. a booking whose deposits are held at
+   * another property, or an imported deposit of a booking reservations does not know). Throws the refusal.
+   */
+  assertTargetUsable(
+    tx: TxContext,
+    ref: { type: 'folio' | 'booking'; id: string },
+    scope: LedgerScope,
+  ): Promise<void>;
   /** Payment against a folio (domain map + scope, method, verification, clearing). */
   recordPayment(
     tx: TxContext,
@@ -158,11 +168,23 @@ export interface LedgerPort {
  * Review P1-1: a hold or payment for a stay/booking of another property — or for one that exists nowhere — is refused
  * before anything is recorded. `undefined` = not a reference type the directory knows (no check).
  */
+/**
+ * Owner of stays and bookings (reservations). `null` = no such record in this organization; `undefined` = a reference
+ * type the directory does not own (payments refuses those). For a booking, where it came from: a channel virtual
+ * card is accepted only for a booking of that channel connection (review R2-P1-1).
+ */
 export interface ReferenceDirectoryPort {
   describeReference(
     tx: TxContext,
     ref: { type: string; id: string },
-  ): Promise<{ propertyId: string } | null | undefined>;
+  ): Promise<ReferenceOwner | null | undefined>;
+}
+
+export interface ReferenceOwner {
+  propertyId: string;
+  /** Bookings only: how the booking was made (`channel` for OTA/GDS bookings) and the channel connection. */
+  source?: string;
+  channelConnectionId?: string | null;
 }
 
 export interface PropertyInfo {

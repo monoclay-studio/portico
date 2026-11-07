@@ -12,6 +12,7 @@ import {
   withTenantTx,
 } from '@portico/db';
 import {
+  BusinessRuleError,
   fixedClock,
   newId,
   type RequestContext,
@@ -28,6 +29,7 @@ import {
   type PlatformPort,
   type ProviderSecretsPort,
   paymentsManifest,
+  type ReferenceDirectoryPort,
 } from '../src';
 import { SIMULATOR_SIGNATURE_HEADER } from '../src/providers/simulator';
 
@@ -41,7 +43,35 @@ export interface LedgerControls {
   owners: Map<string, { propertyId: string; legalEntityId: string }>;
   /** Folio ids finance does not know at all. */
   unknown: Set<string>;
+  /** Booking ids that were booked directly (not through a channel). */
+  directBookings: Set<string>;
 }
+
+/**
+ * Fake reservations directory (review R2-P2-3: required): a stay or booking belongs to its explicit owner, or to the
+ * tenant's default property; ids in `unknown` exist nowhere. Bookings come from the default channel connection unless
+ * `directBookings` names them (virtual cards are registered only for channel bookings, review R2-P1-1).
+ */
+export function fakeReferences(controls: LedgerControls): ReferenceDirectoryPort {
+  return {
+    async describeReference(tx, ref) {
+      if (ref.type !== 'stay' && ref.type !== 'booking') return undefined;
+      if (controls.unknown.has(ref.id)) return null;
+      const owner = controls.owners.get(ref.id) ?? controls.defaultOwner.get(tx.tenantId);
+      if (!owner) return null;
+      return ref.type === 'booking'
+        ? {
+            propertyId: owner.propertyId,
+            source: controls.directBookings.has(ref.id) ? 'direct' : 'channel',
+            channelConnectionId: controls.directBookings.has(ref.id) ? null : DEFAULT_CHANNEL_CONNECTION,
+          }
+        : { propertyId: owner.propertyId };
+    },
+  };
+}
+
+/** The channel connection fake channel bookings come from. */
+export const DEFAULT_CHANNEL_CONNECTION = '01900000-0000-7000-8000-00000000c0c0';
 
 /**
  * Fake finance: one row per idempotency key (unique), in the caller's transaction; refuses postings whose target
@@ -86,6 +116,16 @@ export function fakeLedger(controls: LedgerControls): LedgerPort {
   return {
     async describeTarget(tx, ref) {
       return ownerOf(tx.tenantId, ref.id);
+    },
+    // The same predicate the fake uses when posting (review R2-P1-3): unknown → refused; other scope → refused.
+    async assertTargetUsable(tx, ref, scope) {
+      const owner = ownerOf(tx.tenantId, ref.id);
+      if (!owner) {
+        throw new BusinessRuleError('ledger_target_unknown', `finance: unknown ${ref.type} ${ref.id}`);
+      }
+      if (owner.propertyId !== scope.propertyId || owner.legalEntityId !== scope.legalEntityId) {
+        throw new BusinessRuleError('scope_mismatch', `finance: ${ref.type} ${ref.id} belongs elsewhere`);
+      }
     },
     async markPaymentVerified(tx, i) {
       await post(tx, 'verified', i.idempotencyKey, i.paymentRef, 0, 'XXX', { evidence: i.evidenceRef });
@@ -249,6 +289,7 @@ export async function startHarness(): Promise<Harness> {
     defaultOwner: new Map(),
     owners: new Map(),
     unknown: new Set(),
+    directBookings: new Set(),
   };
   const http = {
     calls: 0,
@@ -271,6 +312,7 @@ export async function startHarness(): Promise<Harness> {
   const module = createPaymentsModule({
     database: t.db,
     ledger: fakeLedger(ledger),
+    references: fakeReferences(ledger),
     platform: platformPort,
     secrets: secretsPort,
     simulatorSigningSecret: 'sim-signing-test',
@@ -385,6 +427,7 @@ export async function addMethod(
   org: Org,
   token = 'pm_card_visa',
   mitAgreement = true,
+  ownerId: string = newId(),
 ): Promise<string> {
   const m = await org.tx((tx) =>
     h.module.service.tx.createMethod(tx, {
@@ -397,7 +440,7 @@ export async function addMethod(
       expMonth: 12,
       expYear: 2030,
       holderName: 'Aisha Ibrahim',
-      owner: { type: 'guest_profile', id: newId() },
+      owner: { type: 'guest_profile', id: ownerId },
       entryChannel: 'hosted_entry',
       mitAgreement,
       ...(mitAgreement

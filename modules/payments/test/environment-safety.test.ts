@@ -35,7 +35,12 @@ describe('environment safety', () => {
             kind: 'card',
             providerToken: 'pm_1Pq9ZzRealLookingToken',
             owner: { type: 'guest_profile', id: newId() },
-            mitAgreement: false,
+            mitAgreement: true,
+            mandate: {
+              termsVersion: 'T-2026-1',
+              acceptedAt: '2026-11-07T08:00:00.000Z',
+              channel: 'front_desk',
+            },
           }),
         ),
       ).rejects.toThrow(/simulator test tokens/);
@@ -46,7 +51,12 @@ describe('environment safety', () => {
           kind: 'card',
           providerToken: 'pm_card_visa',
           owner: { type: 'guest_profile', id: newId() },
-          mitAgreement: false,
+          mitAgreement: true,
+          mandate: {
+            termsVersion: 'T-2026-1',
+            acceptedAt: '2026-11-07T08:00:00.000Z',
+            channel: 'front_desk',
+          },
         }),
       );
       const p = await svc.chargeNow(org.ctx, {
@@ -81,7 +91,8 @@ describe('environment safety', () => {
         kind: 'card',
         providerToken: 'pm_card_visa',
         owner: { type: 'guest_profile', id: newId() },
-        mitAgreement: false,
+        mitAgreement: true,
+        mandate: { termsVersion: 'T-2026-1', acceptedAt: '2026-11-07T08:00:00.000Z', channel: 'front_desk' },
       }),
     );
     const charge = () =>
@@ -135,7 +146,12 @@ describe('environment safety', () => {
           kind: 'card',
           providerToken: 'pm_card_visa',
           owner: { type: 'guest_profile', id: newId() },
-          mitAgreement: false,
+          mitAgreement: true,
+          mandate: {
+            termsVersion: 'T-2026-1',
+            acceptedAt: '2026-11-07T08:00:00.000Z',
+            channel: 'front_desk',
+          },
         }),
       ),
     ).resolves.toBeTruthy();

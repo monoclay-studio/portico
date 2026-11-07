@@ -4,6 +4,8 @@ import {
   BusinessRuleError,
   ConflictError,
   ForbiddenError,
+  formatMoney,
+  money,
   NotFoundError,
   newId,
   requirePermission,
@@ -415,8 +417,37 @@ export async function createMethod(
       'A card saved for later charges needs the guest’s recorded agreement: the terms version and when they accepted.',
     );
   }
+  const scope = input.mandate?.scope;
+  if (scope && scope.legalEntityId !== property.legalEntityId) {
+    throw new ValidationError(
+      'mandate_scope_other_entity',
+      'The cardholder’s agreement must name the hotel company that operates this property (its legal entity).',
+    );
+  }
+  // ADR-0015 Amendment 1 (a): a guest saving their own card (self-service) saves it for themselves or their booking.
+  if (tx.actor.kind === 'guest') {
+    const own =
+      (input.owner.type === 'guest_profile' && input.owner.id === tx.actor.guestProfileId) ||
+      (input.owner.type === 'booking' && input.owner.id === tx.actor.bookingId);
+    if (!own) {
+      throw new ValidationError(
+        'card_owner_not_self',
+        'A guest can save a card only for themselves or for their own booking.',
+      );
+    }
+  }
+  // Fix sweep SW-PAY-4: how the card was entered is a server fact. Only the guest acting for themselves is a
+  // guest-present (hosted) entry; anything staff save is a staff entry, whatever the client declares.
+  const entryChannel =
+    tx.actor.kind === 'guest' ? 'hosted_entry' : input.entryChannel === 'import' ? 'import' : 'staff_entry';
+  // Review R2-P2-1: a saved token is ONE cardholder's card at ONE property. The simulator's public test tokens are
+  // shared by every tester, so each save is stored under its own token (a real provider issues a new token per card
+  // entry); a real token already saved for another owner or property is refused, never handed over.
+  const storedToken = simulated
+    ? `${input.providerToken}#${input.propertyId}:${input.owner.type}:${input.owner.id}`
+    : input.providerToken;
   const id = newId(tx.now.getTime());
-  // P2-2: saving a token that is already saved returns the existing method (no aborted transaction).
+  // P2-2: saving the same token again for the same owner returns the existing method (no aborted transaction).
   const row = await db(tx)
     .insertInto('payments.payment_methods')
     .values({
@@ -425,7 +456,7 @@ export async function createMethod(
       account_id: account.id,
       property_id: input.propertyId,
       kind: input.kind,
-      provider_token: input.providerToken,
+      provider_token: storedToken,
       provider_customer_ref: input.providerCustomerRef ?? null,
       brand: input.brand ?? null,
       last4: input.last4 ?? null,
@@ -436,7 +467,8 @@ export async function createMethod(
       owner_id: input.owner.id,
       mit_agreement: input.mitAgreement ?? false,
       mandate: JSON.stringify(input.mandate ?? {}),
-      entry_channel: input.entryChannel ?? 'hosted_entry',
+      entry_channel: entryChannel,
+      declared_entry_channel: input.entryChannel ?? null,
       token_portability:
         input.tokenPortability ?? (input.kind === 'virtual_card' ? 'vault_portable' : 'provider_bound'),
       portability_note: input.portabilityNote ?? null,
@@ -451,8 +483,18 @@ export async function createMethod(
       .selectFrom('payments.payment_methods')
       .selectAll()
       .where('account_id', '=', account.id)
-      .where('provider_token', '=', input.providerToken)
+      .where('provider_token', '=', storedToken)
       .executeTakeFirstOrThrow();
+    if (
+      existing.owner_type !== input.owner.type ||
+      existing.owner_id !== input.owner.id ||
+      existing.property_id !== input.propertyId
+    ) {
+      throw new ConflictError(
+        'payment_method_token_in_use',
+        'This card token is already saved for another cardholder or property. A saved card belongs to one cardholder: ask the guest to enter the card again (a new entry gives a new token), or use the card they already saved here.',
+      );
+    }
     return toMethodView(existing);
   }
   // Audit without the token itself (tokens are not card data, but they are credentials to charge).
@@ -531,4 +573,198 @@ export async function detachMethod(
     after: { status: 'detached' },
   });
   return toMethodView(row);
+}
+
+// ───────────────────────── guarantee cards (ADR-0015 Amendment 1) ─────────────────────────
+
+export interface GuaranteeCardAssessment {
+  /** The card exists, is active, was saved at this property and belongs to this property's hotel company. */
+  usable: boolean;
+  /**
+   * Why staff WITHOUT `payments.payment.collect` may hold this card for this booking, or null:
+   *  - `cardholder_supplied`: the cardholder entered it for this booking (hosted entry / self-service);
+   *  - `channel_card`: the virtual card the booking's own channel connection issued for it;
+   *  - `mandate`: the cardholder's recorded agreement names this booking, for guarantees, up to its amount.
+   */
+  basis: 'cardholder_supplied' | 'channel_card' | 'mandate' | null;
+  card: { brand: string | null; last4: string | null } | null;
+  /** Plain-language explanation (shown when the card cannot be used). */
+  reason: string;
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * ADR-0015 Amendment 1: is this saved card the booking's AGREED guarantee? Only if its cardholder supplied it for
+ * THIS booking (hosted entry, payment link, terminal, self-service; or the booking's own channel virtual card), or a
+ * recorded mandate covers it (names the booking, for guarantees, at this hotel company, within its amount). Staff
+ * linking a person to a booking (booker, occupant, payer, company, agency) never makes that person's card usable.
+ * Any other card is an explicit payments decision (`payments.payment.collect`), which the calling module checks.
+ */
+export async function assessGuaranteeCard(
+  d: PaymentsDeps,
+  tx: TxContext,
+  input: {
+    propertyId: string;
+    methodId: string;
+    bookingId: string;
+    amount?: { amountMinor: number; currency: string };
+  },
+): Promise<GuaranteeCardAssessment> {
+  const notHere: GuaranteeCardAssessment = {
+    usable: false,
+    basis: null,
+    card: null,
+    reason:
+      "This payment method is not a saved card of this property (unknown, removed, or saved at another property or hotel company). Save the guest's card here first.",
+  };
+  if (!UUID_RE.test(input.methodId)) return notHere;
+  const m = await db(tx)
+    .selectFrom('payments.payment_methods')
+    .selectAll()
+    .where('id', '=', input.methodId)
+    .executeTakeFirst();
+  if (!m || m.status !== 'active' || m.property_id !== input.propertyId) return notHere;
+  const property = await loadProperty(d, tx, input.propertyId);
+  const account = await loadAccount(tx, m.account_id);
+  if (account.legal_entity_id !== property.legalEntityId) return notHere;
+  const card = { brand: m.brand, last4: m.last4 };
+  const mandate = (m.mandate ?? {}) as {
+    kind?: string;
+    termsVersion?: string;
+    acceptedAt?: string;
+    channelConnectionId?: string;
+    scope?: {
+      legalEntityId?: string;
+      propertyIds?: string[];
+      purposes?: string[];
+      maxAmount?: { amountMinor: number; currency: string };
+      bookingIds?: string[];
+    };
+  };
+  const scope = mandate.scope;
+  const withinAmount = () =>
+    !input.amount ||
+    !scope?.maxAmount ||
+    (scope.maxAmount.currency === input.amount.currency &&
+      input.amount.amountMinor <= scope.maxAmount.amountMinor);
+  const tooMuch = (): GuaranteeCardAssessment => ({
+    usable: true,
+    basis: null,
+    card,
+    reason: `The cardholder agreed to holds of at most ${formatMoney(money(scope?.maxAmount?.amountMinor ?? 0, scope?.maxAmount?.currency ?? 'USD'))} on this card. Hold that amount, or ask a colleague with payment rights.`,
+  });
+  const forThisBooking = m.owner_type === 'booking' && m.owner_id === input.bookingId;
+  if (forThisBooking && m.entry_channel === 'hosted_entry') {
+    return {
+      usable: true,
+      basis: 'cardholder_supplied',
+      card,
+      reason: 'The cardholder entered this card for this booking.',
+    };
+  }
+  if (forThisBooking && m.kind === 'virtual_card' && mandate.kind === 'ota_virtual_card') {
+    const b = await d.references.describeReference(tx, { type: 'booking', id: input.bookingId });
+    if (
+      b?.source === 'channel' &&
+      b.channelConnectionId &&
+      b.channelConnectionId === mandate.channelConnectionId
+    ) {
+      if (!withinAmount()) return tooMuch();
+      return {
+        usable: true,
+        basis: 'channel_card',
+        card,
+        reason: "The booking's channel issued this virtual card for it.",
+      };
+    }
+  }
+  const named = forThisBooking || (scope?.bookingIds ?? []).includes(input.bookingId);
+  if (
+    m.mit_agreement &&
+    mandate.termsVersion &&
+    mandate.acceptedAt &&
+    scope &&
+    named &&
+    scope.legalEntityId === property.legalEntityId &&
+    (scope.propertyIds === undefined || scope.propertyIds.includes(property.id)) &&
+    (scope.purposes ?? []).includes('guarantee')
+  ) {
+    if (!withinAmount()) return tooMuch();
+    return {
+      usable: true,
+      basis: 'mandate',
+      card,
+      reason: "The cardholder's recorded agreement names this booking.",
+    };
+  }
+  return {
+    usable: true,
+    basis: null,
+    card,
+    reason:
+      "This card was not supplied by its cardholder for this booking, and no recorded agreement of the cardholder names this booking. Linking a person to a booking does not let staff use that person's saved card: send the guest a card link for this booking, or ask a colleague with payment rights to choose the card.",
+  };
+}
+
+// ───────────────────────── guest profile merges (review R2-P2-1) ─────────────────────────
+
+/**
+ * guests.profile.merged: cards follow the surviving profile (their cardholder is the same person), remembering the
+ * previous owner so an unmerge gives them back. Idempotent (a second delivery finds nothing to move).
+ */
+export async function repointMethodsOnMerge(
+  tx: TxContext,
+  p: { survivorId?: string; mergedId?: string },
+): Promise<number> {
+  if (!p.survivorId || !p.mergedId) return 0;
+  const moved = await db(tx)
+    .updateTable('payments.payment_methods')
+    .set((eb) => ({
+      owner_id: p.survivorId as string,
+      merged_from_owner_id: p.mergedId as string,
+      version: eb('version', '+', 1),
+    }))
+    .where('owner_type', '=', 'guest_profile')
+    .where('owner_id', '=', p.mergedId)
+    .returning('id')
+    .execute();
+  for (const m of moved) {
+    await tx.audit({
+      action: 'payments.method.ownerMerged',
+      target: { type: 'payment_method', id: m.id },
+      before: { owner: { type: 'guest_profile', id: p.mergedId } },
+      after: { owner: { type: 'guest_profile', id: p.survivorId } },
+    });
+  }
+  return moved.length;
+}
+
+/** guests.profile.unmerged: cards that came from the restored profile go back to it. */
+export async function restoreMethodsOnUnmerge(
+  tx: TxContext,
+  p: { survivorId?: string; restoredId?: string },
+): Promise<number> {
+  if (!p.survivorId || !p.restoredId) return 0;
+  const moved = await db(tx)
+    .updateTable('payments.payment_methods')
+    .set((eb) => ({
+      owner_id: p.restoredId as string,
+      merged_from_owner_id: null,
+      version: eb('version', '+', 1),
+    }))
+    .where('owner_type', '=', 'guest_profile')
+    .where('owner_id', '=', p.survivorId)
+    .where('merged_from_owner_id', '=', p.restoredId)
+    .returning('id')
+    .execute();
+  for (const m of moved) {
+    await tx.audit({
+      action: 'payments.method.ownerUnmerged',
+      target: { type: 'payment_method', id: m.id },
+      before: { owner: { type: 'guest_profile', id: p.survivorId } },
+      after: { owner: { type: 'guest_profile', id: p.restoredId } },
+    });
+  }
+  return moved.length;
 }

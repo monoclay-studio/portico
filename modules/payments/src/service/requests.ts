@@ -12,7 +12,10 @@
 import { explainVersionMiss, type TxContext, withTenantTx } from '@portico/db';
 import {
   BusinessRuleError,
+  ConflictError,
+  formatMoney,
   localDateIn,
+  money,
   NotFoundError,
   newId,
   type RequestContext,
@@ -39,6 +42,7 @@ import {
   effectiveModeFor,
   loadAccount,
   loadProperty,
+  lockCollectionRefs,
   type PaymentsDeps,
   type RequestRow,
   requestHash,
@@ -110,6 +114,7 @@ export async function createPaymentRequest(
   d: PaymentsDeps,
   tx: TxContext,
   input: z.infer<typeof paymentRequestInput> & { businessKey: string },
+  opts: { ledgerSynced?: boolean } = {},
 ): Promise<{ id: string; replayed: boolean }> {
   requirePermission(tx, 'payments.paymentRequest.create', { propertyId: input.propertyId });
   const businessKey = `request:${input.businessKey}`;
@@ -126,7 +131,13 @@ export async function createPaymentRequest(
   await assertPaymentsWritable(d, tx, input.propertyId);
   const property = await loadProperty(d, tx, input.propertyId);
   await assertLedgerTarget(d, tx, input.ref, property);
-  await assertNoCompetingCollection(tx, input.ref, input.purpose, input.separateCollection);
+  // SW-PAY-1: the same per-reference lock as every collection path, so a link and a desk charge never both pass.
+  await lockCollectionRefs(tx, [input.ref]);
+  // A balance request kept in line with the folio (late charges) asks for what the ledger says is owed, which
+  // already counts every payment collected; its caller refused while one is still in flight.
+  if (!opts.ledgerSynced) {
+    await assertNoCompetingCollection(tx, input.ref, input.purpose, input.separateCollection);
+  }
   const expiresAt = new Date(input.expiresAt);
   if (expiresAt.getTime() <= tx.now.getTime() + 15 * 60_000) {
     throw new ValidationError('expiry_too_soon', 'A payment request must stay open for at least 15 minutes.');
@@ -391,6 +402,215 @@ export async function simulateRequestPayment(
   );
 }
 
+// ───────────────────────── balance requests kept in line with the folio (late charges) ─────────────────────────
+
+export interface BalanceSyncInput {
+  propertyId: string;
+  folioId: string;
+  /** What the folio owes now, from finance's ledger (0 when settled or in credit). */
+  outstanding: { amountMinor: number; currency: string };
+  payer: { type: 'guest_profile' | 'company' | 'agency' | 'other'; id?: string; name: string };
+  /** Why the balance changed (late charge, correction, transfer…), for the audit and the request's description. */
+  reason: string;
+}
+
+export interface BalanceSyncResult {
+  status: 'requested' | 'amended' | 'reissued' | 'cancelled' | 'unchanged' | 'none' | 'deferred';
+  /** The open balance request after the sync, if any. */
+  requestId: string | null;
+  /** What the open request still asks the payer for (0 when none). Never more than the folio owes. */
+  openMinor: number;
+  detail: string;
+}
+
+/** Days a balance request for charges after departure stays open before it expires. */
+const BALANCE_REQUEST_DAYS = 7;
+
+/**
+ * Review R2-P1-2: after departure a folio has at most ONE open balance request, and it always asks for what the
+ * folio owes now. Finance calls this under its folio lock after every change to a departed folio's balance (late
+ * charge, reversal, adjustment, transfer, desk payment, deposit application): payments creates the request, amends
+ * it up or down (never below what was already paid through it), re-issues it when the provider link cannot be changed,
+ * or closes it when nothing is owed. While a payment on the folio is still being confirmed nothing changes (the
+ * folio's balance does not show it yet), and the result says so — never "requested" for an amount that was not.
+ */
+export async function syncBalanceRequest(
+  d: PaymentsDeps,
+  tx: TxContext,
+  input: BalanceSyncInput,
+): Promise<BalanceSyncResult> {
+  requirePermission(tx, 'payments.paymentRequest.create', { propertyId: input.propertyId });
+  const ref = { type: 'folio' as const, id: input.folioId };
+  await assertPaymentsWritable(d, tx, input.propertyId);
+  const property = await loadProperty(d, tx, input.propertyId);
+  await assertLedgerTarget(d, tx, ref, property);
+  await lockCollectionRefs(tx, [ref]);
+  const open = await db(tx)
+    .selectFrom('payments.payment_requests')
+    .selectAll()
+    .where('ref_type', '=', 'folio')
+    .where('ref_id', '=', input.folioId)
+    .where('purpose', '=', 'balance')
+    .where('status', 'in', ['open', 'partially_paid'])
+    .orderBy('created_at')
+    .forUpdate()
+    .execute();
+  const current = open[0];
+  const openMinor = (r: RequestRow | undefined) => (r ? r.amount_minor - r.paid_minor : 0);
+  const inflight = await db(tx)
+    .selectFrom('payments.payments')
+    .select('id')
+    .where('ref_type', '=', 'folio')
+    .where('ref_id', '=', input.folioId)
+    .where('status', 'in', ['processing', 'pending_verification'])
+    .executeTakeFirst();
+  if (inflight) {
+    return {
+      status: 'deferred',
+      requestId: current?.id ?? null,
+      openMinor: openMinor(current),
+      detail:
+        'A payment on this folio is still being confirmed, so the balance request was not changed (asking now could ask twice). Check the folio once the payment is confirmed.',
+    };
+  }
+  const want = Math.max(0, input.outstanding.amountMinor);
+  const currency = input.outstanding.currency;
+  const fmt = (n: number) => formatMoney(money(n, currency));
+  const create = async (n: number) => {
+    const count = await db(tx)
+      .selectFrom('payments.payment_requests')
+      .select((eb) => eb.fn.countAll<string>().as('n'))
+      .where('ref_type', '=', 'folio')
+      .where('ref_id', '=', input.folioId)
+      .where('purpose', '=', 'balance')
+      .executeTakeFirstOrThrow();
+    const r = await createPaymentRequest(
+      d,
+      tx,
+      {
+        propertyId: input.propertyId,
+        payer: input.payer,
+        amount: { amountMinor: n, currency },
+        purpose: 'balance',
+        ref,
+        description: 'Charges posted after departure',
+        expiresAt: new Date(tx.now.getTime() + BALANCE_REQUEST_DAYS * 86_400_000).toISOString(),
+        businessKey: `balance-sync:${input.folioId}:${Number(count.n) + 1}`,
+      },
+      { ledgerSynced: true },
+    );
+    return r.id;
+  };
+  const audit = async (id: string, before: number, after: number, how: string) =>
+    tx.audit({
+      action: 'payments.request.balanceSync',
+      target: { type: 'payment_request', id },
+      propertyId: input.propertyId,
+      reason: input.reason,
+      before: { openMinor: before },
+      after: { openMinor: after, how },
+    });
+  if (!current) {
+    if (want === 0) {
+      return {
+        status: 'none',
+        requestId: null,
+        openMinor: 0,
+        detail: 'The folio owes nothing; no payment request.',
+      };
+    }
+    const id = await create(want);
+    await audit(id, 0, want, 'requested');
+    return {
+      status: 'requested',
+      requestId: id,
+      openMinor: want,
+      detail: `Payment request for ${fmt(want)} created; send the link to the payer.`,
+    };
+  }
+  const before = openMinor(current);
+  if (before === want) {
+    return {
+      status: 'unchanged',
+      requestId: current.id,
+      openMinor: before,
+      detail: `The open payment request already asks for ${fmt(want)}.`,
+    };
+  }
+  if (want === 0) {
+    // Nothing owed any more: close the request. Never below what was already paid through it.
+    const paidInFull = current.paid_minor > 0;
+    await db(tx)
+      .updateTable('payments.payment_requests')
+      .set(
+        paidInFull
+          ? { amount_minor: current.paid_minor, status: 'paid', version: current.version + 1 }
+          : {
+              status: 'cancelled',
+              cancelled_reason: `The folio no longer owes anything (${input.reason}).`,
+              version: current.version + 1,
+            },
+      )
+      .where('id', '=', current.id)
+      .execute();
+    await audit(current.id, before, 0, paidInFull ? 'closed_as_paid' : 'cancelled');
+    if (!paidInFull) {
+      await tx.emit({
+        type: PaymentsEvents.requestCancelled,
+        propertyId: current.property_id,
+        aggregate: { type: 'payment_request', id: current.id },
+        payload: { paymentRequestId: current.id, reason: 'balance_settled' },
+      });
+    }
+    return {
+      status: 'cancelled',
+      requestId: null,
+      openMinor: 0,
+      detail: `The folio no longer owes anything, so the payment request for ${fmt(before)} was ${paidInFull ? 'closed' : 'cancelled'}.`,
+    };
+  }
+  if (!current.provider_link_ref) {
+    // No provider link yet: amend in place (the link is created for the new amount).
+    await db(tx)
+      .updateTable('payments.payment_requests')
+      .set({ amount_minor: current.paid_minor + want, version: current.version + 1 })
+      .where('id', '=', current.id)
+      .execute();
+    await audit(current.id, before, want, 'amended');
+    return {
+      status: 'amended',
+      requestId: current.id,
+      openMinor: want,
+      detail: `The open payment request now asks for ${fmt(want)} (was ${fmt(before)}).`,
+    };
+  }
+  // A provider link cannot change its amount: cancel it and issue a new one. A payment that still arrives on the old
+  // link is credited to the cancelled request and raised for a refund or credit (never lost).
+  await db(tx)
+    .updateTable('payments.payment_requests')
+    .set({
+      status: 'cancelled',
+      cancelled_reason: `Replaced by a request for ${fmt(want)}: the folio balance changed (${input.reason}).`,
+      version: current.version + 1,
+    })
+    .where('id', '=', current.id)
+    .execute();
+  await tx.emit({
+    type: PaymentsEvents.requestCancelled,
+    propertyId: current.property_id,
+    aggregate: { type: 'payment_request', id: current.id },
+    payload: { paymentRequestId: current.id, reason: 'balance_changed' },
+  });
+  const id = await create(want);
+  await audit(id, before, want, `reissued (replaces ${current.id})`);
+  return {
+    status: 'reissued',
+    requestId: id,
+    openMinor: want,
+    detail: `The folio now owes ${fmt(want)}: the earlier link for ${fmt(before)} was cancelled and a new payment link created. Send the new link.`,
+  };
+}
+
 // ───────────────────────── virtual cards ─────────────────────────
 
 function toVccView(v: {
@@ -447,12 +667,47 @@ export async function registerVirtualCard(
   await assertPaymentsWritable(d, tx, input.propertyId);
   const property = await loadProperty(d, tx, input.propertyId);
   await assertLedgerTarget(d, tx, input.ledgerRef ?? { type: 'booking', id: input.bookingId }, property);
+  // Review R2-P1-1: a channel's virtual card pays a booking OF THAT CHANNEL. Registering one for a direct booking would
+  // let anyone with `payments.vcc.manage` attach a card the booking's guest never supplied.
+  const booking = await d.references.describeReference(tx, { type: 'booking', id: input.bookingId });
+  if (!booking || booking.propertyId !== input.propertyId) {
+    throw new BusinessRuleError(
+      'reference_unknown',
+      'Portico has no booking with this reference at this property, so no virtual card can be registered for it.',
+      { bookingId: input.bookingId },
+    );
+  }
+  if (booking.source !== 'channel' || !booking.channelConnectionId) {
+    throw new BusinessRuleError(
+      'vcc_booking_not_from_channel',
+      'This booking was not made through a channel, so a channel virtual card cannot pay or guarantee it. Ask the guest for their card through a payment link.',
+      { bookingId: input.bookingId },
+    );
+  }
   const account = await loadAccount(tx, input.accountId);
   assertAccountUsable(account, property, input.amount.currency);
-  if (effectiveModeFor(d, tx, account) === 'simulate' && !isSimulatorTestToken(input.vaultToken)) {
+  const simulated = effectiveModeFor(d, tx, account) === 'simulate';
+  if (simulated && !isSimulatorTestToken(input.vaultToken)) {
     throw new ValidationError(
       'simulator_test_token_required',
       'In this environment payments are simulated: register virtual cards with a simulator test token.',
+    );
+  }
+  // Review R2-P2-1 / AP-39: one stored token per card; a token already saved is refused cleanly (never an aborted
+  // transaction), and the simulator's shared test tokens are stored per booking.
+  const storedToken = simulated
+    ? `${input.vaultToken}#${input.propertyId}:booking:${input.bookingId}:${input.channelReference}`
+    : input.vaultToken;
+  const taken = await db(tx)
+    .selectFrom('payments.payment_methods')
+    .select('id')
+    .where('account_id', '=', account.id)
+    .where('provider_token', '=', storedToken)
+    .executeTakeFirst();
+  if (taken) {
+    throw new ConflictError(
+      'payment_method_token_in_use',
+      'This virtual card token is already saved in Portico. Check the channel reference; a virtual card is registered once.',
     );
   }
   const methodId = newId(tx.now.getTime());
@@ -464,7 +719,7 @@ export async function registerVirtualCard(
       account_id: account.id,
       property_id: input.propertyId,
       kind: 'virtual_card',
-      provider_token: input.vaultToken,
+      provider_token: storedToken,
       provider_customer_ref: null,
       brand: input.brand ?? null,
       last4: input.last4 ?? null,
@@ -474,14 +729,21 @@ export async function registerVirtualCard(
       owner_type: 'booking',
       owner_id: input.bookingId,
       // A virtual card is issued by the channel to pay this stay: charging it is agreed by the channel contract.
-      // A virtual card is issued by the channel to pay this stay: charging it is agreed by the channel contract.
       mit_agreement: true,
       mandate: JSON.stringify({
         kind: 'ota_virtual_card',
         channel: input.channel,
         channelReference: input.channelReference,
+        channelConnectionId: booking.channelConnectionId,
         termsVersion: `channel-contract:${input.channel}`,
         acceptedAt: tx.now.toISOString(),
+        scope: {
+          legalEntityId: property.legalEntityId,
+          propertyIds: [input.propertyId],
+          purposes: ['guarantee', 'deposit', 'balance', 'no_show'],
+          maxAmount: input.amount,
+          bookingIds: [input.bookingId],
+        },
       }),
       entry_channel: 'vault',
       created_at: tx.now,

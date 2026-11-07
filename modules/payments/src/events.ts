@@ -39,6 +39,12 @@ export const PaymentsEvents = {
   statementImported: 'payments.statement.imported',
 } as const;
 
+/** Events of other modules payments consumes (their owners' type strings). */
+export const ConsumedEvents = {
+  guestsProfileMerged: 'guests.profile.merged',
+  guestsProfileUnmerged: 'guests.profile.unmerged',
+} as const;
+
 export interface OperationEventPayload extends Record<string, unknown> {
   operationId: string;
   kind: string;

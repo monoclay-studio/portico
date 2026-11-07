@@ -1,5 +1,5 @@
 /** Shared helpers for the payments services: dependencies, loaders, guards, mappers, exceptions, journal. */
-import { type PorticoDatabase, type Selectable, type TxContext, typed } from '@portico/db';
+import { type PorticoDatabase, type Selectable, sql, type TxContext, typed } from '@portico/db';
 import {
   type Authorizer,
   BusinessRuleError,
@@ -14,6 +14,7 @@ import {
   newId,
   type RequestContext,
   sha256Hex,
+  ValidationError,
 } from '@portico/kernel';
 import type {
   Authorization,
@@ -55,8 +56,11 @@ export interface PaymentsDeps {
   database: PorticoDatabase;
   ledger: LedgerPort;
   platform: PlatformPort;
-  /** Owner of stays/bookings (reservations). Unbound in a standalone deployment alongside another PMS. */
-  references?: ReferenceDirectoryPort;
+  /**
+   * Owner of stays and bookings (reservations). Required (review R2-P2-3): a deployment alongside another PMS binds
+   * an adapter that answers from the connected system of record or refuses stay and booking references.
+   */
+  references: ReferenceDirectoryPort;
   registry: ProviderRegistry;
   breaker: BreakerConfig;
 }
@@ -171,12 +175,20 @@ export async function assertLedgerTarget(
       { ref },
     );
   }
+  // Review R2-P1-3 (AP-44): the pre-check before any card is charged is finance's own posting predicate, so a
+  // payment the provider confirms can always be posted (e.g. a booking whose deposits are held at another property).
+  await d.ledger.assertTargetUsable(tx, ref, {
+    propertyId: property.id,
+    legalEntityId: property.legalEntityId,
+  });
 }
 
 /**
- * Review P1-1 sibling: a hold or recorded authorization is tied to a stay or booking of THIS property. An unknown
- * reference or one of another property is refused before anything is recorded (no griefing of another property's
- * guest: their check-in would otherwise find foreign payment records on its stay).
+ * Review P1-1 sibling / R2-P2-3: a hold or recorded authorization is tied to a reference whose owner payments can
+ * verify, at THIS property: a stay or booking (reservations' directory) or a folio (finance). Any other reference type
+ * is refused (allow-list), so nobody can park a hold "for" another property's record under a type nobody checks, and
+ * an unknown reference or one of another property is refused before anything is recorded (no griefing of another
+ * property's guest: their check-in would otherwise find foreign payment records).
  */
 export async function assertReferenceAt(
   d: PaymentsDeps,
@@ -184,10 +196,19 @@ export async function assertReferenceAt(
   ref: { type: string; id: string },
   propertyId: string,
 ): Promise<void> {
-  if (!d.references) return;
+  if (ref.type === 'folio' || ref.type === 'booking') {
+    await assertLedgerTarget(d, tx, { type: ref.type, id: ref.id }, await loadProperty(d, tx, propertyId));
+    return;
+  }
+  if (ref.type !== 'stay') {
+    throw new ValidationError(
+      'reference_type_not_supported',
+      `Payments holds or collects money for a stay, a booking or a folio, not for a "${ref.type}". Choose the stay, booking or folio the money belongs to.`,
+      { ref },
+    );
+  }
   const owner = await d.references.describeReference(tx, ref);
-  if (owner === undefined) return;
-  if (owner === null) {
+  if (!owner) {
     throw new BusinessRuleError(
       'reference_unknown',
       `Portico has no ${ref.type} with this reference, so nothing can be held or collected for it. Check the reference and try again.`,
@@ -200,6 +221,22 @@ export async function assertReferenceAt(
       `This ${ref.type} belongs to another property. Collect at the property that owns it.`,
       { ref, propertyId },
     );
+  }
+}
+
+/**
+ * Fix sweep SW-PAY-1 (AP-36): every path that collects, holds, links or receives money for a reference takes this
+ * transaction lock before reading the guards that protect it (desk charge, hold, capture, recorded payment, link
+ * creation, the link-payment webhook, VCC charges, late-charge balance requests). Several references are locked in
+ * a fixed order, so two paths can never wait on each other.
+ */
+export async function lockCollectionRefs(
+  tx: TxContext,
+  refs: ReadonlyArray<{ type: string; id: string }>,
+): Promise<void> {
+  const keys = [...new Set(refs.map((r) => `payments:collect:${r.type}:${r.id}`))].sort();
+  for (const key of keys) {
+    await sql`select pg_advisory_xact_lock(hashtext(${key}))`.execute(tx.db);
   }
 }
 
@@ -502,6 +539,7 @@ export function toMethodView(m: MethodRow): PaymentMethod {
     expYear: m.exp_year,
     holderName: m.holder_name,
     owner: { type: m.owner_type, id: m.owner_id },
+    entryChannel: m.entry_channel,
     mitAgreement: m.mit_agreement,
     mandate: (m.mandate ?? {}) as Record<string, unknown>,
     tokenPortability: m.token_portability,

@@ -65,7 +65,11 @@ export interface PaymentMethodsTable {
   owner_id: string;
   mit_agreement: boolean;
   mandate: unknown;
-  entry_channel: Generated<'hosted_entry' | 'terminal' | 'vault' | 'import'>;
+  entry_channel: Generated<'hosted_entry' | 'terminal' | 'vault' | 'import' | 'staff_entry'>;
+  /** What the client said about the entry channel (information only; `entry_channel` is the server fact). */
+  declared_entry_channel: string | null;
+  /** R2-P2-1: the owner before a guest-profile merge (restored by an unmerge). */
+  merged_from_owner_id: string | null;
   token_portability: 'provider_bound' | 'network_token' | 'vault_portable' | 'unknown';
   portability_note: string | null;
   status: 'active' | 'detached' | 'expired';

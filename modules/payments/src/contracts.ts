@@ -122,6 +122,28 @@ export const accountHealth = z.object({
 });
 export type AccountHealth = z.infer<typeof accountHealth>;
 
+/** What a card-on-file mandate lets the hotel use the card for (ADR-0015 Amendment 1 (b)). */
+export const mandatePurpose = z.enum(['guarantee', 'deposit', 'balance', 'incidentals', 'no_show']);
+export type MandatePurpose = z.infer<typeof mandatePurpose>;
+export const mandateScope = z
+  .object({
+    /** The hotel company (merchant of record) the cardholder agreed with. */
+    legalEntityId: z.uuid(),
+    /** Properties of that company the consent covers; omitted = every property of the legal entity. */
+    propertyIds: z.array(z.uuid()).min(1).max(50).optional(),
+    purposes: z.array(mandatePurpose).min(1),
+    /** Highest amount per use the cardholder agreed to. */
+    maxAmount: money.optional(),
+    /**
+     * The bookings the consent names. A card is a booking's agreed guarantee through its mandate only when the
+     * mandate names that booking (or the card was saved for it): staff linking the cardholder to another booking
+     * never extends the consent (Amendment 1).
+     */
+    bookingIds: z.array(z.uuid()).min(1).max(20).optional(),
+  })
+  .strict();
+export type MandateScope = z.infer<typeof mandateScope>;
+
 export const mandateInput = z
   .object({
     termsVersion: text(100, 1),
@@ -131,6 +153,8 @@ export const mandateInput = z
     threeDsResult: z
       .enum(['authenticated', 'attempted', 'not_authenticated', 'exempt', 'unknown'])
       .optional(),
+    /** The consent's scope with its evidence (terms version, acceptance time, channel above). */
+    scope: mandateScope.optional(),
   })
   .strict();
 
@@ -152,8 +176,11 @@ export const paymentMethodInput = z
     owner: z
       .object({ type: z.enum(['guest_profile', 'company', 'agency', 'booking']), id: z.uuid() })
       .strict(),
-    /** How the card reached the provider; a guest-present entry makes the first charge customer-initiated. */
-    entryChannel: z.enum(['hosted_entry', 'terminal', 'vault', 'import']).default('hosted_entry'),
+    /**
+     * How the client says the card reached the provider. Information only (SW-PAY-4): whether the guest was present
+     * is derived by the server (a guest saving their own card), never taken from this field.
+     */
+    entryChannel: z.enum(['hosted_entry', 'terminal', 'vault', 'import']).optional(),
     mitAgreement: z.boolean().default(false),
     /** Required when mitAgreement is true: the guest's recorded agreement to later charges (PAY-R11). */
     mandate: mandateInput.optional(),
@@ -177,6 +204,8 @@ export const paymentMethod = z.object({
   expYear: z.number().nullable(),
   holderName: z.string().nullable(),
   owner: z.object({ type: z.string(), id: z.uuid() }),
+  /** Server fact: how the card was entered (`hosted_entry` = the guest saved it themselves). */
+  entryChannel: z.string(),
   mitAgreement: z.boolean(),
   mandate: z.record(z.string(), z.unknown()),
   tokenPortability: z.string(),
@@ -245,10 +274,19 @@ export const authorizeInput = z
     amount: money,
     ref: anyRef,
     description: text(200).optional(),
+    /** SW-PAY-1: a hold on a booking or folio whose collection a payment link owns needs a stated reason. */
+    separateCollection: separateCollection.optional(),
   })
   .strict();
 export const incrementInput = z.object({ additionalAmount: money }).strict();
-export const captureInput = z.object({ amount: money.optional(), ledgerRef: ledgerRef.optional() }).strict();
+export const captureInput = z
+  .object({
+    amount: money.optional(),
+    ledgerRef: ledgerRef.optional(),
+    /** SW-PAY-1: collecting money a payment link already owns needs a stated reason (audited). */
+    separateCollection: separateCollection.optional(),
+  })
+  .strict();
 export const voidInput = z.object({ reason: text(500, 1) }).strict();
 export const recordAuthorizationInput = z
   .object({

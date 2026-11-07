@@ -27,6 +27,7 @@ import {
   db,
   effectiveModeFor,
   loadAccount,
+  lockCollectionRefs,
   type PaymentsDeps,
   raiseException,
   resolveExceptionsByKey,
@@ -829,6 +830,16 @@ async function applyLinkEvent(
   accountId: string,
   o: Extract<WebhookObject, { kind: 'payment_link' }>,
 ): Promise<WebhookOutcome> {
+  const target = await db(tx)
+    .selectFrom('payments.payment_requests')
+    .select(['ref_type', 'ref_id'])
+    .where('account_id', '=', accountId)
+    .where('provider_link_ref', '=', o.providerRef)
+    .executeTakeFirst();
+  if (!target) return 'no_match';
+  // SW-PAY-1: the same per-reference collection lock as desk charges, holds and captures (taken before the row lock,
+  // in the same order as every other path).
+  await lockCollectionRefs(tx, [{ type: target.ref_type, id: target.ref_id }]);
   const r = await db(tx)
     .selectFrom('payments.payment_requests')
     .selectAll()

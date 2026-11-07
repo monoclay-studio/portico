@@ -5,6 +5,7 @@
  */
 import { newId } from '@portico/kernel';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { deriveInitiator } from '../src/service/collect';
 import { addMethod, type Harness, type Org, postings, setupOrg, startHarness } from './harness';
 
 let h: Harness;
@@ -146,7 +147,7 @@ describe('authorizations', () => {
     expect(p.presentation).toMatchObject({ tone: 'failure', label: expect.stringMatching(/Not paid/) });
   });
 
-  it('merchant- vs customer-initiated is derived from the consent record, never declared (P1-8)', async () => {
+  it('merchant- vs customer-initiated is derived from server facts, never declared (P1-8, fix sweep SW-PAY-4)', async () => {
     const org = await setupOrg(h);
     const charge = (methodId: string) =>
       h.module.service.chargeNow(org.ctx, {
@@ -156,12 +157,19 @@ describe('authorizations', () => {
         ref: { type: 'folio', id: newId() },
         businessKey: newId(),
       });
-    // Card just entered by the guest (hosted entry), no agreement for later charges: the guest is present → OK.
+    // A card staff saved without the cardholder's agreement — even declared as "hosted_entry" and charged at once — is
+    // merchant-initiated: refused (the client's entryChannel is information only).
     const fresh = await addMethod(h, org, 'pm_card_visa', false);
-    expect((await charge(fresh)).status.payment).toBe('succeeded');
-    // Later the guest is gone: charging the same stored card is merchant-initiated and needs an agreement.
+    const saved = await org.tx((tx) => h.module.service.tx.getMethod(tx, fresh));
+    expect(saved.entryChannel).toBe('staff_entry');
+    await expect(charge(fresh)).rejects.toMatchObject({ code: 'mit_not_agreed' });
     h.clock.advance(31 * 60_000);
     await expect(charge(fresh)).rejects.toThrow(/Send a payment link/);
+    // Only the guest acting for themselves is customer-initiated.
+    expect(deriveInitiator({ ...org.ctx, actor: { kind: 'guest', guestProfileId: newId() } } as never)).toBe(
+      'customer',
+    );
+    expect(deriveInitiator(org.ctx as never)).toBe('merchant');
     // A card saved WITH a recorded agreement (terms version + acceptance) may be charged later.
     const agreed = await addMethod(h, org, 'pm_card_mastercard', true);
     h.clock.advance(31 * 60_000);

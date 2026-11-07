@@ -594,7 +594,12 @@ describe('P2 fixes', () => {
   it('P2-2/P2-3: saving a token twice returns the same method; a reused key with different content is refused', async () => {
     const org = await setupOrg(h);
     const svc = h.module.service;
-    expect(await addMethod(h, org, 'pm_card_visa')).toBe(await addMethod(h, org, 'pm_card_visa'));
+    const owner = newId();
+    const first = await addMethod(h, org, 'pm_card_visa', true, owner);
+    expect(await addMethod(h, org, 'pm_card_visa', true, owner)).toBe(first);
+    // Review R2-P2-1: another cardholder saving the simulator's shared test token gets THEIR OWN card, never the
+    // first saver's.
+    expect(await addMethod(h, org, 'pm_card_visa', true, newId())).not.toBe(first);
     const p = await paidCharge(org, 50_000);
     const key = `refund-${newId()}`;
     const same = await Promise.all(

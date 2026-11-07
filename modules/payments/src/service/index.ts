@@ -9,7 +9,7 @@ import { type TxContext, type TxEventSubscription, withTenantTx } from '@portico
 import { DomainError, delegateAtProperty, type RequestContext } from '@portico/kernel';
 import type { Authorization, Payment, PaymentRequest, Refund } from '../contracts';
 import { type BreakerConfig, DEFAULT_BREAKER } from '../domain/circuit-breaker';
-import { PaymentsEvents } from '../events';
+import { ConsumedEvents, PaymentsEvents } from '../events';
 import type { LedgerPort, PlatformPort, ReferenceDirectoryPort } from '../ports';
 import type { ProviderRegistry } from '../providers/registry';
 import * as accounts from './accounts';
@@ -25,7 +25,7 @@ export interface PaymentsServiceDeps {
   database: PaymentsDeps['database'];
   ledger: LedgerPort;
   platform: PlatformPort;
-  references?: ReferenceDirectoryPort;
+  references: ReferenceDirectoryPort;
   registry: ProviderRegistry;
   breaker?: BreakerConfig;
 }
@@ -202,15 +202,13 @@ export function createPaymentsService(input: PaymentsServiceDeps) {
           amount?: { amountMinor: number; currency: string };
           ledgerRef?: { type: 'folio' | 'booking'; id: string };
           idempotencyKey: string;
-          /** The property the caller authorized (ADR-0015); the hold must belong to it. */
-          propertyId?: string;
+          /** The property the caller authorized (ADR-0015, required: BS3-3); the hold must belong to it. */
+          propertyId: string;
         },
       ): Promise<Payment> {
         const { propertyId, ...rest } = i;
-        if (propertyId) {
-          await assertRecordAt(tx, 'authorizations', 'authorization', i.authorizationId, propertyId);
-          tx = delegateAtProperty(tx, PORT_DELEGATION, propertyId);
-        }
+        await assertRecordAt(tx, 'authorizations', 'authorization', i.authorizationId, propertyId);
+        tx = delegateAtProperty(tx, PORT_DELEGATION, propertyId);
         const s = await collect.capture(d, tx, { ...rest, businessKey: i.idempotencyKey });
         scheduleAfterCommit(tx, s.operationId);
         return queries.getPayment(tx, s.id);
@@ -252,36 +250,48 @@ export function createPaymentsService(input: PaymentsServiceDeps) {
         return queries.getRefund(tx, s.id);
       },
       /**
-       * `scope` (ADR-0015): the property the caller authorized; every record on the reference must belong to it.
-       * Without it, the caller's own payments read permission applies (HTTP-equivalent behaviour).
+       * `scope` (ADR-0015, required: BS3-3): the property the caller authorized; every record on the reference must
+       * belong to it.
        */
       async getPaymentStatus(
         tx: TxContext,
         ref: { type: string; id: string },
-        scope?: { propertyId: string },
+        scope: { propertyId: string },
       ) {
-        if (!scope) return queries.getPaymentStatus(tx, ref);
         await assertRefAt(tx, ref, scope.propertyId);
         return queries.getPaymentStatus(delegateAtProperty(tx, PORT_DELEGATION, scope.propertyId), ref);
       },
       /**
-       * Who a saved payment method belongs to (review P1-2): the calling module checks that a card used for a stay
-       * belongs to its guest, booker or payer. Null when the method does not exist, is detached or belongs to another
-       * property (indistinguishable to the caller).
+       * ADR-0015 Amendment 1 (review R2-P1-1): whether a saved card is a booking's AGREED guarantee — supplied by its
+       * cardholder for this booking, the booking's own channel virtual card, or covered by a recorded mandate that
+       * names the booking — and whether it is usable here at all (this property and its hotel company). The calling
+       * module refuses any other card unless the user holds `payments.payment.collect`.
        */
-      async describeMethod(
+      assessGuaranteeCard: (
         tx: TxContext,
-        methodId: string,
-        scope: { propertyId: string },
-      ): Promise<{ id: string; owner: { type: string; id: string } } | null> {
-        if (!/^[0-9a-f-]{36}$/i.test(methodId)) return null;
-        const m = await db(tx)
-          .selectFrom('payments.payment_methods')
-          .select(['id', 'property_id', 'owner_type', 'owner_id', 'status'])
-          .where('id', '=', methodId)
-          .executeTakeFirst();
-        if (!m || m.property_id !== scope.propertyId || m.status !== 'active') return null;
-        return { id: m.id, owner: { type: m.owner_type, id: m.owner_id } };
+        i: {
+          propertyId: string;
+          methodId: string;
+          bookingId: string;
+          amount?: { amountMinor: number; currency: string };
+        },
+      ) => accounts.assessGuaranteeCard(d, tx, i),
+      /**
+       * Review R2-P1-2: keep the ONE open balance request of a departed folio equal to what the folio owes (finance
+       * calls it under its folio lock after every balance change). Intent only; links are made after commit.
+       */
+      async syncBalanceRequest(
+        tx: TxContext,
+        i: requests.BalanceSyncInput,
+      ): Promise<requests.BalanceSyncResult> {
+        tx = delegateAtProperty(tx, PORT_DELEGATION, i.propertyId);
+        const r = await requests.syncBalanceRequest(d, tx, i);
+        if (r.requestId && (r.status === 'requested' || r.status === 'reissued' || r.status === 'amended')) {
+          const ctx = requestContextOf(tx);
+          const id = r.requestId;
+          tx.afterCommit(() => requests.ensurePaymentLink(d, ctx, id));
+        }
+        return r;
       },
       listUnresolved: (tx: TxContext, i: { propertyId: string }) =>
         queries.listUnresolved(delegateAtProperty(tx, PORT_DELEGATION, i.propertyId), i),
@@ -423,6 +433,27 @@ export function createPaymentsService(input: PaymentsServiceDeps) {
             // P2-7: never hold the delivery transaction across the provider call — run it after commit.
             const ctx = requestContextOf(tx);
             if (operationId) tx.afterCommit(() => executeOperation(d, ctx, operationId));
+          },
+        },
+        {
+          // Review R2-P2-1: a guest's saved cards follow their profile through a merge, and back on unmerge.
+          consumer: 'payments.profile-merged',
+          types: [ConsumedEvents.guestsProfileMerged],
+          handle: async (tx, event) => {
+            await accounts.repointMethodsOnMerge(
+              tx,
+              event.payload as { survivorId?: string; mergedId?: string },
+            );
+          },
+        },
+        {
+          consumer: 'payments.profile-unmerged',
+          types: [ConsumedEvents.guestsProfileUnmerged],
+          handle: async (tx, event) => {
+            await accounts.restoreMethodsOnUnmerge(
+              tx,
+              event.payload as { survivorId?: string; restoredId?: string },
+            );
           },
         },
         {

@@ -41,6 +41,7 @@ export {
 export type { PaymentsDB } from './tables';
 
 import type { PorticoDatabase } from '@portico/db';
+import { BusinessRuleError } from '@portico/kernel';
 import { type BreakerConfig, DEFAULT_BREAKER } from './domain/circuit-breaker';
 import { paymentsJobs } from './jobs';
 import type { LedgerPort, PlatformPort, ReferenceDirectoryPort } from './ports';
@@ -50,13 +51,31 @@ import { SimulatorProvider } from './providers/simulator';
 import { paymentsHttp } from './routes';
 import { createPaymentsService } from './service';
 
+/**
+ * Reference directory for a deployment without Portico reservations: stays and bookings live in the connected system
+ * of record, so payments cannot verify who owns one and refuses holds for them (folios are verified by finance).
+ */
+export const standaloneReferenceDirectory: ReferenceDirectoryPort = {
+  async describeReference(_tx, ref) {
+    if (ref.type !== 'stay' && ref.type !== 'booking') return undefined;
+    throw new BusinessRuleError(
+      'reference_directory_unavailable',
+      `Stays and bookings are kept in the connected system of record, so Portico cannot verify this ${ref.type}. Take the payment against a folio, or in that system.`,
+      { ref },
+    );
+  },
+};
+
 /** One-call wiring for the composition root. */
 export function createPaymentsModule(deps: {
   database: PorticoDatabase;
   ledger: LedgerPort;
   platform: PlatformPort;
-  /** Owner of stays and bookings (reservations); omit in a standalone deployment alongside another PMS. */
-  references?: ReferenceDirectoryPort;
+  /**
+   * Owner of stays and bookings (reservations). Required (review R2-P2-3); a standalone deployment alongside another
+   * PMS binds `standaloneReferenceDirectory` (refuses stay and booking references) or an adapter to that PMS.
+   */
+  references: ReferenceDirectoryPort;
   secrets: ProviderSecretsPort;
   /** Signs simulator webhooks (not a real secret: the simulator moves no money). */
   simulatorSigningSecret: string;
@@ -73,7 +92,7 @@ export function createPaymentsModule(deps: {
     database: deps.database,
     ledger: deps.ledger,
     platform: deps.platform,
-    ...(deps.references ? { references: deps.references } : {}),
+    references: deps.references,
     registry,
     breaker: deps.breaker ?? DEFAULT_BREAKER,
   });
