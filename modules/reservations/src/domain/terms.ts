@@ -148,10 +148,13 @@ export function termsDigest(doc: TermsSnapshot): string {
     hash: _h,
     quotedAt: _q,
     quoteId: _i,
-    providerDocument: _p,
+    providerDocument: provider,
     ...rest
   } = doc as TermsSnapshot & { hash?: unknown; quoteId?: unknown };
-  return sha256Hex(canonicalJson(rest));
+  // Review P3-1: the view maps some policy details lossily (e.g. cancellation basis, accepted guarantees); the
+  // provider's policies are part of the digest verbatim so a change in them still makes a preview stale.
+  const policies = (provider as { policies?: unknown } | undefined)?.policies;
+  return sha256Hex(canonicalJson(policies === undefined ? rest : { ...rest, providerPolicies: policies }));
 }
 
 /** Plain-language cancellation policy for previews (shown before the guest's agreement is recorded). */

@@ -143,6 +143,8 @@ export interface RatesPenaltyEvaluation {
 
 /** The rates provider functions reservations binds (rates README § Provider contract). */
 export interface RatesProvider {
+  /** True when the (stored, raw) terms carry a valid seal made with this server's key. */
+  verifyTerms(terms: unknown): boolean;
   quote(tx: TxContext, request: unknown): Promise<RatesOffer[]>;
   priceChange(
     tx: TxContext,
@@ -340,7 +342,7 @@ export function termsView(doc: RatesTermsDocument): TermsSnapshot {
 }
 
 /** The rates document stored inside a view, passed back to rates exactly as stored (seal intact). */
-export function ratesDocumentOf(view: TermsSnapshot): RatesTermsDocument {
+export function ratesDocumentOf(view: TermsSnapshot, verify?: (doc: unknown) => boolean): RatesTermsDocument {
   const doc = view.providerDocument;
   if (
     typeof doc !== 'object' ||
@@ -351,6 +353,15 @@ export function ratesDocumentOf(view: TermsSnapshot): RatesTermsDocument {
     throw new DomainError(
       'terms_not_from_rates',
       'These agreed terms were not issued by the rates module (for example they were imported, or recorded before rates was connected), so rates cannot re-price or evaluate them. Re-quote the stay to replace them with sealed terms.',
+      { status: 422 },
+    );
+  }
+  // Review P2-3: penalties and deposits are evaluated by rates' pure functions, which do not check the seal — so the
+  // adapter verifies it before any stored document is used (as priceChange does inside rates).
+  if (verify && !verify(doc)) {
+    throw new DomainError(
+      'terms_seal_invalid',
+      'These agreed terms were altered after rates sealed them, so Portico will not evaluate them. Restore them from the audit trail or re-quote the stay.',
       { status: 422 },
     );
   }
@@ -382,6 +393,7 @@ const occupancyOf = (o: Occupancy) => ({ adults: o.adults, childrenAges: [...(o.
  * backdated quote (rates requires `rates.quote.backdate` for other dates), so `bookingDate` / `asOf` are not sent.
  */
 export function ratesPortFrom(rates: RatesProvider): RatesPort {
+  const verify = (doc: unknown) => rates.verifyTerms(doc);
   return {
     async quote(tx, input) {
       const offers = await rates.quote(tx, {
@@ -397,7 +409,7 @@ export function ratesPortFrom(rates: RatesProvider): RatesPort {
       return offers.map(offerView);
     },
     evaluateCancellationPenalty(terms, at, opts) {
-      const doc = ratesDocumentOf(terms);
+      const doc = ratesDocumentOf(terms, verify);
       const e = rates.evaluateCancellationPenalty(doc, at, { event: opts.event, nights: opts.nights });
       return {
         event: e.event,
@@ -413,7 +425,7 @@ export function ratesPortFrom(rates: RatesProvider): RatesPort {
     async complimentaryTerms(tx, input) {
       return termsView(
         await rates.complimentaryTerms(tx, {
-          terms: ratesDocumentOf(input.terms),
+          terms: ratesDocumentOf(input.terms, verify),
           kind: input.kind,
           reason: input.reason,
         }),
@@ -430,7 +442,7 @@ export function ratesPortFrom(rates: RatesProvider): RatesPort {
     async priceChange(tx, input) {
       const c = input.change;
       const r = await rates.priceChange(tx, {
-        terms: ratesDocumentOf(input.terms),
+        terms: ratesDocumentOf(input.terms, verify),
         change: {
           nights: c.nights,
           unitTypeId: c.unitTypeId,
@@ -450,7 +462,7 @@ export function ratesPortFrom(rates: RatesProvider): RatesPort {
     instantiatePaymentSchedule(terms, opts) {
       return rates
         .instantiatePaymentSchedule(
-          ratesDocumentOf(terms),
+          ratesDocumentOf(terms, verify),
           opts?.bookingDate ? { bookingDate: opts.bookingDate } : {},
         )
         .map((i) => ({ kind: i.kind, dueDate: i.dueDate, amount: i.amount }));

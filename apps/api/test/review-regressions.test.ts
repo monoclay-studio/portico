@@ -7,7 +7,7 @@ import { sql } from '@portico/db';
 import { financeForReservations } from '@portico/finance';
 import { newId, type RequestContext, staticAuthorizer } from '@portico/kernel';
 import { platform } from '@portico/platform';
-import type { Booking } from '@portico/reservations';
+import type { Booking, TermsSnapshot } from '@portico/reservations';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   applied,
@@ -486,5 +486,49 @@ describe("P2-2 — finance never delegates organization-wide on reservations' po
     };
     await expect(org.run(kAgent, (tx) => unscoped.getFolioBalance(tx, folioId))).rejects.toThrow(/scope/);
     await expect(org.run(kAgent, (tx) => unscoped.listFolios(tx, { owner: hStay }))).rejects.toThrow(/scope/);
+  });
+});
+
+describe('P2-3 — the rates adapter verifies the seal before evaluating stored terms', () => {
+  it('penalties, deposits and complimentary terms refuse an altered document; honest terms still evaluate', async () => {
+    const org = await organization(s);
+    const k = await kandu(s, org);
+    const { reservations, rates } = s.c.services;
+    const agent = org.staff('reservations_agent', 'Aishath', [k.id]);
+    const offers = await org.run(agent, (tx) =>
+      reservations.deps.ports.rates.quote(tx, {
+        propertyId: k.id,
+        nights: { from: '2027-03-15', to: '2027-03-18' },
+        occupancy: { adults: 2, childrenAges: [] },
+        unitTypeIds: [k.types.BV as string],
+        ratePlanIds: [k.plans.BAR as string],
+      }),
+    );
+    const view = offers[0]?.terms as TermsSnapshot;
+    const port = reservations.deps.ports.rates;
+    const at = new Date('2027-03-10T09:00:00+05:00');
+    const nights = ['2027-03-15', '2027-03-16', '2027-03-17'];
+    expect(
+      port.evaluateCancellationPenalty(view, at, { event: 'cancellation', nights }).amount.amountMinor,
+    ).toBeGreaterThan(0);
+    expect(port.instantiatePaymentSchedule(view).length).toBeGreaterThan(0);
+    const doc = structuredClone(view.providerDocument) as {
+      policies: { cancellation: unknown; deposit: unknown };
+    };
+    doc.policies.cancellation = null;
+    doc.policies.deposit = null;
+    const forged: TermsSnapshot = { ...view, providerDocument: doc };
+    expect(rates.verifyTerms(doc)).toBe(false);
+    expect(() => port.evaluateCancellationPenalty(forged, at, { event: 'cancellation', nights })).toThrow(
+      expect.objectContaining({ code: 'terms_seal_invalid' }),
+    );
+    expect(() => port.instantiatePaymentSchedule(forged)).toThrow(
+      expect.objectContaining({ code: 'terms_seal_invalid' }),
+    );
+    await expect(
+      org.run(org.setup, (tx) =>
+        port.complimentaryTerms(tx, { terms: forged, kind: 'complimentary', reason: 'x' }),
+      ),
+    ).rejects.toMatchObject({ code: 'terms_seal_invalid' });
   });
 });
