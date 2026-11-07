@@ -532,3 +532,69 @@ describe('P2-3 — the rates adapter verifies the seal before evaluating stored 
     ).rejects.toMatchObject({ code: 'terms_seal_invalid' });
   });
 });
+
+describe('P2-6 — rates does not re-check its own quote key on port calls (ADR-0015)', () => {
+  it('a custom role with reservations.booking.create (no rates keys) books and extends; complimentary stays explicit', async () => {
+    const org = await organization(s);
+    const k = await kandu(s, org);
+    const { reservations } = s.c.services;
+    const perms = [
+      'reservations.booking.create',
+      'reservations.booking.read',
+      'reservations.booking.update',
+      'guests.profile.update',
+    ];
+    const custom: RequestContext = {
+      tenantId: org.tenantId,
+      environment: org.environment,
+      actor: { kind: 'user', userId: newId(), displayName: 'Custom booker' },
+      authz: staticAuthorizer(perms.map((permission) => ({ permission, propertyIds: [k.id] }))),
+      correlationId: newId(),
+    };
+    const b = applied<Booking>(
+      await org.run(custom, (tx) =>
+        reservations.createBooking(tx, bookingInput(k, { arrival: '2027-03-10', departure: '2027-03-12' })),
+      ),
+    );
+    const preview = await org.run(custom, (tx) =>
+      reservations.previewChange(tx, {
+        kind: 'dates',
+        stayId: b.stays[0]?.id as string,
+        arrival: '2027-03-10',
+        departure: '2027-03-13',
+      }),
+    );
+    expect(preview.feasible).toBe(true);
+    // Rates' own HTTP-equivalent service still checks rates.quote.read for this user.
+    await expect(
+      org.run(custom, (tx) =>
+        s.c.services.rates.quote(tx, {
+          propertyId: k.id,
+          nights: { from: '2027-03-10', to: '2027-03-12' },
+          occupancy: { adults: 2, childrenAges: [] },
+        }),
+      ),
+    ).rejects.toMatchObject({ status: 403 });
+    // A complimentary stay needs reservations.stay.complimentary AND rates.price.override (explicit, §5).
+    const comp: RequestContext = {
+      ...custom,
+      authz: staticAuthorizer(
+        [...perms, 'reservations.stay.complimentary'].map((permission) => ({
+          permission,
+          propertyIds: [k.id],
+        })),
+      ),
+    };
+    const input = bookingInput(k, { arrival: '2027-03-14', departure: '2027-03-15' });
+    const stay = input.stays[0];
+    if (!stay) throw new Error('no stay');
+    await expect(
+      org.run(comp, (tx) =>
+        reservations.createBooking(tx, {
+          ...input,
+          stays: [{ ...stay, commercialType: 'complimentary', commercialReason: 'Travel agent fam trip' }],
+        }),
+      ),
+    ).rejects.toMatchObject({ status: 403 });
+  });
+});

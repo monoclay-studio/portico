@@ -97,6 +97,7 @@ import {
   type RatesService,
   ratesHttp,
   ratesManifest,
+  ratesProvider,
   ratesSearch,
   ratesService,
   termsSealKeyFromEnv,
@@ -494,7 +495,7 @@ export function compose(database: PorticoDatabase): Composition {
     // reasons/conflicting refs, sold[] for the who-sold-it explanation). Drift in inventory's contract fails tsc.
     inventory: inventoryPortFrom(inventoryProvider(inventoryService)),
     // Rates' sealed TermsSnapshot v1 stored verbatim inside reservations' view and passed back unchanged.
-    rates: ratesPortFrom(rates),
+    rates: ratesPortFrom(ratesProvider(rates)),
     guests: guestsService satisfies GuestsPort,
     finance: financeForReservations(finance) satisfies FinancePort,
     payments: payments.service.provider satisfies PaymentsPort,

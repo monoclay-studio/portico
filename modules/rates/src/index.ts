@@ -16,6 +16,7 @@ export {
 } from './events';
 export * from './manifest';
 export type { RatesPorts, RatesPropertyInfo, RatesUnitType } from './ports';
+export { ratesProvider } from './provider';
 export * from './routes';
 export { termsSealKeyFromEnv } from './seal-key';
 export { ratesSearch } from './search';
