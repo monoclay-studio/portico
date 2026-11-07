@@ -619,3 +619,20 @@ direct vendor APIs only.
 **Blocks:** M16 only.
 **Raised by / date:** orchestrator (owner D14 follow-up), 2026-11-07
 
+
+### Q160 — May a saved card cover future stays booked by phone?      Status: open
+**Context:** Repeat and corporate guests often ask the hotel to "keep my card on file and charge it for my next stays".
+Re-review #4 showed that letting a general agreement cover "the cardholder's bookings" lets staff, by editing who is
+on a booking, charge a guest's card for someone else's stay (ADR-0015 Amendment 3). Portico now ties a card-on-file
+agreement to the bookings it names.
+**Question:** Should the first release offer a **future-stays mandate**: the cardholder agrees once (with evidence)
+that phone or email bookings for a payer account they control may be guaranteed or charged with their card, within
+stated purposes and limits?
+**Default we are proceeding with:** no. Each new booking needs new cardholder consent: a payment link, the terminal or
+hosted entry. A link is one click for the guest. The agreement data model leaves room for a named-payer-account scope.
+**Implemented by:** the pending-fixes line "integration-step fix round 4 (R4-P1-1)" (agreements cover only the
+bookings they name).
+**If the answer differs:** add a mandate scope bound to a payer account the cardholder controls, with its own consent
+capture and evidence. That is about a day of payments work; no rework.
+**Blocks:** nothing.
+**Raised by / date:** orchestrator, from integration-step re-review #4, 2026-11-07
