@@ -26,6 +26,7 @@ const base: CanonicalChannelBooking = {
     },
   ],
   guarantee: { kind: 'prepaid_channel' },
+  amountsIncludeTax: false,
   specialRequests: ['Honeymoon'],
   marketSegment: 'ota',
 };

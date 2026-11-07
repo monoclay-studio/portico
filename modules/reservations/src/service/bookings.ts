@@ -194,7 +194,9 @@ export async function createBookingInternal(
   const businessDate = property.businessDate;
   for (const s of input.stays) {
     dateRange(s.arrival, s.departure);
-    if (s.arrival < businessDate && input.source !== 'import') {
+    // Channel and import bookings were already confirmed elsewhere: they are recorded (with an issue raised by the
+    // caller) rather than refused.
+    if (s.arrival < businessDate && input.source !== 'import' && input.source !== 'channel') {
       throw new BusinessRuleError(
         'arrival_in_past',
         `Arrival ${s.arrival} is before the property's business date (${businessDate}). Choose today or a later date.`,

@@ -704,6 +704,8 @@ export const canonicalChannelBooking = z.object({
     kind: z.enum(['prepaid_channel', 'card', 'agency', 'none']),
     paymentMethodId: z.string().optional(),
   }),
+  /** Whether nightlyPrices include taxes and levies (rates' tax engine decomposes them). */
+  amountsIncludeTax: z.boolean().default(false),
   specialRequests: z.array(z.string()).default([]),
   notes: z.string().optional(),
   marketSegment: z.string().default('ota'),
@@ -719,7 +721,7 @@ export const ingestRequest = z.object({
 });
 
 export const ingestResult = z.object({
-  outcome: z.enum(['created', 'modified', 'cancelled', 'duplicate', 'conflict', 'stale']),
+  outcome: z.enum(['created', 'modified', 'cancelled', 'duplicate', 'conflict', 'stale', 'needs_review']),
   bookingId: uuid.optional(),
   fieldLosses: z.array(z.object({ path: z.string(), lost: z.unknown(), kind: z.string() })).optional(),
   conflictIds: z.array(z.string()).optional(),

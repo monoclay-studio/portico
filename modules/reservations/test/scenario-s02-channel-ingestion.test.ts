@@ -54,10 +54,11 @@ function payload(
       },
     ],
     guarantee: { kind: 'prepaid_channel' },
+    amountsIncludeTax: false,
     specialRequests: ['Late arrival by seaplane'],
     marketSegment: 'ota',
     ...over,
-  };
+  } as CanonicalChannelBooking;
 }
 
 describe('S02: channel booking delivered twice, modified, reordered and cancelled', () => {
@@ -200,6 +201,45 @@ describe('S02: channel booking delivered twice, modified, reordered and cancelle
     expect(booking.stays[0]?.issues.map((i) => i.code)).toContain('relocation_required');
   });
 
+  it('R-01: a channel price that differs from the quote keeps every tax and levy (computed by rates)', async () => {
+    const org = await setupOrg(t);
+    const p = payload(org);
+    for (const n of p.rooms[0]?.nightlyPrices ?? []) n.amountMinor = 30_001; // one cent off Portico's quote
+    const res = await org.run((tx) =>
+      org.svc.ingestChannelBooking(tx, {
+        connectionId: newId(),
+        externalId: 'OTA-CENT',
+        revision: 1,
+        payload: p,
+      }),
+    );
+    const b = await org.run((tx) => org.svc.getBooking(tx, res.bookingId ?? ''));
+    // 3 nights: TGST 17% of 30 001 = 5 100 per night; Green Tax 2 adults × 1 200 per night.
+    expect(b.totals).toMatchObject({
+      net: { amountMinor: 90_003 },
+      taxes: { amountMinor: 15_300 },
+      fees: { amountMinor: 7_200 },
+    });
+    // Tax-inclusive channel prices are decomposed by the tax engine, never stored as net.
+    const incl = payload(org, { amountsIncludeTax: true });
+    for (const n of incl.rooms[0]?.nightlyPrices ?? []) n.amountMinor = 37_500;
+    const r2 = await org.run((tx) =>
+      org.svc.ingestChannelBooking(tx, {
+        connectionId: newId(),
+        externalId: 'OTA-INCL',
+        revision: 1,
+        payload: incl,
+      }),
+    );
+    const b2 = await org.run((tx) => org.svc.getBooking(tx, r2.bookingId ?? ''));
+    expect(b2.totals).toMatchObject({
+      net: { amountMinor: 90_000 },
+      taxes: { amountMinor: 15_300 },
+      fees: { amountMinor: 7_200 },
+      gross: { amountMinor: 112_500 },
+    });
+  });
+
   it('records channel prices as the agreed price and flags a discrepancy with Portico rates', async () => {
     const org = await setupOrg(t);
     const p = payload(org);
@@ -215,5 +255,110 @@ describe('S02: channel booking delivered twice, modified, reordered and cancelle
     const b = await org.run((tx) => org.svc.getBooking(tx, res.bookingId ?? ''));
     expect(b.totals.net.amountMinor).toBe(81_000);
     expect(b.issues.map((i) => i.code)).toContain('channel_rate_discrepancy');
+  });
+});
+
+describe('S02 review regressions (steward R-05, R-06, R-19)', () => {
+  it('R-05: a cancellation that arrives before its creation leaves no live booking', async () => {
+    const org = await setupOrg(t);
+    const connectionId = newId();
+    const ingest = (revision: number, p: CanonicalChannelBooking) =>
+      org.run((tx) =>
+        org.svc.ingestChannelBooking(tx, { connectionId, externalId: 'OTA-ORDER', revision, payload: p }),
+      );
+    expect((await ingest(3, payload(org, { status: 'cancelled' }))).outcome).toBe('stale');
+    const create = await ingest(1, payload(org));
+    expect(create.outcome).toBe('stale');
+    expect(create.bookingId).toBeUndefined();
+    const count = await org.run((tx) =>
+      sql<{ n: number }>`select count(*)::int as n from reservations.bookings`.execute(tx.db),
+    );
+    expect(count.rows[0]?.n).toBe(0);
+    expect((await ingest(3, payload(org, { status: 'cancelled' }))).outcome).toBe('duplicate');
+    const issues = await org.run((tx) => org.svc.listIssues(tx, { propertyId: org.propertyId }));
+    expect(issues.map((i) => i.kind)).toContain('channel_cancelled_before_created');
+  });
+
+  it('R-06: a channel cancellation for an in-house guest is recorded for review, not thrown', async () => {
+    const org = await setupOrg(t);
+    const connectionId = newId();
+    const p = payload(org, {}, { arrival: '2026-12-10', departure: '2026-12-12' });
+    const r1 = await org.run((tx) =>
+      org.svc.ingestChannelBooking(tx, { connectionId, externalId: 'OTA-INH', revision: 1, payload: p }),
+    );
+    const b = await org.run((tx) => org.svc.getBooking(tx, r1.bookingId ?? ''));
+    const stayId = b.stays[0]?.id as string;
+    await org.run((tx) =>
+      org.svc.assignUnit(tx, { stayId, unitId: org.units.V101 as string, expectedVersion: b.version }),
+    );
+    await org.svc.performWorkflow(t.db, org.ctx, {
+      stayId,
+      kind: 'check_in',
+      checkIn: { registration: { identityVerified: true } },
+    });
+    const r2 = await org.run((tx) =>
+      org.svc.ingestChannelBooking(tx, {
+        connectionId,
+        externalId: 'OTA-INH',
+        revision: 2,
+        payload: { ...p, status: 'cancelled' },
+      }),
+    );
+    expect(r2.outcome).toBe('needs_review');
+    const after = await org.run((tx) => org.svc.getBooking(tx, r1.bookingId ?? ''));
+    expect(after.stays[0]?.status.stay).toBe('in_house');
+    expect(after.issues.map((i) => i.code)).toContain('channel_modification_review');
+    // Redelivery is a duplicate, not another attempt.
+    expect(
+      (
+        await org.run((tx) =>
+          org.svc.ingestChannelBooking(tx, {
+            connectionId,
+            externalId: 'OTA-INH',
+            revision: 2,
+            payload: { ...p, status: 'cancelled' },
+          }),
+        )
+      ).outcome,
+    ).toBe('duplicate');
+  });
+
+  it('R-06: a past-dated channel booking is recorded with an urgent issue', async () => {
+    const org = await setupOrg(t);
+    const r = await org.run((tx) =>
+      org.svc.ingestChannelBooking(tx, {
+        connectionId: newId(),
+        externalId: 'OTA-PAST',
+        revision: 1,
+        payload: payload(org, {}, { arrival: '2026-12-05', departure: '2026-12-07' }),
+      }),
+    );
+    expect(['created', 'conflict']).toContain(r.outcome);
+    const issues = await org.run((tx) => org.svc.listIssues(tx, { propertyId: org.propertyId }));
+    expect(issues.find((i) => i.kind === 'channel_past_arrival')?.severity).toBe('urgent');
+  });
+
+  it('R-19: the same revision with different content raises an urgent issue', async () => {
+    const org = await setupOrg(t);
+    const connectionId = newId();
+    const a = await org.run((tx) =>
+      org.svc.ingestChannelBooking(tx, {
+        connectionId,
+        externalId: 'OTA-X',
+        revision: 1,
+        payload: payload(org),
+      }),
+    );
+    const b = await org.run((tx) =>
+      org.svc.ingestChannelBooking(tx, {
+        connectionId,
+        externalId: 'OTA-X',
+        revision: 1,
+        payload: payload(org, { specialRequests: ['wheelchair access'] }),
+      }),
+    );
+    expect(b.outcome).toBe('duplicate');
+    const booking = await org.run((tx) => org.svc.getBooking(tx, a.bookingId ?? ''));
+    expect(booking.issues.map((i) => i.code)).toContain('channel_revision_conflict');
   });
 });

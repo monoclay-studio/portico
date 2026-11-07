@@ -229,7 +229,7 @@ create table reservations.channel_revisions (
   revision       bigint not null,
   payload_hash   text not null,
   payload        jsonb not null,
-  outcome        text not null check (outcome in ('created', 'modified', 'cancelled', 'conflict', 'stale')),
+  outcome        text not null check (outcome in ('created', 'modified', 'cancelled', 'conflict', 'stale', 'needs_review')),
   applied        boolean not null,
   booking_id     uuid,
   diff           jsonb,

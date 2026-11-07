@@ -261,6 +261,26 @@ export interface RepricingResult {
 
 export interface RatesPort {
   quote(tx: TxContext, input: QuoteRequest): Promise<Offer[]>;
+  /**
+   * Agreed terms for prices received from a channel (RES-R33; rates README gap "termsFromChannelPrice"). Rates owns
+   * the tax engine: it decomposes tax-inclusive amounts and computes every tax and levy (incl. per-person Green Tax)
+   * for the received prices. `base` (Portico's own quote, when the plan is mapped) supplies the policies.
+   * Reservations never writes agreed terms with taxes dropped.
+   */
+  termsFromChannelPrices(
+    tx: TxContext,
+    input: {
+      propertyId: string;
+      unitTypeId: string;
+      ratePlanId: string;
+      occupancy: Occupancy;
+      currency: string;
+      nights: Array<{ date: LocalDate; amount: Money }>;
+      amountsIncludeTax: boolean;
+      base: TermsSnapshot | null;
+      channelRef: { connectionId: string; externalId: string; roomRef: string };
+    },
+  ): Promise<TermsSnapshot>;
   priceChange(
     tx: TxContext,
     input: { terms: TermsSnapshot; change: StayChangeRequest },

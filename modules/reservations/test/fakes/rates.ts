@@ -170,6 +170,44 @@ export class FakeRates implements RatesPort {
     return out;
   }
 
+  /** Channel prices → agreed terms with every tax recomputed (inclusive prices decomposed; levies per person). */
+  async termsFromChannelPrices(
+    _tx: TxContext,
+    input: Parameters<RatesPort['termsFromChannelPrices']>[1],
+  ): Promise<TermsSnapshot> {
+    const t = this.taxes.get(input.propertyId) ?? { taxBp: 0, levyPerPersonNight: 0, levyMinAge: 0 };
+    const persons =
+      input.occupancy.adults + input.occupancy.childrenAges.filter((a) => a >= t.levyMinAge).length;
+    const levy = t.levyPerPersonNight * persons;
+    const nights = input.nights.map((n) => {
+      if (!input.amountsIncludeTax) return { date: n.date, net: n.amount.amountMinor };
+      // gross = net + round(net × rate) + levy; the rounding residue stays on the net (RAT-R24).
+      const exact = (n.amount.amountMinor - levy) / (1 + t.taxBp / 10_000);
+      const tax = Math.round((exact * t.taxBp) / 10_000);
+      return { date: n.date, net: n.amount.amountMinor - levy - tax };
+    });
+    const plan =
+      (this.plans.get(input.propertyId) ?? []).find((p) => p.id === input.ratePlanId) ??
+      ({
+        id: input.ratePlanId,
+        name: 'Channel rate (not mapped)',
+        unitTypeIds: [input.unitTypeId],
+        base: {},
+        extraAdult: 0,
+        child: 0,
+        cancellation: { tiers: [], noShow: { kind: 'none' } },
+        deposit: [],
+        guarantee: ['prepaid_channel'],
+      } satisfies FakeRatePlan);
+    const terms = this.terms(input.propertyId, plan, input.unitTypeId, input.occupancy, nights);
+    return {
+      ...terms,
+      ...(input.base ? { policies: input.base.policies } : {}),
+      priceSource: 'channel',
+      channel: input.channelRef,
+    };
+  }
+
   async priceChange(
     _tx: TxContext,
     input: { terms: TermsSnapshot; change: StayChangeRequest },
