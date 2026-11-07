@@ -109,3 +109,62 @@ export function ageOn(birthDate: LocalDate, on: LocalDate): number {
   if (om < bm || (om === bm && od < bd)) age--;
   return age;
 }
+
+/** UTC offset (minutes) of a time zone at an instant, e.g. +300 for Indian/Maldives. */
+export function timeZoneOffsetMinutes(instant: Date, timeZone: string): number {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      hourCycle: 'h23',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    })
+      .formatToParts(instant)
+      .map((p) => [p.type, p.value]),
+  );
+  const asUtc = Date.UTC(
+    Number(parts.year),
+    Number(parts.month) - 1,
+    Number(parts.day),
+    Number(parts.hour),
+    Number(parts.minute),
+    Number(parts.second),
+  );
+  return Math.round((asUtc - Math.floor(instant.getTime() / 1000) * 1000) / 60000);
+}
+
+/**
+ * The instant at which it is `localTime` ('HH:MM') on `date` in `timeZone` — e.g. a cancellation deadline of
+ * 14:00 property time. During a DST gap the next valid instant is returned; during an overlap the earlier one.
+ */
+export function zonedTimeToInstant(date: LocalDate, localTime: string, timeZone: string): Date {
+  assertLocalDate(date);
+  const m = /^(\d{2}):(\d{2})$/.exec(localTime);
+  if (!m) throw new ValidationError('invalid_time', `Time must be HH:MM (got "${localTime}").`);
+  const naiveUtc = Date.parse(`${date}T${m[1]}:${m[2]}:00Z`);
+  let guess = naiveUtc - timeZoneOffsetMinutes(new Date(naiveUtc), timeZone) * 60000;
+  guess = naiveUtc - timeZoneOffsetMinutes(new Date(guess), timeZone) * 60000;
+  return new Date(guess);
+}
+
+/** Local calendar date and 'HH:MM' time of an instant in a time zone. */
+export function instantToZoned(instant: Date, timeZone: string): { date: LocalDate; time: string } {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat('en-CA', {
+      timeZone,
+      hourCycle: 'h23',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    })
+      .formatToParts(instant)
+      .map((p) => [p.type, p.value]),
+  );
+  return { date: `${parts.year}-${parts.month}-${parts.day}`, time: `${parts.hour}:${parts.minute}` };
+}

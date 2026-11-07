@@ -59,3 +59,29 @@ describe('dates', () => {
     expect(a < b).toBe(true);
   });
 });
+
+describe('time zones', async () => {
+  const { zonedTimeToInstant, instantToZoned, timeZoneOffsetMinutes } = await import('./dates');
+  it('converts property-local times (Maldives, no DST)', () => {
+    expect(timeZoneOffsetMinutes(new Date('2026-11-07T00:00:00Z'), 'Indian/Maldives')).toBe(300);
+    expect(zonedTimeToInstant('2026-12-24', '14:00', 'Indian/Maldives').toISOString()).toBe(
+      '2026-12-24T09:00:00.000Z',
+    );
+    expect(instantToZoned(new Date('2026-12-24T20:30:00Z'), 'Indian/Maldives')).toEqual({
+      date: '2026-12-25',
+      time: '01:30',
+    });
+  });
+  it('handles DST transitions (Europe/London)', () => {
+    expect(zonedTimeToInstant('2026-07-01', '12:00', 'Europe/London').toISOString()).toBe(
+      '2026-07-01T11:00:00.000Z',
+    );
+    expect(zonedTimeToInstant('2026-01-15', '12:00', 'Europe/London').toISOString()).toBe(
+      '2026-01-15T12:00:00.000Z',
+    );
+    // 01:30 does not exist on 2026-03-29 in London (clocks jump 01:00 → 02:00): next valid instant
+    expect(
+      instantToZoned(zonedTimeToInstant('2026-03-29', '01:30', 'Europe/London'), 'Europe/London').time,
+    ).toMatch(/^0[12]:30$/);
+  });
+});

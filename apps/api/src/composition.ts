@@ -10,23 +10,36 @@ import {
   type SearchProvider,
   type TxEventSubscription,
 } from '@portico/db';
+import {
+  createGuestsDemoSeed,
+  createGuestsService,
+  type GuestsService,
+  guestsHttp,
+  guestsJobs,
+  guestsManifest,
+  guestsSearchProvider,
+} from '@portico/guests';
 import type { Authenticator, HttpModule } from '@portico/http';
 import { type IdentityPorts, identityAuthenticator, identityHttp, identityManifest } from '@portico/identity';
-import { DomainError, type ModuleManifest, randomToken, systemAuthorizer } from '@portico/kernel';
+import { DomainError, fieldCryptoFromEnv, type ModuleManifest, randomToken, systemAuthorizer } from '@portico/kernel';
 import {
   createPaymentsModule,
   envProviderSecrets,
   type LedgerPort,
+  type PaymentsService,
   type PlatformPort as PaymentsPlatformPort,
   paymentsManifest,
   paymentsSearch,
+  seedPaymentsDemo,
 } from '@portico/payments';
 import { platform, platformHttp, platformManifest, platformSearch } from '@portico/platform';
 import { recordsHttp } from './records-routes';
+import type { DemoSeedStep } from './seed/demo';
 
 export const MANIFESTS: readonly ModuleManifest[] = [
   platformManifest,
   identityManifest,
+  guestsManifest,
   // wave-1 modules register here
   paymentsManifest,
 ];
@@ -54,6 +67,10 @@ export interface Composition {
   searchProviders: SearchProvider[];
   /** Periodic background jobs run by apps/worker (each module contributes its own). */
   jobs: ScheduledJob[];
+  /** Provider services other modules' ports bind to (domain map). */
+  services: { guests: GuestsService; payments: PaymentsService };
+  /** Demo data contributed by each module, run in order inside each demo organization (apps/api/src/seed). */
+  demoSeedSteps: DemoSeedStep[];
 }
 
 export function compose(database: PorticoDatabase): Composition {
@@ -64,11 +81,35 @@ export function compose(database: PorticoDatabase): Composition {
   const identityPorts: IdentityPorts = { propertyIdsInScope: platform.propertyIdsInScope };
   const identityModule = identityHttp({ database });
 
-  // ── payments ── (finance LedgerPort: bound by the orchestrator when finance merges)
+  // ── guests ── (other wave-1 providers — referenceCounters, personalDataContributors, communications — are
+  // bound by the orchestrator when reservations / finance / comms merge; until then the ports are empty.)
+  const asSystem = <T extends { authz: unknown }>(tx: T): T => ({ ...tx, authz: systemAuthorizer });
+  const guestsService = createGuestsService({
+    platform: {
+      assertWritable: (tx, propertyId, domain) => platform.assertWritable(tx, propertyId, domain),
+      hasEntitlement: (tx, feature) => platform.hasEntitlement(tx, feature),
+      resolvePolicy: (tx, propertyId, key, def) => platform.resolvePolicy(tx, propertyId, key, def),
+      listPropertyIds: async (tx) => (await platform.listProperties(asSystem(tx))).map((p) => p.id),
+      getPropertyCountry: async (tx, id) => (await platform.getProperty(asSystem(tx), id)).countryCode,
+      getPropertyLegalEntityId: async (tx, id) =>
+        (await platform.getProperty(asSystem(tx), id)).legalEntityId,
+      legalEntityExists: (tx, id) =>
+        platform.getLegalEntity(tx, id).then(
+          () => true,
+          () => false,
+        ),
+      getBusinessDate: (tx, id) => platform.getBusinessDate(tx, id),
+    },
+    // Field encryption + blind index from the shared kernel helper (KMS in production; refuses dev keys there).
+    crypto: fieldCryptoFromEnv(),
+  });
+  const guestsModule = guestsHttp({ database, service: guestsService });
+
+  // ── payments ── (finance LedgerPort: bind `financeLedgerForPayments(finance)` when finance merges)
   const paymentsPlatform: PaymentsPlatformPort = {
     // Payments has already checked its own permission; it needs the merchant (legal entity) and time zone.
     async getProperty(tx, propertyId) {
-      const p = await platform.getProperty({ ...tx, authz: systemAuthorizer }, propertyId);
+      const p = await platform.getProperty(asSystem(tx), propertyId);
       return { id: p.id, legalEntityId: p.legalEntityId, timezone: p.timezone, baseCurrency: p.baseCurrency };
     },
     async getLegalEntity(tx, id) {
@@ -89,15 +130,17 @@ export function compose(database: PorticoDatabase): Composition {
   });
 
   // ── cross-module experience: global search, summaries, record history ──
-  const searchProviders: SearchProvider[] = [platformSearch, paymentsSearch];
+  const searchProviders: SearchProvider[] = [platformSearch, guestsSearchProvider(guestsService), paymentsSearch];
   const recordsModule = recordsHttp({ database, manifests: MANIFESTS, searchProviders });
 
   return {
     authenticator: identityAuthenticator(database, identityPorts),
-    httpModules: [platformModule, identityModule, payments.http, recordsModule],
+    httpModules: [platformModule, identityModule, guestsModule, payments.http, recordsModule],
     subscriptions: [...payments.subscriptions],
     searchProviders,
-    jobs: [...CORE_JOBS, ...payments.jobs],
+    jobs: [...CORE_JOBS, ...guestsJobs(guestsService), ...payments.jobs],
+    services: { guests: guestsService, payments: payments.service },
+    demoSeedSteps: [createGuestsDemoSeed(guestsService), { name: 'payments', run: seedPaymentsDemo }],
   };
 }
 
