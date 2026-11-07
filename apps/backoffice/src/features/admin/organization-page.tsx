@@ -1,13 +1,14 @@
-import { DataText, EmptyState, ProvenanceBadge, StatusBadge } from '@portico/ui';
+import { DataText, EmptyState, ProvenanceBadge } from '@portico/ui';
 import { useTranslation } from 'react-i18next';
 import { useApp } from '../../app/app-context';
-import { DOMAIN_BINDINGS } from '../../data/sources';
+import { type BindingMode, bindWorkspaceSources, DOMAINS } from '../../data/sources';
 import { Facts, PageHeader, Panel } from '../common/page-header';
 
 /** GET /v1/organization — plus an honest list of what in this build is live vs simulated. */
 export function OrganizationPage() {
   const { t } = useTranslation();
-  const { organization, properties } = useApp();
+  const { organization, properties, session } = useApp();
+  const bound = bindWorkspaceSources(session.organization.environment);
   if (!organization) return <EmptyState title={t('admin.noAccess')} />;
   return (
     <div className="flex flex-col gap-4">
@@ -46,32 +47,24 @@ export function OrganizationPage() {
                 {t('admin.capability')}
               </th>
               <th scope="col" className="py-2 text-start font-medium">
-                {t('admin.module')}
-              </th>
-              <th scope="col" className="py-2 text-start font-medium">
                 {t('provenanceNote.source')}
               </th>
             </tr>
           </thead>
           <tbody>
             {[
-              { domain: t('admin.bindingSignIn'), module: 'identity', mode: 'live' as const },
-              { domain: t('admin.bindingSettings'), module: 'platform + identity', mode: 'live' as const },
-              {
-                domain: t('admin.bindingSearch'),
-                module: 'records (platform provider)',
-                mode: 'live' as const,
-              },
-              ...DOMAIN_BINDINGS,
+              { id: 'signIn', label: t('admin.bindingSignIn'), mode: 'live' as BindingMode },
+              { id: 'settings', label: t('admin.bindingSettings'), mode: 'live' as BindingMode },
+              { id: 'search', label: t('admin.bindingSearch'), mode: 'live' as BindingMode },
+              ...DOMAINS.map((d) => ({ id: d, label: t(`admin.domains.${d}`), mode: bound.modes[d] })),
             ].map((b) => (
-              <tr key={b.domain} className="border-b border-line last:border-b-0">
-                <td className="py-2">{b.domain}</td>
-                <td className="py-2 pt-code text-ink-muted">{b.module}</td>
+              <tr key={b.id} className="border-b border-line last:border-b-0">
+                <td className="py-2">{b.label}</td>
                 <td className="py-2">
-                  {b.mode === 'live' ? (
-                    <ProvenanceBadge provenance="live" />
+                  {b.mode === 'not_connected' ? (
+                    <span className="text-ink-muted">{t('admin.notConnected')}</span>
                   ) : (
-                    <ProvenanceBadge provenance="simulated" />
+                    <ProvenanceBadge provenance={b.mode} compact />
                   )}
                 </td>
               </tr>

@@ -1,4 +1,5 @@
 import {
+  BedDouble,
   Building2,
   CalendarRange,
   ConciergeBell,
@@ -7,6 +8,7 @@ import {
   Inbox,
   Landmark,
   LayoutDashboard,
+  LogOut,
   type LucideIcon,
   Settings,
   Sparkles,
@@ -20,6 +22,8 @@ export const NAV_ICONS: Record<AppPath, LucideIcon> = {
   '/my-work': Inbox,
   '/learn': GraduationCap,
   '/front-desk/arrivals': ConciergeBell,
+  '/front-desk/in-house': BedDouble,
+  '/front-desk/departures': LogOut,
   '/housekeeping': Sparkles,
   '/reservations/timeline': CalendarRange,
   '/settings/organization': Building2,

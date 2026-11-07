@@ -7,7 +7,12 @@ import { useSyncExternalStore } from 'react';
 const PERSONAL_TYPES = new Set(['stay', 'guest', 'booking', 'user', 'company']);
 
 /** A title safe to keep in browser storage: the reference code for personal records, never a person's name. */
-export function safeRecordTitle(r: { type: string; title: string; code?: string | undefined; typeLabel: string }): string {
+export function safeRecordTitle(r: {
+  type: string;
+  title: string;
+  code?: string | undefined;
+  typeLabel: string;
+}): string {
   if (!PERSONAL_TYPES.has(r.type)) return r.title;
   return r.code ? `${r.typeLabel} ${r.code}` : r.typeLabel;
 }

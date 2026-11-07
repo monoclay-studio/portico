@@ -1,8 +1,8 @@
 import { EntityLink, ProvenanceBadge } from '@portico/ui';
-import { scopeKey } from '../api/queries';
 import { useQueryClient } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
+import { scopeKey } from '../api/queries';
 import { useApp } from '../app/app-context';
 import { definitionFor } from './registry';
 import { useRecordNav } from './use-record-nav';

@@ -16,7 +16,10 @@
   },
   "dependencies": {
     "@portico/identity": "workspace:*",
+    "@portico/operations": "workspace:*",
+    "@portico/payments": "workspace:*",
     "@portico/platform": "workspace:*",
+    "@portico/reservations": "workspace:*",
     "@portico/ui": "workspace:*",
     "@tanstack/react-query": "5.104.5",
     "@tanstack/react-router": "1.170.46",

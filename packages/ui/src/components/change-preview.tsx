@@ -46,6 +46,11 @@ export interface ChangePreviewProps {
   /** Formatted time the preview stays valid until. */
   validUntil?: string | undefined;
   stale?: boolean;
+  /**
+   * Why this change cannot be made as previewed (infeasible preview). Confirm is disabled while any blocker is
+   * shown (ux round 1, C6.2); the blockers say what to do instead.
+   */
+  blockers?: readonly ReactNode[];
   onRefresh?: () => void;
   onConfirm: () => void;
   onBack: () => void;
@@ -75,6 +80,7 @@ export function ChangePreview({
   provenance,
   validUntil,
   stale,
+  blockers = [],
   onRefresh,
   onConfirm,
   onBack,
@@ -195,13 +201,35 @@ export function ChangePreview({
         validUntil && <p className="text-xs text-ink-muted">{fmt(s.expires, { time: validUntil })}</p>
       )}
 
+      {blockers.length > 0 && (
+        <div
+          role="alert"
+          data-preview-blocked
+          className="flex items-start gap-2 rounded-md border border-danger-line border-s-4 border-s-danger-solid bg-danger-bg p-3 text-sm"
+        >
+          <CircleAlert aria-hidden className="mt-0.5 size-4 shrink-0 text-danger-fg" />
+          <div className="flex flex-col gap-1">
+            <p className="font-semibold">{s.blocked}</p>
+            {blockers.map((b, i) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: blockers are positional messages
+              <p key={i}>{b}</p>
+            ))}
+          </div>
+        </div>
+      )}
+
       {problem}
 
       <div className="flex flex-wrap justify-end gap-2">
         <Button variant="ghost" onClick={onBack} disabled={confirming}>
           {s.back}
         </Button>
-        <Button variant="primary" onClick={onConfirm} loading={confirming} disabled={stale}>
+        <Button
+          variant="primary"
+          onClick={onConfirm}
+          loading={confirming}
+          disabled={stale || blockers.length > 0}
+        >
           {confirmLabel ?? s.confirm}
         </Button>
       </div>

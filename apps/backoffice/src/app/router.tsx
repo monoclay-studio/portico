@@ -15,7 +15,7 @@ import { PropertiesPage } from '../features/admin/properties-page';
 import { PropertyDetailPage } from '../features/admin/property-detail-page';
 import { UsersPage } from '../features/admin/users-page';
 import { SignInPage } from '../features/auth/sign-in-page';
-import { ArrivalsPage } from '../features/front-desk/arrivals-page';
+import { DeskPage } from '../features/front-desk/desk-page';
 import { HomeRedirect } from '../features/home';
 import { HousekeepingPage } from '../features/housekeeping/housekeeping-page';
 import { LearnPage } from '../features/learn/learn-page';
@@ -71,7 +71,17 @@ const learnRoute = createRoute({ getParentRoute: () => appRoute, path: '/learn',
 const arrivalsRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/front-desk/arrivals',
-  component: ArrivalsPage,
+  component: () => <DeskPage kind="arrivals" />,
+});
+const inHouseRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/front-desk/in-house',
+  component: () => <DeskPage kind="in-house" />,
+});
+const departuresRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/front-desk/departures',
+  component: () => <DeskPage kind="departures" />,
 });
 const housekeepingRoute = createRoute({
   getParentRoute: () => appRoute,
@@ -120,6 +130,8 @@ const routeTree = rootRoute.addChildren([
     myWorkRoute,
     learnRoute,
     arrivalsRoute,
+    inHouseRoute,
+    departuresRoute,
     housekeepingRoute,
     timelineRoute,
     organizationRoute,

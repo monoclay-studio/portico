@@ -14,12 +14,11 @@ import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { problemFromUnknown } from '../../api/errors';
 import { useApp } from '../../app/app-context';
-import { workspaceSource } from '../../data/sources';
+import { useWorkspace } from '../../data/use-workspace';
 import { learning } from '../../learning/progress';
 import { useRecordNav } from '../../records/use-record-nav';
 import { PageHeader } from '../common/page-header';
-import { toSimProperty } from '../common/sim-property';
-import { SimulatedNote } from '../common/simulated-note';
+import { NotConnected, SourceNote } from '../common/source-note';
 
 function Swatch({ className, label }: { className: string; label: string }) {
   return (
@@ -40,11 +39,15 @@ export function TimelinePage() {
   const [from, setFrom] = useState<string | null>(search.from ?? null);
   const start = from ?? (property ? addDays(property.businessDate, -2) : '2026-01-01');
   const days = 21;
+  const ws = useWorkspace();
+  const source = ws.source('timeline');
   const query = useQuery({
-    queryKey: ['sim', property?.id, property?.businessDate, 'timeline', start, days],
+    queryKey: ws.key('timeline', start, days),
     queryFn: () =>
-      workspaceSource.timeline(toSimProperty(property as NonNullable<typeof property>), start, days),
-    enabled: Boolean(property),
+      source && ws.property
+        ? source.timeline(ws.property, start, days)
+        : Promise.reject(new Error('unbound')),
+    enabled: Boolean(source && ws.property),
     placeholderData: (prev) => prev,
   });
   const view = query.data?.data;
@@ -82,12 +85,19 @@ export function TimelinePage() {
         subtitle={t('timeline.subtitle', { units: units.length })}
         meta={
           query.data && (
-            <ProvenanceBadge provenance={query.data.provenance} lastSyncedAt={query.data.generatedAt} />
+            <ProvenanceBadge
+              provenance={query.data.provenance.kind}
+              {...(query.data.provenance.generatedAt
+                ? { generatedAt: query.data.provenance.generatedAt }
+                : {})}
+              timeZone={property?.timezone ?? 'UTC'}
+            />
           )
         }
         helpKey="reservations.timeline"
       />
-      <SimulatedNote module="reservations + inventory" />
+      <SourceNote provenance={query.data?.provenance} timeZone={property?.timezone ?? 'UTC'} />
+      {!source && <NotConnected what={t('timeline.title')} />}
       <ul className="mb-3 flex flex-wrap gap-4" aria-label={t('timeline.legend')}>
         <Swatch
           className="border border-s-4 border-[var(--pt-bar-expected-line)] bg-[var(--pt-bar-expected)]"

@@ -32,14 +32,14 @@ export const SHORTCUTS: readonly ShortcutDef[] = [
   { id: 'back', combo: 'escape', display: ['Esc'], labelKey: 'shortcuts.closeDialog', group: 'record' },
   {
     id: 'switchProperty',
-    combo: 'g p',
-    display: ['G', 'P'],
+    combo: 'g s',
+    display: ['G', 'S'],
     labelKey: 'shortcuts.switchProperty',
     group: 'goTo',
   },
   ...WORKSPACES.flatMap((w) =>
     w.items
-      .filter((i) => i.goKey && i.goKey !== 'p')
+      .filter((i) => i.goKey && i.goKey !== 's')
       .map((i) => ({
         id: `go:${i.to}`,
         combo: `g ${i.goKey}`,
@@ -55,4 +55,8 @@ export const SHORTCUTS: readonly ShortcutDef[] = [
     labelKey: 'shortcuts.tableNav',
     group: 'lists',
   },
+  // Handled by the shared DataTable (not global hotkeys), listed so the ? sheet shows them.
+  { id: 'listMove', combo: '', display: ['J', 'K'], labelKey: 'shortcuts.listMove', group: 'lists' },
+  { id: 'listSelect', combo: '', display: ['X'], labelKey: 'shortcuts.listSelect', group: 'lists' },
+  { id: 'listPrimary', combo: '', display: ['E'], labelKey: 'shortcuts.listPrimary', group: 'lists' },
 ];

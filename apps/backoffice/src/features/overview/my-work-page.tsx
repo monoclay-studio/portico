@@ -13,13 +13,12 @@ import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { problemFromUnknown } from '../../api/errors';
 import { useApp } from '../../app/app-context';
-import { workspaceSource } from '../../data/sources';
-import type { SimWorkItem } from '../../mocks/adapter';
+import { useWorkspace } from '../../data/use-workspace';
+import type { WorkItem } from '../../data/views';
 import { RecordLink } from '../../records/entity-link';
 import { useRecordNav } from '../../records/use-record-nav';
 import { PageHeader } from '../common/page-header';
-import { toSimProperty } from '../common/sim-property';
-import { SimulatedNote } from '../common/simulated-note';
+import { NotConnected, SourceNote } from '../common/source-note';
 import { builtInView, useSavedViews } from '../common/use-saved-views';
 
 const RANK = { urgent: 0, high: 1, normal: 2, low: 3 } as const;
@@ -32,10 +31,13 @@ export function MyWorkPage() {
   const { t, i18n } = useTranslation();
   const { property, me } = useApp();
   const nav = useRecordNav();
+  const ws = useWorkspace();
+  const source = ws.source('work');
   const query = useQuery({
-    queryKey: ['sim', property?.id, property?.businessDate, 'my-work'],
-    queryFn: () => workspaceSource.myWork(toSimProperty(property as NonNullable<typeof property>)),
-    enabled: Boolean(property),
+    queryKey: ws.key('work', 'my-work'),
+    queryFn: () =>
+      source && ws.property ? source.myWork(ws.property) : Promise.reject(new Error('unbound')),
+    enabled: Boolean(source && ws.property),
   });
   const tz = property?.timezone ?? 'UTC';
   const builtIn = useMemo<SavedView[]>(
@@ -62,7 +64,7 @@ export function MyWorkPage() {
     [t],
   );
   const saved = useSavedViews('my-work', me.userId, builtIn);
-  const columns = useMemo<ColumnDef<SimWorkItem>[]>(
+  const columns = useMemo<ColumnDef<WorkItem>[]>(
     () => [
       {
         id: 'priority',
@@ -123,13 +125,13 @@ export function MyWorkPage() {
           ),
       },
       {
-        id: 'module',
-        header: t('myWork.module'),
-        accessor: (w) => w.module,
-        width: '8rem',
+        id: 'area',
+        header: t('myWork.department'),
+        accessor: (w) => t(`myWork.areas.${w.area}`),
+        width: '9rem',
         filter: 'select',
+        priority: 3,
       },
-      { id: 'department', header: t('myWork.department'), accessor: (w) => w.department, width: '9rem' },
       { id: 'assignee', header: t('myWork.assignee'), accessor: (w) => w.assignee ?? '', width: '10rem' },
       {
         id: 'due',
@@ -151,12 +153,19 @@ export function MyWorkPage() {
         subtitle={t('myWork.subtitle')}
         meta={
           query.data && (
-            <ProvenanceBadge provenance={query.data.provenance} lastSyncedAt={query.data.generatedAt} />
+            <ProvenanceBadge
+              provenance={query.data.provenance.kind}
+              {...(query.data.provenance.generatedAt
+                ? { generatedAt: query.data.provenance.generatedAt }
+                : {})}
+              timeZone={tz}
+            />
           )
         }
         helpKey="overview.myWork"
       />
-      <SimulatedNote module="operations + integration" />
+      <SourceNote provenance={query.data?.provenance} timeZone={tz} />
+      {!source && <NotConnected what={t('myWork.title')} />}
       {query.isPending && <SkeletonList rows={6} />}
       {query.isError && (
         <ProblemAlert

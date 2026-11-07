@@ -18,8 +18,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '../../api';
 import { scopeKey } from '../../api/queries';
-import { workspaceSource } from '../../data/sources';
-import { toSimProperty } from '../../features/common/sim-property';
+import { useWorkspace } from '../../data/use-workspace';
 import { LOCALES, setLocale } from '../../i18n';
 import { learning } from '../../learning/progress';
 import { definitionFor } from '../../records/registry';
@@ -61,7 +60,7 @@ export function GlobalPalette({
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
   const app = useApp();
-  const { workspaces, properties, setPropertyId, property, me } = app;
+  const { workspaces, properties, setPropertyId, me } = app;
   const nav = useRecordNav();
   const theme = useTheme();
   const [query, setQuery] = useState('');
@@ -83,10 +82,24 @@ export function GlobalPalette({
     staleTime: 10_000,
     retry: false,
   });
+  // Stays the desk works with today (arrivals and in house) until reservations is in /v1/search.
+  const ws = useWorkspace();
+  const frontDesk = ws.source('frontDesk');
   const sim = useQuery({
-    queryKey: ['sim', property?.id, property?.businessDate, 'arrivals'],
-    queryFn: () => workspaceSource.arrivals(toSimProperty(property as NonNullable<typeof property>)),
-    enabled: open && Boolean(property),
+    queryKey: ws.key('frontDesk', 'palette'),
+    queryFn: async () => {
+      if (!frontDesk || !ws.property) return null;
+      const [a, i] = await Promise.all([
+        frontDesk.list(ws.property, 'arrivals'),
+        frontDesk.list(ws.property, 'in-house'),
+      ]);
+      const seen = new Set<string>();
+      const items = [...a.data.items, ...i.data.items].filter(
+        (r) => !seen.has(r.stayId) && seen.add(r.stayId),
+      );
+      return { items, provenance: a.provenance };
+    },
+    enabled: open && Boolean(frontDesk && ws.property),
   });
 
   const openRecord = (type: string, id: string) => {
@@ -129,14 +142,20 @@ export function GlobalPalette({
       });
     }
     if (q) {
-      for (const a of sim.data?.data ?? []) {
+      for (const a of sim.data?.items ?? []) {
         list.push({
           id: `stay:${a.stayId}`,
-          group: t('commands.recent'),
-          label: `${a.guestName} — ${a.bookingCode}`,
-          description: `${t('records.types.stay')} · ${a.unitName ?? a.unitTypeName}`,
-          keywords: [a.bookingCode, a.unitName ?? '', a.unitTypeName],
-          badge: <ProvenanceBadge provenance="simulated" compact />,
+          group: t('records.types.stay'),
+          label: `${a.guestName ?? ''} — ${a.bookingCode}`,
+          description: `${t(`ui.status.stay.${a.stayStatus}`)} · ${a.unitName ?? t('arrivals.unassigned')}`,
+          keywords: [a.bookingCode, a.unitName ?? ''],
+          badge: (
+            <ProvenanceBadge
+              provenance={sim.data?.provenance.kind ?? 'simulated'}
+              compact
+              interactive={false}
+            />
+          ),
           icon: <UserRound />,
           onSelect: () => openRecord('stay', a.stayId),
         });

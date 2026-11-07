@@ -24,7 +24,10 @@ test.describe('back office smoke (real API on :4100)', () => {
     await expect(page.getByRole('heading', { name: 'Today' })).toBeVisible();
   });
 
-  test('P0-1: after a session ends on a shared tab, the next person sees none of the previous data', async ({ page, request }) => {
+  test('P0-1: after a session ends on a shared tab, the next person sees none of the previous data', async ({
+    page,
+    request,
+  }) => {
     // The director signs in and opens the staff list.
     await page.goto('/sign-in');
     await page.getByLabel('Work email').fill(DIRECTOR);
@@ -35,12 +38,18 @@ test.describe('back office smoke (real API on :4100)', () => {
     await page.goto('/settings/users');
     await expect(page.getByRole('grid', { name: 'Users & roles' })).toContainText('Front Desk Agent');
     // The server ends that session (idle timeout / revoked).
-    const token = await page.evaluate(() => JSON.parse(sessionStorage.getItem('portico.session.v1') ?? '{}').token as string);
+    const token = await page.evaluate(
+      () => JSON.parse(sessionStorage.getItem('portico.session.v1') ?? '{}').token as string,
+    );
     const revoked = await request.post('/v1/auth/logout', { headers: { authorization: `Bearer ${token}` } });
     expect(revoked.status()).toBe(204);
     // The next request gets a 401; the tab goes to sign-in and remembers where it was.
     await page.getByRole('tab', { name: /Roles/ }).click();
-    await page.getByRole('button', { name: 'Refresh' }).first().click().catch(() => {});
+    await page
+      .getByRole('button', { name: 'Refresh' })
+      .first()
+      .click()
+      .catch(() => {});
     await page.goto('/settings/users');
     await expect(page).toHaveURL(/\/sign-in/);
     // A front-desk agent signs in on the same tab.

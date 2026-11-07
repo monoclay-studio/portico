@@ -18,14 +18,62 @@ import { useTranslation } from 'react-i18next';
 import { problemFromUnknown } from '../../api/errors';
 import { useApp } from '../../app/app-context';
 import { PHONE_QUERY, useMediaQuery } from '../../app/use-media-query';
-import { workspaceSource } from '../../data/sources';
+import type { BoardRow } from '../../data/contracts';
+import { useWorkspace } from '../../data/use-workspace';
 import { learning } from '../../learning/progress';
-import type { HousekeepingRow } from '../../mocks/contracts';
 import { useRecordNav } from '../../records/use-record-nav';
 import { PageHeader } from '../common/page-header';
-import { toSimProperty } from '../common/sim-property';
-import { SimulatedNote } from '../common/simulated-note';
+import { NotConnected, SourceNote } from '../common/source-note';
 import { builtInView, useSavedViews } from '../common/use-saved-views';
+
+/** One board row as this screen shows it (operations `boardRow`, flattened). */
+interface HousekeepingRow {
+  unitId: string;
+  unitNumber: string;
+  unitTypeName: string;
+  sectionName: string;
+  condition: string;
+  occupancy: string;
+  discrepancy: string;
+  dnd: boolean;
+  block: { kind: string; reason: string } | null;
+  arrival: { stayId: string; eta: string | null; vip: boolean; guestLabel: string } | null;
+  departureToday: boolean;
+  topPriority: 'low' | 'normal' | 'high' | 'urgent' | null;
+  priorityReasons: string[];
+  assigneeName: string | null;
+  expectedReadyAt: string | null;
+  ready: boolean;
+}
+
+function toRow(r: BoardRow): HousekeepingRow {
+  const u = r.unit;
+  return {
+    unitId: u.unitId,
+    unitNumber: u.unitNumber,
+    unitTypeName: u.unitTypeCode ?? '',
+    sectionName: u.sectionName ?? '',
+    condition: u.condition,
+    occupancy: u.occupancy,
+    discrepancy: u.discrepancy,
+    dnd: u.dnd,
+    block: u.block ? { kind: u.block.kind, reason: u.block.reason ?? '' } : null,
+    arrival: r.arrival
+      ? {
+          stayId: r.arrival.stayId,
+          eta: r.arrival.eta,
+          vip: r.arrival.vip,
+          guestLabel: r.arrival.guestLabel ?? '',
+        }
+      : null,
+    departureToday: Boolean(r.departureToday),
+    topPriority: r.topPriority,
+    priorityReasons: r.priorityReasons,
+    assigneeName: r.openTasks[0]?.assigneeName ?? null,
+    expectedReadyAt: u.readiness.expectedReadyAt,
+    ready: u.readiness.ready,
+  };
+}
 
 const PRIORITY_RANK = { urgent: 0, high: 1, normal: 2, low: 3 } as const;
 
@@ -36,12 +84,14 @@ export function HousekeepingPage() {
   const { property, me } = useApp();
   const phone = useMediaQuery(PHONE_QUERY);
   const nav = useRecordNav();
+  const ws = useWorkspace();
+  const source = ws.source('housekeeping');
   const query = useQuery({
-    queryKey: ['sim', property?.id, property?.businessDate, 'housekeeping'],
-    queryFn: () => workspaceSource.housekeeping(toSimProperty(property as NonNullable<typeof property>)),
-    enabled: Boolean(property),
+    queryKey: ws.key('housekeeping', 'board'),
+    queryFn: () => (source && ws.property ? source.board(ws.property) : Promise.reject(new Error('unbound'))),
+    enabled: Boolean(source && ws.property),
   });
-  const rows = query.data?.data ?? [];
+  const rows = useMemo(() => (query.data?.data.rows ?? []).map(toRow), [query.data]);
   const tz = property?.timezone ?? 'UTC';
   const lng = i18n.resolvedLanguage;
 
@@ -95,6 +145,7 @@ export function HousekeepingPage() {
       },
       {
         id: 'section',
+        priority: 5,
         header: t('housekeeping.section'),
         accessor: (r) => r.sectionName,
         width: '8rem',
@@ -111,6 +162,7 @@ export function HousekeepingPage() {
       },
       {
         id: 'occupancy',
+        priority: 2,
         header: t('housekeeping.occupancy'),
         accessor: (r) => r.occupancy,
         width: '11rem',
@@ -166,6 +218,7 @@ export function HousekeepingPage() {
       },
       {
         id: 'attendant',
+        priority: 3,
         header: t('housekeeping.attendant'),
         accessor: (r) => r.assigneeName ?? '',
         width: '8rem',
@@ -175,6 +228,7 @@ export function HousekeepingPage() {
       },
       {
         id: 'ready',
+        priority: 4,
         header: t('housekeeping.readyEstimate'),
         accessor: (r) => r.expectedReadyAt ?? '',
         width: '9rem',
@@ -201,7 +255,7 @@ export function HousekeepingPage() {
   const counts = STATUS_VALUES.condition.map(
     (c) => [c, rows.filter((r) => r.condition === c).length] as const,
   );
-  const notReadyArrivals = rows.filter((r) => r.arrival && r.condition !== 'inspected').length;
+  const notReadyArrivals = rows.filter((r) => r.arrival && !r.ready).length;
 
   return (
     <div>
@@ -210,12 +264,19 @@ export function HousekeepingPage() {
         subtitle={t('housekeeping.subtitle', { units: rows.length, arrivals: notReadyArrivals })}
         meta={
           query.data && (
-            <ProvenanceBadge provenance={query.data.provenance} lastSyncedAt={query.data.generatedAt} />
+            <ProvenanceBadge
+              provenance={query.data.provenance.kind}
+              {...(query.data.provenance.generatedAt
+                ? { generatedAt: query.data.provenance.generatedAt }
+                : {})}
+              timeZone={tz}
+            />
           )
         }
         helpKey="housekeeping.board"
       />
-      <SimulatedNote module="operations" />
+      <SourceNote provenance={query.data?.provenance} timeZone={tz} />
+      {!source && <NotConnected what={t('housekeeping.title')} />}
       {query.isPending && <SkeletonList rows={8} />}
       {query.isError && (
         <ProblemAlert

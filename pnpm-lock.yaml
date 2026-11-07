@@ -159,9 +159,18 @@ importers:
       '@portico/identity':
         specifier: workspace:*
         version: link:../../modules/identity
+      '@portico/operations':
+        specifier: workspace:*
+        version: link:../../modules/operations
+      '@portico/payments':
+        specifier: workspace:*
+        version: link:../../modules/payments
       '@portico/platform':
         specifier: workspace:*
         version: link:../../modules/platform
+      '@portico/reservations':
+        specifier: workspace:*
+        version: link:../../modules/reservations
       '@portico/ui':
         specifier: workspace:*
         version: link:../../packages/ui

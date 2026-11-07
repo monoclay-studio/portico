@@ -4,7 +4,6 @@ import {
   Field,
   formatTime,
   ProblemAlert,
-  type ProblemDetails,
   ProvenanceBadge,
   Select,
   SkeletonList,
@@ -15,28 +14,12 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { Property } from '../../api';
 import { problemFromUnknown } from '../../api/errors';
-import { workspaceSource } from '../../data/sources';
-import { SimulatedProblem } from '../../mocks/adapter';
-import { toSimProperty } from '../common/sim-property';
-
-function toProblem(e: unknown): ProblemDetails {
-  if (e instanceof SimulatedProblem) {
-    return {
-      type: `about:blank#simulated-${e.code}`,
-      title: e.status === 409 ? 'Conflict' : 'Cannot complete this action',
-      status: e.status,
-      code: e.code,
-      detail: e.message,
-      retryable: false,
-      correlationId: `sim-${Date.now().toString(36)}`,
-    };
-  }
-  return problemFromUnknown(e, 'extend-stay');
-}
+import { IntentKeys } from '../../api/intent';
+import { useWorkspace } from '../../data/use-workspace';
 
 /**
  * Extend a stay: change preview (availability, price, taxes, deposits, balance) → explicit confirm.
- * SIMULATED until the reservations module merges; the dialog shows that on its face.
+ * Its provenance (simulated, sandbox, live) comes from the source and is shown on its face.
  */
 export function ExtendStayDialog({
   property,
@@ -56,24 +39,44 @@ export function ExtendStayDialog({
   const queryClient = useQueryClient();
   const [nights, setNights] = useState(defaultNights);
   const [now, setNow] = useState(() => Date.now());
-  const sim = toSimProperty(property);
+  const ws = useWorkspace();
+  const changes = ws.source('stayChanges');
+  // One confirm = one intent = one idempotency key, reused if the same confirm is retried.
+  const [intent] = useState(() => new IntentKeys());
   useEffect(() => {
     if (!open) return;
     const id = setInterval(() => setNow(Date.now()), 15_000);
     return () => clearInterval(id);
   }, [open]);
   const preview = useQuery({
-    queryKey: ['sim', property.id, property.businessDate, 'preview-extend', stayId, nights],
-    queryFn: () => workspaceSource.previewExtension(sim, stayId, nights),
-    enabled: open,
+    queryKey: ws.key('stayChanges', 'preview-extend', stayId, nights),
+    queryFn: () =>
+      changes && ws.property
+        ? changes.previewExtension(ws.property, stayId, nights)
+        : Promise.reject(new Error('unbound')),
+    enabled: open && Boolean(changes && ws.property),
     staleTime: 0,
     gcTime: 0,
   });
   const commit = useMutation({
-    mutationFn: () => workspaceSource.commitExtension(sim, preview.data?.data.token ?? '', stayId, nights),
-    onSuccess: () => {
-      toast({ tone: 'success', title: t('timeline.committed') });
-      void queryClient.invalidateQueries({ queryKey: ['sim', property.id] });
+    mutationFn: () => {
+      if (!changes || !ws.property) return Promise.reject(new Error('unbound'));
+      const previewToken = preview.data?.data.token ?? '';
+      return changes.commitExtension(ws.property, {
+        previewToken,
+        stayId,
+        nights,
+        idempotencyKey: intent.keyFor({ previewToken, stayId, nights }),
+      });
+    },
+    onSuccess: (r) => {
+      intent.settle();
+      toast({
+        tone: 'success',
+        title: t('timeline.committed'),
+        description: t('timeline.committedDetail', { date: r.data.departure }),
+      });
+      void queryClient.invalidateQueries({ queryKey: ws.key('frontDesk').slice(0, 5) });
       onOpenChange(false);
     },
   });
@@ -108,12 +111,16 @@ export function ExtendStayDialog({
         </div>
         {preview.isPending && <SkeletonList rows={4} />}
         {preview.isError && (
-          <ProblemAlert problem={toProblem(preview.error)} onRetry={() => void preview.refetch()} />
+          <ProblemAlert
+            problem={problemFromUnknown(preview.error, 'extend-stay')}
+            onRetry={() => void preview.refetch()}
+          />
         )}
         {data && (
           <ChangePreview
             title={t('timeline.previewHeading')}
-            provenance={<ProvenanceBadge provenance={preview.data?.provenance ?? 'simulated'} />}
+            provenance={preview.data && <ProvenanceBadge provenance={preview.data.provenance.kind} compact />}
+            blockers={data.feasible ? [] : data.blockers}
             sections={data.sections}
             consequences={data.consequences}
             validUntil={formatTime(data.validUntil, property.timezone)}
@@ -125,7 +132,11 @@ export function ExtendStayDialog({
             onBack={() => onOpenChange(false)}
             onConfirm={() => commit.mutate()}
             confirming={commit.isPending}
-            problem={commit.isError ? <ProblemAlert problem={toProblem(commit.error)} /> : undefined}
+            problem={
+              commit.isError ? (
+                <ProblemAlert problem={problemFromUnknown(commit.error, 'extend-stay')} />
+              ) : undefined
+            }
           />
         )}
       </div>

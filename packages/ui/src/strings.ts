@@ -50,6 +50,7 @@ export const defaultUiStrings = {
     versionNote: 'You edited version {{expected}}; the saved version is now {{current}}.',
   },
   changePreview: {
+    blocked: 'This change cannot be made as it stands.',
     before: 'Before',
     after: 'After',
     change: 'Change',

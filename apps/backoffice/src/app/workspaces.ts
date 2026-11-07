@@ -13,6 +13,8 @@ export type AppPath =
   | '/my-work'
   | '/learn'
   | '/front-desk/arrivals'
+  | '/front-desk/in-house'
+  | '/front-desk/departures'
   | '/housekeeping'
   | '/reservations/timeline'
   | '/settings/organization'
@@ -38,6 +40,8 @@ export interface Workspace {
   items: readonly NavItem[];
 }
 
+/** Go-to map (ux round 1, C2): g o Today · g w My work · g a/i/d desk lists · g t · g h · g l · g s switch. */
+
 const ALL_STAFF = [
   'org_admin',
   'general_manager',
@@ -58,7 +62,7 @@ export const WORKSPACES: readonly Workspace[] = [
     labelKey: 'nav.overview',
     roles: ALL_STAFF,
     items: [
-      { to: '/today', labelKey: 'nav.today', goKey: 'd', helpKey: 'overview.today' },
+      { to: '/today', labelKey: 'nav.today', goKey: 'o', helpKey: 'overview.today' },
       { to: '/my-work', labelKey: 'nav.myWork', goKey: 'w', helpKey: 'overview.myWork' },
       { to: '/learn', labelKey: 'nav.learn', goKey: 'l', helpKey: 'learning.centre' },
     ],
@@ -69,6 +73,13 @@ export const WORKSPACES: readonly Workspace[] = [
     roles: ['org_admin', 'general_manager', 'front_desk', 'night_auditor'],
     items: [
       { to: '/front-desk/arrivals', labelKey: 'nav.arrivals', goKey: 'a', helpKey: 'frontDesk.arrivals' },
+      { to: '/front-desk/in-house', labelKey: 'nav.inHouse', goKey: 'i', helpKey: 'frontDesk.inHouse' },
+      {
+        to: '/front-desk/departures',
+        labelKey: 'nav.departures',
+        goKey: 'd',
+        helpKey: 'frontDesk.departures',
+      },
     ],
   },
   {
@@ -112,9 +123,9 @@ export const WORKSPACES: readonly Workspace[] = [
     roles: ['org_admin', 'general_manager', 'finance'],
     items: [
       { to: '/settings/organization', labelKey: 'nav.organization', helpKey: 'settings.organization' },
-      { to: '/settings/properties', labelKey: 'nav.properties', goKey: 'p', helpKey: 'settings.properties' },
+      { to: '/settings/properties', labelKey: 'nav.properties', helpKey: 'settings.properties' },
       { to: '/settings/legal-entities', labelKey: 'nav.legalEntities', helpKey: 'settings.legalEntities' },
-      { to: '/settings/users', labelKey: 'nav.users', goKey: 'u', helpKey: 'settings.users' },
+      { to: '/settings/users', labelKey: 'nav.users', helpKey: 'settings.users' },
     ],
   },
 ];

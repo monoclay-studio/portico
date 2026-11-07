@@ -15,7 +15,7 @@ export function PageHeader({
   meta,
   actions,
   helpKey,
-  context = true,
+  context = false,
 }: {
   title: ReactNode;
   subtitle?: ReactNode;

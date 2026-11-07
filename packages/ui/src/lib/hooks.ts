@@ -66,6 +66,8 @@ export function useHotkey(
       return e.key.toLowerCase() === key.toLowerCase();
     };
     const onKey = (e: KeyboardEvent) => {
+      // A focused widget already handled this key (e.g. `e` or `j` in a data grid): never act twice.
+      if (e.defaultPrevented) return;
       const step = steps[index] ?? '';
       const hasModifier = step.includes('mod+') || step.includes('alt+');
       if (!hasModifier && isEditableTarget(e.target)) return;
