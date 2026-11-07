@@ -373,7 +373,7 @@ async function claim(
   });
 }
 
-async function upsertChannelState(
+export async function upsertChannelState(
   tx: TxContext,
   connectionId: string,
   kind: AriKind,
