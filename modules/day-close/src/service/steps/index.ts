@@ -572,6 +572,7 @@ async function postAdvance(s: StepContext): Promise<StepOutcome> {
     }
     return { report: 'stored', export: exportStatus };
   });
+  await s.hooks.afterItem?.('post_advance', 0);
   const allowances = await pregrantAllowances(s, addDays(D, 1));
   return { status: 'completed', detail: { ...result, allowances } };
 }

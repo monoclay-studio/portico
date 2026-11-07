@@ -41,6 +41,8 @@ const POINTS: Point[] = [
   ...WITH_ITEMS.map((step) => ({ at: 'insideItem' as const, step })),
   // Right after the advance transaction committed (date moved), before anything else is recorded.
   { at: 'afterItem' as const, step: 'advance' as StepKey },
+  // Right after the report and the day-closed event committed, before tonight's allowances are pre-granted.
+  { at: 'afterItem' as const, step: 'post_advance' as StepKey },
 ];
 
 const nightOf = (date: string) =>
@@ -117,6 +119,17 @@ describe('crash at every step boundary and inside every step, then resume (E07)'
       .execute();
     expect(log).toHaveLength(POINTS.length);
     expect(new Set(log.map((l) => l.from_date)).size).toBe(POINTS.length);
+    // The day-closed announcement is made once per date, whatever was resumed.
+    const closed = await h.t.admin.kysely
+      .selectFrom('core.outbox')
+      .select(['payload'])
+      .where('tenant_id', '=', org.tenantId)
+      .where('type', '=', 'dayClose.day.closed')
+      .execute();
+    expect(closed).toHaveLength(POINTS.length);
+    expect(new Set(closed.map((c) => (c.payload as { businessDate: string }).businessDate)).size).toBe(
+      POINTS.length,
+    );
     const reports = await h.t.admin.kysely
       .selectFrom('day_close.day_reports')
       .select(['business_date'])
