@@ -4,8 +4,13 @@
 
 - **Done:** module complete per the original brief, plus the steward review fixes (see *Review fixes* below).
   Green: `pnpm lint`, `pnpm typecheck`, `pnpm --filter @portico/operations test`, `pnpm --filter @portico/api test`.
-- **Next steps (orchestrator / other workstreams):** bind `InventoryPort` to `@portico/inventory` in the composition
-  root (shapes now match the inventory branch; run S08 against the real provider); decide the composite-unit model
+- **InventoryPort is bound to the real inventory** (main) in `apps/api/src/composition.ts`; `test/real-inventory.test.ts`
+  runs block / refusal / forward / external release / late events against the real provider.
+- **`pnpm lint` fails after merging main** on a boundary-checker false positive in *inventory's* code
+  (`${input.operations.length}` inside a `sql` template) — see `FOUNDATION_REQUESTS.md` FR-1 (one-line fix in
+  `tools/check-boundaries.mjs`). Biome and typecheck are green.
+- **Next steps (orchestrator / other workstreams):** apply FR-1; inventory to stop re-checking
+  `inventory.block.manage` on port calls (ADR-0015; the composition adapter uses system scope meanwhile); decide the composite-unit model
   (P1-8); integration wave 2: inbound PMS stays contract + CR-6 (see *Adoption modes*); reservations to version stay
   events (`aggregateVersion`) and send `stays[]` in booking events; identity templates: `operations.task.read`.
 - **Known failing tests:** none.
@@ -110,7 +115,7 @@ eta?, guestLabel? }]` to those payloads (additive), or call `setGuestWaiting`/a 
 | Port | Needs | Binding in `apps/api/src/composition.ts` |
 |---|---|---|
 | `PlatformPort` | property facts (system-scope read), `assertWritable`, `getDataAuthority`, `resolvePolicy`, departments | bound to `@portico/platform` |
-| `InventoryPort` | `blockUnit`, `releaseBlock(tx, { blockId, reason? })`, `listUnits(tx, propertyId, { status? })` — shapes of the inventory branch provider (`createInventoryService`) | **`unavailable('inventory')` — orchestrator binds at merge.** Per ADR-0015 operations authorizes the user's intent (`operations.maintenance.setInventoryImpact` at the property); the provider must not re-check `inventory.block.manage` on port calls. A refusal by inventory (already blocked, past dates, external system of record, unavailable) keeps the work order with `block.status = 'refused'`, the reason and the next step (`withSavepoint`). Composite units are not mirrored. |
+| `InventoryPort` | `blockUnit`, `releaseBlock(tx, { blockId, reason? })`, `listUnits(tx, propertyId, { status? })` — shapes of the inventory provider (`createInventoryService`) | **Bound to `inventoryService`** (system scope in the adapter until inventory stops re-checking its own keys). Per ADR-0015 operations authorizes the user's intent (`operations.maintenance.setInventoryImpact` at the property); the provider must not re-check `inventory.block.manage` on port calls. A refusal by inventory (already blocked, past dates, external system of record, unavailable) keeps the work order with `block.status = 'refused'`, the reason and the next step (`withSavepoint`). Composite units are not mirrored. |
 
 Provider functions (domain map; per ADR-0015 they do not re-check the caller's operations permissions — the
 calling module authorizes its own action): `getUnitCondition(tx, unitId)`, `listUnitConditions(tx, { propertyId })`,

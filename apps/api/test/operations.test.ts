@@ -204,7 +204,7 @@ describe('operations HTTP API', () => {
     expect(JSON.stringify(history.json())).toContain('operations.task.transition');
   });
 
-  it('offline sync batch and delta pull over HTTP; inventory-dependent actions explain they are unavailable', async () => {
+  it('offline sync batch and delta pull over HTTP; out of order through the real inventory', async () => {
     const { auth } = await signedInOrg(h);
     const { propertyId, unitId, post } = await resort(auth, 'OPS3');
     const pull = await h.app.inject({
@@ -242,9 +242,9 @@ describe('operations HTTP API', () => {
     });
     expect(delta.json().units.map((u: { condition: string }) => u.condition)).toEqual(['clean']);
 
-    // Taking a unit out of order needs inventory, which is not bound in this build: the fault report is kept
-    // (ADR-0015 §6) with the refusal and the next step — never lost, never shown as blocked.
-    const wo = await post('/v1/operations/work-orders', {
+    // Out of order goes through the real inventory provider (bound in composition). A unit known to operations
+    // but not to inventory is refused by inventory — the fault report is kept with the reason (ADR-0015 §6).
+    const orphan = await post('/v1/operations/work-orders', {
       propertyId,
       unitId,
       title: 'AC leaking',
@@ -252,9 +252,37 @@ describe('operations HTTP API', () => {
       urgency: 'high',
       block: { kind: 'out_of_order', from: '2026-11-07', to: '2026-11-08', reason: 'AC leak' },
     });
+    expect(orphan.statusCode).toBe(201);
+    expect(orphan.json().block.status).toBe('refused');
+    expect(orphan.json().issues.map((i: { code: string }) => i.code)).toContain('block_refused');
+    // With the unit in the inventory catalog (mirrored into operations), the block is placed.
+    const type = await post(`/v1/properties/${propertyId}/unit-types`, {
+      code: 'WV',
+      name: 'Water villa',
+      kind: 'villa',
+      baseOccupancy: 2,
+      maxAdults: 2,
+      maxChildren: 1,
+      maxOccupancy: 3,
+    });
+    expect(type.statusCode).toBe(201);
+    const invUnit = await post(`/v1/properties/${propertyId}/units`, {
+      unitTypeId: type.json().id,
+      number: 'A201',
+    });
+    expect(invUnit.statusCode).toBe(201);
+    const synced = await post(`/v1/operations/properties/${propertyId}/units/sync-from-inventory`, {});
+    expect(synced.json().created).toBe(1);
+    const wo = await post('/v1/operations/work-orders', {
+      propertyId,
+      unitId: invUnit.json().id,
+      title: 'AC leaking',
+      faultCategory: 'hvac',
+      urgency: 'high',
+      block: { kind: 'out_of_order', from: '2026-11-07', to: '2026-11-08', reason: 'AC leak' },
+    });
     expect(wo.statusCode).toBe(201);
-    expect(wo.json().block).toMatchObject({ status: 'refused', refusal: { code: 'module_unavailable' } });
-    expect(wo.json().issues.map((i: { code: string }) => i.code)).toContain('block_refused');
+    expect(wo.json().block.status).toBe('active');
     const plain = await post('/v1/operations/work-orders', {
       propertyId,
       unitId,
