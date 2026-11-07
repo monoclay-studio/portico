@@ -1,7 +1,7 @@
 # Agent run: Identity and platform enterprise features
 
-- Started: 2026-11-07T07:38:12.649Z · last activity: 2026-11-07T18:16:17.066Z
-- Turns: 1370 · tool uses: 779 · output tokens: 2,738,415
+- Started: 2026-11-07T07:38:12.649Z · last activity: 2026-11-07T18:29:44.188Z
+- Turns: 1470 · tool uses: 838 · output tokens: 2,808,937
 - Type: general-purpose
 
 ## Brief (2026-11-07T07:38:12.649Z)
@@ -1303,5 +1303,114 @@ All tests below are in `modules/identity/test/review3-regressions.test.ts`.
 3. **R3-P2-3 used review option (b)** (prove in any organization) rather than (a) (keep same-organization links).
 4. **ADR wording not changed.** The reviewer asked for one clarifying sentence in rule 15 ("root = anything that decides who signs in or which roles a sign-in grants"). It belongs in `docs/adr/`, which is outside my scope; the code implements that wording.
 5. **Domain re-check job is registered separately** as `ssoDomainRecheckJob(systemTxtResolver)` in the composition root, because jobs have no ports and it needs DNS.
+````
+
+## Report (2026-11-07T18:29:44.057Z)
+
+````text
+## Backoffice sign-in with this branch: done. Every gate and the Playwright run exit 0.
+
+Branch `feat/identity-platform-enterprise`, worktree `/home/user/wt/identity-plus`. Committed, not pushed.
+
+I merged `main` first (41 commits, docs only, including ADR-0017 amendment 2 rule 16).
+
+### Commits
+| Commit | What |
+|---|---|
+| `1e67366` | Merged `main`. |
+| `ee3b3da` | identity: demo second factor (rule 16), and refused sign-in codes now say why. Plus the demo seed and CLI. |
+| `14f69ae` | backoffice: code step, recovery code, two-step set-up offer, staff-language errors, e2e fixtures. |
+| `b9ab264` | identity: the refusal reasons are now a contracts vocabulary (`mfaChallengeFailureReason`), which the staff app imports instead of copying (self-check BS3-1). |
+
+### Results (exit codes read directly from log files)
+- `pnpm install --frozen-lockfile`: 0
+- `pnpm lint`: 0 (biome plus module boundaries)
+- `pnpm turbo run typecheck --force`: 0 (18/18; the backoffice is green again)
+- `pnpm turbo run test --force --concurrency=2` with `PORTICO_TEST_DB_PREFIX=w1_idplus_fix5`: 0 (16/16 tasks)
+  - identity 153, api 64, backoffice 53, platform 62; every other package also passes.
+- `pnpm --filter @portico/backoffice exec playwright test e2e/smoke.spec.ts --trace off` with `PORTICO_E2E_DB=portico_idplus_e2e` on default ports: **12 passed**, exit 0.
+  - An earlier run on a fresh database also passed 12/12. That run covered the first seed path: the demo CLI with the authenticator, then creating the training organization.
+  - The final run reused the already-seeded database.
+- Cleanup: dropped `portico_idplus_e2e`, which I created, and my leftover `w1_idplus_fix5_*` databases from two runs I stopped. None remain.
+
+### 1. Sign-in code step (`apps/backoffice/src/features/auth/`)
+- **Code step.** Shown after the password when sign-in returns `mfa_required`.
+  - The 6-digit code field has focus; Enter verifies. It uses `one-time-code` autocomplete and a numeric keypad.
+  - "Use a recovery code instead" switches to a recovery code field, and back.
+  - It shows which organization you are signing in to, with its environment label. In a demo organization it also says where the demo code comes from.
+- **Errors, in staff language (C7/C8):**
+  - Wrong code: explained at the field, with "N more tries, then you need to enter your password again"; the field is refocused.
+  - Too many wrong codes (429): the time the pause ends, a live countdown, Verify blocked meanwhile, and the small reference.
+  - Expired or used-up sign-in: back to the password step with the reason. Email and the chosen organization are kept, the password field has focus.
+  - A malformed code is caught before it costs an attempt.
+- **Server side.** `POST /v1/auth/login/mfa` still answers 401 `unauthenticated`, so existing clients are unaffected. It now adds `details.reason`:
+  - `invalid_code`, with `attemptsRemaining`;
+  - `challenge_expired`.
+- **Other outcomes, with a next step instead of a dead end:**
+  - Signed in with a password but no two-step verification: an offer to set it up right after sign-in. The flow is key (plus an `otpauth` link), first code, recovery codes shown once. "Not now" continues into the app. The password just typed is used as the proof, so nobody retypes it.
+  - When a set-up is discarded after 5 wrong codes, the server now adds `details.setupDiscarded`, and the screen offers "Start the set-up again".
+  - `sso_required`: says to use the company sign-in link or ask the Portico administrator.
+  - 403 `mfa_enrollment_required` and `mfa_required` now explain what to do instead of "You don't have access".
+  - "Email not verified" is not a sign-in outcome on this branch: an unverified person has no password, so they get the normal wrong-credentials message.
+- **API client:** `loginSecondStep`, `startAuthenticatorSetup`, `confirmAuthenticatorSetup`.
+- **Tests:**
+  - `sign-in-steps.test.tsx` and `sign-in-page.test.tsx` (17 tests, on a real router): the full path, expired back to the password step with the organization kept, the set-up offer, company sign-in, wrong password.
+  - New e2e test: keyboard-first code step, a wrong code shown at the field with "4 more tries", then the right code. It includes an axe check of the error state.
+
+### 2. e2e and demo
+- `e2e/fixtures.ts` now uses `WEB_URL` exported from `playwright.config.ts`; no hard-coded 5180.
+- `apiSignIn` and the UI sign-ins answer the code step with the demo authenticator. The helper is in the new `e2e/demo-authenticator.ts`, which has no Playwright imports so the seed script can use it too.
+  - It remembers per email which time step this process used.
+  - If a code was already used by another process, it tries the next one; a success resets the server's wrong-code counter.
+- Smoke spec: the three UI sign-in tests now enter the code.
+
+### 3. Demo admins and sensitive permissions (ADR-0017 rule 16)
+Yes, they lost them. A new test proves it: a demo `org_admin` without the factor gets 403 `mfa_enrollment_required`.
+- `identity.seedDemoTotp` enrols an active factor with the fixed secret `PORTICODEMOAUTHENTICATORDEMOKEYS`. It is refused with `demo_factor_not_allowed` unless all of these hold:
+  - the caller is a system process;
+  - the organization is `demo`, checked in the database through `platform.tenant_summaries` and not only in the request context;
+  - the address is `*.portico.invalid`;
+  - the person is a member of that organization.
+- `seedDemoMember` now uses the same shared check (`isDemoSeeding`). That tightens it: a context that only claims to be demo is now refused too.
+- The demo CLI calls `seedDemo({ authenticator: true })` and prints the secret beside the password.
+- The default stays off, so `rates`, `inventory` and `demo-seed` tests are unchanged.
+- **Tests:**
+  - `modules/identity/test/demo-authenticator.test.ts`: refused in live, trial, training and sandbox; refused when the context only claims demo; refused for a real email, a non-system caller, or someone outside the organization (0 factor rows each time); the reasons; the lock.
+  - `apps/api/test/demo-authenticator.test.ts`: the same over HTTP, including that sensitive permissions work after the code step.
+
+### Outside the literal write scope (needed for the gate)
+- **`apps/backoffice/scripts/seed-dev.ts`.** It called `provisionOrganization` without a password or notifier, which this branch refuses (`notifier_required`). The director would also only have been invited, not active. It now:
+  - signs the director in with password plus demo code;
+  - creates the training organization with `platform.provisionOrganization` and `identity.seedSystemRoles`;
+  - adds the director with `identity.addSelfToOrganization`.
+- **`apps/backoffice/playwright.config.ts`.** Exports `API_PORT`, `WEB_PORT` and `WEB_URL`.
+- **`modules/identity/README.md`.** New rule-16 and code-step rows, and contract notes.
+
+### Self-check (v3)
+- **§1 gate block:** the coordinator's command set above, all 0. I did not run plain `pnpm test` or default-concurrency turbo this round.
+- **§3 re-attack:**
+
+| Change | Commit | Regression test | (a) reverse | (b) siblings | (c) failure path | (d) griefing | (e) atomic |
+|---|---|---|---|---|---|---|---|
+| Rule 16 demo factor | `ee3b3da` | demo-authenticator (identity + api) | n/a: no "only when new" exception | `seedDemoMember` given the same check; `enrolTotp`/`confirmTotp` still need proof; SSO/SCIM create no factors | each refusal leaves 0 factor rows | only the system seeder can reach it | n/a |
+| Code-refusal reasons | `ee3b3da`, `b9ab264` | demo-authenticator "explains a refused code" | n/a | step-up and set-up confirm already have their own reasons | attempts still commit as before | needs the challenge token, which only the password holder has | uses the existing row-locked attempts count |
+
+- **§4 BS3-1 finding, not fixed this round.** `modules/platform/src/contracts.ts` copies kernel vocabularies as literals:
+  - environment (lines 12 and 444; line 12 is already on `main`);
+  - effect modes (line 426);
+  - provenance (line 428);
+  - data authority (lines 111, 123, 157; line 111 is already on `main`).
+
+  The kernel exports these as types only. They need a foundation request for runtime constants, plus a compile-time guard. BS3-3: no optional scopes in identity or platform ports.
+
+### Follow-ups for you
+1. `features/admin/users-page.tsx` still offers "Initial password", which the server now refuses with `password_not_allowed`.
+2. There is no in-app step-up prompt or security settings page. The 403 messages currently say to sign in again.
+3. Company sign-in (SSO) can't be completed in the staff app: it needs a callback route in `router.tsx`.
+4. The UX lab instructions need the demo authenticator secret.
+5. The demo part of Q148 is now settled by amendment 2.
+6. Hardening suggestion (P3): refuse inviting `*.portico.invalid` addresses into live organizations. The demo credentials are public, though a live admin would have to invite one deliberately.
+7. The backoffice README test counts are out of date.
+
 ````
 

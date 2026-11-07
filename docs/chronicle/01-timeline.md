@@ -235,7 +235,7 @@ Each agent's brief and report are in `agents/`.
     regression test per sibling entry point.
 - **18:16 — Guests fix launched** (`fix/guests-erasure-idempotency`). The payments fix waits for the integration-step
   merge, because the two overlap. The rates, finance and backoffice P2s go to their next rounds.
-- **18:30 — Integration-step focused re-review: merge after fixes.** All 9 original PoCs are refused, but attacking each
+- **18:29 — Integration-step focused re-review: merge after fixes.** All 9 original PoCs are refused, but attacking each
   fix found a new P1 one step beyond it (card guarantee by linking the cardholder; only one late charge collected; the
   opening-deposit import skips ownership). ADR-0015 Amendment 1 defines the agreed card guarantee (supplied by the
   cardholder, or a recorded mandate). Fix round 2 goes to the integration engineer, together with the payments
