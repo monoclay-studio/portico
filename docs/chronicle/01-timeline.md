@@ -317,4 +317,10 @@ Each agent's brief and report are in `agents/`.
   - 49 edge cases were added by the failure-class sweep, and the inventory README's 13 over-claimed rows were
     corrected.
   - EC-INV-017 decided: lowering an allowance below sales is refused, with the affected cells listed.
+- **21:49 — UX round 2a done** <!-- t: agent-a81ad3b20abc5995c @ 2026-11-07T21:49:12.661Z (Black-box UX tester, round 2a) -->. The first tester run on playbook v2: 74 cited files, all present, 0 duplicates.
+  Praised: one-line blockers with owner and ETA, the Extend preview with Maldives taxes, and honest labelling.
+  Friction is mostly simulated-data contradictions (housekeeping and front desk disagree) and dead-end actions. Two
+  LIVE defects: a generic error on an empty required field, and the property switcher picking the wrong hotel. No
+  refiner run: the LIVE findings go to backoffice, and the SIM findings become acceptance checks for the real-data
+  round.
 
