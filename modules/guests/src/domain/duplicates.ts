@@ -16,8 +16,11 @@ export interface MatchSubject {
   names: NameKeys;
   dateOfBirth: string | null;
   nationality: string | null;
-  /** High-confidence normalized emails (never proxy emails). */
+  /** VERIFIED normalized emails (exact keys; never proxy emails). For an incoming booking these are the claimed
+   *  emails — they only become exact matches against another profile's verified emails. */
   emails: readonly string[];
+  /** Unverified normalized emails: strong evidence for the review queue, never an exact key. */
+  unverifiedEmails?: readonly string[];
   /** E.164 phones. */
   phones: readonly string[];
   /** Keyed hashes of identity-document number + issuing country. */
@@ -27,6 +30,7 @@ export interface MatchSubject {
 export type MatchReasonCode =
   | 'document_exact'
   | 'email_exact'
+  | 'email_unverified'
   | 'phone_exact'
   | 'name_exact'
   | 'name_similar'
@@ -73,6 +77,12 @@ export function scoreMatch(a: MatchSubject, b: MatchSubject): MatchResult {
     reasons.push({ code: 'document_exact', detail: 'Same identity document number and country' });
   if (emails.length) reasons.push({ code: 'email_exact', detail: 'Same email address' });
   if (phones.length) reasons.push({ code: 'phone_exact', detail: 'Same phone number (E.164)' });
+  const looseEmails = emails.length
+    ? []
+    : intersect([...a.emails, ...(a.unverifiedEmails ?? [])], [...b.emails, ...(b.unverifiedEmails ?? [])]);
+  if (looseEmails.length) {
+    reasons.push({ code: 'email_unverified', detail: 'Same email address (not verified on both profiles)' });
+  }
 
   if (sim >= 0.999) reasons.push({ code: 'name_exact', detail: 'Same name' });
   else if (sim >= 0.5)
@@ -104,8 +114,8 @@ export function scoreMatch(a: MatchSubject, b: MatchSubject): MatchResult {
   if (docs.length) {
     // Same passport: the same person unless the name is completely different (data-entry error).
     score = sim >= 0.3 ? 0.97 : 0.7;
-  } else if (emails.length || phones.length) {
-    const key = emails.length && phones.length ? 0.6 : 0.5;
+  } else if (emails.length || phones.length || looseEmails.length) {
+    const key = emails.length && phones.length ? 0.6 : emails.length || phones.length ? 0.5 : 0.45;
     if (sim < 0.4) {
       // Shared family / assistant contact: show as low evidence only.
       score = 0.3;
@@ -149,7 +159,8 @@ export function shouldReopenDismissed(knownExactKeys: readonly string[], result:
 
 /**
  * Exact-only resolution (channel / import ingestion, spec GUE-R09): reuse an existing profile only when an exact
- * key matches AND the name is compatible AND nothing conflicts. Returns false for family members sharing a contact.
+ * key matches (verified email, E.164 phone or document — never an unverified email) AND the name is compatible AND
+ * nothing conflicts. Returns false for family members sharing a contact.
  */
 export function isSafeExactReuse(result: MatchResult): boolean {
   if (result.exactKeys.length === 0) return false;

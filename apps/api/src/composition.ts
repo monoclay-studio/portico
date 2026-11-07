@@ -12,17 +12,15 @@ import {
 } from '@portico/db';
 import {
   createGuestsService,
-  type GuestsCryptoPort,
   type GuestsService,
   guestsHttp,
   guestsJobs,
   guestsManifest,
   guestsSearchProvider,
-  localGuestsCrypto,
 } from '@portico/guests';
 import type { Authenticator, HttpModule } from '@portico/http';
 import { type IdentityPorts, identityAuthenticator, identityHttp, identityManifest } from '@portico/identity';
-import { type ModuleManifest, systemAuthorizer } from '@portico/kernel';
+import { fieldCryptoFromEnv, type ModuleManifest, systemAuthorizer } from '@portico/kernel';
 import { platform, platformHttp, platformManifest, platformSearch } from '@portico/platform';
 import { recordsHttp } from './records-routes';
 
@@ -42,23 +40,6 @@ export interface Composition {
   jobs: ScheduledJob[];
   /** Provider services other modules' ports bind to (domain map). */
   services: { guests: GuestsService };
-}
-
-/**
- * Guests field crypto. Development/test: kernel localFieldCipher with a key from PORTICO_FIELD_ENCRYPTION_KEY
- * (or a clearly dev-only derived key). Production must bind KMS envelope encryption + a separate blind-index key
- * (modules/guests/README.md → ports); starting without a configured key in production is refused.
- */
-function guestsCrypto(): GuestsCryptoPort {
-  const key = process.env.PORTICO_FIELD_ENCRYPTION_KEY;
-  if (!key && process.env.NODE_ENV === 'production') {
-    throw new Error(
-      'PORTICO_FIELD_ENCRYPTION_KEY (or the KMS FieldCipher binding) is required in production.',
-    );
-  }
-  return key
-    ? localGuestsCrypto(key, 'env')
-    : localGuestsCrypto(Buffer.from('portico-development-only-field-key').toString('base64'), 'dev');
 }
 
 export function compose(database: PorticoDatabase): Composition {
@@ -81,8 +62,15 @@ export function compose(database: PorticoDatabase): Composition {
       getPropertyCountry: async (tx, id) => (await platform.getProperty(asSystem(tx), id)).countryCode,
       getPropertyLegalEntityId: async (tx, id) =>
         (await platform.getProperty(asSystem(tx), id)).legalEntityId,
+      legalEntityExists: (tx, id) =>
+        platform.getLegalEntity(tx, id).then(
+          () => true,
+          () => false,
+        ),
+      getBusinessDate: (tx, id) => platform.getBusinessDate(tx, id),
     },
-    crypto: guestsCrypto(),
+    // Field encryption + blind index from the shared kernel helper (KMS in production; refuses dev keys there).
+    crypto: fieldCryptoFromEnv(),
   });
   const guestsModule = guestsHttp({ database, service: guestsService });
 

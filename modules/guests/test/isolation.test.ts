@@ -4,6 +4,7 @@
  * buggy query.
  */
 import { sql } from '@portico/db';
+import { systemContext } from '@portico/kernel';
 import type { TestDatabase } from '@portico/testing';
 import { testContext } from '@portico/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -107,9 +108,15 @@ describe('tenant isolation', () => {
     expect(found.items).toHaveLength(0);
     const dups = await as((tx) => attacker.svc.listDuplicates(tx, { status: 'open' }));
     expect(dups.some((d) => [d.profileAId, d.profileBId].includes(g1.profileId))).toBe(false);
-    // Recording repoints against another tenant's merge is impossible.
+    // Recording repoints is reserved for event consumers (system), and never reaches another tenant's merge.
     await expect(
       as((tx) => attacker.svc.recordReferenceRepoints(tx, { mergeId, module: 'x', references: [] })),
+    ).rejects.toMatchObject({ code: 'forbidden' });
+    const attackerSystem = systemContext(attacker.tenantId, 'consumer:evil', 'live', crypto.randomUUID());
+    await expect(
+      attacker.run(attackerSystem, (tx) =>
+        attacker.svc.recordReferenceRepoints(tx, { mergeId, module: 'x', references: [] }),
+      ),
     ).rejects.toMatchObject({ status: 404 });
 
     // Victim data unchanged.
@@ -171,6 +178,31 @@ describe('permissions (deny by default)', () => {
         org.svc.resolveProfile(tx, { propertyId: org.properties[0] as string, familyName: 'X' }),
       ),
     ).rejects.toMatchObject({ code: 'forbidden' });
+  });
+
+  it('provider functions are guarded: no snapshot on the public service; consent reads need a guests permission', async () => {
+    const org = await setupOrg(t);
+    const g = await org.sys((tx) =>
+      org.svc.resolveProfile(
+        tx,
+        { propertyId: org.properties[0] as string, familyName: 'Guarded' },
+        { matchStrategy: 'create_new' },
+      ),
+    );
+    expect('snapshotProfile' in org.svc).toBe(false);
+    const nobody = testContext({ tenantId: org.tenantId, grants: [] });
+    await expect(
+      org.run(nobody, (tx) =>
+        org.svc.getConsent(tx, {
+          profileId: g.profileId,
+          legalEntityId: org.legalEntityId,
+          purpose: 'marketing_email',
+        }),
+      ),
+    ).rejects.toMatchObject({ code: 'forbidden' });
+    await expect(org.run(nobody, (tx) => org.svc.detectDuplicates(tx, g.profileId))).rejects.toMatchObject({
+      code: 'forbidden',
+    });
   });
 
   it('property scope is enforced: a desk agent at one property cannot create profiles at another', async () => {

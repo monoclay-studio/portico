@@ -25,8 +25,9 @@ import type {
 import { normalizeContact } from '../domain/contact';
 import { isSafeExactReuse, type MatchSubject } from '../domain/duplicates';
 import { autoTransliterate, detectScript, nameKeys } from '../domain/names';
-import type { GuestsPorts } from '../ports';
-import { detectDuplicates, scoreAgainstExisting } from './duplicates';
+import { itemVisible } from '../domain/visibility';
+import { type GuestsPorts, keyIdOf } from '../ports';
+import { detectDuplicates, type ScoredCandidate, scoreAgainstExisting } from './duplicates';
 import {
   actingProperty,
   actorKey,
@@ -40,6 +41,7 @@ import {
   requireVisibleProfile,
   requireWritableProfile,
   resolveAccess,
+  visibilityOf,
 } from './internal';
 import { buildProfileView } from './view';
 
@@ -125,6 +127,9 @@ export async function insertContactPoint(
 ): Promise<{ id: string; inserted: boolean }> {
   const n = normalizeContact(c.kind, c.value, defaultCountry);
   const id = newId(tx.now.getTime());
+  // Verification is a staff statement (in person, OTP, reply). API clients and system feeds cannot self-assert
+  // it, because verified emails drive exact-match reuse.
+  const verified = tx.actor.kind === 'user' && (c.verified ?? false);
   const row = await db(tx)
     .insertInto('guests.contact_points')
     .values({
@@ -136,9 +141,9 @@ export async function insertContactPoint(
       normalized: n.normalized,
       label: c.label ?? null,
       is_primary: c.isPrimary ?? false,
-      verified: c.verified ?? false,
-      verified_at: c.verified ? tx.now : null,
-      verification_method: c.verified ? (c.verificationMethod ?? 'staff') : null,
+      verified,
+      verified_at: verified ? tx.now : null,
+      verification_method: verified ? (c.verificationMethod ?? 'staff') : null,
       source: c.source ?? opts.source ?? 'staff',
       low_confidence: n.lowConfidence || (opts.lowConfidence ?? false),
       requested_profile_id: opts.requestedProfileId ?? null,
@@ -228,9 +233,12 @@ export interface ProfileInput extends Omit<CreateProfileInput, 'matchStrategy'> 
 
 /**
  * Provider (domain map): find-or-create a profile for bookings, channel ingestion and imports (GUE-R09).
- *  - exact_only (default): reuse an existing profile only on an exact key (high-confidence email, E.164 phone,
- *    document) with a compatible name and no conflicting date of birth, and only if exactly one qualifies;
- *  - suggest: same reuse rule, and returns scored suggestions for staff;
+ *  - exact_only (default): reuse an existing profile only on an exact key (VERIFIED email, E.164 phone, document)
+ *    with a compatible name and no conflicting date of birth, only if exactly one qualifies, and only if that
+ *    profile is visible at the resolving property — i.e. already known there, or cross-property sharing fully
+ *    applies (entitlement + policy + readShared + no guest objection). Otherwise a property-local profile is
+ *    created and the pair is queued for an organization-level reviewer (GUE-I05, GUE-R16);
+ *  - suggest: same reuse rule, and returns scored suggestions — only profiles the caller may see;
  *  - create_new: always creates.
  * Never merges. Duplicate detection records queue-worthy pairs in every mode.
  */
@@ -247,6 +255,16 @@ export async function resolveProfile(
 }> {
   requirePermission(tx, 'guests.profile.update', { propertyId: input.propertyId });
   const strategy = opts.matchStrategy ?? 'exact_only';
+  // What the caller may see AT the resolving property (never more).
+  const access = await resolveAccess(tx, ports, { propertyId: input.propertyId });
+  const visibleOnly = async (cands: ScoredCandidate[]) => {
+    const vis = await visibilityOf(
+      tx,
+      access,
+      cands.map((c) => c.profileId),
+    );
+    return cands.filter((c) => (vis.get(c.profileId) ?? 'none') !== 'none');
+  };
   if (strategy !== 'create_new') {
     const names = resolveNames(input);
     const country = await propertyCountry(tx, ports, input.propertyId);
@@ -255,6 +273,7 @@ export async function resolveProfile(
       names: { searchName: names.search_name, searchNameNative: names.search_name_native },
       dateOfBirth: input.dateOfBirth ?? null,
       nationality: input.nationality ?? null,
+      // The booking's emails are claims: they match only other profiles' VERIFIED emails as exact keys.
       emails: [],
       phones: [],
       documentHashes: input.documentHash ? [input.documentHash] : [],
@@ -265,8 +284,8 @@ export async function resolveProfile(
       if (c.kind === 'email') (subject.emails as string[]).push(n.normalized);
       if (c.kind === 'phone' || c.kind === 'whatsapp') (subject.phones as string[]).push(n.normalized);
     }
-    const scored = await scoreAgainstExisting(tx, subject);
-    const reusable = scored.filter(isSafeExactReuse);
+    const visible = await visibleOnly(await scoreAgainstExisting(tx, subject));
+    const reusable = visible.filter(isSafeExactReuse);
     if (reusable.length === 1 && reusable[0]) {
       const profileId = reusable[0].profileId;
       await linkProperty(tx, profileId, input.propertyId, 'resolved');
@@ -275,7 +294,7 @@ export async function resolveProfile(
           source: input.source?.kind ?? 'resolved',
         });
       }
-      const others = scored.filter((s) => s.profileId !== profileId && s.score >= 0.3);
+      const others = visible.filter((v) => v.profileId !== profileId && v.score >= 0.3);
       return {
         profileId,
         created: false,
@@ -288,7 +307,11 @@ export async function resolveProfile(
     propertyId: input.propertyId,
     linkSource: 'created',
   });
-  const dups = (await detectDuplicates(tx, profileId, 'on_create')).filter((d) => d.score >= 0.3);
+  // Detection queues pairs organization-wide (for reviewers who may see both); the caller only learns about
+  // profiles it may see.
+  const dups = await visibleOnly(
+    (await detectDuplicates(tx, ports, profileId, 'on_create')).filter((d) => d.score >= 0.3),
+  );
   return {
     profileId,
     created: true,
@@ -318,7 +341,7 @@ export async function getProfile(
   opts: { propertyId?: string | null } = {},
 ): Promise<GuestProfile> {
   const vp = await requireVisibleProfile(tx, ports, id, opts);
-  return buildProfileView(tx, vp);
+  return buildProfileView(tx, ports, vp);
 }
 
 // ───────────────────────────── Update ─────────────────────────────
@@ -406,7 +429,7 @@ export async function updateProfile(
     payload: { profileId: id, changedFields: changed },
   });
   if (changed.some((k) => (IDENTITY_FIELDS as readonly string[]).includes(k))) {
-    await detectDuplicates(tx, id, 'on_update');
+    await detectDuplicates(tx, ports, id, 'on_update');
   }
   return getProfile(tx, ports, id);
 }
@@ -450,7 +473,7 @@ export async function addContactPoint(
     aggregate: { type: 'guest_profile', id: vp.row.id },
     payload: { profileId: vp.row.id, changedFields: ['contactPoints'] },
   });
-  await detectDuplicates(tx, vp.row.id, 'on_update');
+  await detectDuplicates(tx, ports, vp.row.id, 'on_update');
   return getProfile(tx, ports, vp.row.id);
 }
 
@@ -497,7 +520,7 @@ export async function verifyContactPoint(
     propertyId: vp.actingPropertyId,
     metadata: { contactPointId, method: input.method },
   });
-  await detectDuplicates(tx, vp.row.id, 'on_update');
+  await detectDuplicates(tx, ports, vp.row.id, 'on_update');
   return getProfile(tx, ports, vp.row.id);
 }
 
@@ -564,6 +587,32 @@ export async function addPreference(
   return getProfile(tx, ports, vp.row.id);
 }
 
+/**
+ * A property-scoped preference belongs to its property: it must be visible to the caller (404 otherwise) and is
+ * changed only with the permission at that property.
+ */
+async function requirePreferenceAccess(
+  tx: TxContext,
+  ports: GuestsPorts,
+  preferenceId: string,
+  propertyId: string | undefined,
+) {
+  const pref = await db(tx)
+    .selectFrom('guests.preferences')
+    .select(['id', 'profile_id', 'scope_property_id'])
+    .where('id', '=', preferenceId)
+    .executeTakeFirst();
+  if (!pref) throw new NotFoundError('preference', preferenceId);
+  const seen = await requireVisibleProfile(tx, ports, pref.profile_id).catch(() => {
+    throw new NotFoundError('preference', preferenceId);
+  });
+  const scope = pref.scope_property_id;
+  if (scope && !seen.access.readAll && !seen.access.readPropertyIds.includes(scope)) {
+    throw new NotFoundError('preference', preferenceId);
+  }
+  return requireWritableProfile(tx, ports, pref.profile_id, 'guests.profile.update', scope ?? propertyId);
+}
+
 export async function updatePreference(
   tx: TxContext,
   ports: GuestsPorts,
@@ -571,14 +620,7 @@ export async function updatePreference(
   expectedVersion: number,
   input: { value: string; propertyId?: string },
 ): Promise<GuestProfile> {
-  const pref = await loadChild(tx, 'guests.preferences', preferenceId);
-  const vp = await requireWritableProfile(
-    tx,
-    ports,
-    pref.profile_id,
-    'guests.profile.update',
-    input.propertyId,
-  );
+  const vp = await requirePreferenceAccess(tx, ports, preferenceId, input.propertyId);
   const row = await db(tx)
     .updateTable('guests.preferences')
     .set({ value: input.value, confirmed_at: tx.now, version: sql`version + 1` })
@@ -612,14 +654,7 @@ export async function removePreference(
   preferenceId: string,
   opts: { propertyId?: string } = {},
 ): Promise<GuestProfile> {
-  const pref = await loadChild(tx, 'guests.preferences', preferenceId);
-  const vp = await requireWritableProfile(
-    tx,
-    ports,
-    pref.profile_id,
-    'guests.profile.update',
-    opts.propertyId,
-  );
+  const vp = await requirePreferenceAccess(tx, ports, preferenceId, opts.propertyId);
   await db(tx).deleteFrom('guests.preferences').where('id', '=', preferenceId).execute();
   await bumpVersion(tx, vp.row.id);
   await tx.audit({
@@ -702,13 +737,33 @@ export async function resolveAlert(
   expectedVersion: number,
   opts: { propertyId?: string; reason?: string } = {},
 ): Promise<GuestProfile> {
-  const alert = await loadChild(tx, 'guests.alerts', alertId);
+  const alert = await db(tx)
+    .selectFrom('guests.alerts')
+    .selectAll()
+    .where('id', '=', alertId)
+    .executeTakeFirst();
+  if (!alert) throw new NotFoundError('alert', alertId);
+  // The alert must be visible to the caller (property-private alerts never leave their property) …
+  const seen = await requireVisibleProfile(tx, ports, alert.profile_id).catch(() => {
+    throw new NotFoundError('alert', alertId);
+  });
+  if (
+    !itemVisible(
+      seen.access,
+      seen.view,
+      { visibility: alert.visibility, propertyId: alert.property_id },
+      seen.consent,
+    )
+  ) {
+    throw new NotFoundError('alert', alertId);
+  }
+  // … and an alert recorded at a property is managed by staff of that property.
   const vp = await requireWritableProfile(
     tx,
     ports,
     alert.profile_id,
     'guests.alert.manage',
-    opts.propertyId,
+    alert.property_id ?? opts.propertyId,
   );
   const row = await db(tx)
     .updateTable('guests.alerts')
@@ -884,7 +939,7 @@ export async function addSpecialNeed(
       vp.actingPropertyId,
     );
   }
-  const aad = `guests.special_need:${tx.tenantId}:${id}`;
+  const encDetail = ports.crypto.cipher.encrypt(input.detail, `guests.special_need:${tx.tenantId}:${id}`);
   await db(tx)
     .insertInto('guests.special_needs')
     .values({
@@ -893,8 +948,8 @@ export async function addSpecialNeed(
       profile_id: vp.row.id,
       property_id: input.propertyId,
       category: input.category,
-      enc_detail: ports.crypto.cipher.encrypt(input.detail, aad),
-      key_id: ports.crypto.keyId,
+      enc_detail: encDetail,
+      key_id: keyIdOf(encDetail),
       alert_id: alertId,
       guest_agreed_text: input.guestAgreedAlertText ?? null,
       created_by: actorKey(tx),
@@ -1016,7 +1071,7 @@ export async function upsertMirroredProfile(
         last_synced_at: input.syncedAt,
       })
       .execute();
-    await detectDuplicates(tx, profileId, 'on_create');
+    await detectDuplicates(tx, ports, profileId, 'on_create');
     return { profileId, created: true };
   }
   const { row } = await (async () => {

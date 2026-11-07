@@ -247,7 +247,10 @@ create table guests.consents (
                                                    'profiling', 'cross_property_sharing')),
   state           text not null check (state in ('granted', 'withdrawn', 'unknown')),
   source          text not null,
+  -- Minimal evidence only: {textVersion, channel, capturedAt}. Free text (e.g. an IP or ticket reference) is kept
+  -- in evidence_reference, which erasure clears.
   evidence        jsonb not null default '{}',
+  evidence_reference text,
   changed_at      timestamptz not null,
   requested_profile_id uuid,
   created_at      timestamptz not null default now(),
@@ -265,12 +268,29 @@ create table guests.consent_events (
   purpose         text not null,
   state           text not null,
   source          text not null,
-  evidence        jsonb not null default '{}',
+  evidence        jsonb not null default '{}',   -- minimal: {textVersion, channel, capturedAt}
+  reference       text,                          -- free text; the only column erasure may clear
   occurred_at     timestamptz not null,
   actor_key       text not null
 );
 create index consent_events_consent_idx on guests.consent_events (consent_id, occurred_at);
 select core.enable_tenant_isolation('guests.consent_events');
+
+-- Consent evidence history is append-only except for erasure clearing the free-text reference.
+create or replace function guests.guard_consent_event_update() returns trigger
+  language plpgsql as $$
+begin
+  if new.reference is not null
+     or (to_jsonb(new) - 'reference') is distinct from (to_jsonb(old) - 'reference') then
+    raise exception 'guests.consent_events is append-only; only erasure may clear the reference'
+      using errcode = 'P0001';
+  end if;
+  return new;
+end $$;
+create trigger guard_consent_event_update before update on guests.consent_events
+  for each row execute function guests.guard_consent_event_update();
+create trigger reject_consent_event_delete before delete on guests.consent_events
+  for each row execute function core.reject_mutation();
 
 ---------------------------------------------------------------------------------------------------------
 -- Companies and travel agents (kind = agency) + contacts
@@ -376,6 +396,7 @@ create table guests.duplicate_candidates (
   profile_b_id   uuid not null references guests.profiles(id),
   score          numeric(3, 2) not null check (score >= 0 and score <= 1),
   reasons        jsonb not null,
+  -- Matched exact keys as keyed blind-index hashes (`email:<hmac>`), never plaintext values.
   exact_keys     text[] not null default '{}',
   status         text not null default 'open' check (status in ('open', 'merged', 'dismissed')),
   detected_by    text not null,
@@ -432,7 +453,8 @@ create table guests.merge_reference_repoints (
   ref_id       text not null,
   field        text,
   recorded_at  timestamptz not null,
-  unique (merge_id, module, ref_type, ref_id, field)
+  -- Idempotent re-delivery even when field is null.
+  unique nulls not distinct (merge_id, module, ref_type, ref_id, field)
 );
 select core.enable_tenant_isolation('guests.merge_reference_repoints');
 
@@ -462,8 +484,26 @@ create trigger touch before update on guests.alerts for each row execute functio
 create trigger touch before update on guests.companies for each row execute function core.touch_updated_at();
 create trigger touch before update on guests.stay_history for each row execute function core.touch_updated_at();
 
+---------------------------------------------------------------------------------------------------------
+-- Scheduled-job tenant discovery (routing metadata only — tenant ids, never business data). SECURITY DEFINER:
+-- the owner (migration role) must bypass RLS; the job then works inside each tenant's RLS-scoped transaction.
+---------------------------------------------------------------------------------------------------------
+create or replace function guests.tenants_with_expired_documents(p_as_of date) returns table (tenant_id uuid)
+  language sql stable security definer set search_path = guests, pg_temp as $$
+    select distinct d.tenant_id from guests.identity_documents d where d.retain_until < p_as_of
+$$;
+create or replace function guests.tenants_with_active_profiles() returns table (tenant_id uuid)
+  language sql stable security definer set search_path = guests, pg_temp as $$
+    select distinct p.tenant_id from guests.profiles p where p.status = 'active'
+$$;
+
 select core.apply_standard_grants('guests');
-select core.make_append_only('guests.consent_events');
+revoke execute on function guests.tenants_with_expired_documents(date), guests.tenants_with_active_profiles()
+  from public;
+grant execute on function guests.tenants_with_expired_documents(date), guests.tenants_with_active_profiles()
+  to portico_app;
+revoke update, delete, truncate on guests.consent_events from portico_app;
+grant update (reference) on guests.consent_events to portico_app;
 select core.make_append_only('guests.merge_reference_repoints');
 -- Notes: deletes are never allowed (redaction instead); updates are restricted by guard_note_update.
 revoke delete, truncate on guests.notes from portico_app;

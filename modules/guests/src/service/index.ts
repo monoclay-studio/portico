@@ -3,7 +3,7 @@
  * other modules call the provider functions (domain map § guests) inside their own transaction.
  */
 import type { TxContext } from '@portico/db';
-import type { EntityRef } from '@portico/kernel';
+import { type EntityRef, requirePermission } from '@portico/kernel';
 import type {
   AlertInput,
   CompanyInput,
@@ -146,8 +146,11 @@ export function createGuestsService(ports: GuestsPorts) {
       documents.purgeExpiredDocuments(tx, opts),
 
     // ── Duplicates & merges ──
-    detectDuplicates: (tx: TxContext, profileId: string) =>
-      duplicates.detectDuplicates(tx, profileId, 'scan'),
+    /** Re-run detection for one profile (reviewers; the nightly job uses scanDuplicates). */
+    detectDuplicates: (tx: TxContext, profileId: string) => {
+      requirePermission(tx, 'guests.profile.merge');
+      return duplicates.detectDuplicates(tx, ports, profileId, 'scan');
+    },
     listDuplicates: (
       tx: TxContext,
       opts?: { status?: 'open' | 'merged' | 'dismissed'; limit?: number; propertyId?: string },
@@ -155,7 +158,7 @@ export function createGuestsService(ports: GuestsPorts) {
     dismissDuplicate: (tx: TxContext, candidateId: string, reason: string) =>
       duplicates.dismissDuplicate(tx, ports, candidateId, reason),
     scanDuplicates: (tx: TxContext, opts?: { afterId?: string; batch?: number }) =>
-      duplicates.scanDuplicates(tx, opts),
+      duplicates.scanDuplicates(tx, ports, opts),
     previewMerge: (
       tx: TxContext,
       input: { survivorId: string; mergedId: string; fieldChoices?: Record<string, 'survivor' | 'merged'> },
@@ -164,7 +167,6 @@ export function createGuestsService(ports: GuestsPorts) {
     listMergesForProfile: (tx: TxContext, profileId: string) =>
       merge.listMergesForProfile(tx, ports, profileId),
     previewUnmerge: (tx: TxContext, mergeId: string) => merge.previewUnmerge(tx, ports, mergeId),
-    snapshotProfile: (tx: TxContext, profileId: string) => merge.snapshotProfile(tx, profileId),
 
     // ── Companies & agencies ──
     createCompany: (tx: TxContext, input: CompanyInput) => companies.createCompany(tx, ports, input),

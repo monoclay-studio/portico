@@ -125,10 +125,38 @@ export async function exportProfile(
   return { requestId, data };
 }
 
+/**
+ * Build the export. Property-bound data (identity documents, special needs, property-private and department
+ * notes and alerts, property-scoped preferences, stays) is included only for properties where the requester
+ * holds guests.privacy.export — and document / sensitive details additionally need guests.document.read /
+ * guests.sensitive.read there. Everything else is listed as withheld so the manifest says honestly whether the
+ * export is complete (an organization-wide data-protection role produces a complete one). Every document
+ * decrypted into an export is audited like a reveal.
+ */
 async function buildExport(tx: TxContext, ports: GuestsPorts, profileId: string, requestId: string) {
   const snap = await snapshotProfile(tx, profileId);
-  const canReadDocs = tx.authz.can('guests.document.read');
-  const documents = (snap.children.identity_documents ?? []).map((d) => {
+  const exportScope = tx.authz.propertyScope('guests.privacy.export');
+  const inScope = (propertyId: unknown) =>
+    exportScope === 'all' || (typeof propertyId === 'string' && exportScope.includes(propertyId));
+  const withheld: Array<{ category: string; count: number; reason: string }> = [];
+  const withhold = (category: string, count: number, reason: string) => {
+    if (count > 0) withheld.push({ category, count, reason });
+  };
+  const outOfScope = 'recorded at a property where you do not hold guests.privacy.export';
+  const byScope = <T extends Record<string, unknown>>(
+    rows: T[],
+    prop: (r: T) => unknown,
+    category: string,
+  ) => {
+    const ok = rows.filter((r) => inScope(prop(r)));
+    withhold(category, rows.length - ok.length, outOfScope);
+    return ok;
+  };
+
+  const docs = byScope(snap.children.identity_documents ?? [], (d) => d.property_id, 'identityDocuments');
+  let docDetailsWithheld = 0;
+  const documents = [];
+  for (const d of docs) {
     const base = {
       id: d.id,
       type: d.doc_type,
@@ -136,21 +164,87 @@ async function buildExport(tx: TxContext, ports: GuestsPorts, profileId: string,
       expiryDate: d.expiry_date,
       propertyId: d.property_id,
     };
-    if (!canReadDocs) return { ...base, details: 'withheld: requires guests.document.read' };
+    if (!tx.authz.can('guests.document.read', { propertyId: String(d.property_id) })) {
+      docDetailsWithheld++;
+      documents.push({ ...base, details: 'withheld: requires guests.document.read at this property' });
+      continue;
+    }
     const payload = JSON.parse(
       ports.crypto.cipher.decrypt(String(d.enc_payload), `guests.identity_document:${tx.tenantId}:${d.id}`),
     ) as Record<string, unknown>;
-    return { ...base, details: payload };
-  });
-  const specialNeeds = (snap.children.special_needs ?? []).map((s) => ({
-    id: s.id,
-    category: s.category,
-    propertyId: s.property_id,
-    guestAgreedText: s.guest_agreed_text,
-    detail: tx.authz.can('guests.sensitive.read')
-      ? ports.crypto.cipher.decrypt(String(s.enc_detail), `guests.special_need:${tx.tenantId}:${s.id}`)
-      : 'withheld: requires guests.sensitive.read',
-  }));
+    await tx.audit({
+      action: 'guests.document.read',
+      target: { type: 'identity_document', id: String(d.id) },
+      propertyId: String(d.property_id),
+      reason: `Data-subject export ${requestId}`,
+      metadata: { profileId, type: d.doc_type, via: 'privacy_export' },
+    });
+    documents.push({ ...base, details: payload });
+  }
+  withhold(
+    'identityDocumentDetails',
+    docDetailsWithheld,
+    'requires guests.document.read at the capturing property',
+  );
+
+  const needs = byScope(snap.children.special_needs ?? [], (n) => n.property_id, 'specialNeeds');
+  let needDetailsWithheld = 0;
+  const specialNeeds = [];
+  for (const n of needs) {
+    const allowed = tx.authz.can('guests.sensitive.read', { propertyId: String(n.property_id) });
+    if (!allowed) needDetailsWithheld++;
+    else {
+      await tx.audit({
+        action: 'guests.sensitive.read',
+        target: { type: 'special_need', id: String(n.id) },
+        propertyId: String(n.property_id),
+        reason: `Data-subject export ${requestId}`,
+        metadata: { profileId, category: n.category, via: 'privacy_export' },
+      });
+    }
+    specialNeeds.push({
+      id: n.id,
+      category: n.category,
+      propertyId: n.property_id,
+      guestAgreedText: n.guest_agreed_text,
+      detail: allowed
+        ? ports.crypto.cipher.decrypt(String(n.enc_detail), `guests.special_need:${tx.tenantId}:${n.id}`)
+        : 'withheld: requires guests.sensitive.read at this property',
+    });
+  }
+  withhold(
+    'specialNeedDetails',
+    needDetailsWithheld,
+    'requires guests.sensitive.read at the capturing property',
+  );
+
+  // Shared items follow the person; private / department items stay with their property.
+  const SHARED = '*shared*';
+  const sharedOr = (shared: boolean, propertyId: unknown) => (shared ? SHARED : propertyId);
+  const inScopeOrShared = (v: unknown) => v === SHARED || inScope(v);
+  const scoped = <T extends Record<string, unknown>>(rows: T[], key: (r: T) => unknown, category: string) => {
+    const ok = rows.filter((r) => inScopeOrShared(key(r)));
+    withhold(category, rows.length - ok.length, outOfScope);
+    return ok;
+  };
+  const notes = scoped(
+    snap.children.notes ?? [],
+    (n) => sharedOr(n.visibility === 'shared', n.property_id),
+    'notes',
+  );
+  const alerts = scoped(
+    snap.children.alerts ?? [],
+    (a) => sharedOr(a.visibility === 'shared', a.property_id),
+    'alerts',
+  );
+  const preferences = scoped(
+    snap.children.preferences ?? [],
+    (x) => sharedOr(x.scope_property_id === null, x.scope_property_id),
+    'preferences',
+  );
+  const stays = byScope(snap.children.stay_history ?? [], (x) => x.property_id, 'stays');
+  const knownAt = (snap.children.profile_properties ?? []).map((x) => String(x.property_id)).filter(inScope);
+
   const p = snap.profile;
   const modules: Record<string, unknown> = {};
   const manifest: Array<{ module: string; status: 'included' | 'unavailable' }> = [
@@ -169,6 +263,8 @@ async function buildExport(tx: TxContext, ports: GuestsPorts, profileId: string,
     generatedAt: tx.now.toISOString(),
     requestId,
     manifest,
+    complete: withheld.length === 0 && manifest.every((m) => m.status === 'included'),
+    withheld,
     profile: {
       id: p.id,
       status: p.status,
@@ -193,17 +289,9 @@ async function buildExport(tx: TxContext, ports: GuestsPorts, profileId: string,
       verified: c.verified,
       source: c.source,
     })),
-    preferences: (snap.children.preferences ?? []).map((x) => ({ category: x.category, value: x.value })),
-    alerts: (snap.children.alerts ?? []).map((x) => ({
-      severity: x.severity,
-      text: x.text,
-      status: x.status,
-    })),
-    notes: (snap.children.notes ?? []).map((x) => ({
-      body: x.body,
-      visibility: x.visibility,
-      createdAt: x.created_at,
-    })),
+    preferences: preferences.map((x) => ({ category: x.category, value: x.value })),
+    alerts: alerts.map((x) => ({ severity: x.severity, text: x.text, status: x.status })),
+    notes: notes.map((x) => ({ body: x.body, visibility: x.visibility, createdAt: x.created_at })),
     relationships: [
       ...(snap.children.relationships_out ?? []),
       ...(snap.children.relationships_in ?? []),
@@ -216,15 +304,15 @@ async function buildExport(tx: TxContext, ports: GuestsPorts, profileId: string,
     consents: await consentHistory(tx, ports, profileId),
     identityDocuments: documents,
     specialNeeds,
-    stays: (snap.children.stay_history ?? []).map((s) => ({
-      stayId: s.stay_id,
-      propertyId: s.property_id,
-      role: s.role,
-      arrival: s.arrival,
-      departure: s.departure,
-      status: s.status,
+    stays: stays.map((x) => ({
+      stayId: x.stay_id,
+      propertyId: x.property_id,
+      role: x.role,
+      arrival: x.arrival,
+      departure: x.departure,
+      status: x.status,
     })),
-    knownAtProperties: (snap.children.profile_properties ?? []).map((x) => x.property_id),
+    knownAtProperties: knownAt,
     merges: (await listMergesForProfile(tx, ports, profileId)).map((m) => ({
       id: m.id,
       survivorId: m.survivorId,
@@ -234,7 +322,8 @@ async function buildExport(tx: TxContext, ports: GuestsPorts, profileId: string,
     })),
     otherModules: modules,
     counts: Object.fromEntries(Object.entries(snap.children).map(([k, v]) => [k, v.length])),
-    documentDetailsIncluded: canReadDocs,
+    documentDetailsIncluded:
+      docDetailsWithheld === 0 && docs.length === (snap.children.identity_documents ?? []).length,
   };
   return data;
 }
@@ -336,14 +425,20 @@ export async function eraseProfile(
       .where('redacted_at', 'is', null)
       .execute(),
   );
-  // Consent: keep purpose / state / date as evidence; remove free-text evidence.
+  // Consent: purpose / state / date / text version / channel stay as minimal evidence (never personal); the
+  // free-text reference (IP, ticket…) is cleared — in the current rows and in the append-only history.
   await count(
     'consents',
     db(tx)
       .updateTable('guests.consents')
-      .set({ evidence: JSON.stringify({ redacted: true }) })
+      .set({ evidence_reference: null })
       .where('profile_id', 'in', ids)
       .execute(),
+  );
+  await sql`update guests.consent_events set reference = null
+    where reference is not null
+      and consent_id in (select c.id from guests.consents c where c.profile_id = any(${ids}::uuid[]))`.execute(
+    tx.db,
   );
   await db(tx)
     .deleteFrom('guests.external_refs')
@@ -360,11 +455,17 @@ export async function eraseProfile(
       .where('status', '=', 'active')
       .execute(),
   );
-  await db(tx)
-    .updateTable('guests.merges')
-    .set({ snapshot: JSON.stringify({ redacted: true }) })
-    .where((eb) => eb.or([eb('survivor_id', 'in', ids), eb('merged_id', 'in', ids)]))
-    .execute();
+  // Every merge record touching the person: snapshots, field values in decisions, survivor-row before/after,
+  // unmerge conflict values and the free-text reasons are removed; field names, sides and rules remain.
+  await sql`update guests.merges set
+      snapshot = '{"redacted": true}'::jsonb,
+      decisions = coalesce((select jsonb_agg(d - 'survivorValue' - 'mergedValue' - 'value')
+                            from jsonb_array_elements(decisions) d), '[]'::jsonb),
+      survivor_updates = '[]'::jsonb,
+      unmerge_result = case when unmerge_result is null then null else '{"redacted": true}'::jsonb end,
+      reason = '[redacted]',
+      reverse_reason = case when reverse_reason is null then null else '[redacted]' end
+    where survivor_id = any(${ids}::uuid[]) or merged_id = any(${ids}::uuid[])`.execute(tx.db);
   for (const id of ids) {
     await db(tx)
       .updateTable('guests.profiles')
@@ -392,7 +493,7 @@ export async function eraseProfile(
       .where('id', '=', id)
       .execute();
   }
-  // Duplicate suggestions about an anonymized person are meaningless.
+  // Duplicate suggestions about an anonymized person are meaningless; their match evidence is removed.
   await db(tx)
     .updateTable('guests.duplicate_candidates')
     .set({
@@ -402,6 +503,11 @@ export async function eraseProfile(
       version: sql`version + 1`,
     })
     .where('status', '=', 'open')
+    .where((eb) => eb.or([eb('profile_a_id', 'in', ids), eb('profile_b_id', 'in', ids)]))
+    .execute();
+  await db(tx)
+    .updateTable('guests.duplicate_candidates')
+    .set({ reasons: '[]', exact_keys: [], resolution_reason: 'Profile anonymized' })
     .where((eb) => eb.or([eb('profile_a_id', 'in', ids), eb('profile_b_id', 'in', ids)]))
     .execute();
   const retained = await db(tx)

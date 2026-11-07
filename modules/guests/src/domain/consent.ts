@@ -17,16 +17,6 @@ export type ConsentState = 'granted' | 'withdrawn' | 'unknown';
 
 export type LegalBasis = 'consent' | 'contract' | 'legal_obligation' | 'legitimate_interests';
 
-/** Activities that never depend on marketing consent. */
-export const OPERATIONAL_ACTIVITIES = {
-  reservation_fulfilment: 'contract',
-  pre_arrival_logistics: 'contract',
-  service_requests: 'contract',
-  billing_and_fiscal_records: 'legal_obligation',
-  guest_registration: 'legal_obligation',
-  safety_and_fraud_prevention: 'legitimate_interests',
-} as const satisfies Record<string, LegalBasis>;
-
 export interface PurposeBasis {
   purpose: ConsentPurpose;
   basis: LegalBasis;

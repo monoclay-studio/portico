@@ -12,7 +12,7 @@ import {
   normalizeDocumentNumber,
   retentionDate,
 } from '../domain/documents';
-import type { GuestsPorts } from '../ports';
+import { type GuestsPorts, keyIdOf } from '../ports';
 import { detectDuplicates } from './duplicates';
 import { actorKey, db, requireVisibleProfile, requireWritableProfile, today } from './internal';
 
@@ -86,6 +86,7 @@ export async function addDocument(
     ...(input.dateOfBirth ? { dateOfBirth: input.dateOfBirth } : {}),
     ...(input.issueDate ? { issueDate: input.issueDate } : {}),
   };
+  const encrypted = ports.crypto.cipher.encrypt(JSON.stringify(payload), aadFor(tx.tenantId, id));
   await db(tx)
     .insertInto('guests.identity_documents')
     .values({
@@ -95,8 +96,8 @@ export async function addDocument(
       property_id: input.propertyId,
       doc_type: input.type,
       issuing_country: input.issuingCountry,
-      enc_payload: ports.crypto.cipher.encrypt(JSON.stringify(payload), aadFor(tx.tenantId, id)),
-      key_id: ports.crypto.keyId,
+      enc_payload: encrypted,
+      key_id: keyIdOf(encrypted),
       number_hash: numberHash,
       last4_hash: ports.crypto.blindIndex(documentLast4Input(number)),
       expiry_date: input.expiryDate ?? null,
@@ -113,7 +114,7 @@ export async function addDocument(
     // Never the number (GUE-I04).
     metadata: { profileId: vp.row.id, type: input.type, issuingCountry: input.issuingCountry },
   });
-  await detectDuplicates(tx, vp.row.id, 'on_update');
+  await detectDuplicates(tx, ports, vp.row.id, 'on_update');
   return { documentId: id };
 }
 
@@ -241,14 +242,33 @@ export async function recomputeDocumentRetention(
 export async function purgeExpiredDocuments(
   tx: TxContext,
   opts: { asOf?: string } = {},
-): Promise<{ deleted: number; documentIds: string[] }> {
+): Promise<{ deleted: number; documentIds: string[]; heldByLegalHold: number }> {
   requirePermission(tx, 'guests.document.manage');
+  // Manual runs are limited to the caller's properties; the scheduled job runs as system (all properties).
+  const scope = tx.authz.propertyScope('guests.document.manage');
   const asOf = opts.asOf ?? today(tx);
-  const rows = await db(tx)
-    .deleteFrom('guests.identity_documents')
-    .where('retain_until', '<', asOf)
-    .returning(['id', 'profile_id', 'property_id', 'doc_type'])
-    .execute();
+  const due = (q: ReturnType<typeof baseDue>) =>
+    scope === 'all' ? q : q.where('d.property_id', 'in', [...scope]);
+  const baseDue = () =>
+    db(tx)
+      .selectFrom('guests.identity_documents as d')
+      .innerJoin('guests.profiles as p', 'p.id', 'd.profile_id')
+      .where('d.retain_until', '<', asOf);
+  const held = await due(baseDue())
+    .where('p.legal_hold', '=', true)
+    .select(sql<number>`count(*)::int`.as('n'))
+    .executeTakeFirst();
+  const ids = (await due(baseDue()).where('p.legal_hold', '=', false).select('d.id').execute()).map(
+    (r) => r.id,
+  );
+  const rows =
+    ids.length === 0
+      ? []
+      : await db(tx)
+          .deleteFrom('guests.identity_documents')
+          .where('id', 'in', ids)
+          .returning(['id', 'profile_id', 'property_id', 'doc_type'])
+          .execute();
   for (const r of rows) {
     await tx.audit({
       action: 'guests.document.retentionPurge',
@@ -258,5 +278,6 @@ export async function purgeExpiredDocuments(
       metadata: { profileId: r.profile_id, type: r.doc_type },
     });
   }
-  return { deleted: rows.length, documentIds: rows.map((r) => r.id) };
+  // Run report: what was deleted, and what a legal hold kept.
+  return { deleted: rows.length, documentIds: rows.map((r) => r.id), heldByLegalHold: held?.n ?? 0 };
 }

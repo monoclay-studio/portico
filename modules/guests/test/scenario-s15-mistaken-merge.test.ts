@@ -6,10 +6,10 @@
  * the audit trail shows both the merge and the unmerge.
  */
 import { drainOutbox, type TxContext, type TxEventSubscription } from '@portico/db';
-import { addDays, newId } from '@portico/kernel';
+import { addDays, newId, systemContext } from '@portico/kernel';
 import type { TestDatabase } from '@portico/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { ProfileSnapshot } from '../src/service/merge';
+import { type ProfileSnapshot, snapshotProfile } from '../src/service/merge';
 import { auditRows, makeService, outboxRows, setupOrg, startDb, type TestOrg } from './helpers';
 
 let t: TestDatabase;
@@ -55,6 +55,9 @@ class FakeReservations {
     };
   }
 }
+
+/** Internal snapshot (test-only; not part of the public service). */
+const snap = (org: TestOrg, id: string) => org.sys((tx) => snapshotProfile(tx, id));
 
 const drain = (sub: TxEventSubscription) =>
   drainOutbox(t.db, { subscriptions: [sub], environmentOf: async () => 'live' });
@@ -218,8 +221,8 @@ describe('scenario S15 — a mistaken merge is investigated and corrected', () =
     reservations.refs.set(bookingOfTwo, p2);
     await drain(sub); // settle earlier events
 
-    const before1 = await org.sys((tx) => svc.snapshotProfile(tx, p1));
-    const before2 = await org.sys((tx) => svc.snapshotProfile(tx, p2));
+    const before1 = await snap(org, p1);
+    const before2 = await snap(org, p2);
 
     // A duty manager with merge rights at both properties merges the two "Ahmed Ali" profiles by mistake.
     const manager = org.user(
@@ -320,8 +323,8 @@ describe('scenario S15 — a mistaken merge is investigated and corrected', () =
     await drain(sub);
 
     // Both profiles are restored field-for-field and record-for-record (apart from post-merge items).
-    const after1 = await org.sys((tx) => svc.snapshotProfile(tx, p1));
-    const after2 = await org.sys((tx) => svc.snapshotProfile(tx, p2));
+    const after1 = await snap(org, p1);
+    const after2 = await snap(org, p2);
     const postMerge = up.postMergeItems.map((i) => i.id);
     expect(comparable(after1, postMerge)).toEqual(comparable(before1));
     expect(comparable(after2, postMerge)).toEqual(comparable(before2));
@@ -393,8 +396,8 @@ describe('merge invariants', () => {
   it('GUE-I02: merge then unmerge with no intervening change restores both profiles exactly', async () => {
     const org = await setupOrg(t);
     const { p1, p2 } = await twoAhmedAlis(org);
-    const b1 = await org.sys((tx) => org.svc.snapshotProfile(tx, p1));
-    const b2 = await org.sys((tx) => org.svc.snapshotProfile(tx, p2));
+    const b1 = await snap(org, p1);
+    const b2 = await snap(org, p2);
     const { mergeId } = await org.sys((tx) =>
       org.svc.mergeProfiles(tx, {
         survivorId: p1,
@@ -406,8 +409,8 @@ describe('merge invariants', () => {
     const mid = await org.sys((tx) => org.svc.getProfile(tx, p1));
     expect(mid).toMatchObject({ nationality: 'SA', dateOfBirth: '1992-11-20' });
     await org.sys((tx) => org.svc.unmergeProfiles(tx, { mergeId, reason: 'test reversal' }));
-    expect(comparable(await org.sys((tx) => org.svc.snapshotProfile(tx, p1)))).toEqual(comparable(b1));
-    expect(comparable(await org.sys((tx) => org.svc.snapshotProfile(tx, p2)))).toEqual(comparable(b2));
+    expect(comparable(await snap(org, p1))).toEqual(comparable(b1));
+    expect(comparable(await snap(org, p2))).toEqual(comparable(b2));
   });
 
   it('GUE-I01/R12: chains resolve to the active survivor; the earlier merge waits for the later one', async () => {
@@ -464,6 +467,26 @@ describe('merge invariants', () => {
     expect(preview.fields.find((f) => f.field === 'nationality')).toMatchObject({
       chosen: 'survivor',
       changes: false,
+    });
+  });
+
+  it('recordReferenceRepoints is idempotent (re-delivered events never inflate the reference map)', async () => {
+    const org = await setupOrg(t);
+    const { p1, p2 } = await twoAhmedAlis(org);
+    const { mergeId } = await org.sys((tx) =>
+      org.svc.mergeProfiles(tx, { survivorId: p1, mergedId: p2, reason: 'r' }),
+    );
+    const consumer = systemContext(org.tenantId, 'consumer:reservations', 'live', newId());
+    const ref = { type: 'booking', id: newId() };
+    const first = await org.run(consumer, (tx) =>
+      org.svc.recordReferenceRepoints(tx, { mergeId, module: 'reservations', references: [ref] }),
+    );
+    const again = await org.run(consumer, (tx) =>
+      org.svc.recordReferenceRepoints(tx, { mergeId, module: 'reservations', references: [ref] }),
+    );
+    expect([first.recorded, again.recorded]).toEqual([1, 0]);
+    expect((await org.sys((tx) => org.svc.getMerge(tx, mergeId))).referencesRepointed).toEqual({
+      reservations: 1,
     });
   });
 

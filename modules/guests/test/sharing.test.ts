@@ -278,3 +278,210 @@ describe('cross-property sharing', () => {
     expect(await body(colleague)).not.toContain('Prefers female therapist');
   });
 });
+
+describe('cross-property resolution and property-scoped items (review regressions)', () => {
+  async function hiddenGuest(org: TestOrg) {
+    const [A] = org.properties as [string, string];
+    const g = await org.sys((tx) =>
+      org.svc.resolveProfile(
+        tx,
+        {
+          propertyId: A,
+          givenName: 'Ingrid',
+          familyName: 'Larsen',
+          dateOfBirth: '1985-05-05',
+          contactPoints: [
+            { kind: 'email', value: 'ingrid.larsen@guest.example', verified: true },
+            { kind: 'phone', value: '+47 912 34 567' },
+          ],
+        },
+        { matchStrategy: 'create_new' },
+      ),
+    );
+    return g.profileId;
+  }
+  const deskB = (org: TestOrg, extra: string[] = []) =>
+    org.user(
+      ['guests.profile.read', 'guests.profile.update', ...extra].map((permission) => ({
+        permission,
+        propertyIds: [org.properties[1] as string],
+      })),
+    );
+
+  it('GUE-I05: resolution at B never reuses or reveals A’s profile when sharing does not apply', async () => {
+    const org = await setupOrg(t);
+    const [, B] = org.properties as [string, string];
+    const id = await hiddenGuest(org);
+    const desk = deskB(org); // no readShared
+    const suggest = await org.run(desk, (tx) =>
+      org.svc.createProfile(tx, {
+        propertyId: B,
+        givenName: 'Ingrid',
+        familyName: 'Larsen',
+        contactPoints: [{ kind: 'email', value: 'someone.else@guest.example' }],
+      }),
+    );
+    expect(suggest.created).toBe(true);
+    expect(suggest.possibleDuplicates.map((d) => d.profileId)).not.toContain(id);
+    const exact = await org.run(desk, (tx) =>
+      org.svc.resolveProfile(tx, {
+        propertyId: B,
+        givenName: 'Ingrid',
+        familyName: 'Larsen',
+        contactPoints: [{ kind: 'email', value: 'ingrid.larsen@guest.example' }],
+      }),
+    );
+    expect(exact.created).toBe(true);
+    expect(exact.profileId).not.toBe(id);
+    expect(exact.possibleDuplicates).not.toContain(id);
+    await expect(org.run(desk, (tx) => org.svc.getProfile(tx, id))).rejects.toMatchObject({ status: 404 });
+    // The pair is still queued for an organization-level reviewer who can see both.
+    const queue = await org.sys((tx) => org.svc.listDuplicates(tx, { status: 'open' }));
+    expect(queue.some((d) => [d.profileAId, d.profileBId].includes(id))).toBe(true);
+  });
+
+  it('with sharing fully permitted, B reuses the profile; the guest’s objection or sharing off stops it', async () => {
+    const org = await setupOrg(t);
+    const [A, B] = org.properties as [string, string];
+    const id = await hiddenGuest(org);
+    const desk = deskB(org, ['guests.profile.readShared']);
+    const input = {
+      propertyId: B,
+      givenName: 'Ingrid',
+      familyName: 'Larsen',
+      contactPoints: [{ kind: 'email' as const, value: 'ingrid.larsen@guest.example' }],
+    };
+    await setSharing(org, { enabled: false });
+    expect((await org.run(desk, (tx) => org.svc.resolveProfile(tx, input))).profileId).not.toBe(id);
+    await setSharing(org, { enabled: true });
+    await org.sys((tx) =>
+      org.svc.recordConsent(tx, id, {
+        propertyId: A,
+        purpose: 'cross_property_sharing',
+        state: 'withdrawn',
+        source: 'front_desk',
+        evidence: { channel: 'front_desk' },
+      }),
+    );
+    expect((await org.run(desk, (tx) => org.svc.resolveProfile(tx, input))).profileId).not.toBe(id);
+    await org.sys((tx) =>
+      org.svc.recordConsent(tx, id, {
+        propertyId: A,
+        purpose: 'cross_property_sharing',
+        state: 'unknown',
+        source: 'front_desk',
+        evidence: { channel: 'front_desk' },
+      }),
+    );
+    const reused = await org.run(desk, (tx) => org.svc.resolveProfile(tx, input));
+    expect(reused).toMatchObject({ profileId: id, created: false });
+  });
+
+  it('staff at B can neither see nor change A’s property-scoped preference or private alert', async () => {
+    const org = await setupOrg(t);
+    const [A, B] = org.properties as [string, string];
+    const id = await hiddenGuest(org);
+    await org.sys(async (tx) => {
+      await org.svc.addPreference(tx, id, { category: 'villa', value: 'Sunset side', scopePropertyId: A });
+      await org.svc.addAlert(tx, id, {
+        propertyId: A,
+        severity: 'critical',
+        text: 'A-only alert',
+        visibility: 'property_private',
+      });
+      await org.svc.recordStayHistory(tx, {
+        profileId: id,
+        stayRef: { type: 'stay', id: crypto.randomUUID() },
+        propertyId: B,
+        arrival: '2026-11-20',
+        departure: '2026-11-22',
+        status: 'expected',
+      });
+    });
+    const full = await org.sys((tx) => org.svc.getProfile(tx, id));
+    const pref = full.preferences.find((p) => p.scopePropertyId === A);
+    const alert = full.alerts.find((a) => a.text === 'A-only alert');
+    const desk = deskB(org, ['guests.alert.manage']);
+    const viewB = await org.run(desk, (tx) => org.svc.getProfile(tx, id));
+    expect(viewB.preferences.map((p) => p.id)).not.toContain(pref?.id);
+    expect(viewB.alerts.map((a) => a.id)).not.toContain(alert?.id);
+    await expect(
+      org.run(desk, (tx) =>
+        org.svc.updatePreference(tx, pref?.id as string, pref?.version as number, {
+          value: 'Changed',
+          propertyId: B,
+        }),
+      ),
+    ).rejects.toMatchObject({ status: 404 });
+    await expect(
+      org.run(desk, (tx) => org.svc.removePreference(tx, pref?.id as string, { propertyId: B })),
+    ).rejects.toMatchObject({ status: 404 });
+    await expect(
+      org.run(desk, (tx) =>
+        org.svc.resolveAlert(tx, alert?.id as string, alert?.version as number, { propertyId: B }),
+      ),
+    ).rejects.toMatchObject({ status: 404 });
+    const unchanged = await org.sys((tx) => org.svc.getProfile(tx, id));
+    expect(unchanged.preferences.find((p) => p.id === pref?.id)?.value).toBe('Sunset side');
+    expect(unchanged.alerts.find((a) => a.id === alert?.id)?.status).toBe('active');
+  });
+
+  it('links, known-at properties and duplicate issues do not leak other properties when sharing is off', async () => {
+    const org = await setupOrg(t);
+    const [A, B] = org.properties as [string, string];
+    const id = await hiddenGuest(org);
+    const stayA = crypto.randomUUID();
+    const bookingA = crypto.randomUUID();
+    await org.sys(async (tx) => {
+      await org.svc.recordStayHistory(tx, {
+        profileId: id,
+        stayRef: { type: 'stay', id: stayA },
+        bookingId: bookingA,
+        propertyId: A,
+        arrival: '2026-01-05',
+        departure: '2026-01-12',
+        status: 'departed',
+      });
+      await org.svc.recordStayHistory(tx, {
+        profileId: id,
+        stayRef: { type: 'stay', id: crypto.randomUUID() },
+        propertyId: B,
+        arrival: '2026-11-20',
+        departure: '2026-11-22',
+        status: 'expected',
+      });
+    });
+    // A same-name duplicate known only at A (visible to org reviewers, not to B).
+    await org.sys((tx) =>
+      org.svc.resolveProfile(
+        tx,
+        { propertyId: A, givenName: 'Ingrid', familyName: 'Larsen', dateOfBirth: '1985-05-05' },
+        { matchStrategy: 'create_new' },
+      ),
+    );
+    await setSharing(org, { enabled: false });
+    const desk = org.user([{ permission: 'guests.profile.read', propertyIds: [B] }]);
+    const p = await org.run(desk, (tx) => org.svc.getProfile(tx, id));
+    expect(p.knownAtPropertyIds).toEqual([B]);
+    expect(p.links.map((l) => l.id)).not.toContain(stayA);
+    expect(p.links.map((l) => l.id)).not.toContain(bookingA);
+    expect(p.issues.map((i) => i.code)).not.toContain('possible_duplicate');
+    const h = await org.run(desk, (tx) => org.svc.getStayHistory(tx, id));
+    expect(h.items.map((i) => i.propertyId)).toEqual([B]);
+  });
+
+  it('writing at another property does not silently link the profile there', async () => {
+    const org = await setupOrg(t);
+    const [, B] = org.properties as [string, string];
+    const id = await hiddenGuest(org);
+    const desk = deskB(org, ['guests.profile.readShared']);
+    await org.run(desk, (tx) =>
+      org.svc.addNote(tx, id, { propertyId: B, visibility: 'property_private', body: 'B note' }),
+    );
+    const p = await org.run(desk, (tx) => org.svc.getProfile(tx, id));
+    expect(p.visibility).toBe('shared');
+    expect(p.notes.map((n) => n.body)).toContain('B note'); // B's own item is visible at B
+    await setSharing(org, { enabled: false });
+    await expect(org.run(desk, (tx) => org.svc.getProfile(tx, id))).rejects.toMatchObject({ status: 404 });
+  });
+});

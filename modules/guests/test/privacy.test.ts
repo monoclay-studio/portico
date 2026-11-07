@@ -3,6 +3,7 @@
  * operations; withdrawal never deletes legally retained financial references; export is complete and audited;
  * erasure anonymizes personal data, keeps pseudonymous financial references and is blocked by legal hold.
  */
+import { sql } from '@portico/db';
 import type { TestDatabase } from '@portico/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { auditRows, makeService, outboxRows, setupOrg, startDb, type TestOrg } from './helpers';
@@ -123,6 +124,22 @@ describe('consent', () => {
     expect(events.at(-1)?.payload).toMatchObject({ purpose: 'marketing_email', state: 'withdrawn' });
   });
 
+  it('refuses a legal entity that is not one of the organization’s', async () => {
+    const org = await setupOrg(t);
+    const { profileId } = await returningGuest(org);
+    await expect(
+      org.sys((tx) =>
+        org.svc.recordConsent(tx, profileId, {
+          legalEntityId: crypto.randomUUID(),
+          purpose: 'marketing_sms',
+          state: 'withdrawn',
+          source: 'desk',
+          evidence: {},
+        }),
+      ),
+    ).rejects.toMatchObject({ code: 'unknown_legal_entity' });
+  });
+
   it('a signed-in guest may record their own consent, not someone else’s', async () => {
     const org = await setupOrg(t);
     const { profileId, A } = await returningGuest(org);
@@ -155,6 +172,76 @@ describe('consent', () => {
 });
 
 describe('data-subject export', () => {
+  it('a property-scoped requester gets only their property’s private data; the manifest says what was withheld', async () => {
+    const org = await setupOrg(t);
+    const [A, B] = org.properties as [string, string];
+    const { profileId } = await org.sys((tx) =>
+      org.svc.resolveProfile(
+        tx,
+        { propertyId: A, givenName: 'Export', familyName: 'Scope' },
+        { matchStrategy: 'create_new' },
+      ),
+    );
+    await org.sys(async (tx) => {
+      await org.svc.recordStayHistory(tx, {
+        profileId,
+        stayRef: { type: 'stay', id: crypto.randomUUID() },
+        propertyId: B,
+        arrival: '2026-01-05',
+        departure: '2026-01-07',
+        status: 'departed',
+      });
+      await org.svc.addDocument(tx, profileId, {
+        propertyId: B,
+        type: 'passport',
+        issuingCountry: 'FR',
+        number: 'BPASS9876',
+      });
+      await org.svc.addDocument(tx, profileId, {
+        propertyId: A,
+        type: 'national_id',
+        issuingCountry: 'FR',
+        number: 'APASS1234',
+      });
+      await org.svc.addSpecialNeed(tx, profileId, {
+        propertyId: B,
+        category: 'medical',
+        detail: 'B-only medical detail',
+      });
+      await org.svc.addNote(tx, profileId, {
+        propertyId: B,
+        visibility: 'property_private',
+        body: 'B private note',
+      });
+      await org.svc.addNote(tx, profileId, { visibility: 'shared', body: 'Shared note' });
+    });
+    const dpoA = org.user([
+      { permission: 'guests.profile.read', propertyIds: [A] },
+      { permission: 'guests.privacy.export', propertyIds: [A] },
+      { permission: 'guests.document.read', propertyIds: [A] },
+      { permission: 'guests.sensitive.read', propertyIds: [A] },
+    ]);
+    const { data } = await org.run(dpoA, (tx) =>
+      org.svc.exportProfile(tx, { kind: 'export', profileId, reason: 'Access request' }),
+    );
+    const text = JSON.stringify(data);
+    expect(text).not.toMatch(/BPASS9876|B-only medical detail|B private note/);
+    expect(text).toContain('APASS1234'); // own property, with document.read
+    expect(text).toContain('Shared note');
+    const d = data as { complete: boolean; withheld: Array<{ category: string; count: number }> };
+    expect(d.complete).toBe(false);
+    expect(d.withheld.map((w) => w.category).sort()).toEqual([
+      'identityDocuments',
+      'notes',
+      'specialNeeds',
+      'stays',
+    ]);
+    // The decrypted document was audited like a reveal.
+    const reads = await auditRows(t, org.tenantId, { action: 'guests.document.read' });
+    expect(reads).toHaveLength(1);
+    expect(reads[0]?.reason).toMatch(/Data-subject export/);
+  });
+
   it('produces a complete machine-readable export with a manifest; document details only with permission', async () => {
     const org = await setupOrg(t, {
       svc: makeService({
@@ -200,7 +287,183 @@ describe('data-subject export', () => {
   });
 });
 
+/** Every table of schema `guests` — a new table must be classified here (and handled by erasure) to pass. */
+const GUESTS_TABLES = [
+  'alerts',
+  'companies',
+  'company_contacts',
+  'consent_events',
+  'consents',
+  'contact_points',
+  'duplicate_candidates',
+  'external_refs',
+  'identity_documents',
+  'merge_reference_repoints',
+  'merges',
+  'notes',
+  'preferences',
+  'privacy_requests',
+  'profile_properties',
+  'profiles',
+  'relationships',
+  'special_needs',
+  'stay_history',
+];
+
+/** JSON of every row of every guests table (plus the tenant's outbox and audit log) for one organization. */
+async function tenantDump(tenantId: string): Promise<string> {
+  const { rows } = await sql<{ table_name: string }>`
+    select table_name from information_schema.tables
+    where table_schema = 'guests' and table_type = 'BASE TABLE' order by table_name`.execute(t.admin.kysely);
+  expect(rows.map((r) => r.table_name)).toEqual(GUESTS_TABLES);
+  const parts: string[] = [];
+  for (const table of [...GUESTS_TABLES.map((x) => `guests.${x}`), 'core.outbox', 'core.audit_log']) {
+    const data = await t.admin.kysely
+      .selectFrom(table)
+      .selectAll()
+      .where('tenant_id', '=', tenantId)
+      .execute();
+    parts.push(`${table}: ${JSON.stringify(data)}`);
+  }
+  return parts.join('\n');
+}
+
 describe('data-subject erasure with retention', () => {
+  it('GUE-I06: no personal data remains in ANY guests table after erasing a merged, duplicated, consented guest', async () => {
+    const org = await setupOrg(t);
+    const [A, B] = org.properties as [string, string];
+    const svc = org.svc;
+    const mk = (input: Record<string, unknown>, at = A) =>
+      org.sys((tx) =>
+        svc.resolveProfile(tx, { propertyId: at, ...input } as Parameters<typeof svc.resolveProfile>[1], {
+          matchStrategy: 'create_new',
+        }),
+      );
+    const p = (
+      await mk({
+        givenName: 'Zanele',
+        familyName: 'Mokoena',
+        dateOfBirth: '1977-04-04',
+        nationality: 'ZA',
+        importantDates: [{ kind: 'anniversary', date: '2003-12-06' }],
+        contactPoints: [
+          { kind: 'email', value: 'zanele.mokoena@guest.example', verified: true },
+          { kind: 'phone', value: '+27 82 987 6543' },
+        ],
+      })
+    ).profileId;
+    // A duplicate created by a channel (same verified email → exact key) …
+    const dup = (
+      await mk(
+        {
+          givenName: 'Zanelle',
+          familyName: 'Mokoena',
+          dateOfBirth: '1977-04-04',
+          contactPoints: [
+            { kind: 'email', value: 'zanele.mokoena@guest.example', verified: true },
+            { kind: 'email', value: 'z.mokoena.work@guest.example' },
+          ],
+        },
+        B,
+      )
+    ).profileId;
+    // … a different person merged by mistake and unmerged (reversed merge record with an unmerge result) …
+    const other = (await mk({ givenName: 'Thabo', familyName: 'Nkosi', dateOfBirth: '1990-09-09' }))
+      .profileId;
+    const wrong = await org.sys((tx) =>
+      svc.mergeProfiles(tx, { survivorId: p, mergedId: other, reason: 'oops' }),
+    );
+    await org.sys((tx) => svc.unmergeProfiles(tx, { mergeId: wrong.mergeId, reason: 'Different person' }));
+    const spouse = (await mk({ givenName: 'Sipho', familyName: 'Dlamini' })).profileId;
+    const corp = await org.sys((tx) =>
+      svc.createCompany(tx, { kind: 'company', legalName: 'Karoo Freight (fictitious)' }),
+    );
+    await org.sys(async (tx) => {
+      await svc.addPreference(tx, p, { category: 'bedding', value: 'Hypoallergenic duvet' });
+      await svc.addAlert(tx, p, {
+        propertyId: A,
+        severity: 'important',
+        text: 'Bring extra towels to villa',
+        visibility: 'shared',
+      });
+      await svc.addNote(tx, dup, { visibility: 'shared', body: 'Prefers the quiet villa by the lagoon' });
+      await svc.addSpecialNeed(tx, p, {
+        propertyId: A,
+        category: 'medical',
+        detail: 'Penicillin anaphylaxis',
+        guestAgreedAlertText: 'Medical: penicillin allergy',
+      });
+      await svc.addDocument(tx, p, {
+        propertyId: A,
+        type: 'passport',
+        issuingCountry: 'ZA',
+        number: 'ZM1234567',
+      });
+      await svc.addRelationship(tx, p, { relatedProfileId: spouse, kind: 'spouse' });
+      await svc.addCompanyContact(tx, corp.id, { profileId: dup, role: 'booker' });
+      await svc.recordConsent(tx, p, {
+        propertyId: A,
+        purpose: 'marketing_email',
+        state: 'granted',
+        source: 'booking_engine',
+        evidence: { textVersion: 'v1', channel: 'web', reference: 'ip 198.51.100.77' },
+      });
+      await svc.recordStayHistory(tx, {
+        profileId: dup,
+        stayRef: { type: 'stay', id: crypto.randomUUID() },
+        propertyId: B,
+        arrival: '2026-03-01',
+        departure: '2026-03-05',
+        status: 'departed',
+        revenue: { amountMinor: 250_000, currency: 'USD' },
+      });
+    });
+    await org.sys((tx) => svc.exportProfile(tx, { kind: 'export', profileId: p, reason: 'Access request' }));
+    await org.sys((tx) => svc.mergeProfiles(tx, { survivorId: p, mergedId: dup, reason: 'Same guest' }));
+    // A mirrored profile of the same person from the external PMS (connected mode) is erased separately.
+    const mirror = await org.sys((tx) =>
+      svc.upsertMirroredProfile(tx, {
+        connectionId: crypto.randomUUID(),
+        systemName: 'Legacy PMS (simulated)',
+        externalId: 'PMS-ZM-77',
+        propertyId: B,
+        syncedAt: new Date('2026-11-07T06:00:00Z'),
+        profile: { givenName: 'Zanele', familyName: 'Mokoena' },
+      }),
+    );
+
+    const pii = [
+      'Zanele',
+      'Zanelle',
+      'Mokoena',
+      'mokoena',
+      '1977-04-04',
+      '2003-12-06',
+      '829876543',
+      '198.51.100.77',
+      'ZM1234567',
+      'Penicillin',
+      'penicillin',
+      'Hypoallergenic',
+      'extra towels',
+      'quiet villa',
+      'PMS-ZM-77',
+    ];
+    const before = await tenantDump(org.tenantId);
+    expect(pii.filter((x) => before.includes(x)).length).toBeGreaterThan(8); // the fixture really holds PII
+
+    await org.sys((tx) => svc.eraseProfile(tx, { kind: 'erasure', profileId: p, reason: 'Erasure request' }));
+    await org.sys((tx) =>
+      svc.eraseProfile(tx, { kind: 'erasure', profileId: mirror.profileId, reason: 'Erasure request' }),
+    );
+    const after = await tenantDump(org.tenantId);
+    expect(pii.filter((x) => after.includes(x))).toEqual([]);
+    // The other person (unmerged) keeps their data; the financial reference survives pseudonymously.
+    expect(after).toContain('Thabo');
+    const history = await org.sys((tx) => svc.getStayHistory(tx, p));
+    expect(history.items[0]?.revenue).toEqual({ amountMinor: 250_000, currency: 'USD' });
+  });
+
   it('anonymizes personal data, keeps pseudonymous financial references, and is audited', async () => {
     const org = await setupOrg(t);
     const { profileId, stayId, bookingId, A } = await returningGuest(org);
@@ -237,19 +500,7 @@ describe('data-subject erasure with retention', () => {
       expect.objectContaining({ stayId, bookingId, revenue: { amountMinor: 1_234_500, currency: 'USD' } }),
     ]);
     // No personal data remains in guests tables for this tenant (GUE-I06), nor in the consent evidence.
-    const dump = JSON.stringify(
-      await Promise.all(
-        [
-          'guests.profiles',
-          'guests.contact_points',
-          'guests.notes',
-          'guests.consents',
-          'guests.preferences',
-        ].map((tbl) =>
-          t.admin.kysely.selectFrom(tbl).selectAll().where('tenant_id', '=', org.tenantId).execute(),
-        ),
-      ),
-    );
+    const dump = await tenantDump(org.tenantId);
     expect(dump).not.toMatch(/Priya|Sharma|priya\.sharma|98765|1989-01-26|Jain|203\.0\.113\.9/);
     // Search cannot find the person any more.
     const found = await org.sys((tx) =>

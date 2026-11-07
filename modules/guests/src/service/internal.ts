@@ -217,13 +217,9 @@ export async function requireWritableProfile(
       { profileId: vp.row.id },
     );
   }
+  // Writing never links the profile to the acting property (that would silently widen visibility there, and
+  // survive sharing being switched off). Properties become "known" only through resolve, stays or mirroring.
   const acting = actingProperty(tx, permission, vp.row, vp.links, propertyId);
-  if (propertyId && !vp.links.includes(propertyId)) {
-    // Working on a profile at another property makes the guest known there (identity only; other
-    // properties' data stays governed by the sharing policy).
-    await linkProperty(tx, vp.row.id, propertyId, 'manual');
-    vp.links.push(propertyId);
-  }
   return { ...vp, actingPropertyId: acting };
 }
 
@@ -288,6 +284,33 @@ export async function propertyCountry(tx: TxContext, ports: GuestsPorts, propert
 
 export function assertNotSame(a: string, b: string, message: string): void {
   if (a === b) throw new ValidationError('same_profile', message);
+}
+
+/** Visibility of several profiles for the given access (batch: links + sharing consent). */
+export async function visibilityOf(
+  tx: TxContext,
+  access: AccessScope,
+  ids: readonly string[],
+): Promise<Map<string, Visibility>> {
+  const out = new Map<string, Visibility>();
+  if (ids.length === 0) return out;
+  const links = await db(tx)
+    .selectFrom('guests.profile_properties')
+    .select(['profile_id', 'property_id'])
+    .where('profile_id', 'in', [...ids])
+    .execute();
+  const consents = await db(tx)
+    .selectFrom('guests.consents')
+    .select(['profile_id', 'state'])
+    .where('profile_id', 'in', [...ids])
+    .where('purpose', '=', 'cross_property_sharing')
+    .execute();
+  for (const id of ids) {
+    const l = links.filter((x) => x.profile_id === id).map((x) => x.property_id);
+    const c = aggregateSharingConsent(consents.filter((x) => x.profile_id === id).map((x) => x.state));
+    out.set(id, profileVisibility(access, l, c));
+  }
+  return out;
 }
 
 /** SQL visibility predicate on alias `p` (search, queues). Mirrors domain/visibility.ts profileVisibility. */

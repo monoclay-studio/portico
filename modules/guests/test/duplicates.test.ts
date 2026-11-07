@@ -39,13 +39,38 @@ describe('duplicate detection — exact keys', () => {
     const b = await create(org, {
       givenName: 'Anna',
       familyName: 'Schmidt',
-      contactPoints: [{ kind: 'email', value: 'anna.schmidt@guest.example' }],
+      contactPoints: [{ kind: 'email', value: 'anna.schmidt@guest.example', verified: true }],
     });
     expect(b.possibleDuplicates).toContain(a.profileId);
     const queue = await open(org);
     const hit = queue.find((d) => pairOf(d) === pair(a.profileId, b.profileId));
     expect(hit?.score).toBeGreaterThanOrEqual(0.85);
     expect(hit?.reasons.map((r) => r.code)).toEqual(expect.arrayContaining(['email_exact', 'name_exact']));
+    // Exact keys are stored as keyed hashes, never the address itself.
+    const stored = await t.admin.kysely
+      .selectFrom('guests.duplicate_candidates')
+      .select('exact_keys')
+      .where('id', '=', hit?.id as string)
+      .executeTakeFirstOrThrow();
+    expect(stored.exact_keys[0]).toMatch(/^email:[0-9a-f]{64}$/);
+    expect(JSON.stringify(stored)).not.toContain('schmidt');
+  });
+
+  it('an unverified email is strong evidence for the queue but never an exact key', async () => {
+    const org = await setupOrg(t);
+    const a = await create(org, {
+      givenName: 'Lena',
+      familyName: 'Vogel',
+      contactPoints: [{ kind: 'email', value: 'lena.vogel@guest.example', verified: true }],
+    });
+    const b = await create(org, {
+      givenName: 'Lena',
+      familyName: 'Vogel',
+      contactPoints: [{ kind: 'email', value: 'lena.vogel@guest.example' }],
+    });
+    const hit = (await open(org)).find((d) => pairOf(d) === pair(a.profileId, b.profileId));
+    expect(hit?.reasons.map((r) => r.code)).toContain('email_unverified');
+    expect(hit?.reasons.map((r) => r.code)).not.toContain('email_exact');
   });
 
   it('matches phone numbers typed in different formats (E.164 normalization with the property country)', async () => {
@@ -192,6 +217,42 @@ describe('duplicate detection — fuzzy and precision', () => {
       dateOfBirth: '1991-04-18',
     });
     expect((await open(org)).find((d) => pairOf(d) === pair(a.profileId, b.profileId))).toBeDefined();
+  });
+});
+
+describe('candidate selection at scale', () => {
+  it('a very common name never crowds out the exact-key match', async () => {
+    const org = await setupOrg(t);
+    const A = org.properties[0] as string;
+    await org.sys(async (tx) => {
+      for (let i = 0; i < 70; i++) {
+        await tx.db
+          .insertInto('guests.profiles')
+          .values({
+            id: crypto.randomUUID(),
+            tenant_id: org.tenantId,
+            given_name: 'Mohamed',
+            family_name: 'Ali',
+            search_name: 'mohamed ali',
+            home_property_id: A,
+          })
+          .execute();
+      }
+    });
+    const target = await create(org, {
+      givenName: 'Mohamed',
+      familyName: 'Ali',
+      contactPoints: [{ kind: 'email', value: 'mohamed.ali.77@guest.example', verified: true }],
+    });
+    const again = await org.sys((tx) =>
+      org.svc.resolveProfile(tx, {
+        propertyId: A,
+        givenName: 'Mohamed',
+        familyName: 'Ali',
+        contactPoints: [{ kind: 'email', value: 'mohamed.ali.77@guest.example' }],
+      }),
+    );
+    expect(again).toMatchObject({ profileId: target.profileId, created: false });
   });
 });
 

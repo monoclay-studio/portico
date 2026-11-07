@@ -155,6 +155,21 @@ describe('duplicate scoring — precision cases', () => {
   });
 });
 
+describe('unverified emails', () => {
+  it('are strong evidence for the queue but never an exact key for reuse', () => {
+    const a = subject(
+      { givenName: 'Anna', familyName: 'Schmidt' },
+      { unverifiedEmails: ['anna@example.de'] },
+    );
+    const b = subject({ givenName: 'Anna', familyName: 'Schmidt' }, { emails: ['anna@example.de'] });
+    const r = scoreMatch(a, b);
+    expect(r.exactKeys).toEqual([]);
+    expect(r.reasons.map((x) => x.code)).toContain('email_unverified');
+    expect(r.score).toBeGreaterThanOrEqual(QUEUE_THRESHOLD);
+    expect(isSafeExactReuse(r)).toBe(false);
+  });
+});
+
 describe('queue mechanics', () => {
   it('orders pairs canonically', () => {
     expect(orderedPair('b', 'a')).toEqual(['a', 'b']);

@@ -7,11 +7,16 @@ import type { GuestProfile } from '../contracts';
 import { type ConsentPurpose, mayProcess, purposeBasis } from '../domain/consent';
 import { isExpired } from '../domain/documents';
 import { displayName } from '../domain/names';
-import { documentVisible, itemVisible } from '../domain/visibility';
+import { documentVisible, itemVisible, stayVisible, visibleKnownAt } from '../domain/visibility';
+import type { GuestsPorts } from '../ports';
 import { actorKey, db, iso, today, type VisibleProfile } from './internal';
 import { profileRecord } from './record';
 
-export async function buildProfileView(tx: TxContext, vp: VisibleProfile): Promise<GuestProfile> {
+export async function buildProfileView(
+  tx: TxContext,
+  ports: GuestsPorts,
+  vp: VisibleProfile,
+): Promise<GuestProfile> {
   const { row, view, access, consent } = vp;
   const id = row.id;
   const [contacts, prefs, alerts, notes, relOut, relIn, companies, consents, docs, needs, ext] =
@@ -59,6 +64,21 @@ export async function buildProfileView(tx: TxContext, vp: VisibleProfile): Promi
         .executeTakeFirst(),
     ]);
   const me = actorKey(tx);
+  // Alerts are judged on the viewing property's business date (or today, organization-wide).
+  const day = access.propertyId ? await ports.platform.getBusinessDate(tx, access.propertyId) : today(tx);
+  const activeOn = (a: { status: string; active_from: string | null; active_to: string | null }) =>
+    a.status === 'active' && (!a.active_from || a.active_from <= day) && (!a.active_to || a.active_to >= day);
+  const stays = (
+    await db(tx)
+      .selectFrom('guests.stay_history')
+      .select(['stay_id', 'booking_id', 'arrival', 'departure', 'property_id'])
+      .where('profile_id', '=', id)
+      .orderBy('arrival', 'desc')
+      .execute()
+  ).filter((st) => stayVisible(access, view, st.property_id, consent));
+  const visibleAlerts = alerts.filter((a) =>
+    itemVisible(access, view, { visibility: a.visibility, propertyId: a.property_id }, consent),
+  );
   const ownProperty = (p: string) => access.readAll || access.readPropertyIds.includes(p);
   const sharingRequiresConsent = access.sharingRequiresConsent;
 
@@ -66,9 +86,8 @@ export async function buildProfileView(tx: TxContext, vp: VisibleProfile): Promi
     mirroredFrom: ext?.system_name ?? null,
     documents: docs.filter((d) => documentVisible(access, view, d.property_id)),
     contacts,
-    alerts: alerts.filter((a) =>
-      itemVisible(access, view, { visibility: a.visibility, propertyId: a.property_id }, consent),
-    ),
+    alerts: visibleAlerts.filter(activeOn),
+    stays,
     companies,
     relationships: [
       ...relOut.map((r) => ({ id: r.id, other: r.related_profile_id, kind: r.kind })),
@@ -104,7 +123,7 @@ export async function buildProfileView(tx: TxContext, vp: VisibleProfile): Promi
     tags: row.tags,
     importantDates: (row.important_dates ?? []) as GuestProfile['importantDates'],
     homePropertyId: row.home_property_id,
-    knownAtPropertyIds: vp.links,
+    knownAtPropertyIds: visibleKnownAt(access, vp.links, consent),
     legalHold: row.legal_hold,
     contactPoints: contacts.map((c) => ({
       id: c.id,
@@ -129,22 +148,19 @@ export async function buildProfileView(tx: TxContext, vp: VisibleProfile): Promi
         confirmedAt: iso(p.confirmed_at),
         version: p.version,
       })),
-    alerts: alerts
-      .filter((a) =>
-        itemVisible(access, view, { visibility: a.visibility, propertyId: a.property_id }, consent),
-      )
-      .map((a) => ({
-        id: a.id,
-        severity: a.severity,
-        text: a.text,
-        audience: a.audience,
-        visibility: a.visibility,
-        propertyId: a.property_id,
-        activeFrom: a.active_from,
-        activeTo: a.active_to,
-        status: a.status,
-        version: a.version,
-      })),
+    alerts: visibleAlerts.map((a) => ({
+      id: a.id,
+      severity: a.severity,
+      text: a.text,
+      audience: a.audience,
+      visibility: a.visibility,
+      propertyId: a.property_id,
+      activeFrom: a.active_from,
+      activeTo: a.active_to,
+      status: a.status,
+      activeNow: activeOn(a),
+      version: a.version,
+    })),
     notes: notes
       .filter((n) =>
         itemVisible(

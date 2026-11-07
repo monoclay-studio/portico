@@ -19,7 +19,6 @@ import {
   canTransitionCompany,
   validateCommission,
   validateIataCode,
-  wouldCreateCycle,
 } from '../domain/company';
 import { normalizeLatin } from '../domain/names';
 import type { GuestsPorts } from '../ports';
@@ -101,10 +100,22 @@ async function assertParent(
   parentId: string | null | undefined,
 ): Promise<void> {
   if (!parentId) return;
-  const rows = await db(tx).selectFrom('guests.companies').select(['id', 'parent_company_id']).execute();
-  const parentOf = new Map(rows.map((r) => [r.id, r.parent_company_id]));
-  if (!parentOf.has(parentId)) throw new NotFoundError('company', parentId);
-  if (wouldCreateCycle(companyId, parentId, (id) => parentOf.get(id))) {
+  const parent = await db(tx)
+    .selectFrom('guests.companies')
+    .select('id')
+    .where('id', '=', parentId)
+    .executeTakeFirst();
+  if (!parent) throw new NotFoundError('company', parentId);
+  // Walk up from the proposed parent (bounded); reaching the company itself would create a cycle.
+  const { rows } = await sql<{ id: string }>`
+    with recursive up(id, parent_company_id, depth) as (
+      select id, parent_company_id, 0 from guests.companies where id = ${parentId}
+      union all
+      select c.id, c.parent_company_id, up.depth + 1
+      from guests.companies c join up on c.id = up.parent_company_id
+      where up.depth < 50
+    ) select id from up`.execute(tx.db);
+  if (rows.some((r) => r.id === companyId)) {
     throw new ValidationError(
       'company_hierarchy_cycle',
       'That parent would make the company its own ancestor. Choose a different parent company.',
@@ -165,7 +176,19 @@ export async function createCompany(
     action: 'guests.company.create',
     target: { type: 'company', id },
     propertyId: input.propertyId ?? null,
-    after: { ...input, billingEmail: input.billingEmail ? '(set)' : undefined },
+    // Free text (notes) and contact details are not copied into the audit trail.
+    after: {
+      kind: input.kind,
+      legalName: input.legalName,
+      tradingName: input.tradingName,
+      taxId: input.taxId,
+      iataCode: input.iataCode,
+      parentCompanyId: input.parentCompanyId,
+      commission: input.commission,
+      billingEmail: input.billingEmail ? '(set)' : undefined,
+      billingAddress: input.billingAddress ? '(set)' : undefined,
+      notes: input.notes ? '(set)' : undefined,
+    },
   });
   await tx.emit({
     type: 'guests.company.created',

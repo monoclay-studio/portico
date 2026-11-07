@@ -67,7 +67,10 @@ describe('merge chains', () => {
   });
   it('refuses cycles and over-long chains', () => {
     expect(() => followMergeChain('x', (id) => rows[id])).toThrow(/cycle/);
-    expect(() => followMergeChain('a', (id) => rows[id], 1)).toThrow(/longer than/);
+    expect(() => followMergeChain('a', (id) => rows[id], 1)).toThrow(/more than 1 links/);
+    expect(() => followMergeChain('x', (id) => rows[id])).toThrow(
+      expect.objectContaining({ code: 'merge_chain_corrupt' }),
+    );
   });
 });
 
@@ -86,5 +89,8 @@ describe('consents and post-merge suggestions', () => {
     expect(suggestPostMergeOwner({ normalizedContact: '+966507654321' }, merged).owner).toBe('restored');
     expect(suggestPostMergeOwner({ requestedProfileId: 's' }, merged).owner).toBe('survivor');
     expect(suggestPostMergeOwner({}, merged).owner).toBe('survivor');
+    expect(suggestPostMergeOwner({ documentHash: 'h1' }, { ...merged, documentHashes: ['h1'] }).owner).toBe(
+      'restored',
+    );
   });
 });

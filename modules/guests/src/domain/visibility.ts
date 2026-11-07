@@ -73,9 +73,8 @@ export function itemVisible(
   opts: { readPrivateNotePropertyIds?: readonly string[] | 'all' } = {},
 ): boolean {
   if (profileView === 'none') return false;
-  const own =
-    profileView === 'full' &&
-    (scope.readAll || (item.propertyId !== null && scope.readPropertyIds.includes(item.propertyId)));
+  // Items recorded at the viewer's own properties are theirs, whether the profile is known there or only shared.
+  const own = scope.readAll || (item.propertyId !== null && scope.readPropertyIds.includes(item.propertyId));
   if (!own) {
     if (item.visibility !== 'shared') return false;
     return item.propertyId === null || profileView === 'shared' || sharingApplies(scope, sharingConsent);
@@ -88,7 +87,7 @@ export function itemVisible(
 
 /** Identity documents and sensitive data are never shared across properties (Q46). */
 export function documentVisible(scope: AccessScope, profileView: Visibility, propertyId: string): boolean {
-  if (profileView !== 'full') return false;
+  if (profileView === 'none') return false;
   return scope.readAll || scope.readPropertyIds.includes(propertyId);
 }
 
@@ -100,6 +99,16 @@ export function stayVisible(
   sharingConsent: SharingConsentState,
 ): boolean {
   if (profileView === 'none') return false;
-  if (profileView === 'full' && (scope.readAll || scope.readPropertyIds.includes(propertyId))) return true;
+  if (scope.readAll || scope.readPropertyIds.includes(propertyId)) return true;
   return sharingApplies(scope, sharingConsent);
+}
+
+/** Properties a profile is known at that the viewer may learn about (own ones; all when sharing applies). */
+export function visibleKnownAt(
+  scope: AccessScope,
+  linkedPropertyIds: readonly string[],
+  sharingConsent: SharingConsentState,
+): string[] {
+  if (scope.readAll || sharingApplies(scope, sharingConsent)) return [...linkedPropertyIds];
+  return linkedPropertyIds.filter((p) => scope.readPropertyIds.includes(p));
 }

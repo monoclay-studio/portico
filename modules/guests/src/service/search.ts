@@ -19,6 +19,8 @@ type Kind = Exclude<SearchQuery['kind'], 'auto'>;
 export function detectQueryKind(q: string): Kind {
   if (q.includes('@')) return 'email';
   if (/^[A-Z]{2}:[A-Z0-9<\s-]{3,}$/i.test(q)) return 'document';
+  // Booking confirmation codes: letters + separator + 6–10 Crockford characters, e.g. "AZR-7Q2X9K".
+  if (/^[A-Z]{2,5}-[0-9A-Z]{4,10}$/i.test(q.trim())) return 'booking';
   const digits = q.replace(/\D/g, '');
   if (/^[+\d][\d\s().-]{5,}$/.test(q) && digits.length >= 6) return 'phone';
   return 'name';
@@ -91,6 +93,21 @@ export async function searchProfiles(
       ...(query.propertyId ? { propertyId: query.propertyId } : {}),
       metadata: { mode: full ? 'full_number' : 'last4', results: hits.length },
     });
+  } else if (kind === 'booking') {
+    // Booking code → profiles via the reservations index (port). Not connected → no results (never a guess).
+    const ids = ports.bookingLookup
+      ? await ports.bookingLookup.findProfileIdsByConfirmationCode(tx, query.q.trim().toUpperCase())
+      : [];
+    hits =
+      ids.length === 0
+        ? []
+        : (
+            await sql<Hit>`
+      select p.id, 'booking' as matched_on, 1.0::float8 as score
+      from guests.profiles p
+      where p.status = 'active' and p.id = any(${ids}::uuid[]) and ${visible}
+      limit ${limit}`.execute(tx.db)
+          ).rows;
   } else if (kind === 'company') {
     if (!tx.authz.can('guests.company.read') && !tx.authz.can('guests.profile.read')) {
       throw new ForbiddenError('guests.company.read');

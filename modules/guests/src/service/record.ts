@@ -6,7 +6,7 @@
 import type { TxContext } from '@portico/db';
 import type { RecordAction, RecordIssue, RecordLink } from '@portico/kernel';
 import { QUEUE_THRESHOLD } from '../domain/duplicates';
-import { db, iso, today, type VisibleProfile } from './internal';
+import { db, iso, today, type VisibleProfile, visibilityOf } from './internal';
 
 /** Holds `permission` at a property where the guest is known (or organization-wide). */
 function canOnProfile(
@@ -41,7 +41,10 @@ export async function profileRecord(
     mirroredFrom: string | null;
     documents: Array<{ id: string; expiry_date: string | null; property_id: string }>;
     contacts: Array<{ verified: boolean; low_confidence: boolean }>;
+    /** Alerts visible to the viewer AND active on the viewing day. */
     alerts: Array<{ severity: string; status: string; text: string }>;
+    /** Stays the viewer may see (own properties; other properties only when sharing applies). */
+    stays: Array<{ stay_id: string; booking_id: string | null; arrival: string; departure: string }>;
     companies: Array<{ company_id: string; role: string }>;
     relationships: Array<{ id: string; other: string; kind: string }>;
   },
@@ -50,7 +53,8 @@ export async function profileRecord(
   const id = row.id;
   const P = vp.access.propertyId;
   const can = (perm: string) => canOnProfile(tx, perm, known, P);
-  const [dups, activeMerges, mergedFrom, stays] = await Promise.all([
+  const stays = facts.stays.slice(0, 20);
+  const [allDups, activeMerges, mergedFrom] = await Promise.all([
     db(tx)
       .selectFrom('guests.duplicate_candidates')
       .select(['id', 'profile_a_id', 'profile_b_id', 'score', 'detected_at'])
@@ -67,14 +71,11 @@ export async function profileRecord(
       .orderBy('merged_at', 'desc')
       .execute(),
     db(tx).selectFrom('guests.profiles').select('id').where('merged_into', '=', id).execute(),
-    db(tx)
-      .selectFrom('guests.stay_history')
-      .select(['stay_id', 'booking_id', 'arrival', 'departure', 'property_id'])
-      .where('profile_id', '=', id)
-      .orderBy('arrival', 'desc')
-      .limit(20)
-      .execute(),
   ]);
+  // A possible-duplicate issue is shown only when the viewer may see the other profile too.
+  const others = allDups.map((d) => (d.profile_a_id === id ? d.profile_b_id : d.profile_a_id));
+  const otherVis = await visibilityOf(tx, vp.access, others);
+  const dups = allDups.filter((_d, i) => (otherVis.get(others[i] as string) ?? 'none') !== 'none');
   const anonymized = row.status === 'anonymized';
   const full = view === 'full';
   const readOnlyReason = anonymized
@@ -183,7 +184,7 @@ export async function profileRecord(
     }
   }
   for (const a of facts.alerts) {
-    if (a.status === 'active' && a.severity === 'critical') {
+    if (a.severity === 'critical') {
       issues.push({ code: 'critical_alert', severity: 'warning', message: a.text });
     }
   }

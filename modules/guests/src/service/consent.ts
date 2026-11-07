@@ -74,6 +74,12 @@ export async function recordConsent(
       );
     }
     legalEntityId = await ports.platform.getPropertyLegalEntityId(tx, input.propertyId);
+  } else if (!(await ports.platform.legalEntityExists(tx, legalEntityId))) {
+    throw new ValidationError(
+      'unknown_legal_entity',
+      'This legal entity does not belong to your organization. Choose one of your operating companies.',
+      { legalEntityId },
+    );
   }
   const problem = validateEvidence(input.state, input.evidence ?? {});
   if (problem) throw new ValidationError('consent_evidence_required', problem, { purpose: input.purpose });
@@ -86,7 +92,15 @@ export async function recordConsent(
     .where('purpose', '=', input.purpose)
     .forUpdate()
     .executeTakeFirst();
-  const evidence = JSON.stringify(input.evidence ?? {});
+  // Minimal evidence (what text, which channel, when) lives in the append-only history; free text such as an IP
+  // address or ticket reference is kept separately so erasure can clear it (GUE-I06).
+  const ev = input.evidence ?? {};
+  const evidence = JSON.stringify({
+    ...(ev.textVersion ? { textVersion: ev.textVersion } : {}),
+    ...(ev.channel ? { channel: ev.channel } : {}),
+    ...(ev.capturedAt ? { capturedAt: ev.capturedAt } : {}),
+  });
+  const reference = ev.reference ?? null;
   let consentId: string;
   if (existing) {
     consentId = existing.id;
@@ -96,6 +110,7 @@ export async function recordConsent(
         state: input.state,
         source: input.source,
         evidence,
+        evidence_reference: reference,
         changed_at: tx.now,
         version: sql`version + 1`,
       })
@@ -114,6 +129,7 @@ export async function recordConsent(
         state: input.state,
         source: input.source,
         evidence,
+        evidence_reference: reference,
         changed_at: tx.now,
         requested_profile_id: profileId !== row.id ? profileId : null,
       })
@@ -130,6 +146,7 @@ export async function recordConsent(
       state: input.state,
       source: input.source,
       evidence,
+      reference,
       occurred_at: tx.now,
       actor_key: actorKey(tx),
     })
@@ -204,6 +221,11 @@ export async function getConsent(
   ports: GuestsPorts,
   input: { profileId: string; legalEntityId: string; purpose: ConsentPurpose; propertyId?: string },
 ): Promise<ConsentDecision> {
+  // Trusted provider call (comms decides before marketing sends) — still deny-by-default for staff without any
+  // guest-profile permission; system consumers (event handlers, schedulers) are allowed.
+  if (tx.actor.kind !== 'system' && !tx.authz.can('guests.profile.read')) {
+    throw new ForbiddenError('guests.profile.read');
+  }
   const { row } = await resolveSurvivor(tx, input.profileId);
   return decide(tx, ports, row.id, input.legalEntityId, input.purpose, input.propertyId ?? null);
 }

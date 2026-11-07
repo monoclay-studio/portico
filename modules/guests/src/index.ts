@@ -1,7 +1,7 @@
 export * from './contracts';
-export { localGuestsCrypto } from './crypto';
 export * as guestsDomain from './domain';
 export * from './events';
+export { guestsJobs } from './jobs';
 export * from './manifest';
 export type * from './ports';
 export * from './routes';

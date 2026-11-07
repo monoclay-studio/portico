@@ -6,7 +6,7 @@ import { platform } from '@portico/platform';
 import type { TestDatabase } from '@portico/testing';
 import { testContext } from '@portico/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { deskGrants, outboxRows, setupOrg, startDb, type TestOrg } from './helpers';
+import { deskGrants, makeService, outboxRows, setupOrg, startDb, type TestOrg } from './helpers';
 
 let t: TestDatabase;
 beforeAll(async () => {
@@ -169,6 +169,43 @@ describe('profile editing', () => {
     expect((await outboxRows(t, org.tenantId, 'guests.alert.raised'))[0]?.payload).toMatchObject({
       severity: 'critical',
     });
+  });
+});
+
+describe('alert active periods (R03)', () => {
+  it('an alert outside its active dates is not critical on arrival screens or as an issue', async () => {
+    const org = await setupOrg(t);
+    const [A] = org.properties as [string];
+    const { profile } = await create(org, { givenName: 'Old', familyName: 'Alert' });
+    await org.sys(async (tx) => {
+      await org.svc.addAlert(tx, profile.id, {
+        propertyId: A,
+        severity: 'critical',
+        text: 'Expired alert',
+        visibility: 'shared',
+        activeFrom: '2020-01-01',
+        activeTo: '2020-01-31',
+      });
+      await org.svc.addAlert(tx, profile.id, {
+        propertyId: A,
+        severity: 'critical',
+        text: 'Current alert',
+        visibility: 'shared',
+        activeFrom: '2026-11-01',
+      });
+    });
+    const r = await org.sys((tx) =>
+      org.svc.getRecognitionSummary(tx, { profileId: profile.id, propertyId: A }),
+    );
+    expect(r.criticalAlerts.map((a) => a.text)).toEqual(['Current alert']);
+    const p = await org.sys((tx) => org.svc.getProfile(tx, profile.id, { propertyId: A }));
+    expect(p.issues.filter((i) => i.code === 'critical_alert').map((i) => i.message)).toEqual([
+      'Current alert',
+    ]);
+    expect(p.alerts.map((a) => [a.text, a.activeNow])).toEqual([
+      ['Expired alert', false],
+      ['Current alert', true],
+    ]);
   });
 });
 
@@ -484,6 +521,32 @@ describe('companies and travel agents', () => {
     await expect(org.run(nobody, (tx) => org.svc.getCompany(tx, c.id))).rejects.toMatchObject({
       code: 'forbidden',
     });
+  });
+});
+
+describe('booking-code search (R20)', () => {
+  it('finds the guests of a booking through the reservations index port, permission-filtered', async () => {
+    const bookingIndex = new Map<string, string[]>();
+    const org = await setupOrg(t, {
+      svc: makeService({
+        bookingLookup: {
+          findProfileIdsByConfirmationCode: async (_tx, code) => bookingIndex.get(code) ?? [],
+        },
+      }),
+    });
+    const [A, B] = org.properties as [string, string];
+    const { profile } = await create(org, { givenName: 'Kofi', familyName: 'Mensah' }, A);
+    bookingIndex.set('AZR-7Q2X9K', [profile.id]);
+    const deskA = org.user(deskGrants([A]));
+    const found = await org.run(deskA, (tx) =>
+      org.svc.searchProfiles(tx, { q: 'azr-7q2x9k', kind: 'auto', limit: 5 }),
+    );
+    expect(found.items).toEqual([expect.objectContaining({ profileId: profile.id, matchedOn: 'booking' })]);
+    const deskB = org.user(deskGrants([B]));
+    const hidden = await org.run(deskB, (tx) =>
+      org.svc.searchProfiles(tx, { q: 'AZR-7Q2X9K', kind: 'auto', limit: 5 }),
+    );
+    expect(hidden.items).toHaveLength(0);
   });
 });
 

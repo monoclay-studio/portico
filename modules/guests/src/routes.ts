@@ -353,8 +353,9 @@ export function guestsHttp(deps: { database: PorticoDatabase; service: GuestsSer
           return tx(req, (t) => svc.revealDocument(t, req.params.id, req.body.reason));
         },
       );
-      app.delete(
-        '/guests/documents/:id',
+      // POST (not DELETE-with-body, which some proxies strip): the reason is required and audited.
+      app.post(
+        '/guests/documents/:id/delete',
         { schema: { tags, params: idParams, body: reasonBody, response: { 204: z.null() } } },
         async (req, reply) => {
           await tx(req, (t) => svc.deleteDocument(t, req.params.id, req.body.reason));

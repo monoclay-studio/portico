@@ -18,17 +18,30 @@ export interface GuestsPlatformPort {
   getPropertyCountry(tx: TxContext, propertyId: string): Promise<string | null>;
   /** Legal entity operating a property (consent is recorded per legal entity). */
   getPropertyLegalEntityId(tx: TxContext, propertyId: string): Promise<string>;
+  /** True when the legal entity belongs to this organization (consent is recorded per legal entity). */
+  legalEntityExists(tx: TxContext, legalEntityId: string): Promise<boolean>;
+  /** The property's business date (alert active periods are judged on the property's day). */
+  getBusinessDate(tx: TxContext, propertyId: string): Promise<string>;
+}
+
+/** Booking confirmation code → profile ids of its booker/occupants (reservations index; GUE-R20). */
+export interface BookingLookupPort {
+  findProfileIdsByConfirmationCode(tx: TxContext, code: string): Promise<string[]>;
 }
 
 /**
- * Field-level crypto. `cipher` is the kernel FieldCipher (local key in development, KMS envelope encryption in
- * production). `blindIndex` is a keyed hash (HMAC) with a SEPARATE key, used for exact matching of document
- * numbers without storing them.
+ * Field-level crypto, bound in the composition root to the kernel `fieldCryptoFromEnv()` (KMS in production).
+ * `cipher` encrypts documents and special needs; `blindIndex` is a keyed hash with a SEPARATE key, used for exact
+ * matching (document numbers, duplicate exact keys) without storing the values. The module never handles keys.
  */
 export interface GuestsCryptoPort {
   cipher: FieldCipher;
-  keyId: string;
   blindIndex(input: string): string;
+}
+
+/** Key id embedded in a v1 ciphertext (`v1.<keyId>.…`) — stored next to it for rotation. */
+export function keyIdOf(ciphertext: string): string {
+  return ciphertext.split('.')[1] ?? 'unknown';
 }
 
 /** Another module that holds profile references reports how many it holds (merge preview counts per module). */
@@ -57,4 +70,5 @@ export interface GuestsPorts {
   referenceCounters?: readonly ProfileReferenceCounter[];
   personalDataContributors?: readonly PersonalDataContributor[];
   communications?: CommunicationHistoryPort;
+  bookingLookup?: BookingLookupPort;
 }

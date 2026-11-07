@@ -36,7 +36,7 @@ import { nameKeys } from '../domain/names';
 import type { GuestsPorts } from '../ports';
 import type { ProfilesTable } from '../tables';
 import { recomputeDocumentRetention } from './documents';
-import { loadSubjects } from './duplicates';
+import { hashExactKeys, loadSubjects } from './duplicates';
 import {
   actorKey,
   db,
@@ -574,6 +574,12 @@ export async function recordReferenceRepoints(
   tx: TxContext,
   input: { mergeId: string; module: string; references: Array<EntityRef & { field?: string | null }> },
 ): Promise<{ recorded: number }> {
+  // Called by other modules' consumers of guests.profile.merged, which run as system processes.
+  if (tx.actor.kind !== 'system') {
+    throw new ForbiddenError('guests.profile.merge', {
+      reason: 'Only event consumers record re-pointed references',
+    });
+  }
   const merge = await db(tx)
     .selectFrom('guests.merges')
     .select(['id', 'status'])
@@ -648,6 +654,7 @@ async function postMergeItems(tx: TxContext, merge: StoredMerge): Promise<PostMe
   const mergedContacts = (snap.merged.children.contact_points ?? [])
     .map((c) => String(c.normalized ?? ''))
     .filter(Boolean);
+  const mergedDocs = (snap.merged.children.identity_documents ?? []).map((d) => String(d.number_hash));
   const out: PostMergeCandidate[] = [];
   for (const spec of CHILD_SPECS) {
     if (spec.key === 'profile_properties') continue; // derived from stays; re-linked after reassignment
@@ -663,8 +670,9 @@ async function postMergeItems(tx: TxContext, merge: StoredMerge): Promise<PostMe
         {
           requestedProfileId: (r.requested_profile_id as string | null | undefined) ?? null,
           normalizedContact: spec.key === 'contact_points' ? ((r.normalized as string | null) ?? null) : null,
+          documentHash: spec.key === 'identity_documents' ? ((r.number_hash as string | null) ?? null) : null,
         },
-        { id: merge.merged_id, contactValues: mergedContacts },
+        { id: merge.merged_id, contactValues: mergedContacts, documentHashes: mergedDocs },
       );
       out.push({
         kind: spec.key,
@@ -982,7 +990,7 @@ export async function unmergeProfiles(
       profile_b_id: b,
       score: score?.score ?? 0,
       reasons: JSON.stringify(score?.reasons ?? []),
-      exact_keys: score?.exactKeys ?? [],
+      exact_keys: hashExactKeys(ports, score?.exactKeys ?? []),
       status: 'dismissed',
       detected_by: 'unmerge',
       detected_at: tx.now,
@@ -997,7 +1005,7 @@ export async function unmergeProfiles(
         resolved_at: tx.now,
         resolved_by: actorKey(tx),
         resolution_reason: `Unmerged: ${input.reason}`,
-        exact_keys: score?.exactKeys ?? [],
+        exact_keys: hashExactKeys(ports, score?.exactKeys ?? []),
         version: sql`guests.duplicate_candidates.version + 1`,
       }),
     )

@@ -3,9 +3,10 @@
  * revealed only with the sensitive permission at the capturing property, every view audited with a reason, the
  * number never present in plaintext anywhere (tables, audit, outbox), retention purge.
  */
-import { localFieldCipher } from '@portico/kernel';
+import { fieldCryptoFromEnv } from '@portico/kernel';
 import type { TestDatabase } from '@portico/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { guestsJobs } from '../src';
 import { auditRows, outboxRows, setupOrg, startDb, type TestOrg } from './helpers';
 
 let t: TestDatabase;
@@ -69,10 +70,11 @@ describe('identity documents', () => {
       .selectAll()
       .where('id', '=', documentId)
       .executeTakeFirstOrThrow();
-    expect(row.enc_payload).toMatch(/^v1\.local\./);
+    expect(row.enc_payload).toMatch(/^v1\.local-dev\./);
+    expect(row.key_id).toBe('local-dev');
     expect(await tenantDump(org)).not.toContain(NUMBER);
     // The ciphertext is bound to its row: copied into another row it does not decrypt.
-    const cipher = localFieldCipher(Buffer.from('guests-test-field-key-0123456789').toString('base64'));
+    const { cipher } = fieldCryptoFromEnv({});
     expect(() =>
       cipher.decrypt(row.enc_payload, `guests.identity_document:${org.tenantId}:${crypto.randomUUID()}`),
     ).toThrow();
@@ -181,6 +183,38 @@ describe('identity documents', () => {
     expect(purged.documentIds).toContain(documentId);
     expect((await org.sys((tx) => org.svc.getProfile(tx, profileId))).documents).toHaveLength(0);
     expect(await auditRows(t, org.tenantId, { action: 'guests.document.retentionPurge' })).toHaveLength(1);
+  });
+
+  it('retention purge keeps documents of guests under legal hold and runs as a scheduled job', async () => {
+    const org = await setupOrg(t);
+    const kept = await guestWithPassport(org);
+    const gone = await org.sys((tx) =>
+      org.svc.resolveProfile(
+        tx,
+        { propertyId: org.properties[0] as string, familyName: 'Purged' },
+        { matchStrategy: 'create_new' },
+      ),
+    );
+    const { documentId: goneDoc } = await org.sys((tx) =>
+      org.svc.addDocument(tx, gone.profileId, {
+        propertyId: org.properties[0] as string,
+        type: 'passport',
+        issuingCountry: 'GB',
+        number: 'GB0000001',
+      }),
+    );
+    await org.sys((tx) => org.svc.setLegalHold(tx, kept.profileId, { hold: true, reason: 'Police inquiry' }));
+    const job = guestsJobs(org.svc).find((j) => j.name === 'guests.purgeExpiredDocuments');
+    await job?.run(t.db, new Date('2099-01-01T00:00:00Z'));
+    const left = await t.admin.kysely
+      .selectFrom('guests.identity_documents')
+      .select('id')
+      .where('tenant_id', '=', org.tenantId)
+      .execute();
+    expect(left.map((r) => r.id)).toEqual([kept.documentId]);
+    expect(left.map((r) => r.id)).not.toContain(goneDoc);
+    const manual = await org.sys((tx) => org.svc.purgeExpiredDocuments(tx, { asOf: '2099-01-01' }));
+    expect(manual).toMatchObject({ deleted: 0, heldByLegalHold: 1 });
   });
 
   it('a later departure extends retention (Q44 default: one year after the last departure)', async () => {

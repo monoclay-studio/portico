@@ -1,6 +1,7 @@
 /**
  * Reversible profile merge — pure decision logic (spec GUE-R11..R13, invariants GUE-I01..I03).
  */
+import { DomainError } from '@portico/kernel';
 
 /** Scalar profile fields that a merge may take from either side. */
 export const MERGEABLE_FIELDS = [
@@ -113,12 +114,19 @@ export function followMergeChain(
     const row = lookup(current);
     if (!row) return { id: current, path };
     if (row.status !== 'merged' || !row.mergedInto) return { id: current, path };
-    if (path.includes(row.mergedInto))
-      throw new Error(`Merge chain cycle detected at profile ${row.mergedInto}`);
+    if (path.includes(row.mergedInto)) throw chainCorrupt(start, `a cycle at profile ${row.mergedInto}`);
     current = row.mergedInto;
     path.push(current);
   }
-  throw new Error(`Merge chain longer than ${maxDepth} links starting at ${start}`);
+  throw chainCorrupt(start, `more than ${maxDepth} links`);
+}
+
+function chainCorrupt(start: string, what: string): DomainError {
+  return new DomainError(
+    'merge_chain_corrupt',
+    `The merge history of profile ${start} is inconsistent (${what}). Nothing was changed; contact support so the merge records can be repaired.`,
+    { status: 500, details: { profileId: start } },
+  );
 }
 
 /** Consent conflict on merge: the most recent statement by the guest wins (a later withdrawal is never lost). */
@@ -138,11 +146,18 @@ export type PostMergeOwner = 'survivor' | 'restored';
  *  - otherwise the survivor keeps it.
  */
 export function suggestPostMergeOwner(
-  item: { requestedProfileId?: string | null; normalizedContact?: string | null },
-  merged: { id: string; contactValues: readonly string[] },
+  item: {
+    requestedProfileId?: string | null;
+    normalizedContact?: string | null;
+    documentHash?: string | null;
+  },
+  merged: { id: string; contactValues: readonly string[]; documentHashes?: readonly string[] },
 ): { owner: PostMergeOwner; reason: string } {
   if (item.requestedProfileId && item.requestedProfileId === merged.id) {
     return { owner: 'restored', reason: 'Recorded against the merged profile’s original id' };
+  }
+  if (item.documentHash && (merged.documentHashes ?? []).includes(item.documentHash)) {
+    return { owner: 'restored', reason: 'Same identity document as the merged profile before the merge' };
   }
   if (item.normalizedContact && merged.contactValues.includes(item.normalizedContact)) {
     return { owner: 'restored', reason: 'Matches a contact of the merged profile before the merge' };

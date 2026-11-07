@@ -45,21 +45,6 @@ export function validateCommission(terms: CommissionTerms): string | null {
   return null;
 }
 
-/** Parent links must never form a cycle (reporting hierarchy, GUE-R08). */
-export function wouldCreateCycle(
-  companyId: string,
-  newParentId: string,
-  parentOf: (id: string) => string | null | undefined,
-  maxDepth = 50,
-): boolean {
-  let cursor: string | null | undefined = newParentId;
-  for (let i = 0; cursor && i < maxDepth; i++) {
-    if (cursor === companyId) return true;
-    cursor = parentOf(cursor);
-  }
-  return cursor === companyId;
-}
-
 const TRANSITIONS: Record<CompanyStatus, readonly CompanyStatus[]> = {
   active: ['on_hold', 'inactive'],
   on_hold: ['active', 'inactive'],

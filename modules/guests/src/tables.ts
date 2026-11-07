@@ -168,6 +168,7 @@ export interface ConsentsTable {
   state: 'granted' | 'withdrawn' | 'unknown';
   source: string;
   evidence: JsonDefault;
+  evidence_reference: string | null;
   changed_at: Timestamp;
   requested_profile_id: string | null;
   created_at: Generated<Date>;
@@ -183,6 +184,7 @@ export interface ConsentEventsTable {
   state: string;
   source: string;
   evidence: JsonDefault;
+  reference: string | null;
   occurred_at: Timestamp;
   actor_key: string;
 }

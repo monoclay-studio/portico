@@ -37,13 +37,14 @@ export async function loadSubjects(
       dateOfBirth: p.date_of_birth,
       nationality: p.nationality,
       emails: [],
+      unverifiedEmails: [],
       phones: [],
       documentHashes: [],
     });
   }
   const contacts = await db(tx)
     .selectFrom('guests.contact_points')
-    .select(['profile_id', 'kind', 'normalized'])
+    .select(['profile_id', 'kind', 'normalized', 'verified'])
     .where('profile_id', 'in', [...ids])
     .where('low_confidence', '=', false)
     .where('normalized', 'is not', null)
@@ -51,7 +52,9 @@ export async function loadSubjects(
   for (const c of contacts) {
     const s = out.get(c.profile_id);
     if (!s || !c.normalized) continue;
-    if (c.kind === 'email') (s.emails as string[]).push(c.normalized);
+    // Only VERIFIED emails are exact keys (spec GUE-R10); unverified ones are evidence for the queue.
+    if (c.kind === 'email' && c.verified) (s.emails as string[]).push(c.normalized);
+    else if (c.kind === 'email') (s.unverifiedEmails as string[]).push(c.normalized);
     else if (c.kind === 'phone' || c.kind === 'whatsapp') (s.phones as string[]).push(c.normalized);
   }
   const docs = await db(tx)
@@ -63,22 +66,32 @@ export async function loadSubjects(
   return out;
 }
 
-/** Candidate ids for a subject: exact contact/document keys or trigram-similar names (GIN-indexed). */
+/**
+ * Candidate ids for a subject. Exact-key matches (any email, E.164 phone, document hash) are ALWAYS included and
+ * come first; trigram name matches fill up to `limit`, strongest first — so for a very common name ("Mohamed
+ * Ali") the profile with the same email is never crowded out.
+ */
 export async function candidateIds(tx: TxContext, s: MatchSubject, limit = 50): Promise<string[]> {
-  const keys = [...s.emails, ...s.phones];
-  const { rows } = await sql<{ id: string }>`
-    select p.id from guests.profiles p
+  const keys = [...s.emails, ...(s.unverifiedEmails ?? []), ...s.phones];
+  const exact = await sql<{ id: string }>`
+    select distinct p.id from guests.profiles p
     where p.tenant_id = ${tx.tenantId} and p.status = 'active' and p.id <> ${s.id}
       and (
         p.id in (select c.profile_id from guests.contact_points c
                  where c.tenant_id = ${tx.tenantId} and not c.low_confidence and c.normalized = any(${keys}::text[]))
         or p.id in (select d.profile_id from guests.identity_documents d
                     where d.tenant_id = ${tx.tenantId} and d.number_hash = any(${[...s.documentHashes]}::text[]))
-        or (${s.names.searchName} <> '' and p.search_name % ${s.names.searchName})
-        or (${s.names.searchNameNative}::text is not null and p.search_name_native % ${s.names.searchNameNative})
       )
+    limit 500`.execute(tx.db);
+  const fuzzy = await sql<{ id: string }>`
+    select p.id from guests.profiles p
+    where p.tenant_id = ${tx.tenantId} and p.status = 'active' and p.id <> ${s.id}
+      and ((${s.names.searchName} <> '' and p.search_name % ${s.names.searchName})
+        or (${s.names.searchNameNative}::text is not null and p.search_name_native % ${s.names.searchNameNative}))
+    order by greatest(similarity(p.search_name, ${s.names.searchName}),
+                      coalesce(similarity(p.search_name_native, ${s.names.searchNameNative}), 0)) desc
     limit ${limit}`.execute(tx.db);
-  return rows.map((r) => r.id);
+  return [...new Set([...exact.rows.map((r) => r.id), ...fuzzy.rows.map((r) => r.id)])];
 }
 
 export interface ScoredCandidate extends MatchResult {
@@ -103,8 +116,18 @@ export async function scoreAgainstExisting(tx: TxContext, subject: MatchSubject)
  * Run detection for one profile and record queue-worthy pairs (GUE-R10). Dismissed pairs are re-opened only for a
  * new exact key; merged pairs are never re-proposed. Returns every scored candidate (for suggestions).
  */
+/** Exact keys are stored as keyed blind-index hashes — never the email or phone itself (GUE-I06). */
+export function hashExactKeys(ports: GuestsPorts, keys: readonly string[]): string[] {
+  return keys.map((k) => {
+    const i = k.indexOf(':');
+    const kind = k.slice(0, i);
+    return `${kind}:${ports.crypto.blindIndex(`dupkey:${k}`)}`;
+  });
+}
+
 export async function detectDuplicates(
   tx: TxContext,
+  ports: GuestsPorts,
   profileId: string,
   detectedBy: 'on_create' | 'on_update' | 'scan',
 ): Promise<ScoredCandidate[]> {
@@ -113,6 +136,7 @@ export async function detectDuplicates(
   const scored = await scoreAgainstExisting(tx, subject);
   for (const c of scored) {
     if (c.score < QUEUE_THRESHOLD) continue;
+    const keys = hashExactKeys(ports, c.exactKeys);
     const [a, b] = orderedPair(profileId, c.profileId);
     const existing = await db(tx)
       .selectFrom('guests.duplicate_candidates')
@@ -132,7 +156,7 @@ export async function detectDuplicates(
           profile_b_id: b,
           score: c.score,
           reasons: JSON.stringify(c.reasons),
-          exact_keys: c.exactKeys,
+          exact_keys: keys,
           detected_by: detectedBy,
           detected_at: tx.now,
         })
@@ -148,19 +172,22 @@ export async function detectDuplicates(
         .set({
           score: c.score,
           reasons: JSON.stringify(c.reasons),
-          exact_keys: [...new Set([...existing.exact_keys, ...c.exactKeys])],
+          exact_keys: [...new Set([...existing.exact_keys, ...keys])],
           version: sql`version + 1`,
         })
         .where('id', '=', existing.id)
         .execute();
-    } else if (existing.status === 'dismissed' && shouldReopenDismissed(existing.exact_keys, c)) {
+    } else if (
+      existing.status === 'dismissed' &&
+      shouldReopenDismissed(existing.exact_keys, { ...c, exactKeys: keys })
+    ) {
       await db(tx)
         .updateTable('guests.duplicate_candidates')
         .set({
           status: 'open',
           score: c.score,
           reasons: JSON.stringify(c.reasons),
-          exact_keys: [...new Set([...existing.exact_keys, ...c.exactKeys])],
+          exact_keys: [...new Set([...existing.exact_keys, ...keys])],
           resolved_at: null,
           resolved_by: null,
           resolution_reason: `Re-opened: new exact match (previously dismissed: ${existing.resolution_reason ?? ''})`,
@@ -283,6 +310,7 @@ export async function dismissDuplicate(
  */
 export async function scanDuplicates(
   tx: TxContext,
+  ports: GuestsPorts,
   opts: { afterId?: string; batch?: number } = {},
 ): Promise<{ scanned: number; nextAfterId: string | null }> {
   requirePermission(tx, 'guests.profile.merge');
@@ -294,7 +322,7 @@ export async function scanDuplicates(
     .limit(opts.batch ?? 200);
   if (opts.afterId) q = q.where('id', '>', opts.afterId);
   const ids = (await q.execute()).map((r) => r.id);
-  for (const id of ids) await detectDuplicates(tx, id, 'scan');
+  for (const id of ids) await detectDuplicates(tx, ports, id, 'scan');
   return {
     scanned: ids.length,
     nextAfterId: ids.length === (opts.batch ?? 200) ? (ids.at(-1) ?? null) : null,

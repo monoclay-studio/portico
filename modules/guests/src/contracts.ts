@@ -196,7 +196,7 @@ export type SpecialNeedInput = z.infer<typeof specialNeedInput>;
 
 export const searchQuery = z.object({
   q: z.string().trim().min(1).max(200),
-  kind: z.enum(['auto', 'name', 'email', 'phone', 'company', 'document']).default('auto'),
+  kind: z.enum(['auto', 'name', 'email', 'phone', 'company', 'document', 'booking']).default('auto'),
   propertyId: z.uuid().optional(),
   limit: z.coerce.number().int().min(1).max(100).default(20),
 });
@@ -338,6 +338,8 @@ export const alertView = z.object({
   activeFrom: z.string().nullable(),
   activeTo: z.string().nullable(),
   status: z.enum(['active', 'resolved']),
+  /** Active and within its active period on the viewing property's business date. */
+  activeNow: z.boolean(),
   version: z.number().int(),
 });
 export const noteView = z.object({

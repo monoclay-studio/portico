@@ -1,11 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { canTransitionCompany, validateCommission, validateIataCode, wouldCreateCycle } from './company';
+import { canTransitionCompany, validateCommission, validateIataCode } from './company';
 import { mayProcess, purposeBasis, validateEvidence } from './consent';
 import {
   documentHashInput,
   documentLast4Input,
   isExpired,
-  maskDocumentNumber,
   normalizeDocumentNumber,
   retentionDate,
 } from './documents';
@@ -52,12 +51,6 @@ describe('companies', () => {
     expect(validateCommission({ model: 'net_rate', basisPoints: 100 })).toMatch(/Only percentage/);
     expect(validateCommission({ model: 'none' })).toBeNull();
   });
-  it('detects hierarchy cycles', () => {
-    const parent: Record<string, string | null> = { a: null, b: 'a', c: 'b' };
-    expect(wouldCreateCycle('a', 'c', (id) => parent[id])).toBe(true);
-    expect(wouldCreateCycle('c', 'a', (id) => parent[id])).toBe(false);
-    expect(wouldCreateCycle('a', 'a', (id) => parent[id])).toBe(true);
-  });
   it('status transitions', () => {
     expect(canTransitionCompany('active', 'on_hold')).toBe(true);
     expect(canTransitionCompany('inactive', 'on_hold')).toBe(false);
@@ -73,7 +66,6 @@ describe('identity documents', () => {
     expect(documentLast4Input('X9K4471203')).toBe('doc4:1203');
   });
   it('masks, expires and retains', () => {
-    expect(maskDocumentNumber('X9K4471203')).toBe('•••••••203');
     expect(isExpired('2026-01-01', '2026-01-02')).toBe(true);
     expect(isExpired('2026-01-02', '2026-01-02')).toBe(false);
     expect(isExpired(null, '2026-01-02')).toBe(false);

@@ -1,16 +1,8 @@
 import { sourcesFromManifests, type TxContext, withTenantTx } from '@portico/db';
-import { newId, type RequestContext, systemAuthorizer } from '@portico/kernel';
+import { fieldCryptoFromEnv, newId, type RequestContext, systemAuthorizer } from '@portico/kernel';
 import { platform, platformManifest } from '@portico/platform';
 import { createTestDatabase, type TestDatabase, testContext } from '@portico/testing';
-import {
-  createGuestsService,
-  type GuestsPorts,
-  type GuestsService,
-  guestsManifest,
-  localGuestsCrypto,
-} from '../src';
-
-export const TEST_FIELD_KEY = Buffer.from('guests-test-field-key-0123456789').toString('base64');
+import { createGuestsService, type GuestsPorts, type GuestsService, guestsManifest } from '../src';
 
 export async function startDb(): Promise<TestDatabase> {
   return createTestDatabase(sourcesFromManifests([platformManifest, guestsManifest]));
@@ -27,13 +19,19 @@ export function platformPort(): GuestsPorts['platform'] {
     listPropertyIds: async (tx) => (await platform.listProperties(asSystem(tx))).map((p) => p.id),
     getPropertyCountry: async (tx, id) => (await platform.getProperty(asSystem(tx), id)).countryCode,
     getPropertyLegalEntityId: async (tx, id) => (await platform.getProperty(asSystem(tx), id)).legalEntityId,
+    legalEntityExists: async (tx, id) =>
+      platform.getLegalEntity(tx, id).then(
+        () => true,
+        () => false,
+      ),
+    getBusinessDate: (tx, id) => platform.getBusinessDate(tx, id),
   };
 }
 
 export function makeService(extra: Partial<GuestsPorts> = {}): GuestsService {
   return createGuestsService({
     platform: platformPort(),
-    crypto: localGuestsCrypto(TEST_FIELD_KEY),
+    crypto: fieldCryptoFromEnv({}), // development keys (never valid in production)
     ...extra,
   });
 }

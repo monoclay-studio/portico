@@ -21,12 +21,6 @@ export function documentLast4Input(number: string): string {
   return `doc4:${normalizeDocumentNumber(number).slice(-4)}`;
 }
 
-/** Masked form for permitted viewers: keeps only the last 3 characters. */
-export function maskDocumentNumber(number: string): string {
-  const n = normalizeDocumentNumber(number);
-  return `${'•'.repeat(Math.max(3, n.length - 3))}${n.slice(-3)}`;
-}
-
 /**
  * Retention (Q44 default): identity-document fields are erased a configured number of days after the guest's
  * last departure (or after capture when no stay is known). Returns the later of the current and new dates.

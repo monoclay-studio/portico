@@ -7,6 +7,7 @@ import {
   profileVisibility,
   sharingApplies,
   stayVisible,
+  visibleKnownAt,
 } from './visibility';
 
 const scope = (over: Partial<AccessScope> = {}): AccessScope => ({
@@ -71,10 +72,20 @@ describe('item visibility', () => {
     expect(itemVisible(s, 'full', item, 'unknown', { readPrivateNotePropertyIds: 'all' })).toBe(true);
     expect(itemVisible(s, 'none', item, 'unknown', { readPrivateNotePropertyIds: 'all' })).toBe(false);
   });
-  it('documents only at the capturing property in a full view; stays follow sharing', () => {
+  it('known-at properties are disclosed only when sharing applies', () => {
+    expect(visibleKnownAt(scope(), ['A', 'B'], 'unknown')).toEqual(['A']);
+    expect(visibleKnownAt(scope({ sharedViewing: true }), ['A', 'B'], 'unknown')).toEqual(['A', 'B']);
+    expect(visibleKnownAt(scope({ sharedViewing: true }), ['A', 'B'], 'withdrawn')).toEqual(['A']);
+  });
+  it('documents only at the capturing property; stays follow sharing', () => {
     expect(documentVisible(s, 'full', 'A')).toBe(true);
     expect(documentVisible(s, 'full', 'B')).toBe(false);
-    expect(documentVisible(s, 'shared', 'A')).toBe(false);
+    expect(documentVisible(s, 'shared', 'A')).toBe(true); // captured at the viewer's own property
+    expect(documentVisible(s, 'shared', 'B')).toBe(false);
+    expect(documentVisible(s, 'none', 'A')).toBe(false);
+    expect(itemVisible(s, 'shared', { visibility: 'property_private', propertyId: 'A' }, 'unknown')).toBe(
+      true,
+    );
     expect(stayVisible(scope(), 'full', 'B', 'unknown')).toBe(false);
     expect(stayVisible(s, 'full', 'B', 'unknown')).toBe(true);
     expect(stayVisible(s, 'none', 'A', 'unknown')).toBe(false);

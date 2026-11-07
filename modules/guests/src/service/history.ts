@@ -116,8 +116,11 @@ export async function getStayHistory(
   let nights = 0;
   let stays = 0;
   const counted = new Set<string>();
+  const revenueCounted = new Set<string>();
   for (const r of visible) {
-    if (r.revenue_minor !== null && r.revenue_currency) {
+    // One stay can appear under several roles (occupant + payer): count its revenue once.
+    if (r.revenue_minor !== null && r.revenue_currency && !revenueCounted.has(r.stay_id)) {
+      revenueCounted.add(r.stay_id);
       spend.set(r.revenue_currency, (spend.get(r.revenue_currency) ?? 0) + r.revenue_minor);
     }
     if (['cancelled', 'no_show'].includes(r.status) || counted.has(r.stay_id)) continue;
@@ -184,7 +187,7 @@ export async function getRecognitionSummary(
       ? { propertyId: done[0].propertyId, arrival: done[0].arrival, departure: done[0].departure }
       : null,
     criticalAlerts: profile.alerts
-      .filter((a) => a.status === 'active' && a.severity !== 'info')
+      .filter((a) => a.activeNow && a.severity !== 'info')
       .map((a) => ({ id: a.id, text: a.text, severity: a.severity })),
     keyPreferences: profile.preferences.slice(0, 8).map((p) => ({ category: p.category, value: p.value })),
     importantDates: profile.importantDates,
