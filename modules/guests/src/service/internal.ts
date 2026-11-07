@@ -6,6 +6,7 @@ import { type Selectable, sql, type TxContext, typed } from '@portico/db';
 import {
   actorId,
   BusinessRuleError,
+  ConflictError,
   ForbiddenError,
   NotFoundError,
   requirePermission,
@@ -210,17 +211,42 @@ export async function requireWritableProfile(
   propertyId?: string | null,
 ): Promise<VisibleProfile & { actingPropertyId: string }> {
   const vp = await requireVisibleProfile(tx, ports, id);
-  if (vp.row.status === 'anonymized') {
-    throw new BusinessRuleError(
-      'profile_anonymized',
-      'This guest profile was anonymized on request and can no longer be changed. Create a new profile if the guest returns.',
-      { profileId: vp.row.id },
-    );
-  }
+  // Lock, then decide (R2-P2-2): an erasure (FOR UPDATE on the profile) and this write serialize, so a write that
+  // passed its checks can never commit after the erasure and leave personal data behind.
+  await lockProfileForWrite(tx, vp.row.id);
   // Writing never links the profile to the acting property (that would silently widen visibility there, and
   // survive sharing being switched off). Properties become "known" only through resolve, stays or mirroring.
   const acting = actingProperty(tx, permission, vp.row, vp.links, propertyId);
   return { ...vp, actingPropertyId: acting };
+}
+
+/**
+ * Take the profile row lock for a write to the person's data and re-read the status under it. Erasure locks the
+ * same row FOR UPDATE: a writer that locked first is then erased with everything else; a writer that arrives after
+ * the erasure is refused (profile_anonymized).
+ */
+export async function lockProfileForWrite(tx: TxContext, profileId: string): Promise<void> {
+  const row = await db(tx)
+    .selectFrom('guests.profiles')
+    .select(['id', 'status'])
+    .where('id', '=', profileId)
+    .forNoKeyUpdate()
+    .executeTakeFirst();
+  if (!row) throw new NotFoundError('guest_profile', profileId);
+  if (row.status === 'anonymized') {
+    throw new BusinessRuleError(
+      'profile_anonymized',
+      'This guest profile was anonymized on request and can no longer be changed. Create a new profile if the guest returns.',
+      { profileId },
+    );
+  }
+  if (row.status === 'merged') {
+    throw new ConflictError(
+      'profile_changed',
+      'This profile was merged into another one while you were working. Open the surviving profile and try again.',
+      { profileId },
+    );
+  }
 }
 
 export async function linkProperty(
@@ -364,11 +390,9 @@ export async function scrubReason<T extends string | null | undefined>(
   const add = (v: string | null | undefined, split: boolean) => {
     if (!v) return;
     const t = v.trim();
-    if (t.length >= 3) tokens.add(t);
-    if (split) for (const part of t.split(/[\s\-'’.]+/u)) if (part.length >= 3) tokens.add(part);
-    // Han / Hangul / Kana names are short: keep two-character names too.
-    if (/^[\p{Script=Han}\p{Script=Hangul}\p{Script=Hiragana}\p{Script=Katakana}]{2}$/u.test(t))
-      tokens.add(t);
+    if (t.length >= 2) tokens.add(t);
+    // Two-letter surnames (Li, Wu, Ng, Do) count — they are matched as whole words only (R2-P3-5).
+    if (split) for (const part of t.split(/[\s\-'’.]+/u)) if (part.length >= 2) tokens.add(part);
   };
   for (const p of profiles) {
     add(p.given_name, true);
@@ -385,9 +409,14 @@ export async function scrubReason<T extends string | null | undefined>(
     add(c.value, false);
     add(c.normalized, false);
   }
+  const cjk = /^[\p{Script=Han}\p{Script=Hangul}\p{Script=Hiragana}\p{Script=Katakana}]+$/u;
   let out: string = reason;
   for (const t of [...tokens].sort((a, b) => b.length - a.length)) {
-    out = out.replace(new RegExp(t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'giu'), '[guest]');
+    const escaped = t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    // Whole words only ("Ann" never turns "Annual" into "[guest]ual"); scripts written without spaces (Han,
+    // Hangul, Kana) cannot use word boundaries, so their names are matched as written.
+    const pattern = cjk.test(t) ? escaped : `(?<![\\p{L}\\p{N}])${escaped}(?![\\p{L}\\p{N}])`;
+    out = out.replace(new RegExp(pattern, 'giu'), '[guest]');
   }
   return out as T;
 }

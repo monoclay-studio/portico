@@ -109,13 +109,15 @@ export async function runIdempotent<T, S = unknown>(
             'This Idempotency-Key was used by a different user or integration. Use a new key for your request.',
           );
         }
+        const stored: unknown = existing.response_body;
+        // Checked before the request hash: once erased, every body answers 410, so the stored hash cannot be used
+        // to confirm a guess of the erased person's data (409 vs 410).
+        if (isStoredErased(stored)) throw new IdempotentResponseErasedError();
         if (existing.request_hash !== requestHash) {
           throw new IdempotencyConflictError(
             'This Idempotency-Key was already used for a different request. Use a new key for a new request.',
           );
         }
-        const stored: unknown = existing.response_body;
-        if (isStoredErased(stored)) throw new IdempotentResponseErasedError();
         if (isStoredRef(stored)) {
           if (!opts?.replay) {
             throw new DomainError(
@@ -159,25 +161,39 @@ export async function runIdempotent<T, S = unknown>(
 }
 
 /**
- * Erasure support: replace every stored response of this organization that mentions any of the given values
- * (data-subject ids, emails, phone numbers) with an erased marker. A later replay answers 410 instead of
- * returning personal data. Matching is by exact substring of the stored JSON. Values shorter than 6 characters are
- * ignored so that a short value cannot redact unrelated records. Returns the number of records redacted.
+ * Erasure support: replace every stored response of this organization that CONTAINS one of the given identifiers
+ * as a whole JSON string value with an erased marker; a later replay answers 410 instead of returning personal data.
+ *
+ * `identifiers` MUST identify the data subject exactly — profile ids, normalized emails, E.164 phone numbers.
+ * Never free text (names, addresses, notes) and never numbers as typed: matching is on whole string values
+ * (case-insensitive), not substrings, so "Maldives" cannot hit "Indian/Maldives" and "+9607771234" cannot hit
+ * "+96077712345" or the number 17771234. Values shorter than 6 characters are ignored.
+ * `keep`: identifiers of OTHER subjects whose records must stay (e.g. a guest on legal hold who shares an email):
+ * a response containing any of them is not touched. Returns the number of records redacted.
  */
 export async function redactIdempotencyResponses(
   tx: TxContext,
-  input: { mentions: readonly string[] },
+  input: { identifiers: readonly string[]; keep?: readonly string[] },
 ): Promise<number> {
-  const mentions = [...new Set(input.mentions.filter((m) => m.length >= 6))];
-  if (mentions.length === 0) return 0;
+  const ids = [...new Set(input.identifiers.map((m) => m.toLowerCase()).filter((m) => m.length >= 6))];
+  if (ids.length === 0) return 0;
+  const keep = [...new Set((input.keep ?? []).map((m) => m.toLowerCase()))];
   const { rows } = await sql<{ n: number }>`
     with hit as (
       update core.idempotency_keys k
-         set response_body = '{"$erased": true}'::jsonb
+         set response_body = '{"$erased": true}'::jsonb,
+             request_hash = 'erased'
        where k.tenant_id = ${tx.tenantId}
          and k.response_body is not null
          and not (k.response_body ? '$erased')
-         and exists (select 1 from unnest(${mentions}::text[]) m where position(m in k.response_body::text) > 0)
+         -- cheap pre-filter, then the exact whole-value test decides
+         and exists (select 1 from unnest(${ids}::text[]) m where position(m in lower(k.response_body::text)) > 0)
+         and exists (
+           select 1 from jsonb_path_query(k.response_body, 'lax $.** ? (@.type() == "string")') v
+           where lower(v #>> '{}') = any(${ids}::text[]))
+         and not exists (
+           select 1 from jsonb_path_query(k.response_body, 'lax $.** ? (@.type() == "string")') v
+           where lower(v #>> '{}') = any(${keep}::text[]))
       returning 1)
     select count(*)::int as n from hit`.execute(tx.db);
   return rows[0]?.n ?? 0;

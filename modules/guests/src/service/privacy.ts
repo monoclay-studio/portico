@@ -339,6 +339,44 @@ async function buildExport(tx: TxContext, ports: GuestsPorts, profileId: string,
 }
 
 /**
+ * The identifiers that let erasure find copies of a person in stored API responses (R2-P2-1). Only values that
+ * identify the subject exactly, matched later as whole JSON string values: profile ids (the survivor and every
+ * profile merged into it), normalized emails and E.164 phone numbers. Never addresses, names or numbers as typed.
+ * An email or phone the person shares with another guest who is on LEGAL HOLD is left out, and that guest's id is
+ * kept, so the held guest's records are never redacted by someone else's erasure.
+ */
+export async function erasureIdentifiers(
+  tx: TxContext,
+  profileIds: readonly string[],
+): Promise<{ identifiers: string[]; keep: string[] }> {
+  const ids = [...profileIds];
+  const own = await db(tx)
+    .selectFrom('guests.contact_points')
+    .select(['normalized'])
+    .where('profile_id', 'in', ids)
+    .where('kind', 'in', ['email', 'phone', 'whatsapp'])
+    .where('normalized', 'is not', null)
+    .execute();
+  const values = [...new Set(own.map((c) => c.normalized as string))];
+  const held =
+    values.length === 0
+      ? []
+      : await db(tx)
+          .selectFrom('guests.contact_points as c')
+          .innerJoin('guests.profiles as p', 'p.id', 'c.profile_id')
+          .select(['c.profile_id', 'c.normalized'])
+          .where('c.normalized', 'in', values)
+          .where('c.profile_id', 'not in', ids)
+          .where('p.legal_hold', '=', true)
+          .execute();
+  const heldValues = new Set(held.map((h) => h.normalized));
+  return {
+    identifiers: [...ids, ...values.filter((v) => !heldValues.has(v))],
+    keep: [...new Set(held.map((h) => h.profile_id))],
+  };
+}
+
+/**
  * Erasure = anonymization (GUE-R18). Profiles merged into this one (same person by staff decision) are
  * anonymized with it and the merge snapshots are redacted — those merges become irreversible (status erased).
  */
@@ -391,21 +429,10 @@ export async function eraseProfile(
     });
     return { requestId, result: onHold };
   }
-  // Stored idempotent responses of ANY module that mention this person (their profile ids, emails or phone
-  // numbers) are replaced by an erased marker: a replay then answers 410 instead of returning their data
-  // (SW-GUE-1). Guests' own endpoints store ids only (replay.ts); this also reaches other modules' responses and
-  // records stored before that change.
-  const contactValues = await db(tx)
-    .selectFrom('guests.contact_points')
-    .select(['value', 'normalized'])
-    .where('profile_id', 'in', ids)
-    .execute();
-  const idempotencyResponses = await redactIdempotencyResponses(tx, {
-    mentions: [
-      ...ids,
-      ...contactValues.flatMap((c) => [c.value, c.normalized].filter((v): v is string => !!v)),
-    ],
-  });
+  // Stored idempotent responses of ANY module that contain this person's exact identifiers are replaced by an
+  // erased marker; a replay then answers 410 instead of returning their data (SW-GUE-1). Guests' own endpoints
+  // store ids only (replay.ts); this safety net reaches other modules' responses and older records.
+  const idempotencyResponses = await redactIdempotencyResponses(tx, await erasureIdentifiers(tx, ids));
   const counts: Record<string, number> = { idempotencyResponses };
   const count = async (k: string, p: Promise<{ numDeletedRows?: bigint; numUpdatedRows?: bigint }[]>) => {
     const r = await p;

@@ -225,21 +225,27 @@ section there.
 | Store | How erasure reaches it | Evidence |
 |---|---|---|
 | `guests.*` (19 tables) | deleted / anonymized / redacted per `ERASURE_PLAN` | `privacy.test.ts` "GUE-I06" (enumerates `information_schema`) |
-| `core.idempotency_keys` (stored API responses, 30-day expiry) | guests endpoints store ids only and rebuild on replay (`src/replay.ts`, erased guest → 410); erasure replaces any module's stored response mentioning the person's profile ids, emails or phone numbers with an erased marker (replay → 410) | `privacy.test.ts` "GUE-I06" + race test; `guests-erasure-idempotency.test.ts` (PoC + 16 entry points); `packages/db/test/core.test.ts` |
+| `core.idempotency_keys` (stored API responses, 30-day expiry) | guests endpoints store ids only and rebuild on replay (`src/replay.ts`, erased guest → 410; replayed duplicate suggestions re-checked against current visibility); erasure replaces any module's stored response that contains one of the person's **exact identifiers as a whole JSON string value** — profile ids (survivor and merged-in), normalized emails (case-insensitive), E.164 phones — with an erased marker (replay → 410 for any body; request hash cleared). Never addresses, names or numbers as typed; never substrings. An email/phone shared with a guest on legal hold is not used, and responses naming a held guest are kept | `privacy.test.ts` "GUE-I06" and "an erasure racing a replay"; `erasure-precision.test.ts` (time-zone collision, digits in an amount, shared email + legal hold, planted values, real copies found, near misses kept, count); `guests-erasure-idempotency.test.ts` (PoC + 16 requests over 15 endpoints); `packages/db/test/core.test.ts` "idempotency without personal data" |
 | `core.audit_log` before/after | never written with personal values (field names, states, ids only) | "GUE-I06" scan |
 | `core.audit_log` reason (free text, append-only) | staff-typed reasons are scrubbed of the subject's names (all scripts), contact values and date of birth before storing | `privacy.test.ts` "staff-typed reasons"; API sibling test (reasons containing the name) |
 | `core.outbox` / `core.event_deliveries` | event payloads carry ids/states only; delivery errors carry no personal values | "GUE-I06" scan; API test `coreDump` |
 | Search (pg_trgm indexes, global `/v1/search`) | indexes are on `guests.profiles` columns, updated by the anonymization itself; no separate index store | `privacy.test.ts` (search after erasure), API test |
 | Data-subject exports | never stored; rebuilt per download from current data (an earlier export downloaded after erasure has no personal data) | API test "export requested before erasure" |
 | HTTP caches (browsers, proxies) | every guests response is `Cache-Control: private, no-store` | API test "never cacheable" |
-| Other modules' copies (reservations booker, finance payer, payments payer name, comms) | `guests.profile.anonymized` event for consumers; their stored idempotent responses are redacted when they mention the profile id, email or phone | consumers' own tests (outside this module) |
+| Other modules' **tables** — finance open-folio `payer_name`, payments card `holder_name` and payment-request payer (name, email), reservations booker/occupant copies | **Not reached yet**: `guests.profile.anonymized` is emitted, but no module consumes it today. Tracked as R2-P2-4 in pending-fixes (owners: finance, payments, reservations) | none yet (no consumer exists) |
+| Other modules' **stored responses** | redacted only when they contain the person's id, normalized email or E.164 phone as a whole value; name-only copies, differently formatted phones and emails inside free text survive until the 30-day expiry — those endpoints must adopt replay plans (R2-P2-4) | `erasure-precision.test.ts` (what is and is not matched) |
+| Concurrent writes to the person's data | every guests writer locks the profile row before deciding (`lockProfileForWrite`); erasure locks it FOR UPDATE — a writer that locked first is erased with everything else, a later one is refused (`profile_anonymized`) | `erasure-precision.test.ts` "writer first", "erasure first: every sibling writer…", "a channel booking racing an erasure" |
 | Fiscal records (finance) | retained by law under the pseudonymous id (research 04 §C1) | by design |
 | Backups / PITR | outside the application (retention per infra policy) | infra (not in scope) |
 
-Residuals (honest): another module's stored response that embeds a guest's name **without** their id, email or
-phone is not recognised — such endpoints must adopt replay plans (`ReplayPlan`) like guests; a misspelled name in
-a staff-typed reason is not scrubbed (FR-8); request hashes (`request_hash`, SHA-256 of the request) remain until
-expiry — not reversible without the full original request.
+Residuals (honest, tracked in pending-fixes): other modules' copies and name-only responses (R2-P2-4); the
+redaction scans the organization's stored responses without an index — fine at today's volumes, a subject-tag index
+is needed at large scale (R2-P2-3, foundation); another module's request that read the guest before the erasure
+and commits after it keeps its copy until expiry (R2-P3-2); contacts removed before the erasure are no longer
+identifiers (R2-P3-4); a misspelled name in a staff-typed reason is not scrubbed (FR-8; reasons are scrubbed on
+whole words, two-letter names included). A shared family email redacts the other family member's stored responses
+that contain it — acceptable, because those responses do contain the erased person's email — unless that member is
+on legal hold. Never put personal data in an Idempotency-Key.
 
 Replay semantics (contract change): a retried guests request returns the **current** state of the record it created
 (same status code, current ETag), never a stored copy; after erasure it answers `410 idempotent_response_erased`.
@@ -279,6 +285,9 @@ Replay semantics (contract change): a retried guests request returns the **curre
 | G-P2 | jobs registered; exact-first candidates; verified-only email keys; idempotent repoints (`nulls not distinct`); alert periods; purge honours legal hold and scope; kernel crypto; no write-time linking; snapshot removed from the public service; document-hash post-merge suggestion | duplicates/documents/profiles/isolation/S15 tests |
 | G-P3 | `merge_chain_corrupt` DomainError; dead code removed; recursive CTE for hierarchy; spend counted once per stay; legal entity validated; `POST …/documents/:id/delete`; company audit masks notes/address | domain + integration tests |
 | G-P2-1 flaky 57P01 | main's harness fix (b484de3) merged; 5 consecutive green runs | — |
+| R2-P2-1 (re-review) over-broad redaction | exact identifiers only (ids, normalized emails, E.164) matched as whole JSON string values, case-insensitive; legal-hold subjects kept; request hash cleared and 410 before the hash check (R2-P3-1) | `erasure-precision.test.ts` R2-P2-1 block; `core.test.ts` "matches identifiers only as WHOLE string values", "no oracle" |
+| R2-P2-2 (re-review) writes racing an erasure | `lockProfileForWrite` in every writer (shared `requireWritableProfile`, resolve reuse, consent, relationship target, company contact, mirror sync) | `erasure-precision.test.ts` R2-P2-2 block (both orders, 11 sibling writers + channel resolution) |
+| R2-P3-3 / R2-P3-5 (re-review) | replayed suggestions re-filtered; reasons scrubbed on whole words incl. two-letter names | `erasure-precision.test.ts` R2-P3 block |
 | SW-GUE-1 (fix sweep) erased guest still in stored idempotent responses | replay plans (ids only + rebuild) for every guests endpoint with personal data; erasure redacts stored responses of any module mentioning the person; replay reads FOR SHARE (waits for a racing erasure); reasons scrubbed; `no-store` responses | `guests-erasure-idempotency.test.ts`; "GUE-I06"; "an erasure racing a replay"; `core.test.ts` "idempotency without personal data" |
 
 ## Open questions for the owner

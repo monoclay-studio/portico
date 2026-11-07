@@ -127,6 +127,9 @@ export function createGuestsService(ports: GuestsPorts) {
       profiles.readSpecialNeed(tx, ports, specialNeedId, reason),
     setLegalHold: (tx: TxContext, profileId: string, input: { hold: boolean; reason: string }) =>
       profiles.setLegalHold(tx, ports, profileId, input),
+    /** Which of these profiles the caller may see now (optionally at a property). */
+    visibleProfileIds: (tx: TxContext, ids: readonly string[], opts?: { propertyId?: string | null }) =>
+      profiles.visibleIds(tx, ports, ids, opts),
     getStayHistory: (tx: TxContext, profileId: string, opts?: { propertyId?: string | null }) =>
       history.getStayHistory(tx, ports, profileId, opts),
 

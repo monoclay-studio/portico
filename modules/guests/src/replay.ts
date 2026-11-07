@@ -37,11 +37,20 @@ export function guestsReplayPlans(svc: GuestsService) {
       created: b.created,
       possibleDuplicates: b.possibleDuplicates,
     }),
-    rebuild: async (tx, s) => ({
-      profile: await currentProfile(tx, s),
-      created: s.created,
-      possibleDuplicates: s.possibleDuplicates,
-    }),
+    rebuild: async (tx, s) => {
+      const profile = await currentProfile(tx, s);
+      // Suggestions are re-checked against the caller's CURRENT visibility (R2-P3-3).
+      const visible = await svc.visibleProfileIds(
+        tx,
+        s.possibleDuplicates.map((d) => d.profileId),
+        { propertyId: s.propertyId ?? null },
+      );
+      return {
+        profile,
+        created: s.created,
+        possibleDuplicates: s.possibleDuplicates.filter((d) => visible.has(d.profileId)),
+      };
+    },
   });
 
   const profile: ReplayPlan<GuestProfile, ProfileRef> = {
