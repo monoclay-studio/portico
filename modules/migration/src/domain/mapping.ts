@@ -145,7 +145,13 @@ export function suggestUnitTypes(
   previous: readonly UnitTypeDecision[] = [],
 ): UnitTypeDecision[] {
   return source.map((s) => {
-    const kept = previous.find((p) => p.sourceCode === s.code && p.reviewedBy);
+    // Reviewed decisions are kept; so is a confident "create" (after the import the created type exists in Portico,
+    // and must not turn the decision into a "map" — the plan must stay the one that was rehearsed).
+    const kept = previous.find(
+      (p) =>
+        p.sourceCode === s.code &&
+        (p.reviewedBy || (p.action === 'create' && p.confidence >= REVIEW_THRESHOLD)),
+    );
     if (kept) return kept;
     const m = bestMatch(s, existing);
     if (m && m.confidence >= 0.5)
@@ -287,8 +293,9 @@ export function planFingerprint(plan: MigrationPlan): string {
     canonicalJson({
       scope: [...plan.scope].sort(),
       currency: plan.defaultCurrency,
-      unitTypes: plan.unitTypes.map((u) => [u.sourceCode, u.action, u.targetCode]).sort(),
-      ratePlans: plan.ratePlans.map((r) => [r.sourceCode, r.action, r.targetCode]).sort(),
+      // What each source code becomes in Portico (by code): "create DBL" and "map to DBL" land on the same type.
+      unitTypes: plan.unitTypes.map((u) => [u.sourceCode, u.targetCode]).sort(),
+      ratePlans: plan.ratePlans.map((r) => [r.sourceCode, r.targetCode]).sort(),
       statuses: plan.statuses.map((s) => [s.sourceWord, s.status]).sort(),
       taxAccounts: plan.taxAccounts.map((t) => [t.sourceCode, t.accountKey]).sort(),
       dateOrder: plan.dateOrder,
