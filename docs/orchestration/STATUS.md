@@ -76,22 +76,21 @@ direction, experience architecture, parity framework, this orchestration folder.
 
 | Branch | Worktree | Scope | State at checkpoint | Next step |
 |---|---|---|---|---|
-| `feat/guests-core` | wt/guests | guests module | **DONE** — 157 tests; S15/S04/S17 | Steward review (in progress) → fix findings → merge |
-| `feat/inventory-core` | wt/inventory | inventory | **DONE** — 74 tests; S01/S03/S08 | Steward review (in progress; check composites & change-consumption) → merge |
-| `feat/rates-core` | wt/rates | rates + tax engine | **DONE** — 105 tests; S19 pricing, terms immutability | Steward review (in progress) → merge |
-| `feat/reservations-core` | wt/reservations | bookings/stays/front desk | building | finish; AccessPort as real key-lifecycle contract; record contract |
-| `feat/finance-core` | wt/finance | ledger, folios, billing rules, AR, invoices, cashier | building | finish; Maldives invoice/tax-point rules |
-| `feat/payments-core` | wt/payments | payments (simulator, Stripe Connect, recorded external-terminal "Route D") | **DONE** — 96 tests + 6 API; S05/S06/S20; ledger port = `unavailablePort('finance')` until finance merges (confirmed payments raise 'not yet on the bill' exceptions, idempotent backlog posts once bound) | Steward review → merge after finance; move `modules/payments/PARITY.md` → `docs/parity/payments.md`; add front-desk `payments.payment.read`; README owner questions → OPEN_QUESTIONS |
-| `feat/operations-core` | wt/operations | housekeeping, maintenance, tasks, offline sync | building | finish |
-| `feat/integration-core` | wt/integration | connector framework, 9-step setup, health, webhooks | building | finish; G-03/G-05 |
-| `feat/backoffice-core` | wt/backoffice | packages/ui + apps/backoffice | building | design direction, record drawer, search/palette, learning layer, Today dashboard, screenshots |
-| `feat/identity-platform-enterprise` | wt/identity-plus | MFA, SSO, SCIM, custom roles, support/break-glass access, owners, outlets, config bundles, rollout groups, trial lifecycle, activation stages | building | + data-authority fixes G-01/02/04/06/07, editions §7 + Connect plan, `getPropertyFacts` |
-| `feat/infra-aws` | wt/infra | Terraform, Dockerfiles, runbooks | building | demo/lean/resilient tier variable; cost table |
-| `docs/guest-journey-audit` | wt/journey | full guest-journey audit + specs (access, guest-experience, crm, contracting, guest-services) | writing | finish → merge |
-| `docs/back-of-house-specs` | wt/backofhouse | accounting, fnb-pos, procurement, stock, workforce, concessions/utilities specs | writing | finish → merge |
-| `docs/parity-front` | wt/parity-front | parity: inventory, rates, reservations, groups, distribution, platform | researching | finish → merge → gaps into specs |
-| `docs/parity-finance` | wt/parity-finance | parity: finance, payments, day-close, accounting, fnb-pos, procurement, stock, analytics | researching | same |
-| `docs/parity-ops` | wt/parity-ops | parity: operations, guests, comms, resort, access, guest-experience, crm, identity, integration, ai | researching | same |
+| `feat/guests-core` | wt/guests | guests module | **MERGED** to main | — |
+| `feat/inventory-core` | wt/inventory | inventory | **MERGED** to main | — |
+| `feat/rates-core` | wt/rates | rates + tax engine | steward review: P0 (service charge from current config) + contract decisions → **fix round running** | verify fixes → merge first |
+| `feat/reservations-core` | wt/reservations | bookings/stays/front desk | steward review: P0 (1-cent channel diff drops taxes) → **fix round running** | merge after rates/finance/payments |
+| `feat/finance-core` | wt/finance | ledger, folios, billing rules, AR, invoices, cashier | steward review: 2 P0 (concurrent corrections, credit notes); ADR-0016 → **fix round running** | merge after rates |
+| `feat/payments-core` | wt/payments | payments (simulator, Stripe Connect, Route D) | steward review: 3 P0 → **fix round running** | merge after finance |
+| `feat/operations-core` | wt/operations | housekeeping, maintenance, tasks, offline sync | steward review: 2 P0 → **fix round running** | merge after rates |
+| `feat/integration-core` | wt/integration | connector framework, setup, health, webhooks | steward review: P0 SSRF → **fix round running** | merge after rates |
+| `feat/backoffice-core` | wt/backoffice | packages/ui + apps/backoffice | **steward review running** | fix round → merge |
+| `feat/identity-platform-enterprise` | wt/identity-plus | MFA, SSO, SCIM, custom roles, break-glass, trials, activation | steward review: **do not merge** (2 P0 cross-org takeover, 8 P1) → ADR-0017 → **fix round running** (sent 11:55Z) | second steward review → merge |
+| `feat/infra-aws` | wt/infra | Terraform, Dockerfiles, runbooks | **paused** (usage) | resume when usage < 80%; set `TRUSTED_PROXY_CIDRS` (pending-fixes) |
+| `docs/parity-ops` | wt/parity-ops | parity: operations, guests, comms, resort, access, guest-experience, crm, identity, integration, ai | **paused** (usage) | resume when usage < 80% |
+| journey, back-of-house, parity-front, parity-finance, readiness, product, adoption docs | — | docs | **MERGED** to main | spec change requests folded in at integration step |
+| market deep dive | wt/market | owner's research prompt + one-button migration | **running** | digest → gap strategist → 10x briefs |
+| UX loop round 1 | wt/uxlab (lab API :4300, UI :5380) | black-box tester (no build context) | **running** | findings → docs/ux/round-1 → refiner → module owners |
 
 Branch briefs: `docs/orchestration/module-agent-playbook.md` (shared module rules), `workstream-briefs.md`
 (per-workstream scope + every follow-up instruction sent), `steward-review-brief.md`, `parity-researcher-brief.md`.
@@ -135,6 +134,8 @@ any time (OPEN_QUESTIONS.md always conflicts at the end: keep both sides, sort b
 ## 7. Open foundation follow-ups
 
 - Platform `getPropertyFacts` (permission-free internal lookup) — assigned to identity-plus branch.
+- DONE on main 739e671: client IP trusted only from `TRUSTED_PROXY_CIDRS` (identity-plus P1-7/P1-8 foundation part).
+- DONE on main: kernel `staticAuthorizer` unions all matching grants (identity-plus review P2-10).
 - Guests requests: production KMS cipher + separate hashing key; history endpoint vs cross-property sharing;
   role templates need guests permissions (do at merge).
 - Domain map: fold in contract changes from guests, inventory, rates READMEs at merge.

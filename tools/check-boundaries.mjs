@@ -54,7 +54,9 @@ for (const m of modules) {
       }
       // Raw SQL in sql`…` templates
       for (const block of text.matchAll(/sql(?:<[^>]*>)?`([^`]*)`/g)) {
-        for (const ref of (block[1] ?? '').matchAll(new RegExp(`\\b${sch}\\.[a-z_]+\\(?`, 'g'))) {
+        // Interpolations (${input.operations.length}) are bound parameters, not SQL text: ignore them.
+        const sqlText = (block[1] ?? '').replace(/\$\{[^}]*\}/g, '$');
+        for (const ref of sqlText.matchAll(new RegExp(`\\b${sch}\\.[a-z_]+\\(?`, 'g'))) {
           const snippet = ref[0];
           if (ALLOWED_CROSS_SCHEMA.some((r) => r.test(snippet))) continue;
           problems.push(`${relative(root, file)}: raw SQL references ${snippet} — another module's schema`);
