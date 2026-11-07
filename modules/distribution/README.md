@@ -110,6 +110,8 @@ only the two Channex hosts). The staging run must check, and record in the readi
 | The environment decides the hub at every call (target re-checked) | `isolation-permissions.test.ts` "…never reaches a hub its organization's environment does not allow" |
 | Secrets never in responses, idempotency records, audit or the simulator view | `apps/api/test/distribution.test.ts` "permissions, isolation, idempotent create…", "…publishes its calendar" |
 | Tenant isolation and permission at the record's property | `isolation-permissions.test.ts` |
+| A dismissed revision (a person's decision, acknowledged) is never re-opened by Retry | `inbound.test.ts` "an orphan never matched escalates after 15 minutes; staff can dismiss it…" |
+| A production hub property belongs to one active connection across all organizations (webhook routing directory) | `isolation-permissions.test.ts` "a production hub property can be claimed by one active connection across ALL organizations" |
 
 ## Scenarios
 
