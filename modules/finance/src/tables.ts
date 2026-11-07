@@ -133,6 +133,7 @@ export interface PostingsTable {
   property_id: string;
   folio_id: string;
   kind: string;
+  origin_kind: Generated<string | null>;
   amount_minor: number;
   currency: string;
   original_amount_minor: number | null;
@@ -203,6 +204,7 @@ export interface BillingRulesTable {
   selector: unknown;
   cap: unknown;
   source: string;
+  supersedes_rule_id: Generated<string | null>;
   active: Generated<boolean>;
   created_at: Ts;
   updated_at: Ts;
@@ -256,6 +258,7 @@ export interface AllowanceInstancesTable {
   eligible_groups: string[];
   eligible_tags: string[];
   covers_taxes: boolean;
+  tax_treatment: Generated<'taxed_at_grant' | 'prepayment'>;
   unused_policy: string;
   currency: string;
   granted_minor: number;

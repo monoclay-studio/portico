@@ -77,7 +77,7 @@ describe('S19: packages, allowances, different taxes and partial payments reconc
     // Night 1
     await night('2026-11-07');
     const dinner = await outlet('FOOD', 8000, '2026-11-07', 'dinner-1'); // 102.96 gross; allowance covers 100.00
-    expect(dinner.allowanceUsage).toEqual(usd(10000));
+    expect(dinner.allowanceUsage).toEqual(usd(10296)); // 80.00 covered + its SC and TGST already charged with the package
     const spa = await outlet('SPA', 5000, '2026-11-07', 'spa-1'); // not eligible for the dining credit
     expect(spa.allowanceUsage).toBeNull();
     await org.run((tx) =>
@@ -90,15 +90,15 @@ describe('S19: packages, allowances, different taxes and partial payments reconc
         idempotencyKey: `pay1:${stayId}`,
       }),
     );
-    expect((await org.run((tx) => h.finance.getFolio(tx, guestFolioId))).balance.amountMinor).toBe(37741);
+    expect((await org.run((tx) => h.finance.getFolio(tx, guestFolioId))).balance.amountMinor).toBe(40315);
     const closed1 = await org.run((tx) => h.finance.closeAllowances(tx, { stayId, upTo: '2026-11-08' }));
-    expect(closed1.closed.map((c) => c.remaining.amountMinor)).toEqual([0]);
+    expect(closed1.closed.map((c) => c.remaining.amountMinor)).toEqual([2000]);
 
     // Night 2
     await advanceBusinessDate(org, '2026-11-07');
     await night('2026-11-08');
     const lunch = await outlet('FOOD', 4000, '2026-11-08', 'lunch-2'); // 51.48 fully covered, 48.52 left
-    expect(lunch.allowanceUsage).toEqual(usd(5148));
+    expect(lunch.allowanceUsage).toEqual(usd(5148)); // 40.00 covered + its SC and TGST
     // Partial payment in MVR cash at the desk (explicit rate, cashier session).
     await org.run((tx) =>
       h.finance.recordFxRate(tx, {
@@ -122,9 +122,9 @@ describe('S19: packages, allowances, different taxes and partial payments reconc
     );
     // Check-out: unused dining credit is forfeited to breakage revenue (not to the guest's bill).
     const closed2 = await org.run((tx) => h.finance.closeAllowances(tx, { stayId, upTo: '2026-11-09' }));
-    expect(closed2.closed.map((c) => c.remaining.amountMinor)).toEqual([4852]);
+    expect(closed2.closed.map((c) => c.remaining.amountMinor)).toEqual([6000]);
     const before = await org.run((tx) => h.finance.getFolio(tx, guestFolioId));
-    expect(before.balance.amountMinor).toBe(78751);
+    expect(before.balance.amountMinor).toBe(84195);
     await org.run((tx) =>
       h.finance.recordPayment(tx, {
         folioId: guestFolioId,
@@ -141,13 +141,15 @@ describe('S19: packages, allowances, different taxes and partial payments reconc
       h.finance.issueInvoice(tx, { folioId: guestFolioId, idempotencyKey: `inv:${stayId}` }),
     );
     expect(invoice.snapshot.totals).toEqual({
-      valueBeforeTaxMinor: 97000 + 7700,
-      serviceChargeMinor: 7700,
-      taxChargedMinor: 14399,
+      // room 600 + package allowance 200 + spa 50 (consumption covered by the allowance is not counted twice)
+      valueBeforeTaxMinor: 85000 + 8500,
+      serviceChargeMinor: 8500,
+      taxChargedMinor: 15895,
       leviesMinor: 4800,
       outsideTaxBaseMinor: 0,
-      totalMinor: 123899,
-      settlementsMinor: -123899,
+      totalMinor: 114195,
+      prepaymentsMinor: 0,
+      settlementsMinor: -114195,
       balanceDueMinor: 0,
     });
     expect(invoice.snapshot.taxSummary).toEqual(
@@ -173,9 +175,9 @@ describe('S19: packages, allowances, different taxes and partial payments reconc
         .flatMap((d) => d.taxes)
         .filter((t) => t.accountCode === code)
         .reduce((s, t) => s + t.amountMinor, 0);
-    expect(taxBy('2200')).toBe(14399); // TGST
+    expect(taxBy('2200')).toBe(15895); // TGST
     expect(taxBy('2210')).toBe(4800); // Green Tax
-    expect(taxBy('2220')).toBe(7700); // service charge
+    expect(taxBy('2220')).toBe(8500); // service charge
     const revenue = days.flatMap((d) => d.byChargeCode);
     expect(revenue.filter((r) => r.chargeCode === 'ROOM').reduce((s, r) => s + r.netMinor, 0)).toBe(60000);
     const green = await org.run((tx) =>
@@ -183,7 +185,7 @@ describe('S19: packages, allowances, different taxes and partial payments reconc
     );
     expect(green.rows).toEqual([
       expect.objectContaining({
-        rateCategory: 'mv.green_tax.12usd',
+        rateCategory: 'MV-GREEN-12',
         guestDays: 4,
         exemptGuestDays: 2,
         amountMinor: 4800,
@@ -193,7 +195,7 @@ describe('S19: packages, allowances, different taxes and partial payments reconc
     const tb = await org.run((tx) => h.finance.trialBalance(tx, { legalEntityId: org.legalEntityId }));
     expect(tb.balanced).toBe(true);
     const bal = (key: string) => tb.accounts.find((a) => a.systemKey === key)?.balanceMinor ?? 0;
-    expect(bal('revenue:breakage')).toBe(-4852);
+    expect(bal('revenue:breakage')).toBe(-8000); // already taxed with the package (ADR-0016 §5)
     expect(bal('allowance_clearing')).toBe(0);
     expect(bal('guest_ledger')).toBe(0);
     expect(bal('cash')).toBe(10000); // MVR 1,542.00 at 15.42 in USD
@@ -212,7 +214,7 @@ describe('S19: packages, allowances, different taxes and partial payments reconc
     expect(closedSession.byMethod).toEqual(
       expect.arrayContaining([
         { method: 'cash', currency: 'MVR', totalMinor: 154200, count: 1 },
-        { method: 'card:simulator', currency: 'USD', totalMinor: 78751, count: 1 },
+        { method: 'card:simulator', currency: 'USD', totalMinor: 84195, count: 1 },
       ]),
     );
   });

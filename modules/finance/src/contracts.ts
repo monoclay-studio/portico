@@ -429,6 +429,11 @@ export const grantAllowanceInput = z.object({
   eligibleTags: z.array(z.string()).max(20).optional(),
   coversTaxes: z.boolean().optional(),
   unusedPolicy: z.enum(['forfeit', 'carry_forward', 'credit_back']),
+  /**
+   * ADR-0016 §5 (Q48 pending): taxed_at_grant (default when the allowance code has a tax category) = the package
+   * price including the allowance is taxed once at grant and consumption draws it down; prepayment = untaxed credit.
+   */
+  taxTreatment: z.enum(['taxed_at_grant', 'prepayment']).optional(),
 });
 export type GrantAllowanceInput = z.infer<typeof grantAllowanceInput>;
 export const allowanceInstance = z.object({

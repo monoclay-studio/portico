@@ -5,9 +5,20 @@
  *  - tax: GST-type taxes charged;
  *  - levy: per-person levies such as Green Tax, stated as their own lines and outside the GST base;
  *  - outside: gratuities and disbursements (paid-outs), outside the tax base;
- *  - settlement: payments, deposits applied, refunds, allowance usage, receivables transfers.
+ *  - prepayment: an untaxed allowance credit bought with a package (ADR-0016 §5 `prepayment` treatment) — owed by
+ *    the guest but not a supply, so outside value before tax;
+ *  - settlement: payments, deposits applied, refunds, prepaid-credit usage, receivables transfers.
+ * With the default `taxed_at_grant` treatment the allowance is part of the package's value (taxed once) and
+ * consumption covered by it appears with negative value/tax lines ("covered by the package"), never twice.
  */
-export type InvoiceCategory = 'value' | 'service_charge' | 'tax' | 'levy' | 'outside' | 'settlement';
+export type InvoiceCategory =
+  | 'value'
+  | 'service_charge'
+  | 'tax'
+  | 'levy'
+  | 'outside'
+  | 'prepayment'
+  | 'settlement';
 
 export interface InvoiceItem {
   postingId: string;
@@ -29,6 +40,8 @@ export interface InvoiceTotals {
   leviesMinor: number;
   outsideTaxBaseMinor: number;
   totalMinor: number;
+  /** Untaxed prepaid credits sold with a package (owed, not a supply). */
+  prepaymentsMinor: number;
   settlementsMinor: number;
   balanceDueMinor: number;
 }
@@ -40,6 +53,7 @@ export function categorize(input: {
   chargeGroup: string | null;
 }): InvoiceCategory {
   const k = input.effectiveKind;
+  if (k === 'prepayment') return 'prepayment';
   if (
     [
       'payment',
@@ -71,6 +85,7 @@ export function invoiceTotals(items: readonly InvoiceItem[]): InvoiceTotals {
   const levy = sum('levy');
   const outside = sum('outside');
   const settlements = sum('settlement');
+  const prepayments = sum('prepayment');
   const total = value + sc + tax + levy + outside;
   return {
     valueBeforeTaxMinor: value + sc,
@@ -79,8 +94,9 @@ export function invoiceTotals(items: readonly InvoiceItem[]): InvoiceTotals {
     leviesMinor: levy,
     outsideTaxBaseMinor: outside,
     totalMinor: total,
+    prepaymentsMinor: prepayments,
     settlementsMinor: settlements,
-    balanceDueMinor: total + settlements,
+    balanceDueMinor: total + prepayments + settlements,
   };
 }
 

@@ -13,8 +13,8 @@ import {
 import type { DepositSummary, OpeningDepositsInput, OpeningImportReport } from '../contracts';
 import { taxAccountKey } from '../domain/chart';
 import type { LineDraft } from '../domain/ledger';
+import { fromRatesTaxLine, type PostingTax } from '../domain/tax-map';
 import type { PaymentMethodKind } from '../domain/types';
-import type { TaxLine } from '../ports';
 import type { DepositAccountsTable } from '../tables';
 import { prepareDestination } from './folios';
 import { chargeCodeByCode } from './setup';
@@ -119,24 +119,29 @@ async function prepaymentTaxes(
     taxGroup: string;
     date: LocalDate;
   },
-): Promise<{ taxes: TaxLine[]; unavailable: boolean }> {
+): Promise<{ taxes: PostingTax[]; unavailable: boolean }> {
   try {
-    const r = await deps.ports.tax.computeTaxes(tx, {
+    const r = await deps.ports.tax.computeTaxesDetailed(tx, {
       propertyId: input.propertyId,
       lines: [
         {
           lineId: 'deposit',
           chargeCode: 'DEPOSIT',
-          chargeGroup: 'deposit',
-          taxGroup: input.taxGroup,
-          priceMode: input.priceMode,
+          taxCategory: input.taxGroup,
           amount: input.amount,
           quantity: 1,
           serviceDate: input.date,
+          taxInclusion: { mode: input.priceMode },
+          // ADR-0016 §4: the tax point of a prepayment is its receipt.
+          taxPointDate: input.date,
         },
       ],
     });
-    const taxes = r.lines.find((l) => l.lineId === 'deposit')?.taxes ?? [];
+    // Only statutory value-based taxes fall due on a prepayment (e.g. TGST): not per-person levies (Green Tax is
+    // due per guest-day) and not commercial fees such as the service charge.
+    const taxes = (r.lines.find((l) => l.lineId === 'deposit')?.taxes ?? [])
+      .map(fromRatesTaxLine)
+      .filter((t) => t.kind === 'tax' && t.statutory && t.valueBased);
     if (taxes.some((t) => t.amount.currency !== input.amount.currency)) {
       throw new BusinessRuleError('tax_engine_error', 'The tax engine answered in another currency.');
     }
@@ -443,8 +448,8 @@ export async function applyDeposits(
   if (releasedTotal > 0) {
     const now = await prepaymentTaxes(tx, deps, {
       propertyId: f0.property_id,
-      amount: money(amount - releasedTotal, acct.currency),
-      priceMode: 'exclusive',
+      amount: money(amount, acct.currency),
+      priceMode: 'inclusive',
       taxGroup: input.taxGroup ?? 'accommodation',
       date: businessDate,
     });
@@ -498,6 +503,24 @@ export async function applyDeposits(
     },
   ];
   const taxes: Array<DeclaredTax & { currentMinor: number }> = [];
+  // The declared rule (name, rate, version) of each tax key, from the deposits received (F-05: label credits by
+  // the rule that was declared, not by today's rule).
+  const received = await db(tx)
+    .selectFrom('finance.deposit_movements')
+    .select('taxes')
+    .where('deposit_account_id', '=', acct.id)
+    .where('kind', 'in', ['received', 'opening_balance'])
+    .orderBy('created_at', 'desc')
+    .execute();
+  const declaredRule = new Map<string, DeclaredTax>();
+  for (const m of received) {
+    for (const t of (m.taxes ?? []) as DeclaredTax[])
+      if (!declaredRule.has(t.accountKey)) declaredRule.set(t.accountKey, t);
+  }
+  const taxAccounts = new Map<string, string>();
+  for (const k of new Set([...Object.keys(released), ...Object.keys(current)])) {
+    taxAccounts.set(k, await accountId(tx, deps, acct.legal_entity_id, taxAccountKey(k)));
+  }
   for (const k of new Set([...Object.keys(released), ...Object.keys(current)])) {
     const dep = released[k] ?? 0;
     // A difference of one minor unit is rounding (inclusive vs exclusive computation), not a rate change.
@@ -520,13 +543,22 @@ export async function applyDeposits(
     const diff = now - dep;
     if (diff !== 0) {
       const idx = postings.length;
+      const rule = declaredRule.get(k);
+      // A tax line (not value): the prepaid part keeps the tax declared at receipt (time of supply).
       postings.push({
         folioId: folio.id,
         kind: 'adjustment',
+        originKind: 'tax',
         amountMinor: -diff,
         currency: cur,
-        description: `${currentNames[k] ?? k}: rate in force when the deposit was paid applies to the prepaid part`,
+        description: `${rule?.name ?? currentNames[k] ?? k} declared on the deposit${rule?.rate ? ` at ${rule.rate}` : ''}: prepaid part keeps the rate in force when it was paid`,
         source: { type: 'booking', id: input.bookingId },
+        taxKind: 'tax',
+        taxName: `${rule?.name ?? k} (rate at deposit${rule?.rate ? ` ${rule.rate}` : ''})`,
+        taxRate: rule?.rate ?? null,
+        taxRuleId: rule?.ruleId || null,
+        taxRuleVersionId: rule?.ruleVersionId || null,
+        counterAccountId: taxAccounts.get(k) ?? null,
       });
       lines.push({
         accountKey: 'guest_ledger',
@@ -536,11 +568,13 @@ export async function applyDeposits(
         postingIndex: idx,
       });
     }
+    const rule = declaredRule.get(k);
     taxes.push({
       accountKey: k,
-      ruleId: '',
-      ruleVersionId: '',
-      name: currentNames[k] ?? k,
+      ruleId: rule?.ruleId ?? '',
+      ruleVersionId: rule?.ruleVersionId ?? '',
+      name: rule?.name ?? currentNames[k] ?? k,
+      ...(rule?.rate ? { rate: rule.rate } : {}),
       amountMinor: -dep,
       currentMinor: now,
     });

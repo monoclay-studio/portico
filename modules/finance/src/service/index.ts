@@ -68,7 +68,7 @@ export function createFinance(ports: FinancePorts) {
     updateBillingRule: bind(deps, billingRules.updateBillingRule),
     deactivateBillingRule: bind(deps, billingRules.deactivateBillingRule),
     listBillingRules: billingRules.listBillingRules,
-    replaceBillingRules: bind(deps, billingRules.replaceBillingRules),
+    mergeBillingRules: bind(deps, billingRules.mergeBillingRules),
     previewRouting: billingRules.previewRouting,
     // ── deposits & allowances ──
     refundDeposit: bind(deps, deposits.refundDeposit),
@@ -412,7 +412,7 @@ export function financeForReservations(service: FinanceService) {
         }>;
       },
     ) {
-      return service.replaceBillingRules(d(tx), {
+      return service.mergeBillingRules(d(tx), {
         owner: ruleOwner(input.owner),
         rules: input.rules.map((r) => ({
           destinationFolioId: r.destinationFolioId,

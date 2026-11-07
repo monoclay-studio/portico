@@ -345,7 +345,7 @@ describe('transfers and corrections', () => {
       ),
     ).rejects.toThrow(/already reversed/);
     const folio = await org.run((tx) => h.finance.getFolio(tx, s.guestFolioId));
-    expect(folio.balance).toEqual(usd(5000)); // only the granted allowance remains
+    expect(folio.balance).toEqual(usd(6435)); // only the package allowance (taxed at grant) remains
     const [allowance] = await org.run((tx) => h.finance.listAllowances(tx, s.stayId));
     expect(allowance?.remaining).toEqual(usd(5000));
     await assertLedgerIntegrity(h, org);

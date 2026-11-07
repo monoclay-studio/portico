@@ -12,8 +12,8 @@ import { db, ensureChart } from './service/support';
 export function unavailableFinancePorts(): { tax: TaxPort; payments: PaymentsPort } {
   return {
     tax: {
-      async computeTaxes() {
-        throw new ModuleUnavailableError('rates (tax engine)', 'computeTaxes');
+      async computeTaxesDetailed() {
+        throw new ModuleUnavailableError('rates (tax engine)', 'computeTaxesDetailed');
       },
       async getRulePackStatus() {
         return { verified: false, note: 'The tax engine (rates module) is not connected.' };

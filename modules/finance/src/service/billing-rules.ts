@@ -1,5 +1,12 @@
 import { explainVersionMiss, type Selectable, sql, type TxContext } from '@portico/db';
-import { BusinessRuleError, NotFoundError, newId, requirePermission, ValidationError } from '@portico/kernel';
+import {
+  BusinessRuleError,
+  canonicalJson,
+  NotFoundError,
+  newId,
+  requirePermission,
+  ValidationError,
+} from '@portico/kernel';
 import type { z } from 'zod';
 import type {
   BillingRule,
@@ -16,7 +23,7 @@ import {
   routeBatch,
   validateSelector,
 } from '../domain/routing';
-import type { ChargeGroup, RuleCap, RuleSelector } from '../domain/types';
+import { CHARGE_GROUPS, type ChargeGroup, type RuleCap, type RuleSelector } from '../domain/types';
 import type { BillingRulesTable } from '../tables';
 import { defaultFolio } from './folios';
 import { capUsage, loadRules } from './postings';
@@ -404,38 +411,65 @@ export async function previewRouting(tx: TxContext, input: PreviewInput): Promis
   };
 }
 
+export interface RuleSetInput {
+  destinationFolioId: string;
+  label: string;
+  selector: RuleSelector;
+  cap: RuleCap | null;
+  source: 'manual' | 'company_default' | 'rate_plan' | 'group' | 'package';
+}
+
+export interface RuleSetChanges {
+  kept: Array<{ ruleId: string; label: string }>;
+  superseded: Array<{ fromRuleId: string; toRuleId: string; label: string; change: string }>;
+  added: Array<{ ruleId: string; label: string }>;
+  deactivated: Array<{ ruleId: string; label: string; source: string }>;
+  untouched: Array<{ ruleId: string; label: string; source: string }>;
+}
+
+const canonicalSelector = (sel: RuleSelector) =>
+  canonicalJson({
+    chargeCodes: [...(sel.chargeCodes ?? [])].sort(),
+    chargeGroups: [...(sel.chargeGroups ?? [])].sort(),
+    serviceDateFrom: sel.serviceDateFrom ?? null,
+    serviceDateTo: sel.serviceDateTo ?? null,
+    daysOfWeek: [...(sel.daysOfWeek ?? [])].sort(),
+  });
+
 /**
- * Replace the whole rule set of an owner in one step (reservations applies company/rate-plan/group defaults at
- * booking or check-in). The new set is validated as a whole — ties and partial overlaps are refused — before any
- * existing rule is deactivated.
+ * Re-apply billing instructions for an owner as a MERGE (ADR-0016 §2), scoped to the sources given (e.g. the
+ * company defaults): an identical rule is kept (same id, limits already used stay used); a rule whose limit or
+ * label changed is replaced by a successor that inherits the limit usage; rules of those sources that are no
+ * longer given are deactivated; rules of other sources (staff-created manual rules) are untouched. The whole
+ * resulting set is validated (no ties). `preview: true` returns the changes without saving.
  */
-export async function replaceBillingRules(
+export async function mergeBillingRules(
   tx: TxContext,
   deps: Deps,
   input: {
     owner: { type: 'stay' | 'booking' | 'group'; id: string };
-    rules: Array<{
-      destinationFolioId: string;
-      label: string;
-      selector: RuleSelector;
-      cap: RuleCap | null;
-      source: 'manual' | 'company_default' | 'rate_plan' | 'group' | 'package';
-    }>;
+    rules: RuleSetInput[];
+    preview?: boolean;
   },
-): Promise<{ ruleIds: string[] }> {
+): Promise<{ ruleIds: string[]; changes: RuleSetChanges; preview: boolean }> {
   const base = await defaultFolio(tx, input.owner);
-  requirePermission(tx, 'finance.billingRule.manage', { propertyId: base.property_id });
-  await deps.ports.platform.assertWritable(tx, base.property_id, 'charges');
-  await lockOwner(tx, input.owner);
+  requirePermission(tx, input.preview ? 'finance.folio.read' : 'finance.billingRule.manage', {
+    propertyId: base.property_id,
+  });
+  if (!input.preview) {
+    await deps.ports.platform.assertWritable(tx, base.property_id, 'charges');
+    await lockOwner(tx, input.owner);
+  }
   const groups = await chargeGroupMap(tx, base.property_id);
-  const candidates: RoutingRule[] = input.rules.map((r) => ({
-    id: newId(tx.now.getTime()),
-    label: r.label,
-    destinationFolioId: r.destinationFolioId,
-    selector: r.selector,
-    cap: r.cap,
-  }));
   for (const r of input.rules) {
+    for (const g of r.selector.chargeGroups ?? []) {
+      if (!CHARGE_GROUPS.includes(g)) {
+        throw new ValidationError(
+          'unknown_charge_group',
+          `"${g}" is not a charge group (${CHARGE_GROUPS.join(', ')}).`,
+        );
+      }
+    }
     await validateRule(tx, {
       propertyId: base.property_id,
       owner: input.owner,
@@ -444,22 +478,109 @@ export async function replaceBillingRules(
       cap: r.cap,
     });
   }
-  assertRuleSetConsistent(candidates, (c) => groups.get(c));
+  const scope = new Set(input.rules.map((r) => r.source));
   const existing = await db(tx)
-    .updateTable('finance.billing_rules')
-    .set({ active: false, version: sql`version + 1` })
+    .selectFrom('finance.billing_rules')
+    .selectAll()
     .where('owner_type', '=', input.owner.type)
     .where('owner_id', '=', input.owner.id)
     .where('active', '=', true)
-    .returning('id')
     .execute();
-  for (let i = 0; i < candidates.length; i++) {
-    const c = candidates[i] as RoutingRule;
-    const r = input.rules[i] as (typeof input.rules)[number];
+  const keyOf = (r: { source: string; destinationFolioId: string; selector: RuleSelector }) =>
+    `${r.source}|${r.destinationFolioId}|${canonicalSelector(r.selector)}`;
+  const byKey = new Map(
+    existing
+      .filter((e) => scope.has(e.source as RuleSetInput['source']))
+      .map((e) => [
+        keyOf({
+          source: e.source,
+          destinationFolioId: e.destination_folio_id,
+          selector: e.selector as RuleSelector,
+        }),
+        e,
+      ]),
+  );
+  const changes: RuleSetChanges = { kept: [], superseded: [], added: [], deactivated: [], untouched: [] };
+  const finalSet: RoutingRule[] = [];
+  const toInsert: Array<RuleSetInput & { id: string; supersedes: string | null }> = [];
+  const matched = new Set<string>();
+  for (const r of input.rules) {
+    const hit = byKey.get(keyOf(r));
+    if (hit && !matched.has(hit.id)) {
+      matched.add(hit.id);
+      const sameCap = canonicalJson(hit.cap ?? null) === canonicalJson(r.cap ?? null);
+      if (sameCap && hit.label === r.label) {
+        changes.kept.push({ ruleId: hit.id, label: hit.label });
+        finalSet.push({
+          id: hit.id,
+          label: hit.label,
+          destinationFolioId: hit.destination_folio_id,
+          selector: hit.selector as RuleSelector,
+          cap: (hit.cap ?? null) as RuleCap | null,
+        });
+        continue;
+      }
+      const id = newId(tx.now.getTime());
+      changes.superseded.push({
+        fromRuleId: hit.id,
+        toRuleId: id,
+        label: r.label,
+        change: sameCap ? 'label' : 'limit',
+      });
+      toInsert.push({ ...r, id, supersedes: hit.id });
+      finalSet.push({
+        id,
+        label: r.label,
+        destinationFolioId: r.destinationFolioId,
+        selector: r.selector,
+        cap: r.cap,
+      });
+      continue;
+    }
+    const id = newId(tx.now.getTime());
+    changes.added.push({ ruleId: id, label: r.label });
+    toInsert.push({ ...r, id, supersedes: null });
+    finalSet.push({
+      id,
+      label: r.label,
+      destinationFolioId: r.destinationFolioId,
+      selector: r.selector,
+      cap: r.cap,
+    });
+  }
+  for (const e of existing) {
+    if (matched.has(e.id)) continue;
+    if (scope.has(e.source as RuleSetInput['source'])) {
+      changes.deactivated.push({ ruleId: e.id, label: e.label, source: e.source });
+    } else {
+      changes.untouched.push({ ruleId: e.id, label: e.label, source: e.source });
+      finalSet.push({
+        id: e.id,
+        label: e.label,
+        destinationFolioId: e.destination_folio_id,
+        selector: e.selector as RuleSelector,
+        cap: (e.cap ?? null) as RuleCap | null,
+      });
+    }
+  }
+  assertRuleSetConsistent(finalSet, (c) => groups.get(c));
+  if (input.preview) return { ruleIds: finalSet.map((r) => r.id), changes, preview: true };
+  const retire = [
+    ...changes.deactivated.map((d) => d.ruleId),
+    ...changes.superseded.map((d) => d.fromRuleId),
+  ];
+  if (retire.length) {
+    await db(tx)
+      .updateTable('finance.billing_rules')
+      .set({ active: false, version: sql`version + 1` })
+      .where('id', 'in', retire)
+      .execute();
+  }
+  for (const r of toInsert) {
     await db(tx)
       .insertInto('finance.billing_rules')
       .values({
-        id: c.id,
+        id: r.id,
         tenant_id: tx.tenantId,
         property_id: base.property_id,
         owner_type: input.owner.type,
@@ -469,21 +590,21 @@ export async function replaceBillingRules(
         selector: JSON.stringify(r.selector),
         cap: r.cap ? JSON.stringify(r.cap) : null,
         source: r.source,
+        supersedes_rule_id: r.supersedes,
       })
       .execute();
   }
   await tx.audit({
-    action: 'finance.billingRule.replaceSet',
+    action: 'finance.billingRule.mergeSet',
     target: { type: 'folio', id: base.id },
     propertyId: base.property_id,
-    before: { deactivated: existing.map((e) => e.id) },
-    after: { rules: input.rules },
+    after: { owner: input.owner, changes },
   });
   await tx.emit({
     type: 'finance.billingRule.changed',
     propertyId: base.property_id,
     aggregate: { type: input.owner.type, id: input.owner.id },
-    payload: { owner: input.owner, change: 'replaced', ruleIds: candidates.map((c) => c.id) },
+    payload: { owner: input.owner, change: 'merged', changes },
   });
-  return { ruleIds: candidates.map((c) => c.id) };
+  return { ruleIds: finalSet.map((r) => r.id), changes, preview: false };
 }

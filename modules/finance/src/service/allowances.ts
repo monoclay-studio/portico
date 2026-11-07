@@ -10,7 +10,9 @@ import {
 } from '@portico/kernel';
 import type { AllowanceInstance, GrantAllowanceInput } from '../contracts';
 import { closeOutcome, type UnusedPolicy } from '../domain/allowance';
+import { taxAccountKey } from '../domain/chart';
 import type { LineDraft } from '../domain/ledger';
+import { fromRatesTaxLine, type PostingTax } from '../domain/tax-map';
 import type { AllowanceInstancesTable } from '../tables';
 import { assertSameProperty, prepareDestination } from './folios';
 import { chargeCodeByCode } from './setup';
@@ -116,6 +118,7 @@ export async function grantAllowance(
       entryId: claim.entryId,
       replayed: true,
     };
+  const treatment = input.taxTreatment ?? (code.tax_group ? 'taxed_at_grant' : 'prepayment');
   const locked = (await lockFolios(tx, [f0.id])).get(f0.id) as FolioRow;
   const { folio } = await prepareDestination(tx, locked, 'new_charge');
   // Top up an instance created earlier for the same period (e.g. carried forward), otherwise create it.
@@ -129,6 +132,12 @@ export async function grantAllowance(
     .executeTakeFirst();
   let instanceId: string;
   if (existing) {
+    if (existing.tax_treatment !== treatment) {
+      throw new BusinessRuleError(
+        'allowance_treatment_mismatch',
+        `The allowance "${existing.label}" for this period is ${existing.tax_treatment.replace('_', ' ')}; a top-up must use the same tax treatment.`,
+      );
+    }
     if (existing.status === 'closed' || existing.status === 'cancelled') {
       throw new BusinessRuleError(
         'allowance_period_closed',
@@ -166,6 +175,7 @@ export async function grantAllowance(
           eligible_groups: input.eligibleGroups ?? [],
           eligible_tags: input.eligibleTags ?? [],
           covers_taxes: input.coversTaxes ?? true,
+          tax_treatment: treatment,
           unused_policy: input.unusedPolicy,
           currency: input.amount.currency,
           granted_minor: input.amount.amountMinor,
@@ -182,16 +192,39 @@ export async function grantAllowance(
     }
   }
   const clearing = await accountId(tx, deps, folio.legal_entity_id, 'allowance_clearing');
+  const serviceDate = [validFrom, businessDate].sort()[0] as string;
+  // ADR-0016 §5: taxed_at_grant → the package price including the allowance value is taxed once, here.
+  let taxes: PostingTax[] = [];
+  if (treatment === 'taxed_at_grant' && code.tax_group) {
+    const r = await deps.ports.tax.computeTaxesDetailed(tx, {
+      propertyId: input.propertyId,
+      lines: [
+        {
+          lineId: 'grant',
+          chargeCode: code.code,
+          taxCategory: code.tax_group,
+          amount: input.amount,
+          quantity: 1,
+          serviceDate,
+          taxInclusion: { mode: 'exclusive' },
+        },
+      ],
+    });
+    taxes = (r.lines.find((l) => l.lineId === 'grant')?.taxes ?? [])
+      .map(fromRatesTaxLine)
+      .filter((t) => t.valueBased);
+  }
   const postings: PostingDraft[] = [
     {
       folioId: folio.id,
       kind: 'charge',
+      originKind: treatment === 'taxed_at_grant' ? 'charge' : 'prepayment',
       amountMinor: input.amount.amountMinor,
       currency: folio.currency,
       description: input.label,
       chargeCodeId: code.id,
       chargeCode: code.code,
-      serviceDate: [validFrom, businessDate].sort()[0] as string,
+      serviceDate,
       revenueDate: validFrom,
       allowanceInstanceId: instanceId,
       counterAccountId: clearing,
@@ -215,6 +248,46 @@ export async function grantAllowance(
       subLedger: { type: 'allowance', id: instanceId },
     },
   ];
+  for (const t of taxes) {
+    if (t.amount.amountMinor === 0) continue;
+    const taxAcct = await accountId(tx, deps, folio.legal_entity_id, taxAccountKey(t.accountKey));
+    const idx = postings.length;
+    postings.push({
+      folioId: folio.id,
+      kind: 'tax',
+      originKind: 'tax',
+      amountMinor: t.amount.amountMinor,
+      currency: folio.currency,
+      description: t.name,
+      parentIndex: 0,
+      chargeCodeId: code.id,
+      chargeCode: code.code,
+      serviceDate,
+      revenueDate: validFrom,
+      taxRuleId: t.ruleId,
+      taxRuleVersionId: t.ruleVersionId,
+      taxName: t.name,
+      taxKind: t.kind,
+      taxRate: t.rate ?? null,
+      allowanceInstanceId: instanceId,
+      counterAccountId: taxAcct,
+    });
+    lines.push({
+      accountKey: 'guest_ledger',
+      amountMinor: t.amount.amountMinor,
+      currency: folio.currency,
+      subLedger: { type: 'folio', id: folio.id },
+      postingIndex: idx,
+      chargeCode: code.code,
+    });
+    lines.push({
+      accountKey: '',
+      accountId: taxAcct,
+      amountMinor: -t.amount.amountMinor,
+      currency: folio.currency,
+      memo: `${t.name} (package allowance)`,
+    });
+  }
   await writeEntryBody(
     tx,
     deps,
@@ -380,6 +453,7 @@ export async function closeAllowances(
               eligible_groups: inst.eligible_groups,
               eligible_tags: inst.eligible_tags,
               covers_taxes: inst.covers_taxes,
+              tax_treatment: inst.tax_treatment,
               unused_policy: inst.unused_policy,
               currency: inst.currency,
               granted_minor: r,

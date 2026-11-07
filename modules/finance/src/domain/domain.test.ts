@@ -188,6 +188,8 @@ describe('fiscal ledger', () => {
     expect(c('tax', 'fee')).toBe('levy');
     expect(c('charge', null, 'gratuity')).toBe('outside');
     expect(c('payment')).toBe('settlement');
+    expect(c('prepayment')).toBe('prepayment');
+    expect(c('allowance_usage')).toBe('settlement');
     const item = (category: ReturnType<typeof c>, amountMinor: number, taxName: string | null = null) => ({
       postingId: 'p',
       category,
@@ -215,6 +217,7 @@ describe('fiscal ledger', () => {
       leviesMinor: 2400,
       outsideTaxBaseMinor: 500,
       totalMinor: 28640,
+      prepaymentsMinor: 0,
       settlementsMinor: -10000,
       balanceDueMinor: 18640,
     });

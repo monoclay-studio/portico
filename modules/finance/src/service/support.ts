@@ -1,4 +1,4 @@
-import { pgCode, type Selectable, sql, type TxContext, typed } from '@portico/db';
+import { type Insertable, pgCode, type Selectable, sql, type TxContext, typed } from '@portico/db';
 import {
   type Authorizer,
   actorId,
@@ -199,6 +199,8 @@ export interface EntryHeader {
 export interface PostingDraft {
   folioId: string;
   kind: PostingKind;
+  /** What the posting ultimately represents (defaults to `kind`); copied through transfers and corrections. */
+  originKind?: string | null;
   amountMinor: number;
   currency: string;
   description: string;
@@ -339,53 +341,53 @@ export async function writeEntryBody(
   if (postings.length > 0) {
     if (!h.propertyId) throw new BusinessRuleError('property_required', 'Folio postings need a property.');
     const propertyId = h.propertyId;
-    const rows: Array<Omit<PostingsTable, 'created_at' | 'post_departure'> & { post_departure: boolean }> =
-      postings.map((p, i) => ({
-        id: postingIds[i] as string,
-        tenant_id: tx.tenantId,
-        entry_id: entryId,
-        legal_entity_id: h.legalEntityId,
-        property_id: propertyId,
-        folio_id: p.folioId,
-        kind: p.kind,
-        amount_minor: p.amountMinor,
-        currency: p.currency,
-        original_amount_minor: p.originalAmountMinor ?? null,
-        original_currency: p.originalCurrency ?? null,
-        fx_rate_id: p.fxRateId ?? null,
-        charge_code_id: p.chargeCodeId ?? null,
-        charge_code: p.chargeCode ?? null,
-        tax_rule_id: p.taxRuleId ?? null,
-        tax_rule_version_id: p.taxRuleVersionId ?? null,
-        tax_name: p.taxName ?? null,
-        tax_kind: p.taxKind ?? null,
-        tax_units: p.taxUnits === undefined || p.taxUnits === null ? null : String(p.taxUnits),
-        tax_exempt_units:
-          p.taxExemptUnits === undefined || p.taxExemptUnits === null ? null : String(p.taxExemptUnits),
-        tax_rate_category: p.taxRateCategory ?? null,
-        tax_rate: p.taxRate ?? null,
-        quantity: p.quantity === undefined || p.quantity === null ? null : String(p.quantity),
-        unit_price_minor: p.unitPriceMinor ?? null,
-        description: p.description,
-        service_date: p.serviceDate ?? null,
-        revenue_date: p.revenueDate ?? null,
-        business_date: h.businessDate,
-        parent_posting_id:
-          p.parentIndex !== undefined ? (postingIds[p.parentIndex] as string) : (p.parentPostingId ?? null),
-        corrects_posting_id: p.correctsPostingId ?? null,
-        transfer_peer_id: p.peerIndex !== undefined ? (postingIds[p.peerIndex] as string) : null,
-        billing_rule_id: p.billingRuleId ?? null,
-        allowance_instance_id: p.allowanceInstanceId ?? null,
-        counter_account_id: p.counterAccountId ?? null,
-        payment_ref_type: p.paymentRef?.type ?? null,
-        payment_ref_id: p.paymentRef?.id ?? null,
-        payment_method: p.paymentMethod ?? null,
-        payment_verification: p.paymentVerification ?? null,
-        cashier_session_id: p.cashierSessionId ?? null,
-        source_type: p.source?.type ?? null,
-        source_id: p.source?.id ?? null,
-        post_departure: p.postDeparture ?? false,
-      }));
+    const rows: Array<Insertable<PostingsTable>> = postings.map((p, i) => ({
+      id: postingIds[i] as string,
+      tenant_id: tx.tenantId,
+      entry_id: entryId,
+      legal_entity_id: h.legalEntityId,
+      property_id: propertyId,
+      folio_id: p.folioId,
+      kind: p.kind,
+      origin_kind: p.originKind ?? null,
+      amount_minor: p.amountMinor,
+      currency: p.currency,
+      original_amount_minor: p.originalAmountMinor ?? null,
+      original_currency: p.originalCurrency ?? null,
+      fx_rate_id: p.fxRateId ?? null,
+      charge_code_id: p.chargeCodeId ?? null,
+      charge_code: p.chargeCode ?? null,
+      tax_rule_id: p.taxRuleId ?? null,
+      tax_rule_version_id: p.taxRuleVersionId ?? null,
+      tax_name: p.taxName ?? null,
+      tax_kind: p.taxKind ?? null,
+      tax_units: p.taxUnits === undefined || p.taxUnits === null ? null : String(p.taxUnits),
+      tax_exempt_units:
+        p.taxExemptUnits === undefined || p.taxExemptUnits === null ? null : String(p.taxExemptUnits),
+      tax_rate_category: p.taxRateCategory ?? null,
+      tax_rate: p.taxRate ?? null,
+      quantity: p.quantity === undefined || p.quantity === null ? null : String(p.quantity),
+      unit_price_minor: p.unitPriceMinor ?? null,
+      description: p.description,
+      service_date: p.serviceDate ?? null,
+      revenue_date: p.revenueDate ?? null,
+      business_date: h.businessDate,
+      parent_posting_id:
+        p.parentIndex !== undefined ? (postingIds[p.parentIndex] as string) : (p.parentPostingId ?? null),
+      corrects_posting_id: p.correctsPostingId ?? null,
+      transfer_peer_id: p.peerIndex !== undefined ? (postingIds[p.peerIndex] as string) : null,
+      billing_rule_id: p.billingRuleId ?? null,
+      allowance_instance_id: p.allowanceInstanceId ?? null,
+      counter_account_id: p.counterAccountId ?? null,
+      payment_ref_type: p.paymentRef?.type ?? null,
+      payment_ref_id: p.paymentRef?.id ?? null,
+      payment_method: p.paymentMethod ?? null,
+      payment_verification: p.paymentVerification ?? null,
+      cashier_session_id: p.cashierSessionId ?? null,
+      source_type: p.source?.type ?? null,
+      source_id: p.source?.id ?? null,
+      post_departure: p.postDeparture ?? false,
+    }));
     // Parents must exist before children (self FK): insert in index order, parents always precede children.
     await db(tx).insertInto('finance.postings').values(rows).execute();
   }

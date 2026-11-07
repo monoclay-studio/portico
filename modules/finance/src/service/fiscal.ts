@@ -336,6 +336,7 @@ interface ItemRow {
   tax_rate: string | null;
   tax_rule_id: string | null;
   tax_kind: string | null;
+  origin_kind: string | null;
   entry_id: string;
   orig_kind: string | null;
   orig_tax_kind: string | null;
@@ -365,6 +366,7 @@ async function invoiceableItems(
       'p.tax_rate',
       'p.tax_rule_id',
       'p.tax_kind',
+      'p.origin_kind',
       'p.entry_id',
       'o.kind as orig_kind',
       'o.tax_kind as orig_tax_kind',
@@ -379,12 +381,14 @@ async function invoiceableItems(
 
 function toItems(rows: readonly ItemRow[]): InvoiceItem[] {
   return rows.map((r) => {
+    // What the line ultimately is (charge, tax, payment, prepayment…) — stored on every derived posting.
     const effectiveKind =
-      ['transfer_in', 'transfer_out', 'adjustment'].includes(r.kind) && r.orig_kind
+      r.origin_kind ??
+      (['transfer_in', 'transfer_out', 'adjustment'].includes(r.kind) && r.orig_kind
         ? r.orig_kind
         : r.kind === 'transfer_in' || r.kind === 'transfer_out'
           ? 'charge'
-          : r.kind;
+          : r.kind);
     return {
       postingId: r.id,
       category: categorize({
@@ -566,8 +570,18 @@ export async function issueInvoice(
         .execute()
     : [];
   const depositTaxCredits = depositTax.flatMap((m) =>
-    ((m.taxes ?? []) as Array<{ name: string; amountMinor: number; currentMinor?: number }>).map((t) => ({
+    (
+      (m.taxes ?? []) as Array<{
+        name: string;
+        rate?: string;
+        ruleVersionId?: string;
+        amountMinor: number;
+        currentMinor?: number;
+      }>
+    ).map((t) => ({
       name: t.name,
+      rate: t.rate ?? null,
+      ruleVersionId: t.ruleVersionId || null,
       declaredAtDepositMinor: -t.amountMinor,
       appliedOn: m.business_date,
     })),

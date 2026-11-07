@@ -3,6 +3,7 @@ import {
   BusinessRuleError,
   ConflictError,
   convert,
+  Decimal,
   type EntityRef,
   type LocalDate,
   type Money,
@@ -17,8 +18,8 @@ import { revenueKeyForGroup, taxAccountKey } from '../domain/chart';
 import type { LineDraft, SubLedgerType } from '../domain/ledger';
 import { capPeriodKey, type RoutingRule, routeCharge } from '../domain/routing';
 import { proportional, splitComponents } from '../domain/split';
+import { fromRatesTaxLine, normalizeLedgerKey, type PostingTax } from '../domain/tax-map';
 import type { ChargeGroup, PaymentMethodKind, RuleCap, RuleSelector } from '../domain/types';
-import type { TaxLine } from '../ports';
 import type { AllowanceInstancesTable, ChargeCodesTable } from '../tables';
 import { assertSameProperty, defaultFolio, prepareDestination, reopenInPlace } from './folios';
 import { chargeCodeByCode, chargeGroupMap } from './setup';
@@ -86,7 +87,7 @@ export interface PostChargeInput {
   occupancy?: Occupancy;
 }
 
-type Component = { kind: 'net' } | { kind: 'tax'; tax: TaxLine };
+type Component = { kind: 'net' } | { kind: 'tax'; tax: PostingTax };
 
 async function replayCharge(tx: TxContext, entryId: string): Promise<PostChargeResult> {
   const rows = await db(tx)
@@ -132,14 +133,22 @@ export async function loadRules(tx: TxContext, owner: { type: string; id: string
 
 /** Gross already routed through a capped rule in its period (charges, taxes and their adjustments). */
 export async function capUsage(tx: TxContext, ruleId: string, periodKey: string): Promise<number> {
-  let q = db(tx)
-    .selectFrom('finance.postings')
-    .select(sql<number>`coalesce(sum(amount_minor), 0)::bigint`.as('used'))
-    .where('billing_rule_id', '=', ruleId)
-    .where('kind', 'in', ['charge', 'tax', 'adjustment']);
-  if (periodKey !== 'stay') q = q.where('service_date', '=', periodKey);
-  const row = await q.executeTakeFirstOrThrow();
-  return Number(row.used);
+  // Usage follows the rule's lineage: a rule re-applied by a successor keeps what its predecessors already paid.
+  const { rows } = await sql<{ used: string }>`
+    with recursive lineage(id) as (
+      select ${ruleId}::uuid
+      union all
+      select r.supersedes_rule_id from finance.billing_rules r join lineage l on r.id = l.id
+       where r.supersedes_rule_id is not null
+    )
+    select coalesce(sum(p.amount_minor), 0)::bigint as used
+      from finance.postings p
+     where p.billing_rule_id in (select id from lineage)
+       and p.kind in ('charge', 'tax', 'adjustment')
+       and (${periodKey} = 'stay' or p.service_date = ${periodKey === 'stay' ? null : periodKey}::date)`.execute(
+    tx.db,
+  );
+  return Number(rows[0]?.used ?? 0);
 }
 
 async function computeComponents(
@@ -152,7 +161,7 @@ async function computeComponents(
   const priceMode = input.priceMode ?? 'exclusive';
   const taxMode = input.taxMode ?? (input.taxLines ? 'provided' : 'compute');
   let net = amount.amountMinor;
-  let taxes: TaxLine[] = [];
+  let taxes: PostingTax[] = [];
   if (taxMode === 'provided') {
     if (tx.actor.kind === 'user') {
       throw new ValidationError(
@@ -160,47 +169,69 @@ async function computeComponents(
         'Staff postings always use the tax engine. Provided tax lines are accepted only from trusted integrations (channel prepaid totals, verified POS).',
       );
     }
-    taxes = (input.taxLines ?? []).map((t): TaxLine => {
+    for (const t of input.taxLines ?? []) {
       if (t.amount.currency !== amount.currency) {
         throw new ValidationError(
           'tax_currency_mismatch',
           'Provided tax lines must be in the charge currency.',
         );
       }
-      return {
+      // Provided taxes may only post to tax accounts that already exist in the chart (no accounts made up by callers).
+      const key = normalizeLedgerKey(t.accountKey);
+      const exists = await db(tx)
+        .selectFrom('finance.accounts')
+        .select('id')
+        .where('system_key', '=', `tax:${key}`)
+        .executeTakeFirst();
+      if (!exists) {
+        throw new ValidationError(
+          'unknown_tax_account',
+          `Provided tax "${t.name}" maps to "${t.accountKey}", which is not a tax account in the chart. Map it first.`,
+        );
+      }
+      taxes.push({
         lineId: 'l1',
         ruleId: t.ruleId,
         ruleVersionId: t.ruleVersionId,
         name: t.name,
         kind: t.kind ?? 'tax',
-        accountKey: t.accountKey,
-        base: amount,
+        accountKey: key,
         amount: t.amount,
+        statutory: true,
+        valueBased: (t.kind ?? 'tax') !== 'fee',
         ...(t.rate ? { rate: t.rate } : {}),
         ...(t.units !== undefined ? { units: t.units } : {}),
         ...(t.exemptUnits !== undefined ? { exemptUnits: t.exemptUnits } : {}),
         ...(t.rateCategory ? { rateCategory: t.rateCategory } : {}),
-      };
-    });
+      });
+    }
     if (priceMode === 'inclusive')
       net = amount.amountMinor - taxes.reduce((s, t) => s + t.amount.amountMinor, 0);
   } else if (code.tax_group) {
-    const result = await deps.ports.tax.computeTaxes(tx, {
+    const quantity =
+      input.quantity && Number.isInteger(input.quantity) && input.quantity >= 1 ? input.quantity : 1;
+    const result = await deps.ports.tax.computeTaxesDetailed(tx, {
       propertyId: input.propertyId,
       lines: [
         {
           lineId: 'l1',
           chargeCode: code.code,
-          chargeGroup: code.charge_group,
-          taxGroup: code.tax_group,
-          priceMode,
+          taxCategory: code.tax_group,
           amount,
-          quantity: input.quantity ?? 1,
+          quantity,
           serviceDate: input.serviceDate,
+          taxInclusion: { mode: priceMode },
+          ...(amount.amountMinor < 0 ? { adjustment: 'price_adjustment' as const } : {}),
+          ...(input.occupancy
+            ? {
+                occupancy: {
+                  adults: input.occupancy.adults,
+                  childrenAges: [...input.occupancy.childrenAges],
+                },
+              }
+            : {}),
         },
       ],
-      ...(input.occupancy ? { occupancy: input.occupancy } : {}),
-      ...(input.target?.type === 'stay' ? { stayContext: { stayId: input.target.id } } : {}),
     });
     const line = result.lines.find((l) => l.lineId === 'l1');
     if (!line)
@@ -208,7 +239,7 @@ async function computeComponents(
         'tax_engine_error',
         'The tax engine returned no result for this charge. Nothing was posted.',
       );
-    taxes = line.taxes;
+    taxes = line.taxes.map(fromRatesTaxLine);
     net = line.net.amountMinor;
     if (line.net.currency !== amount.currency || taxes.some((t) => t.amount.currency !== amount.currency)) {
       throw new BusinessRuleError(
@@ -424,12 +455,15 @@ export async function postCharge(
     destination.set(id, prepared.folio);
   }
 
-  // Allowance consumption (stay allowances only).
-  const consumption: Array<{ instance: Selectable<AllowanceInstancesTable>; amount: number }> = [];
+  // Allowance consumption (stay allowances only). A block per instance: [net covered, tax relief per component].
+  // taxed_at_grant (ADR-0016 §5): the package already charged tax on the allowance, so the covered consumption's
+  // value-based taxes are relieved (no tax charged twice). prepayment: the credit pays the gross like a payment.
+  const blocks: Array<{ instance: Selectable<AllowanceInstancesTable>; comps: number[] }> = [];
   if (input.allowanceRef && gross > 0 && owner.type === 'stay') {
     const instances = await lockEligibleAllowances(tx, owner.id, input.allowanceRef);
     let netLeft = amounts[0] ?? 0;
     let grossLeft = gross;
+    const taxLeft = amounts.slice(1);
     for (const inst of instances) {
       const state = {
         id: inst.id,
@@ -460,9 +494,29 @@ export async function postCharge(
         }
         continue;
       }
-      const u = usageFor(state, { netMinor: netLeft, grossMinor: grossLeft });
-      if (u > 0) {
-        consumption.push({ instance: inst, amount: u });
+      if (inst.tax_treatment === 'taxed_at_grant') {
+        const u = Math.max(0, Math.min(netLeft, state.grantedMinor - state.usedMinor));
+        if (u <= 0) continue;
+        const reliefs = components.slice(1).map((c, k) => {
+          const tax = (c as Extract<Component, { kind: 'tax' }>).tax;
+          if (!tax.valueBased || (amounts[0] ?? 0) === 0) return 0;
+          const r = new Decimal(amounts[k + 1] ?? 0)
+            .mul(u)
+            .div(amounts[0] as number)
+            .toDecimalPlaces(0, Decimal.ROUND_HALF_UP)
+            .toNumber();
+          return Math.min(r, taxLeft[k] ?? 0);
+        });
+        reliefs.forEach((r, k) => {
+          taxLeft[k] = (taxLeft[k] ?? 0) - r;
+        });
+        blocks.push({ instance: inst, comps: [u, ...reliefs] });
+        netLeft -= u;
+        grossLeft -= u + reliefs.reduce((x, y) => x + y, 0);
+      } else {
+        const u = usageFor(state, { netMinor: netLeft, grossMinor: grossLeft });
+        if (u <= 0) continue;
+        blocks.push({ instance: inst, comps: [u, ...components.slice(1).map(() => 0)] });
         grossLeft -= u;
         netLeft = Math.max(0, netLeft - u);
       }
@@ -475,13 +529,13 @@ export async function postCharge(
   const revenueAccount =
     code.revenue_account_id ??
     (await accountId(tx, deps, property.legalEntityId, revenueKeyForGroup(code.charge_group as ChargeGroup)));
-  const allowanceAccount = consumption.length
+  const allowanceAccount = blocks.length
     ? await accountId(tx, deps, property.legalEntityId, 'allowance_clearing')
     : null;
   const single = allocations.length === 1;
   const unitPrice =
     input.quantity && input.quantity > 0 ? Math.round(input.amount.amountMinor / input.quantity) : null;
-  const usageQueue = consumption.map((c) => ({ ...c }));
+  const usageQueue = blocks.map((b) => ({ instance: b.instance, comps: [...b.comps] }));
   const totalTaxPerComponent = components.map((_, j) => amounts[j] ?? 0);
   for (let i = 0; i < allocations.length; i++) {
     const alloc = allocations[i] as (typeof allocations)[number];
@@ -575,39 +629,83 @@ export async function postCharge(
         memo: comp.tax.name,
       });
     }
-    // Allowance usage credits on this allocation, capped by its gross.
+    // Allowance cover on this allocation, capped by its gross; a block that does not fit is split exactly.
     let room = alloc.grossMinor;
     while (room > 0 && usageQueue.length > 0) {
       const head = usageQueue[0] as (typeof usageQueue)[number];
-      const take = Math.min(room, head.amount);
-      const idx = postings.length;
-      postings.push({
-        ...common,
-        billingRuleId: null,
-        kind: 'allowance_usage',
-        amountMinor: -take,
-        description: `${head.instance.label} — allowance used`,
-        parentIndex: chargeIndex,
-        allowanceInstanceId: head.instance.id,
-        counterAccountId: allowanceAccount,
-      });
-      lines.push({
-        accountKey: 'guest_ledger',
-        amountMinor: -take,
-        currency,
-        subLedger: { type: 'folio', id: folio.id },
-        postingIndex: idx,
-      });
-      lines.push({
-        accountKey: '',
-        accountId: allowanceAccount as string,
-        amountMinor: take,
-        currency,
-        subLedger: { type: 'allowance', id: head.instance.id },
-      });
-      head.amount -= take;
+      const total = head.comps.reduce((x, y) => x + y, 0);
+      const take = Math.min(room, total);
+      const part =
+        take === total ? head.comps : (splitComponents(head.comps, [take, total - take])[0] as number[]);
+      const taxedAtGrant = head.instance.tax_treatment === 'taxed_at_grant';
+      for (let j = 0; j < part.length; j++) {
+        const amt = part[j] ?? 0;
+        if (amt === 0) continue;
+        const idx = postings.length;
+        if (j === 0) {
+          postings.push({
+            ...common,
+            billingRuleId: null,
+            kind: 'allowance_usage',
+            originKind: taxedAtGrant ? 'charge' : 'allowance_usage',
+            amountMinor: -amt,
+            description: `${head.instance.label} — covered by the package allowance`,
+            parentIndex: chargeIndex,
+            allowanceInstanceId: head.instance.id,
+            counterAccountId: allowanceAccount,
+          });
+          lines.push({
+            accountKey: 'guest_ledger',
+            amountMinor: -amt,
+            currency,
+            subLedger: { type: 'folio', id: folio.id },
+            postingIndex: idx,
+          });
+          lines.push({
+            accountKey: '',
+            accountId: allowanceAccount as string,
+            amountMinor: amt,
+            currency,
+            subLedger: { type: 'allowance', id: head.instance.id },
+          });
+        } else {
+          const tax = (components[j] as Extract<Component, { kind: 'tax' }>).tax;
+          const taxAcct = await accountId(tx, deps, property.legalEntityId, taxAccountKey(tax.accountKey));
+          postings.push({
+            ...common,
+            billingRuleId: null,
+            kind: 'allowance_usage',
+            originKind: 'tax',
+            amountMinor: -amt,
+            description: `${tax.name} — already charged with the package`,
+            parentIndex: chargeIndex,
+            allowanceInstanceId: head.instance.id,
+            taxRuleId: tax.ruleId,
+            taxRuleVersionId: tax.ruleVersionId,
+            taxName: tax.name,
+            taxKind: tax.kind,
+            taxRate: tax.rate ?? null,
+            counterAccountId: taxAcct,
+          });
+          lines.push({
+            accountKey: 'guest_ledger',
+            amountMinor: -amt,
+            currency,
+            subLedger: { type: 'folio', id: folio.id },
+            postingIndex: idx,
+          });
+          lines.push({
+            accountKey: '',
+            accountId: taxAcct,
+            amountMinor: amt,
+            currency,
+            memo: `${tax.name} relief (package allowance)`,
+          });
+        }
+      }
+      if (take === total) usageQueue.shift();
+      else head.comps = head.comps.map((c, k) => c - (part[k] ?? 0));
       room -= take;
-      if (head.amount === 0) usageQueue.shift();
     }
   }
   const postingIds = await writeEntryBody(
@@ -624,16 +722,16 @@ export async function postCharge(
     lines,
   );
 
-  for (const c of consumption) {
-    const used = Number(c.instance.used_minor) + c.amount;
+  for (const b of blocks) {
+    const used = Number(b.instance.used_minor) + (b.comps[0] ?? 0);
     await db(tx)
       .updateTable('finance.allowance_instances')
       .set({
         used_minor: used,
-        status: used >= Number(c.instance.granted_minor) ? 'consumed' : 'active',
+        status: used >= Number(b.instance.granted_minor) ? 'consumed' : 'active',
         version: sql`version + 1`,
       })
-      .where('id', '=', c.instance.id)
+      .where('id', '=', b.instance.id)
       .execute();
   }
 
@@ -670,7 +768,7 @@ export async function postCharge(
     }
   }
 
-  const allowanceTotal = consumption.reduce((s, c) => s + c.amount, 0);
+  const allowanceTotal = blocks.reduce((s, b) => s + b.comps.reduce((x, y) => x + y, 0), 0);
   // One audit row per folio so each folio's history shows its charges.
   for (const folioId of folioIds) {
     await tx.audit({
@@ -1286,14 +1384,22 @@ export async function transferPostings(
   const lines: Array<LineDraft & { accountId?: string }> = [];
   for (const pr of pairs) {
     const outIdx = postings.length;
+    // Moved lines keep what they are (charge, tax, levy…) and their tax facts, however many hops (F-05).
+    const o = pr.original;
     const base = {
       currency,
-      chargeCodeId: pr.original?.charge_code_id ?? null,
-      chargeCode: pr.original?.charge_code ?? null,
-      serviceDate: pr.original?.service_date ?? null,
-      revenueDate: pr.original?.revenue_date ?? null,
-      correctsPostingId: pr.original?.id ?? null,
-      taxName: pr.original?.tax_name ?? null,
+      originKind: o ? (o.origin_kind ?? o.kind) : null,
+      chargeCodeId: o?.charge_code_id ?? null,
+      chargeCode: o?.charge_code ?? null,
+      serviceDate: o?.service_date ?? null,
+      revenueDate: o?.revenue_date ?? null,
+      correctsPostingId: o?.id ?? null,
+      taxName: o?.tax_name ?? null,
+      taxKind: (o?.tax_kind as PostingDraft['taxKind']) ?? null,
+      taxRate: o?.tax_rate ?? null,
+      taxRuleId: o?.tax_rule_id ?? null,
+      taxRuleVersionId: o?.tax_rule_version_id ?? null,
+      allowanceInstanceId: o?.allowance_instance_id ?? null,
     };
     postings.push({
       ...base,
@@ -1508,6 +1614,7 @@ export async function adjustPosting(
     postings.push({
       folioId: orig.folio_id,
       kind: 'adjustment',
+      originKind: orig.origin_kind ?? orig.kind,
       amountMinor: -amount,
       currency: orig.currency,
       description: `Correction: ${orig.description} (${input.reasonCode})`,
@@ -1567,13 +1674,17 @@ export async function adjustPosting(
         `The allowance "${inst.label}" used by this charge is already closed. Correct the charge with a manual posting reviewed by finance.`,
       );
     }
-    push(u, amt, { type: 'allowance', id: inst.id });
-    const used = Number(inst.used_minor) + amt; // amt is negative (usage credits are negative)
-    await db(tx)
-      .updateTable('finance.allowance_instances')
-      .set({ used_minor: used, status: 'active', version: sql`version + 1` })
-      .where('id', '=', inst.id)
-      .execute();
+    // Tax relief lines (package allowance) post against the tax account; only the net cover counts as usage.
+    const isRelief = !!u.tax_kind;
+    push(u, amt, isRelief ? null : { type: 'allowance', id: inst.id });
+    if (!isRelief) {
+      const used = Number(inst.used_minor) + amt; // amt is negative (usage credits are negative)
+      await db(tx)
+        .updateTable('finance.allowance_instances')
+        .set({ used_minor: used, status: 'active', version: sql`version + 1` })
+        .where('id', '=', inst.id)
+        .execute();
+    }
   }
   const postingIds = await writeEntryBody(
     tx,
@@ -1768,6 +1879,7 @@ export async function reverseEntry(
         `The allowance "${inst.label}" used by this charge is already closed.`,
       );
     }
+    if (p.tax_kind) continue; // tax relief: only the net cover counts as allowance usage
     await db(tx)
       .updateTable('finance.allowance_instances')
       .set({
@@ -1782,6 +1894,7 @@ export async function reverseEntry(
   const drafts: PostingDraft[] = postings.map((p) => ({
     folioId: p.folio_id,
     kind: 'adjustment',
+    originKind: p.origin_kind ?? p.kind,
     amountMinor: -Number(p.amount_minor),
     currency: p.currency,
     description: `Reversal: ${p.description} (${input.reasonCode})`,

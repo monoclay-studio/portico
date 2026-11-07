@@ -97,12 +97,13 @@ describe('deposits (liability, time of supply)', () => {
     } finally {
       h.tax.tgstRate = () => '17';
     }
-    // TGST rises to 17% before arrival: the 1,000.00 prepaid net keeps 16% (160.00); 10.00 is credited back.
+    // TGST rises to 17% before arrival: the prepaid 1,160.00 keeps the 16% declared at receipt (160.00); at 17%
+    // the same prepaid amount would carry 168.55, so 8.55 is credited back as a tax line.
     const res = await org.run((tx) => h.finance.applyDeposits(tx, { bookingId, toFolioId: folioId }));
     const folio = await org.run((tx) => h.finance.getFolio(tx, folioId));
     expect(folio.postings.map((p) => [p.kind, p.amount.amountMinor])).toEqual([
       ['deposit_application', -116000],
-      ['adjustment', -1000],
+      ['adjustment', -855],
     ]);
     expect(res.postingIds).toHaveLength(2);
     await assertLedgerIntegrity(h, org);

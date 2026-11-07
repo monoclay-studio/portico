@@ -258,6 +258,13 @@ export async function chargeGroupMap(tx: TxContext, propertyId: string): Promise
 }
 
 /** Default charge codes for a property (demo and onboarding). Tax groups are rate-pack keys, not rates. */
+/**
+ * Default charge codes for a property (demo and onboarding). Tax groups are rates' tax categories (MV pack:
+ * accommodation, food_beverage, spa, activity, transfer, retail, other_service, general_sector) — data, not rates.
+ * Penalty and stay-change fee codes match the vocabulary reservations posts (NO_SHOW, CANCEL_FEE,
+ * EARLY_DEPARTURE, LATE_CHECKOUT, EARLY_CHECKIN). Whether fees and forfeitures carry TGST is for the tax
+ * engine's rule pack to decide (adviser question Q20).
+ */
 export const DEFAULT_CHARGE_CODES: ReadonlyArray<Omit<ChargeCodeInput, 'propertyId'>> = [
   { code: 'ROOM', name: 'Accommodation', group: 'room', taxGroup: 'accommodation', department: 'rooms' },
   { code: 'PKG', name: 'Package', group: 'package', taxGroup: 'accommodation', department: 'rooms' },
@@ -279,29 +286,70 @@ export const DEFAULT_CHARGE_CODES: ReadonlyArray<Omit<ChargeCodeInput, 'property
     allowanceTags: ['dining'],
   },
   { code: 'MINIBAR', name: 'Minibar', group: 'minibar', taxGroup: 'food_beverage', department: 'rooms' },
-  { code: 'SPA', name: 'Spa treatment', group: 'spa', taxGroup: 'services', department: 'spa' },
+  { code: 'SPA', name: 'Spa treatment', group: 'spa', taxGroup: 'spa', department: 'spa' },
   {
     code: 'DIVE',
     name: 'Diving and excursions',
     group: 'activity',
-    taxGroup: 'services',
+    taxGroup: 'activity',
     department: 'recreation',
   },
   {
     code: 'TRANSFER',
     name: 'Seaplane / speedboat transfer',
     group: 'transfer',
-    taxGroup: 'transport',
+    taxGroup: 'transfer',
     department: 'transport',
   },
-  { code: 'RETAIL', name: 'Boutique', group: 'retail', taxGroup: 'goods', department: 'retail' },
-  { code: 'CXL', name: 'Cancellation / no-show fee', group: 'penalty', taxGroup: null, department: 'rooms' },
-  { code: 'MISC', name: 'Miscellaneous', group: 'misc', taxGroup: 'services', department: 'other' },
+  { code: 'RETAIL', name: 'Boutique', group: 'retail', taxGroup: 'retail', department: 'retail' },
+  {
+    code: 'LATE_CHECKOUT',
+    name: 'Late check-out',
+    group: 'fee',
+    taxGroup: 'accommodation',
+    department: 'rooms',
+  },
+  {
+    code: 'EARLY_CHECKIN',
+    name: 'Early check-in',
+    group: 'fee',
+    taxGroup: 'accommodation',
+    department: 'rooms',
+  },
+  {
+    code: 'NO_SHOW',
+    name: 'No-show charge',
+    group: 'penalty',
+    taxGroup: 'accommodation',
+    department: 'rooms',
+  },
+  {
+    code: 'CANCEL_FEE',
+    name: 'Cancellation fee',
+    group: 'penalty',
+    taxGroup: 'accommodation',
+    department: 'rooms',
+  },
+  {
+    code: 'EARLY_DEPARTURE',
+    name: 'Early departure fee',
+    group: 'penalty',
+    taxGroup: 'accommodation',
+    department: 'rooms',
+  },
+  {
+    code: 'CXL',
+    name: 'Cancellation / no-show (deposit forfeiture)',
+    group: 'penalty',
+    taxGroup: null,
+    department: 'rooms',
+  },
+  { code: 'MISC', name: 'Miscellaneous', group: 'misc', taxGroup: 'other_service', department: 'other' },
   {
     code: 'ALLOW',
     name: 'Package allowance (dining credit)',
     group: 'allowance',
-    taxGroup: null,
+    taxGroup: 'food_beverage',
     department: 'fnb',
   },
 ];

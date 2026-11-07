@@ -8,9 +8,9 @@ import {
   type FinancePorts,
   type FinanceService,
   financeManifest,
-  type TaxChargeLine,
-  type TaxComputation,
-  type TaxLine,
+  type RatesChargeLine,
+  type RatesTaxComputation,
+  type RatesTaxLine,
 } from '../src';
 
 export interface Harness {
@@ -21,79 +21,93 @@ export interface Harness {
   tax: FakeTax;
 }
 
-/** Deterministic fake of the rates tax engine with Maldives-like rules (data in the fake, not in finance). */
+/**
+ * Deterministic fake of the rates tax engine with Maldives-like rules, answering in rates' published shape
+ * (category/basis/ledgerMappingKey). Service charge is a commercial `fee` inside the TGST base; Green Tax is a
+ * statutory `tax` per person-night (quantity-based) — finance must map both correctly.
+ */
 export class FakeTax {
   verified = true;
-  /** TGST rate by service date (time-of-supply tests change it). */
+  /** TGST rate by tax point (time-of-supply tests change it). */
   tgstRate: (date: string) => string = () => '17';
   greenTaxMinor = 1200;
   calls = 0;
 
   compute(
-    line: TaxChargeLine,
-    occupancy?: { adults: number; childrenAges: readonly number[] },
-  ): { net: Money; taxes: TaxLine[] } {
+    line: RatesChargeLine,
+    occupancy?: { adults: number; childrenAges: number[] },
+  ): { net: Money; taxes: RatesTaxLine[] } {
     this.calls++;
     const cur = line.amount.currency;
-    const tgst = new Decimal(this.tgstRate(line.serviceDate)).div(100);
+    const point = line.taxPointDate ?? line.serviceDate;
+    const tgstPct = this.tgstRate(point);
+    const tgst = new Decimal(tgstPct).div(100);
     const sc = new Decimal('0.10');
-    const withSc =
-      ['accommodation', 'food_beverage', 'services'].includes(line.taxGroup) &&
-      line.chargeGroup !== 'deposit';
+    const withSc = ['accommodation', 'food_beverage', 'spa', 'activity', 'other_service'].includes(
+      line.taxCategory,
+    );
     const mk = (
+      code: string,
       name: string,
-      kind: TaxLine['kind'],
-      accountKey: string,
+      category: 'tax' | 'fee',
+      basis: RatesTaxLine['basis'],
+      key: string,
       amount: number,
-      rate: string,
-      extra: Partial<TaxLine> = {},
-    ): TaxLine => ({
+      extra: Partial<RatesTaxLine> = {},
+    ): RatesTaxLine => ({
       lineId: line.lineId,
-      ruleId: `rule-${accountKey}`,
-      ruleVersionId: `rule-${accountKey}-v${accountKey === 'tgst' ? this.tgstRate(line.serviceDate) : '1'}`,
-      name,
-      kind,
-      accountKey,
-      rate,
-      base: line.amount,
+      ruleId: `rule-${code}`,
+      ruleCode: code,
+      ruleName: name,
+      ruleVersionId: `rule-${code}-v${code === 'MV-TGST' ? tgstPct : '1'}`,
+      category,
+      nature: code === 'MV-SC' ? 'commercial' : 'statutory',
+      basis,
+      base: basis === 'percentage' ? line.amount : null,
+      ratePercent: null,
+      quantity: null,
+      fixedAmount: null,
       amount: money(amount, cur),
+      ledgerMappingKey: key,
+      taxPointDate: point,
       ...extra,
     });
     const factor = (withSc ? new Decimal(1).plus(sc) : new Decimal(1)).mul(new Decimal(1).plus(tgst));
-    let net: number;
-    if (line.priceMode === 'inclusive') {
-      net = new Decimal(line.amount.amountMinor)
-        .div(factor)
-        .toDecimalPlaces(0, Decimal.ROUND_HALF_UP)
-        .toNumber();
-    } else {
-      net = line.amount.amountMinor;
-    }
-    const taxes: TaxLine[] = [];
+    const inclusive = line.taxInclusion?.mode === 'inclusive';
+    let net = inclusive
+      ? new Decimal(line.amount.amountMinor).div(factor).toDecimalPlaces(0, Decimal.ROUND_HALF_UP).toNumber()
+      : line.amount.amountMinor;
+    const taxes: RatesTaxLine[] = [];
     const scAmt = withSc ? new Decimal(net).mul(sc).toDecimalPlaces(0, Decimal.ROUND_HALF_UP).toNumber() : 0;
-    if (withSc) taxes.push(mk('Service charge 10%', 'service_charge', 'service_charge', scAmt, '10%'));
+    if (withSc)
+      taxes.push(
+        mk('MV-SC', 'Service charge 10%', 'fee', 'percentage', 'fee.service_charge', scAmt, {
+          ratePercent: '10',
+        }),
+      );
     const tgstAmt = new Decimal(net + scAmt).mul(tgst).toDecimalPlaces(0, Decimal.ROUND_HALF_UP).toNumber();
     taxes.push(
-      mk(
-        `TGST ${this.tgstRate(line.serviceDate)}%`,
-        'tax',
-        'tgst',
-        tgstAmt,
-        `${this.tgstRate(line.serviceDate)}%`,
-      ),
+      mk('MV-TGST', `TGST ${tgstPct}%`, 'tax', 'percentage', 'tax.tgst', tgstAmt, { ratePercent: tgstPct }),
     );
-    if (line.priceMode === 'inclusive')
-      net = line.amount.amountMinor - taxes.reduce((s, t) => s + t.amount.amountMinor, 0);
-    if (line.chargeGroup === 'room' && occupancy) {
-      const exempt = occupancy.childrenAges.filter((a) => a < 2).length;
-      const guests = occupancy.adults + occupancy.childrenAges.length - exempt;
-      const days = line.quantity;
+    if (inclusive) net = line.amount.amountMinor - taxes.reduce((s, t) => s + t.amount.amountMinor, 0);
+    const occ = line.occupancy ?? occupancy;
+    if (line.taxCategory === 'accommodation' && occ && line.chargeCode === 'ROOM') {
+      const exempt = occ.childrenAges.filter((a) => a < 2).length;
+      const persons = occ.adults + occ.childrenAges.length;
+      const nights = line.quantity ?? 1;
       taxes.push(
-        mk('Green Tax', 'fee', 'green_tax', guests * days * this.greenTaxMinor, 'USD 12 per guest-day', {
-          units: guests * days,
-          exemptUnits: exempt * days,
-          rateCategory: 'mv.green_tax.12usd',
-        }),
+        mk(
+          'MV-GREEN-12',
+          'Green Tax',
+          'tax',
+          'per_person_night',
+          'tax.green_tax',
+          (persons - exempt) * nights * this.greenTaxMinor,
+          {
+            quantity: { persons: persons - exempt, exemptPersons: exempt, nights, units: 1 },
+            fixedAmount: { value: '12', currency: 'USD' },
+          },
+        ),
       );
     }
     return { net: money(net, cur), taxes };
@@ -133,7 +147,7 @@ export async function startHarness(): Promise<Harness> {
       assertWritable: (tx, propertyId, domain) => platform.assertWritable(tx, propertyId, domain),
     },
     tax: {
-      async computeTaxes(_tx, input): Promise<TaxComputation> {
+      async computeTaxesDetailed(_tx, input): Promise<RatesTaxComputation> {
         return { lines: input.lines.map((l) => ({ lineId: l.lineId, ...tax.compute(l, input.occupancy) })) };
       },
       async getRulePackStatus() {

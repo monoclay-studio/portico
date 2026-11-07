@@ -193,6 +193,9 @@ create table finance.postings (
   kind                text not null check (kind in ('charge', 'tax', 'allowance_usage', 'payment', 'refund',
                         'deposit_application', 'transfer_in', 'transfer_out', 'adjustment', 'write_off',
                         'paid_out', 'receivables_transfer', 'allowance_return', 'opening_balance')),
+  -- What this posting ultimately represents (charge, tax, payment, prepayment…), carried through transfers and
+  -- corrections so tax invoices state value and tax correctly however often a line was moved.
+  origin_kind         text,
   -- Signed, in folio currency: positive = payer owes more; negative = payer owes less.
   amount_minor        bigint not null,
   currency            char(3) not null,
@@ -370,6 +373,8 @@ create table finance.billing_rules (
   selector             jsonb not null,
   cap                  jsonb,
   source               text not null default 'manual' check (source in ('manual', 'company_default', 'rate_plan', 'group', 'package')),
+  -- Re-applying billing instructions replaces a rule by a successor; limits already used carry over the lineage.
+  supersedes_rule_id   uuid references finance.billing_rules(id),
   active               boolean not null default true,
   created_at           timestamptz not null default now(),
   updated_at           timestamptz not null default now(),
@@ -437,6 +442,9 @@ create table finance.allowance_instances (
   eligible_groups  text[] not null default '{}',
   eligible_tags    text[] not null default '{}',
   covers_taxes     boolean not null default true,
+  -- ADR-0016 §5 (pending adviser, Q48): taxed_at_grant = the package charge carried the tax, consumption only
+  -- draws it down; prepayment = an untaxed credit settling taxed consumption.
+  tax_treatment    text not null default 'taxed_at_grant' check (tax_treatment in ('taxed_at_grant', 'prepayment')),
   unused_policy    text not null check (unused_policy in ('forfeit', 'carry_forward', 'credit_back')),
   currency         char(3) not null,
   granted_minor    bigint not null check (granted_minor > 0),
