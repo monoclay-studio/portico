@@ -122,6 +122,20 @@ describe('no-shows per policy', () => {
     await assertBooksBalance(h, org);
   });
 
+  it('collectFee "never": the fee is posted to the folio but no collection is ever requested, and no card is touched', async () => {
+    const org = await setupOrg(h);
+    const a = await addStay(h, org, { arrival: D, departure: '2026-11-09', status: 'expected' });
+    h.fakes.payments.agreedGuarantee.set(a.bookingId, 'mandate');
+    await setNoShowPolicy(org, { mode: 'auto', protectDelayedTransfers: true, collectFee: 'never' });
+    const before = h.fakes.payments.collections.length;
+    const run = await h.service.startRun(h.t.db, nightAudit(h, org), { propertyId: org.propertyId });
+    expect(run.runStatus).toBe('completed');
+    expect(await entriesByKey(h, org.tenantId, `penalty:no_show:${a.stayId}`)).toHaveLength(1);
+    expect(h.fakes.payments.collections.length).toBe(before);
+    const issues = await org.run((tx) => h.service.listIssues(tx, org.propertyId), org.auditor);
+    expect(issues.filter((i) => i.code === 'no_show_fee_to_collect')).toEqual([]);
+  });
+
   it('decide: every due arrival blocks until decided; "keep expected" with a reason means no no-show and no fee', async () => {
     const org = await setupOrg(h);
     const a = await addStay(h, org, { arrival: D, departure: '2026-11-09', status: 'expected' });

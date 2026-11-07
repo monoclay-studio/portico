@@ -207,7 +207,10 @@ describe('isolation and permissions', () => {
     expect(hits.map((x) => x.id)).toEqual([run.id]);
     expect(await org.run((tx) => dayCloseSearch.search(tx, D, { limit: 5 }), elsewhere)).toEqual([]);
     expect(
-      await other.run((tx) => dayCloseSearch.summarize?.(tx, 'day_close_run', run.id), other.auditor),
+      await other.run(
+        async (tx) => (await dayCloseSearch.summarize?.(tx, 'day_close_run', run.id)) ?? null,
+        other.auditor,
+      ),
     ).toBeNull();
   });
 

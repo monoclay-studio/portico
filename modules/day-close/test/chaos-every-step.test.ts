@@ -31,7 +31,7 @@ beforeAll(async () => {
 });
 afterAll(async () => h?.close());
 
-type Point = { at: 'beforeStep' | 'afterStep' | 'insideItem'; step: StepKey };
+type Point = { at: 'beforeStep' | 'afterStep' | 'insideItem' | 'afterItem'; step: StepKey };
 const WITH_ITEMS: StepKey[] = ['no_shows', 'room_and_package_postings', 'allowance_close', 'advance'];
 const POINTS: Point[] = [
   ...STEP_KEYS.flatMap((step) => [
@@ -39,6 +39,8 @@ const POINTS: Point[] = [
     { at: 'afterStep' as const, step },
   ]),
   ...WITH_ITEMS.map((step) => ({ at: 'insideItem' as const, step })),
+  // Right after the advance transaction committed (date moved), before anything else is recorded.
+  { at: 'afterItem' as const, step: 'advance' as StepKey },
 ];
 
 const nightOf = (date: string) =>
@@ -68,6 +70,7 @@ describe('crash at every step boundary and inside every step, then resume (E07)'
       beforeStep: (s: StepKey) => (at === 'beforeStep' && s === step ? crash(`before ${s}`) : undefined),
       afterStep: (s: StepKey) => (at === 'afterStep' && s === step ? crash(`after ${s}`) : undefined),
       insideItem: (s: StepKey) => (at === 'insideItem' && s === step ? crash(`inside ${s}`) : undefined),
+      afterItem: (s: StepKey) => (at === 'afterItem' && s === step ? crash(`after item ${s}`) : undefined),
     };
     await expect(
       h.service.startRun(h.t.db, org.auditor, { propertyId: org.propertyId, hooks }),
@@ -77,7 +80,8 @@ describe('crash at every step boundary and inside every step, then resume (E07)'
     const run = runs[0];
     expect(run?.businessDate).toBe(day);
     // A crash after the advance committed leaves the new date; any earlier crash leaves the date unchanged.
-    const advanced = step === 'post_advance' || (at === 'afterStep' && step === 'advance');
+    const advanced =
+      step === 'post_advance' || (step === 'advance' && (at === 'afterStep' || at === 'afterItem'));
     expect(await businessDate(org)).toBe(advanced ? next : day);
 
     h.clock.advance(3 * 60_000);

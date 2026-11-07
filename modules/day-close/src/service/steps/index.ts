@@ -394,7 +394,7 @@ async function advance(s: StepContext): Promise<StepOutcome> {
   if (swept) return swept;
   const propertyId = s.property.id;
   const D = s.run.business_date;
-  return s.inTx(async (tx) => {
+  const outcome = await s.inTx(async (tx) => {
     // One advance per property at a time, whoever runs it (serializes with any other Day Close executor).
     await sql`select pg_advisory_xact_lock(hashtextextended(${`day_close:advance:${tx.tenantId}:${propertyId}`}, 0))`.execute(
       tx.db,
@@ -436,8 +436,10 @@ async function advance(s: StepContext): Promise<StepOutcome> {
       before: { businessDate: D },
       after: { businessDate: next },
     });
-    return { status: 'completed', detail: { from: D, to: next }, persisted: true };
+    return { status: 'completed' as const, detail: { from: D, to: next }, persisted: true };
   });
+  await s.hooks.afterItem?.('advance', 0);
+  return outcome as StepOutcome;
 }
 
 // ───────────────────────────── 9. post-advance ─────────────────────────────
