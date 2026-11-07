@@ -66,8 +66,14 @@ export function paymentSecured(input: {
   switch (paymentStatus) {
     case 'authorized':
       return { key: 'payment_secured', status: 'ok', message: 'Card authorized (not yet charged).' };
-    case 'succeeded':
+    case 'paid':
       return { key: 'payment_secured', status: 'ok', message: 'Payment received.' };
+    case 'partially_paid':
+      return {
+        key: 'payment_secured',
+        status: 'ok',
+        message: 'Part payment received and a card authorization is held.',
+      };
     case 'pending_verification':
       return {
         key: 'payment_secured',
@@ -75,20 +81,20 @@ export function paymentSecured(input: {
         message:
           'Payment outcome is pending verification — do not take payment again; reconciliation will resolve it.',
       };
-    case 'requested':
-      return {
-        key: 'payment_secured',
-        status: 'blocking',
-        message: 'Payment requested but not yet received.',
-      };
-    case 'requires_action':
-      return {
-        key: 'payment_secured',
-        status: 'blocking',
-        message: 'The guest must complete card verification.',
-      };
     case 'failed':
-      return { key: 'payment_secured', status: 'blocking', message: 'The last payment attempt failed.' };
+      return {
+        key: 'payment_secured',
+        status: 'blocking',
+        message: 'The last card authorization was declined. Ask for another card or payment method.',
+      };
+    case 'refunded':
+      return guaranteeRequired
+        ? {
+            key: 'payment_secured',
+            status: 'blocking',
+            message: 'The payment was refunded; no guarantee is held now.',
+          }
+        : { key: 'payment_secured', status: 'ok', message: 'No guarantee required.' };
     case 'unknown':
       return {
         key: 'payment_secured',

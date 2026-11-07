@@ -33,7 +33,16 @@ import {
 } from '../domain/workflow';
 import { RESERVATIONS_EVENTS as E } from '../events';
 import { RESERVATIONS_PERMISSIONS as P } from '../manifest';
-import type { GuaranteeKind, KeyKind, KeyOperationResult, UnitCondition } from '../ports';
+import {
+  type AuthorizationState,
+  type AuthorizationView,
+  authorizationState,
+  type GuaranteeKind,
+  type KeyKind,
+  type KeyOperationResult,
+  type PaymentStatusView,
+  type UnitCondition,
+} from '../ports';
 import { type ForwardedResult, guardAuthority, isForwarded } from './authority';
 import {
   actorKey,
@@ -391,40 +400,73 @@ async function stepGuarantee(
   }
   const payments = deps.ports.payments;
   const stayRef: EntityRef = { type: 'stay', id: stay.row.id };
-  // ALWAYS read the authoritative status first (RES-I09, S05): an earlier attempt may have reached the provider
-  // even if our record of it was lost to an interruption. Never authorize again while one is authorized/pending.
+  // ALWAYS read the authoritative status first (RES-I09, S05, R-11). Payments is two-phase: an authorization we
+  // requested may still be `processing` (provider call after commit) or `pending_verification` (no answer). Never
+  // authorize again while one is processing, pending or held — wait and read again.
   const status = await payments.getPaymentStatus(tx, stayRef);
-  const declined = Number(step.result?.declinedAttempts ?? 0);
+  const auths = status.authorizations;
+  const declined = auths.filter((a) => authorizationState(a) === 'failed');
+  // A NEW key only after the provider DECLINED an attempt (counted from payments' own records, so a lost step
+  // record cannot cause a second authorization); an interrupted attempt keeps its key.
   const keyFor = (n: number) => `checkin:${run.id}:guarantee:${n}`;
-  if (status.status === 'authorized' || status.status === 'succeeded') {
+  const held = auths.find((a) => HELD.includes(authorizationState(a)));
+  if (
+    held ||
+    status.status === 'authorized' ||
+    status.status === 'paid' ||
+    status.status === 'partially_paid'
+  ) {
     return {
       status: 'done',
-      message: `Payment ${status.status} (verified with the payment provider).`,
-      result: { ...status, declinedAttempts: declined },
-      idempotencyKey: step.idempotencyKey ?? keyFor(declined),
+      message: held
+        ? `Card authorized${modeLabel(held)} (confirmed by payments).`
+        : `Payment ${status.status.replace('_', ' ')} (confirmed by payments).`,
+      result: guaranteeResult(status, held, declined.length),
+      idempotencyKey: step.idempotencyKey ?? keyFor(declined.length),
     };
   }
-  if (
-    status.status === 'pending_verification' ||
-    status.status === 'requires_action' ||
-    status.status === 'requested'
-  ) {
+  const inFlight = auths.find((a) => IN_FLIGHT.includes(authorizationState(a)));
+  if (inFlight || status.pendingVerification) {
     return {
       status: 'pending',
       message:
-        status.status === 'requires_action'
-          ? 'The guest must complete card verification.'
+        inFlight && authorizationState(inFlight) === 'processing'
+          ? 'Card authorization sent to the payment provider; waiting for its answer. Do not take payment again.'
           : 'The payment outcome is pending verification. Do not take payment again — reconciliation will resolve it.',
-      result: { ...status, declinedAttempts: declined },
-      idempotencyKey: step.idempotencyKey ?? keyFor(declined),
+      result: guaranteeResult(status, inFlight, declined.length),
+      idempotencyKey: step.idempotencyKey ?? keyFor(declined.length),
+    };
+  }
+  // We were waiting for an answer and the provider declined (or the hold lapsed): report it. A retry — ideally
+  // with another card — makes a new attempt.
+  const awaitedId = typeof step.result?.authorizationId === 'string' ? step.result.authorizationId : null;
+  const awaited = awaitedId ? auths.find((a) => a.id === awaitedId) : undefined;
+  if (step.status === 'pending' && awaited) {
+    return {
+      status: 'failed',
+      message: declineMessage(awaited),
+      result: guaranteeResult(status, awaited, declined.length),
+      idempotencyKey: step.idempotencyKey ?? keyFor(declined.length),
     };
   }
   const bookingStatus = await payments.getPaymentStatus(tx, { type: 'booking', id: booking.row.id });
-  if (bookingStatus.status === 'succeeded' || bookingStatus.status === 'authorized') {
+  if (
+    bookingStatus.status === 'paid' ||
+    bookingStatus.status === 'partially_paid' ||
+    bookingStatus.status === 'authorized'
+  ) {
     return {
       status: 'done',
-      message: `Booking payment ${bookingStatus.status}.`,
-      result: { ...bookingStatus },
+      message: `Booking payment ${bookingStatus.status.replace('_', ' ')} (confirmed by payments).`,
+      result: guaranteeResult(bookingStatus, undefined, declined.length),
+    };
+  }
+  if (bookingStatus.pendingVerification) {
+    return {
+      status: 'pending',
+      message:
+        'A booking payment is pending verification. Do not take payment again — reconciliation will resolve it.',
+      result: guaranteeResult(bookingStatus, undefined, declined.length),
     };
   }
   const methodId = input?.paymentMethodId ?? guarantee.paymentMethodId;
@@ -443,6 +485,20 @@ async function stepGuarantee(
       message: 'A card authorization or payment is needed. Add a payment method (card token) and retry.',
     };
   }
+  // Do not send the same card again after a decline the provider marked not retryable.
+  const last = auths[auths.length - 1];
+  if (
+    last &&
+    authorizationState(last) === 'failed' &&
+    last.methodId === methodId &&
+    !last.decline?.retryable
+  ) {
+    return {
+      status: 'failed',
+      message: `${declineMessage(last)} This card cannot be retried; use another card or payment method.`,
+      result: guaranteeResult(status, last, declined.length),
+    };
+  }
   const amount: Money =
     input?.amount ??
     stayTotals(
@@ -453,38 +509,60 @@ async function stepGuarantee(
       ),
       booking.row.currency,
     ).gross;
-  // A NEW key only after the provider DECLINED the previous attempt; an interrupted attempt keeps its key so the
-  // payments journal returns the same operation.
-  const idempotencyKey = keyFor(declined);
-  const attempt = await payments.authorize(tx, { methodId, amount, ref: stayRef, idempotencyKey });
-  switch (attempt.status) {
-    case 'authorized':
-    case 'succeeded':
-      return {
-        status: 'done',
-        message: `Payment ${attempt.status}.`,
-        result: { attemptId: attempt.id, amount: attempt.amount, declinedAttempts: declined },
-        idempotencyKey,
-      };
-    case 'pending_verification':
-    case 'requires_action':
-      return {
-        status: 'pending',
-        message:
-          attempt.status === 'requires_action'
-            ? 'The guest must complete card verification.'
-            : 'The payment outcome is pending verification. Do not take payment again — reconciliation will resolve it.',
-        result: { attemptId: attempt.id, amount: attempt.amount, declinedAttempts: declined },
-        idempotencyKey,
-      };
-    case 'failed':
-      return {
-        status: 'failed',
-        message: `Payment failed: ${attempt.failureReason ?? 'declined'}. Try another card or payment method.`,
-        result: { attemptId: attempt.id, declinedAttempts: declined + 1 },
-        idempotencyKey,
-      };
+  const idempotencyKey = keyFor(declined.length);
+  const auth = await payments.authorize(tx, {
+    propertyId: stay.row.property_id,
+    methodId,
+    amount,
+    ref: stayRef,
+    idempotencyKey,
+  });
+  const state = authorizationState(auth);
+  const result = { ...guaranteeResult(status, auth, declined.length), amount: auth.amount };
+  if (HELD.includes(state)) {
+    return { status: 'done', message: `Card authorized${modeLabel(auth)}.`, result, idempotencyKey };
   }
+  if (state === 'failed' || state === 'voided' || state === 'expired') {
+    return { status: 'failed', message: declineMessage(auth), result, idempotencyKey };
+  }
+  // processing / pending_verification / unknown: the outcome arrives after commit — the workflow reads it again.
+  return {
+    status: 'pending',
+    message:
+      'Card authorization sent to the payment provider; waiting for its answer. Do not take payment again.',
+    result,
+    idempotencyKey,
+  };
+}
+
+const HELD: ReadonlyArray<AuthorizationState | 'unknown'> = ['authorized', 'partially_captured', 'captured'];
+const IN_FLIGHT: ReadonlyArray<AuthorizationState | 'unknown'> = ['processing', 'pending_verification'];
+
+function modeLabel(a: AuthorizationView): string {
+  return a.mode === 'simulate' ? ' (simulated — no real money)' : a.mode === 'sandbox' ? ' (sandbox)' : '';
+}
+
+function declineMessage(a: AuthorizationView): string {
+  const state = authorizationState(a);
+  if (state === 'expired') return 'The card authorization expired before check-in. Authorize the card again.';
+  if (state === 'voided') return 'The card authorization was released. Authorize the card again.';
+  return a.decline
+    ? `Card declined: ${a.decline.message} ${a.decline.recovery}`
+    : 'Card declined by the payment provider. Try another card or payment method.';
+}
+
+function guaranteeResult(
+  status: PaymentStatusView,
+  auth: AuthorizationView | undefined,
+  declinedAttempts: number,
+): Record<string, unknown> {
+  return {
+    paymentStatus: status.status,
+    authorizationId: auth?.id ?? null,
+    authorizationStatus: auth ? authorizationState(auth) : null,
+    mode: auth?.mode ?? null,
+    declinedAttempts,
+  };
 }
 
 async function stayFolio(deps: Deps, tx: TxContext, stay: StayRecord): Promise<string> {

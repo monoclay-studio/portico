@@ -425,47 +425,125 @@ export interface FinancePort {
 
 // ───────────────────────────── payments ─────────────────────────────
 
-export type PaymentStatusValue =
-  | 'none'
-  | 'requested'
-  | 'authorized'
+/**
+ * Payments contract (aligned with the payments module's provider functions, R-11). Payments is TWO-PHASE: a
+ * provider function called inside our transaction records the intent and returns `processing`; the provider call
+ * runs after commit (and, durably, from payments' own outbox consumer). Reservations therefore never treats the
+ * return value of `authorize` as the outcome: the guarantee step reads `getPaymentStatus` first, every time, and
+ * never authorizes again while an authorization is processing, pending verification or authorized.
+ */
+export type AuthorizationState =
+  | 'processing'
   | 'pending_verification'
-  | 'succeeded'
-  | 'failed'
-  | 'requires_action';
+  | 'authorized'
+  | 'partially_captured'
+  | 'captured'
+  | 'voided'
+  | 'expired'
+  | 'failed';
 
-export interface PaymentStatusView {
-  ref: EntityRef;
-  status: PaymentStatusValue;
-  authorized: Money | null;
-  captured: Money | null;
-  pendingVerification: Money | null;
+/** Payments' explanation of a decline (never card data). */
+export interface PaymentDecline {
+  code: string;
+  category: string;
+  message: string;
+  recovery: string;
+  retryable: boolean;
 }
 
-export interface PaymentAttempt {
+/** The part of payments' `Authorization` view reservations reads (the real view carries more). */
+export interface AuthorizationView {
   id: string;
-  status: 'authorized' | 'succeeded' | 'pending_verification' | 'failed' | 'requires_action';
-  amount: Money;
-  failureReason?: string;
+  /** The tokenized payment method authorized (null for recorded terminal authorizations). */
+  methodId: string | null;
+  ref: { type: string; id: string };
+  amount: { amountMinor: number; currency: string };
+  /** Per-family status map (universal record contract); reservations reads the `authorization` family. */
+  status: Record<string, string>;
+  mode: 'live' | 'sandbox' | 'simulate' | 'recorded';
+  decline: PaymentDecline | null;
 }
+
+/** payments' one-word summary for a business reference (read FIRST by the guarantee step). */
+export type PaymentSummaryStatus =
+  | 'none'
+  | 'pending_verification'
+  | 'authorized'
+  | 'partially_paid'
+  | 'paid'
+  | 'refunded';
+
+/** The part of payments' `PaymentStatusSummary` reservations reads. */
+export interface PaymentStatusView {
+  ref: { type: string; id: string };
+  status: PaymentSummaryStatus;
+  /** True while any payment/authorization/refund on the reference is processing or pending verification. */
+  pendingVerification: boolean;
+  authorizedMinor: number;
+  capturedMinor: number;
+  authorizations: AuthorizationView[];
+}
+
+/**
+ * What reservations shows about payment readiness: payments' summary, plus `failed` when nothing is held and the
+ * latest authorization was declined, and `unknown` when payments could not be read.
+ */
+export type PaymentStatusValue = PaymentSummaryStatus | 'failed';
 
 export interface PaymentsPort {
-  getPaymentStatus(tx: TxContext, ref: EntityRef): Promise<PaymentStatusView>;
+  getPaymentStatus(tx: TxContext, ref: { type: string; id: string }): Promise<PaymentStatusView>;
   createPaymentRequest(
     tx: TxContext,
     input: {
-      legalEntityId: string;
-      payer: PayerRef;
-      amount: Money;
-      purpose: string;
-      ref: EntityRef;
-      expiresAt: Date;
+      propertyId: string;
+      payer: {
+        type: 'guest_profile' | 'company' | 'agency' | 'other';
+        id?: string;
+        name: string;
+        email?: string;
+      };
+      amount: { amountMinor: number; currency: string };
+      purpose: 'deposit' | 'balance' | 'incidentals_preauth' | 'custom';
+      ref: { type: 'folio' | 'booking'; id: string };
+      expiresAt: Date | string;
+      idempotencyKey: string;
+      description?: string;
     },
-  ): Promise<{ id: string; status: string }>;
+  ): Promise<{ id: string; status: Record<string, string> }>;
+  /** Records the intent and returns `processing`; the provider call happens after commit. */
   authorize(
     tx: TxContext,
-    input: { methodId: string; amount: Money; ref: EntityRef; idempotencyKey: string },
-  ): Promise<PaymentAttempt>;
+    input: {
+      propertyId: string;
+      methodId: string;
+      amount: { amountMinor: number; currency: string };
+      ref: { type: string; id: string };
+      idempotencyKey: string;
+    },
+  ): Promise<AuthorizationView>;
+}
+
+/** The `authorization` family of an authorization's status map ('unknown' if payments did not send one). */
+export function authorizationState(a: Pick<AuthorizationView, 'status'>): AuthorizationState | 'unknown' {
+  const s = a.status.authorization;
+  const known: readonly string[] = [
+    'processing',
+    'pending_verification',
+    'authorized',
+    'partially_captured',
+    'captured',
+    'voided',
+    'expired',
+    'failed',
+  ];
+  return s && known.includes(s) ? (s as AuthorizationState) : 'unknown';
+}
+
+/** Reservations' payment readiness value for a reference (see `PaymentStatusValue`). */
+export function paymentReadiness(view: PaymentStatusView): PaymentStatusValue {
+  if (view.status !== 'none' && view.status !== 'refunded') return view.status;
+  const latest = view.authorizations[view.authorizations.length - 1];
+  return latest && authorizationState(latest) === 'failed' ? 'failed' : view.status;
 }
 
 // ───────────────────────────── operations ─────────────────────────────

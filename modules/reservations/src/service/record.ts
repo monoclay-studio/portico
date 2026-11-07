@@ -5,7 +5,7 @@ import { bookingActions, stayActions } from '../domain/actions';
 import { conditionMeets } from '../domain/readiness';
 import type { BookingStatus, StayStatus } from '../domain/status';
 import { RESERVATIONS_PERMISSIONS as P } from '../manifest';
-import type { UnitCondition } from '../ports';
+import { paymentReadiness, type UnitCondition } from '../ports';
 import { type Deps, db, isModuleUnavailable, policy } from './context';
 import { type BookingRecord, currentUnit, type StayRecord, toBookingView } from './repo';
 
@@ -50,7 +50,7 @@ async function stayExtras(
   const payment = active
     ? await safely(
         async () =>
-          (await deps.ports.payments.getPaymentStatus(tx, { type: 'stay', id: stay.row.id })).status,
+          paymentReadiness(await deps.ports.payments.getPaymentStatus(tx, { type: 'stay', id: stay.row.id })),
         null,
       )
     : null;
@@ -221,7 +221,8 @@ export async function bookingRecord(deps: Deps, tx: TxContext, rec: BookingRecor
   }
   const can = (p: string) => tx.authz.can(p, { propertyId });
   const payment = await safely(
-    async () => (await deps.ports.payments.getPaymentStatus(tx, { type: 'booking', id: rec.row.id })).status,
+    async () =>
+      paymentReadiness(await deps.ports.payments.getPaymentStatus(tx, { type: 'booking', id: rec.row.id })),
     null,
   );
   const issues: RecordIssue[] = [];

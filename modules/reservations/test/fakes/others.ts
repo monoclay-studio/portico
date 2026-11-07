@@ -2,8 +2,8 @@ import type { TxContext } from '@portico/db';
 import {
   assertExternalEffectAllowed,
   BusinessRuleError,
+  DomainError,
   type EntityRef,
-  ExternalServiceError,
   type Money,
   NotFoundError,
   newId,
@@ -12,11 +12,11 @@ import {
 import { platform } from '@portico/platform';
 import type {
   AccessPort,
+  AuthorizationView,
   GuestProfileInput,
   GuestsPort,
   KeyOperationResult,
   OperationsPort,
-  PaymentAttempt,
   PaymentStatusView,
   PaymentsPort,
   PlatformPort,
@@ -99,67 +99,171 @@ export class FakeGuests implements GuestsPort {
   }
 }
 
-type Outcome = PaymentAttempt['status'] | 'timeout';
+type ProviderOutcome = 'authorized' | 'failed' | 'timeout';
+
+interface FakeAuthorization extends AuthorizationView {
+  key: string;
+  requestHash: string;
+  propertyId: string;
+}
 
 /**
- * Fake payments: provider operations are journaled by idempotency key (a retry returns the SAME attempt), outcomes
- * are scripted per test, and `timeout` simulates the screen timing out after the provider received the request:
- * the attempt is journaled as pending_verification and the call throws (S05-style). `resolve` = reconciliation.
+ * Fake payments, TWO-PHASE and strict like the payments module (R-11):
+ *  - `authorize` inside the caller's transaction records the intent and returns `processing`; the provider answers
+ *    only after commit (tx.afterCommit) with the next scripted outcome: `authorized`, `failed` (a decline with
+ *    payments' explanation) or `timeout` (no answer → `pending_verification`). A rollback leaves nothing behind.
+ *  - the same idempotency key returns the same authorization; the same key with a different request is refused;
+ *    a second authorization while one is in flight on the same reference is refused (one in flight per ref);
+ *  - methods must be registered for the property; environment safety is honored (`payment.charge`).
+ *  - `resolve` = reconciliation settling a pending verification. `crashNextAuthorize` simulates the process dying
+ *    inside the transaction (nothing recorded).
  */
 export class FakePayments implements PaymentsPort {
-  script: Outcome[] = [];
-  attempts = new Map<string, PaymentAttempt & { ref: EntityRef }>();
+  script: ProviderOutcome[] = [];
+  crashNextAuthorize = false;
+  /** Registered tokenized payment methods → property. */
+  methods = new Map<string, string>();
+  /** Committed authorizations by idempotency key, in creation order. */
+  authorizations = new Map<string, FakeAuthorization>();
   authorizeCalls = 0;
-  requests: Array<{ amount: Money; ref: EntityRef }> = [];
-  async authorize(
-    _tx: TxContext,
-    input: { methodId: string; amount: Money; ref: EntityRef; idempotencyKey: string },
-  ) {
-    this.authorizeCalls++;
-    const existing = this.attempts.get(input.idempotencyKey);
-    if (existing) return existing;
-    const outcome = this.script.shift() ?? 'authorized';
-    const attempt = {
-      id: newId(),
-      status: outcome === 'timeout' ? 'pending_verification' : outcome,
-      amount: input.amount,
-      ref: input.ref,
-      ...(outcome === 'failed' ? { failureReason: 'card declined' } : {}),
-    } as PaymentAttempt & { ref: EntityRef };
-    this.attempts.set(input.idempotencyKey, attempt);
-    if (outcome === 'timeout')
-      throw new ExternalServiceError('payments', 'The payment provider did not answer in time.');
-    return attempt;
+  /** Calls that actually reached the "provider" (after commit). */
+  providerCalls = 0;
+  requests: Array<{ amount: Money; ref: EntityRef; key: string }> = [];
+
+  addMethod(propertyId: string): string {
+    const id = newId();
+    this.methods.set(id, propertyId);
+    return id;
   }
-  resolve(ref: EntityRef, status: 'authorized' | 'failed' | 'succeeded') {
-    for (const a of this.attempts.values())
-      if (a.ref.type === ref.type && a.ref.id === ref.id && a.status === 'pending_verification')
-        a.status = status;
-  }
-  async getPaymentStatus(_tx: TxContext, ref: EntityRef): Promise<PaymentStatusView> {
-    const mine = [...this.attempts.values()].filter((a) => a.ref.type === ref.type && a.ref.id === ref.id);
-    const pick = (s: string) => mine.find((a) => a.status === s);
-    const a =
-      pick('succeeded') ??
-      pick('authorized') ??
-      pick('pending_verification') ??
-      pick('requires_action') ??
-      pick('failed');
+
+  private view(a: FakeAuthorization): AuthorizationView {
     return {
-      ref,
-      status: a
-        ? (a.status as PaymentStatusView['status'])
-        : this.requests.some((r) => r.ref.id === ref.id)
-          ? 'requested'
-          : 'none',
-      authorized: a?.status === 'authorized' ? a.amount : null,
-      captured: a?.status === 'succeeded' ? a.amount : null,
-      pendingVerification: a?.status === 'pending_verification' ? a.amount : null,
+      id: a.id,
+      methodId: a.methodId,
+      ref: { ...a.ref },
+      amount: { ...a.amount },
+      status: { ...a.status },
+      mode: a.mode,
+      decline: a.decline ? { ...a.decline } : null,
     };
   }
-  async createPaymentRequest(_tx: TxContext, input: { amount: Money; ref: EntityRef }) {
-    this.requests.push({ amount: input.amount, ref: input.ref });
-    return { id: newId(), status: 'sent' };
+
+  async authorize(
+    tx: TxContext,
+    input: {
+      propertyId: string;
+      methodId: string;
+      amount: { amountMinor: number; currency: string };
+      ref: { type: string; id: string };
+      idempotencyKey: string;
+    },
+  ): Promise<AuthorizationView> {
+    this.authorizeCalls++;
+    const hash = JSON.stringify([input.propertyId, input.methodId, input.amount, input.ref]);
+    const existing = this.authorizations.get(input.idempotencyKey);
+    if (existing) {
+      if (existing.requestHash !== hash)
+        throw new DomainError(
+          'idempotency_key_reused',
+          'This idempotency key was already used for a different authorization.',
+          { status: 422 },
+        );
+      return this.view(existing);
+    }
+    if (this.crashNextAuthorize) {
+      this.crashNextAuthorize = false;
+      throw new Error('connection reset');
+    }
+    const mode = assertExternalEffectAllowed(tx, 'payment.charge');
+    const owner = this.methods.get(input.methodId);
+    if (!owner)
+      throw new NotFoundError('payment_method_not_found', `Payment method ${input.methodId} was not found.`);
+    if (owner !== input.propertyId)
+      throw new BusinessRuleError(
+        'payment_method_property_mismatch',
+        'This payment method belongs to another property.',
+      );
+    if (!Number.isInteger(input.amount.amountMinor) || input.amount.amountMinor <= 0)
+      throw new BusinessRuleError(
+        'invalid_amount',
+        'An authorization needs a positive amount in minor units.',
+      );
+    const inFlight = [...this.authorizations.values()].some(
+      (a) =>
+        a.ref.type === input.ref.type &&
+        a.ref.id === input.ref.id &&
+        (a.status.authorization === 'processing' || a.status.authorization === 'pending_verification'),
+    );
+    if (inFlight)
+      throw new DomainError(
+        'pending_verification_block',
+        'An authorization for this reference is still pending verification. Wait for it to resolve.',
+        { status: 409 },
+      );
+    const auth: FakeAuthorization = {
+      id: newId(),
+      key: input.idempotencyKey,
+      requestHash: hash,
+      propertyId: input.propertyId,
+      methodId: input.methodId,
+      ref: { ...input.ref },
+      amount: { ...input.amount },
+      status: { authorization: 'processing' },
+      mode: mode === 'live' ? 'live' : mode === 'sandbox' ? 'sandbox' : 'simulate',
+      decline: null,
+    };
+    tx.afterCommit(() => {
+      this.authorizations.set(auth.key, auth);
+      this.providerCalls++;
+      const outcome = this.script.shift() ?? 'authorized';
+      if (outcome === 'timeout') auth.status = { authorization: 'pending_verification' };
+      else if (outcome === 'failed') {
+        auth.status = { authorization: 'failed' };
+        auth.decline = {
+          code: 'do_not_honor',
+          category: 'issuer_declined',
+          message: 'The card issuer declined the authorization.',
+          recovery: 'Ask the guest for another card or to contact their bank.',
+          retryable: false,
+        };
+      } else auth.status = { authorization: 'authorized' };
+    });
+    return this.view(auth);
+  }
+
+  /** Reconciliation settles pending verifications on a reference. */
+  resolve(ref: EntityRef, status: 'authorized' | 'failed') {
+    for (const a of this.authorizations.values())
+      if (a.ref.type === ref.type && a.ref.id === ref.id && a.status.authorization === 'pending_verification')
+        a.status = { authorization: status };
+  }
+
+  async getPaymentStatus(_tx: TxContext, ref: { type: string; id: string }): Promise<PaymentStatusView> {
+    const mine = [...this.authorizations.values()].filter(
+      (a) => a.ref.type === ref.type && a.ref.id === ref.id,
+    );
+    const pending = mine.some(
+      (a) => a.status.authorization === 'processing' || a.status.authorization === 'pending_verification',
+    );
+    const held = mine
+      .filter((a) => a.status.authorization === 'authorized')
+      .reduce((n, a) => n + a.amount.amountMinor, 0);
+    return {
+      ref,
+      status: pending ? 'pending_verification' : held > 0 ? 'authorized' : 'none',
+      pendingVerification: pending,
+      authorizedMinor: held,
+      capturedMinor: 0,
+      authorizations: mine.map((a) => this.view(a)),
+    };
+  }
+
+  async createPaymentRequest(
+    _tx: TxContext,
+    input: Parameters<PaymentsPort['createPaymentRequest']>[1],
+  ): Promise<{ id: string; status: Record<string, string> }> {
+    this.requests.push({ amount: input.amount, ref: input.ref, key: input.idempotencyKey });
+    return { id: newId(), status: { request: 'open' } };
   }
 }
 

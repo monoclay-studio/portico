@@ -18,48 +18,58 @@ beforeAll(async () => {
 afterAll(async () => t?.drop());
 
 describe('check-in as a resumable workflow', () => {
-  it('a payment timeout interrupts check-in; resume never authorizes twice; lock outage needs a recorded manual fallback', async () => {
+  it('an interrupted check-in resumes; payments answers after commit; never authorizes twice; lock outage needs a manual fallback', async () => {
     const org = await setupOrg(t);
     const b = created<Booking>(
       await org.run((tx) => org.svc.createBooking(tx, org.booking({}, { unitId: org.units.V101 }))),
     );
     const stayId = b.stays[0]?.id as string;
+    org.fakes.payments.crashNextAuthorize = true;
     org.fakes.payments.script = ['timeout'];
     org.fakes.access.mode = 'unavailable';
 
-    // 1st attempt: the provider got the request but the screen timed out.
+    // 1st attempt: the process dies inside the guarantee step's transaction — nothing was recorded anywhere.
     const first = await org.svc.performWorkflow(t.db, org.ctx, {
       stayId,
       kind: 'check_in',
       checkIn: { registration: { identityVerified: true } },
     });
-    expect(first.interrupted).toMatchObject({ step: 'guarantee', error: { code: 'external_service_error' } });
+    expect(first.interrupted).toMatchObject({ step: 'guarantee', error: { code: 'interrupted' } });
     expect(first.run?.summary).toMatchObject({
       succeeded: ['registration', 'unit'],
       remaining: ['guarantee', 'deposits', 'access', 'confirm'],
     });
     const g1 = first.run?.steps.find((s) => s.key === 'guarantee');
     expect(g1).toMatchObject({ status: 'failed', message: expect.stringMatching(/Interrupted/) });
+    expect(org.fakes.payments.authorizations.size).toBe(0);
 
-    // Resume: same idempotency key → the payments journal returns the SAME attempt: pending verification.
+    // Resume: payments records the authorization (processing); the provider is called after commit and never
+    // answers → pending verification. The workflow polls once and stops there.
     const second = await org.svc.performWorkflow(t.db, org.ctx, { stayId, kind: 'check_in' });
+    expect(second.interrupted).toBeNull();
     expect(second.run?.steps.find((s) => s.key === 'guarantee')).toMatchObject({
       status: 'pending',
       message: expect.stringMatching(/pending verification/),
     });
-    expect(org.fakes.payments.attempts.size).toBe(1);
+    expect(org.fakes.payments.authorizations.size).toBe(1);
+    expect(org.fakes.payments.providerCalls).toBe(1);
     // The arrivals board shows the single blocker truthfully.
     const arrivals = await org.run((tx) => org.svc.listArrivals(tx, { propertyId: org.propertyId }));
     expect(arrivals.items[0]?.readiness?.blockingReason?.message).toMatch(
       /pending verification — do not take payment again/,
     );
+    // Resuming while pending reads the status again and never authorizes again.
+    const callsPending = org.fakes.payments.authorizeCalls;
+    await org.svc.performWorkflow(t.db, org.ctx, { stayId, kind: 'check_in' });
+    expect(org.fakes.payments.authorizeCalls).toBe(callsPending);
 
     // Reconciliation resolves it; resume reads the authoritative status (no new authorization).
     org.fakes.payments.resolve({ type: 'stay', id: stayId }, 'authorized');
     const callsBefore = org.fakes.payments.authorizeCalls;
     const third = await org.svc.performWorkflow(t.db, org.ctx, { stayId, kind: 'check_in' });
     expect(org.fakes.payments.authorizeCalls).toBe(callsBefore);
-    expect(org.fakes.payments.attempts.size).toBe(1);
+    expect(org.fakes.payments.authorizations.size).toBe(1);
+    expect(org.fakes.payments.providerCalls).toBe(1);
     expect(third.run?.steps.find((s) => s.key === 'guarantee')?.status).toBe('done');
     // Keys: lock system down → step failed with instructions, never silently done.
     const access = third.run?.steps.find((s) => s.key === 'access');
@@ -89,6 +99,54 @@ describe('check-in as a resumable workflow', () => {
     );
     expect(events.rows.map((r) => r.type).filter((x) => x === E.stayCheckedIn)).toHaveLength(1);
     expect(org.fakes.guests.history.map((h) => h.status)).toEqual(['in_house']);
+  });
+
+  it("a declined card is reported with payments' explanation; the same card is not retried; another card gets a new key", async () => {
+    const org = await setupOrg(t);
+    const b = created<Booking>(
+      await org.run((tx) => org.svc.createBooking(tx, org.booking({}, { unitId: org.units.V101 }))),
+    );
+    const stayId = b.stays[0]?.id as string;
+    org.fakes.payments.script = ['failed', 'authorized'];
+    const first = await org.svc.performWorkflow(t.db, org.ctx, {
+      stayId,
+      kind: 'check_in',
+      checkIn: { registration: { identityVerified: true } },
+    });
+    expect(first.run?.steps.find((s) => s.key === 'guarantee')).toMatchObject({
+      status: 'failed',
+      message: expect.stringMatching(/Card declined: The card issuer declined.*another card/),
+      result: expect.objectContaining({ authorizationStatus: 'failed', declinedAttempts: 1 }),
+    });
+    const arrivals = await org.run((tx) => org.svc.listArrivals(tx, { propertyId: org.propertyId }));
+    expect(arrivals.items[0]?.readiness?.blockingReason?.message).toMatch(/declined/);
+
+    // Resume with the same card: not retryable → refused without calling payments.
+    const calls = org.fakes.payments.authorizeCalls;
+    const again = await org.svc.performWorkflow(t.db, org.ctx, { stayId, kind: 'check_in' });
+    expect(again.run?.steps.find((s) => s.key === 'guarantee')).toMatchObject({
+      status: 'failed',
+      message: expect.stringMatching(/cannot be retried/),
+    });
+    expect(org.fakes.payments.authorizeCalls).toBe(calls);
+
+    // Another card: a NEW idempotency key (one decline counted from payments' records), authorized after commit.
+    const otherCard = org.fakes.payments.addMethod(org.propertyId);
+    const done = await org.svc.performWorkflow(t.db, org.ctx, {
+      stayId,
+      kind: 'check_in',
+      checkIn: { guarantee: { paymentMethodId: otherCard } },
+    });
+    expect(done.run?.steps.find((s) => s.key === 'guarantee')).toMatchObject({
+      status: 'done',
+      message: expect.stringMatching(/Card authorized/),
+    });
+    const runId = done.run?.id as string;
+    expect([...org.fakes.payments.authorizations.keys()]).toEqual([
+      `checkin:${runId}:guarantee:0`,
+      `checkin:${runId}:guarantee:1`,
+    ]);
+    expect(org.fakes.payments.providerCalls).toBe(2);
   });
 
   it('a unit that failed inspection blocks the unit step until another ready unit is chosen', async () => {

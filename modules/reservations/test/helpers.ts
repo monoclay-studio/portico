@@ -56,6 +56,8 @@ export interface Org {
   types: { beach: string; overwater: string; family: string };
   units: Record<string, string>;
   plans: { bar: string; nonRef: string };
+  /** A tokenized card registered with the fake payments module for this property. */
+  cardMethodId: string;
   /** A staff member of this organization (all permissions unless grants are given). */
   user(name: string, grants?: Array<{ permission: string; propertyIds: string[] | 'all' }>): RequestContext;
   run<T>(fn: (tx: TxContext) => Promise<T>, ctx?: RequestContext): Promise<T>;
@@ -193,6 +195,7 @@ export async function setupOrg(
   const ports: ReservationsPorts = { ...fakes, platform: realPlatformPort() };
   const svc = reservationsService(ports);
   const propertyId = property.id;
+  const cardMethodId = fakes.payments.addMethod(propertyId);
   const org: Org = {
     t,
     ctx,
@@ -203,6 +206,7 @@ export async function setupOrg(
     types,
     units: seeded.units,
     plans,
+    cardMethodId,
     user(name, grants) {
       return {
         ...ctx,
@@ -241,7 +245,7 @@ export async function setupOrg(
         source: 'direct_email',
         externalRefs: {},
         marketSegment: 'leisure',
-        guarantee: { kind: 'card', paymentMethodId: 'pm_tok_visa' },
+        guarantee: { kind: 'card', paymentMethodId: cardMethodId },
         specialRequests: [],
         tags: [],
         stays: [org.stay(stay)],

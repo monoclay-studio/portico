@@ -4,7 +4,7 @@ import type { FrontDeskRow } from '../contracts';
 import { composeReadiness } from '../domain/readiness';
 import { type StepState, summarize } from '../domain/workflow';
 import { RESERVATIONS_PERMISSIONS as P } from '../manifest';
-import type { GuaranteeKind, PaymentStatusValue, UnitCondition } from '../ports';
+import { type GuaranteeKind, type PaymentStatusValue, paymentReadiness, type UnitCondition } from '../ports';
 import { type Deps, db, isModuleUnavailable, policy } from './context';
 import { currentUnit, loadSnapshots, loadStayRecords, occ, type StayRecord, snapshotOf } from './repo';
 
@@ -143,22 +143,23 @@ export async function listArrivals(
         : null;
       const stayPay = await safely(
         async () =>
-          (await deps.ports.payments.getPaymentStatus(tx, { type: 'stay', id: stay.row.id })).status,
+          paymentReadiness(await deps.ports.payments.getPaymentStatus(tx, { type: 'stay', id: stay.row.id })),
         'unknown' as const,
       );
       const bookingPay = await safely(
         async () =>
-          (await deps.ports.payments.getPaymentStatus(tx, { type: 'booking', id: stay.row.booking_id }))
-            .status,
+          paymentReadiness(
+            await deps.ports.payments.getPaymentStatus(tx, { type: 'booking', id: stay.row.booking_id }),
+          ),
         'unknown' as const,
       );
       const rank: Array<PaymentStatusValue | 'unknown'> = [
-        'succeeded',
+        'paid',
+        'partially_paid',
         'authorized',
         'pending_verification',
-        'requires_action',
-        'requested',
         'failed',
+        'refunded',
         'unknown',
         'none',
       ];
