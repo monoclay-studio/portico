@@ -25,6 +25,7 @@ import { normalizeLatin } from '../domain/names';
 import type { GuestsPorts } from '../ports';
 import type { CompaniesTable } from '../tables';
 import { db, forwardingUnavailable, pgCode, requireVisibleProfile } from './internal';
+import { companyRecord } from './record';
 
 function requireCompanyRead(tx: TxContext): void {
   // Company basics are operational: anyone who may read profiles may read the companies they book for.
@@ -46,15 +47,20 @@ async function toView(tx: TxContext, r: Selectable<CompaniesTable>): Promise<Com
     .where('p.status', '=', 'active')
     .orderBy('cc.created_at')
     .execute();
+  const record = await companyRecord(tx, {
+    ...r,
+    contacts: contacts.map((c) => ({ profileId: c.profile_id, role: c.role })),
+  });
   return {
     id: r.id,
+    status: { company: r.status },
+    ...record,
     kind: r.kind,
     legalName: r.legal_name,
     tradingName: r.trading_name,
     taxId: r.tax_id,
     iataCode: r.iata_code,
     parentCompanyId: r.parent_company_id,
-    status: r.status,
     defaultMarketSegment: r.default_market_segment,
     commission: r.commission as CommissionTerms,
     arAccountRef: r.ar_account_ref,

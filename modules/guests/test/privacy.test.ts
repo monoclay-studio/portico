@@ -216,7 +216,7 @@ describe('data-subject erasure with retention', () => {
     });
     const p = await org.sys((tx) => org.svc.getProfile(tx, profileId));
     expect(p).toMatchObject({
-      status: 'anonymized',
+      status: { profile: 'anonymized' },
       givenName: null,
       dateOfBirth: null,
       contactPoints: [],
@@ -281,7 +281,11 @@ describe('data-subject erasure with retention', () => {
     const req = await org.sys((tx) => org.svc.getPrivacyRequest(tx, requestId));
     expect(req).toMatchObject({ status: 'on_hold', rejectionReason: 'Legal hold' });
     const p = await org.sys((tx) => org.svc.getProfile(tx, profileId));
-    expect(p.status).toBe('active');
+    expect(p.status).toEqual({ profile: 'active', privacy: 'legal_hold' });
+    expect(p.allowedActions.find((a) => a.action === 'erase')).toMatchObject({
+      enabled: false,
+      reason: expect.stringMatching(/legal hold/),
+    });
     expect(p.contactPoints).toHaveLength(2);
   });
 

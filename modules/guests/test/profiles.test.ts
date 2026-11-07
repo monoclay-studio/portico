@@ -394,7 +394,11 @@ describe('companies and travel agents', () => {
         commission: { model: 'percent_of_room', basisPoints: 1000, reference: '2027 contract' },
       }),
     );
-    expect(agency).toMatchObject({ kind: 'agency', status: 'active', commission: { basisPoints: 1000 } });
+    expect(agency).toMatchObject({
+      kind: 'agency',
+      status: { company: 'active' },
+      commission: { basisPoints: 1000 },
+    });
     await expect(
       org.sys((tx) => org.svc.createCompany(tx, { kind: 'agency', legalName: 'Bad', iataCode: '96200017' })),
     ).rejects.toMatchObject({ code: 'invalid_iata_code' });
@@ -438,7 +442,10 @@ describe('companies and travel agents', () => {
     const held = await org.sys((tx) =>
       org.svc.updateCompany(tx, c.id, c.version, { status: 'on_hold', arAccountRef: ar }),
     );
-    expect(held).toMatchObject({ status: 'on_hold', arAccountRef: ar });
+    expect(held).toMatchObject({ status: { company: 'on_hold' }, arAccountRef: ar });
+    expect(held.issues.map((i) => i.code)).toContain('company_on_hold');
+    expect(held.links).toContainEqual({ rel: 'receivables', type: 'ar_account', id: ar });
+    expect(held.allowedActions.find((a) => a.action === 'putOnHold')).toMatchObject({ enabled: false });
     await expect(
       org.sys((tx) => org.svc.updateCompany(tx, c.id, c.version, { notes: 'stale' })),
     ).rejects.toMatchObject({
@@ -472,5 +479,108 @@ describe('companies and travel agents', () => {
     await expect(org.run(nobody, (tx) => org.svc.getCompany(tx, c.id))).rejects.toMatchObject({
       code: 'forbidden',
     });
+  });
+});
+
+describe('universal record contract and global search provider', () => {
+  it('profiles expose status families, allowed actions with reasons, issues and links', async () => {
+    const org = await setupOrg(t);
+    const [A] = org.properties as [string];
+    const corp = await org.sys((tx) =>
+      org.svc.createCompany(tx, { kind: 'company', legalName: 'Atoll Telecom (fictitious)' }),
+    );
+    const { profile } = await create(org, {
+      givenName: 'Hana',
+      familyName: 'Ibrahim',
+      dateOfBirth: '1990-01-01',
+      nationality: 'MV',
+      contactPoints: [{ kind: 'email', value: 'hana@guest.example' }],
+    });
+    await create(org, {
+      givenName: 'Hana',
+      familyName: 'Ibrahim',
+      dateOfBirth: '1990-01-01',
+      nationality: 'MV',
+    });
+    await org.sys((tx) => org.svc.addCompanyContact(tx, corp.id, { profileId: profile.id, role: 'booker' }));
+    await org.sys((tx) =>
+      org.svc.addDocument(tx, profile.id, {
+        propertyId: A,
+        type: 'passport',
+        issuingCountry: 'MV',
+        number: 'LA0000001',
+        expiryDate: '2020-01-01',
+      }),
+    );
+    const desk = org.user(deskGrants([A]));
+    const p = await org.run(desk, (tx) => org.svc.getProfile(tx, profile.id));
+    expect(p.status).toEqual({ profile: 'active', privacy: 'normal' });
+    const act = Object.fromEntries(p.allowedActions.map((a) => [a.action, a]));
+    expect(act.edit?.enabled).toBe(true);
+    expect(act.merge).toMatchObject({
+      enabled: false,
+      previewRequired: true,
+      label: 'Review possible duplicate',
+    });
+    expect(act.merge?.reason).toMatch(/guests\.profile\.merge/);
+    expect(act.revealDocument).toMatchObject({
+      enabled: false,
+      reason: expect.stringMatching(/guests\.document\.read/),
+    });
+    expect(act.unmerge).toMatchObject({
+      enabled: false,
+      reason: 'No profile has been merged into this one.',
+    });
+    expect(p.issues.map((i) => i.code).sort()).toEqual([
+      'document_expired',
+      'no_verified_contact',
+      'possible_duplicate',
+    ]);
+    expect(p.links).toContainEqual({ rel: 'company:booker', type: 'company', id: corp.id });
+  });
+
+  it('global search finds guests by name, transliteration, email, phone and company — permission-aware', async () => {
+    const org = await setupOrg(t);
+    const [A, B] = org.properties as [string, string];
+    const { guestsSearchProvider } = await import('../src');
+    const provider = guestsSearchProvider(org.svc);
+    const { profile: ivan } = await create(org, {
+      nativeGivenName: 'Иван',
+      nativeFamilyName: 'Петров',
+      contactPoints: [
+        { kind: 'email', value: 'ivan.petrov@guest.example' },
+        { kind: 'phone', value: '+7 916 123 45 67' },
+      ],
+    });
+    const corp = await org.sys((tx) =>
+      org.svc.createCompany(tx, { kind: 'agency', legalName: 'Coral Routes Travel (fictitious)' }),
+    );
+    await org.sys((tx) => org.svc.addCompanyContact(tx, corp.id, { profileId: ivan.id, role: 'booker' }));
+    const deskA = org.user(deskGrants([A]));
+    const find = async (q: string, ctx = deskA) =>
+      org.run(ctx, (tx) => provider.search(tx, q, { limit: 10 }));
+    for (const q of [
+      'Ivan Petrov',
+      'Иван Петров',
+      'Петров',
+      'ivan.petrov@guest.example',
+      '8 916 123 45 67',
+      'Coral Routes',
+    ]) {
+      const hits = await find(q);
+      expect(
+        hits.map((h) => h.id),
+        q,
+      ).toContain(ivan.id);
+    }
+    expect((await find('Coral Routes')).map((h) => h.type)).toContain('company');
+    // Staff at another property without sharing rights find nothing.
+    const deskB = org.user(deskGrants([B]));
+    expect((await find('Ivan Petrov', deskB)).filter((h) => h.type === 'guest_profile')).toHaveLength(0);
+    const summarize = provider.summarize;
+    if (!summarize) throw new Error('summarize missing');
+    expect(await org.run(deskB, (tx) => summarize(tx, 'guest_profile', ivan.id))).toBeNull();
+    const summary = await org.run(deskA, (tx) => summarize(tx, 'guest_profile', ivan.id));
+    expect(summary).toMatchObject({ title: 'Ivan Petrov', subtitle: expect.stringContaining('Иван Петров') });
   });
 });

@@ -10,6 +10,24 @@ export const guestsManifest: ModuleManifest = {
   schema: 'guests',
   migrationsDir: join(dirname(fileURLToPath(import.meta.url)), '..', 'migrations'),
   features: [CROSS_PROPERTY_FEATURE],
+  // `type` equals the audit target.type (powers GET /v1/records/{type}/{id}/history).
+  recordTypes: [
+    {
+      type: 'guest_profile',
+      label: 'Guest',
+      readPermission: 'guests.profile.read',
+      route: '/guests/profiles/:id',
+    },
+    {
+      type: 'company',
+      label: 'Company / travel agent',
+      readPermission: 'guests.company.read',
+      route: '/guests/companies/:id',
+    },
+    { type: 'identity_document', label: 'Identity document', readPermission: 'guests.document.read' },
+    { type: 'special_need', label: 'Special need', readPermission: 'guests.sensitive.read' },
+    { type: 'duplicate_candidate', label: 'Possible duplicate', readPermission: 'guests.profile.merge' },
+  ],
   permissions: [
     {
       key: 'guests.profile.read',

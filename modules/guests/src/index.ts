@@ -5,6 +5,7 @@ export * from './events';
 export * from './manifest';
 export type * from './ports';
 export * from './routes';
+export { guestsSearchProvider } from './search-provider';
 export { createGuestsDemoSeed, seedDemoGuests } from './seed';
 export {
   createGuestsService,

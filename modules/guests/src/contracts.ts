@@ -274,6 +274,39 @@ export const legalHoldInput = z.object({ hold: z.boolean(), reason: z.string().t
 
 // ───────────────────────────── Outputs ─────────────────────────────
 
+// Universal record contract (docs/architecture/domain-map.md § Universal record contract; kernel records.ts).
+export const recordAction = z.object({
+  action: z.string(),
+  label: z.string(),
+  enabled: z.boolean(),
+  reason: z.string().optional(),
+  previewRequired: z.boolean().optional(),
+});
+export const recordOwner = z.object({
+  kind: z.enum(['user', 'department']),
+  id: z.string(),
+  name: z.string().optional(),
+});
+export const recordIssue = z.object({
+  code: z.string(),
+  severity: z.enum(['blocking', 'warning', 'info']),
+  message: z.string(),
+  owner: recordOwner.optional(),
+  since: z.string().optional(),
+});
+export const recordLink = z.object({
+  rel: z.string(),
+  type: z.string(),
+  id: z.string(),
+  title: z.string().optional(),
+});
+const recordContract = {
+  allowedActions: z.array(recordAction),
+  issues: z.array(recordIssue),
+  owner: recordOwner.optional(),
+  links: z.array(recordLink),
+};
+
 export const contactPointView = z.object({
   id: z.uuid(),
   kind: contactKind,
@@ -357,7 +390,9 @@ export const relationshipView = z.object({
 
 export const guestProfile = z.object({
   id: z.uuid(),
-  status: profileStatus,
+  /** Separate status families (never merged into one field). */
+  status: z.object({ profile: profileStatus, privacy: z.enum(['normal', 'legal_hold']) }),
+  ...recordContract,
   /** Set when the requested id was merged: the chain of ids followed to reach this survivor. */
   resolvedFrom: z.array(z.uuid()).optional(),
   visibility: z.enum(['full', 'shared']),
@@ -548,13 +583,14 @@ export const recognitionSummary = z.object({
 
 export const companyView = z.object({
   id: z.uuid(),
+  status: z.object({ company: companyStatus }),
+  ...recordContract,
   kind: companyKind,
   legalName: z.string(),
   tradingName: z.string().nullable(),
   taxId: z.string().nullable(),
   iataCode: z.string().nullable(),
   parentCompanyId: z.uuid().nullable(),
-  status: companyStatus,
   defaultMarketSegment: z.string().nullable(),
   commission: commissionTerms,
   arAccountRef: z.uuid().nullable(),

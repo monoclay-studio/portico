@@ -5,11 +5,11 @@
  * counted.
  */
 import { sql, type TxContext } from '@portico/db';
-import { ForbiddenError, requirePermission } from '@portico/kernel';
+import { ForbiddenError } from '@portico/kernel';
 import type { SearchQuery, SearchResult } from '../contracts';
 import { normalizeEmail, normalizePhone } from '../domain/contact';
 import { documentHashInput, documentLast4Input, normalizeDocumentNumber } from '../domain/documents';
-import { detectScript, normalizeLatin, normalizeNative } from '../domain/names';
+import { autoTransliterate, detectScript, normalizeLatin, normalizeNative } from '../domain/names';
 import { profileVisibility } from '../domain/visibility';
 import type { GuestsPorts } from '../ports';
 import { propertyCountry, requireSomeProfileRead, resolveAccess, visibilitySql } from './internal';
@@ -54,14 +54,16 @@ export async function searchProfiles(
   } else if (kind === 'phone') {
     const country = await propertyCountry(tx, ports, query.propertyId ?? null);
     const n = normalizePhone(query.q, country);
-    const digits = n.digits.replace(/^0+/, '');
+    // Exact E.164 first; otherwise match the trailing national number (last 7–9 digits) so "8 916 123-45-67"
+    // (Russian trunk prefix) or a number typed without its country code still finds the guest.
+    const tail = n.digits.slice(-Math.min(9, n.digits.length));
     hits = (
       await sql<Hit>`
       select distinct p.id, 'phone' as matched_on,
-             (case when c.normalized = ${n.e164} then 1.0 else 0.8 end)::float8 as score
+             (case when c.normalized = ${n.e164} then 1.0 else 0.7 end)::float8 as score
       from guests.profiles p join guests.contact_points c on c.profile_id = p.id
       where p.status = 'active' and c.kind in ('phone', 'whatsapp')
-        and (c.normalized = ${n.e164} or (length(${digits}) >= 7 and c.normalized like ${`%${digits}`}))
+        and (c.normalized = ${n.e164} or (length(${tail}) >= 7 and c.normalized like ${`%${tail}`}))
         and ${visible}
       order by score desc limit ${limit}`.execute(tx.db)
     ).rows;
@@ -93,41 +95,29 @@ export async function searchProfiles(
     if (!tx.authz.can('guests.company.read') && !tx.authz.can('guests.profile.read')) {
       throw new ForbiddenError('guests.company.read');
     }
-    const q = normalizeLatin(query.q);
-    hits = (
-      await sql<Hit>`
-      select p.id, 'company' as matched_on, max(similarity(co.search_name, ${q}))::float8 as score
-      from guests.profiles p
-        join guests.company_contacts cc on cc.profile_id = p.id
-        join guests.companies co on co.id = cc.company_id
-      where p.status = 'active' and (co.search_name % ${q} or co.search_name like ${`%${q}%`}) and ${visible}
-      group by p.id order by score desc limit ${limit}`.execute(tx.db)
-    ).rows;
+    hits = await companyHits(tx, normalizeLatin(query.q), visible, limit);
   } else {
+    // Names: native script (with automatic ICAO transliteration for Cyrillic), Latin with typo tolerance, and —
+    // in auto mode — people linked to a matching company.
     const script = detectScript(query.q);
+    const parts: Hit[][] = [];
     if (script && script !== 'Latn') {
-      const q = normalizeNative(query.q);
-      hits = (
-        await sql<Hit>`
-        select p.id, 'native_name' as matched_on, similarity(p.search_name_native, ${q})::float8 as score
-        from guests.profiles p
-        where p.status = 'active'
-          and (p.search_name_native % ${q} or replace(p.search_name_native, ' ', '') like ${`%${q.replace(/\s+/g, '')}%`})
-          and ${visible}
-        order by score desc limit ${limit}`.execute(tx.db)
-      ).rows;
+      parts.push(await nativeHits(tx, normalizeNative(query.q), visible, limit));
+      const latin = autoTransliterate(query.q);
+      if (latin) parts.push(await latinHits(tx, normalizeLatin(latin), visible, limit, 'transliteration'));
     } else {
       const q = normalizeLatin(query.q);
-      hits = (
-        await sql<Hit>`
-        select p.id, 'name' as matched_on,
-               greatest(similarity(p.search_name, ${q}), word_similarity(${q}, p.search_name))::float8 as score
-        from guests.profiles p
-        where p.status = 'active' and (p.search_name % ${q} or ${q} <% p.search_name or p.search_name like ${`${q}%`})
-          and ${visible}
-        order by score desc, p.family_name limit ${limit}`.execute(tx.db)
-      ).rows;
+      parts.push(await latinHits(tx, q, visible, limit, 'name'));
+      if (query.kind === 'auto' && q.length >= 3) {
+        parts.push((await companyHits(tx, q, visible, limit)).map((h) => ({ ...h, score: h.score * 0.8 })));
+      }
     }
+    const best = new Map<string, Hit>();
+    for (const h of parts.flat()) {
+      const prev = best.get(h.id);
+      if (!prev || Number(h.score) > Number(prev.score)) best.set(h.id, h);
+    }
+    hits = [...best.values()].sort((a, b) => Number(b.score) - Number(a.score)).slice(0, limit);
   }
   if (hits.length === 0) return { items: [] };
   const ids = hits.map((h) => h.id);
@@ -185,4 +175,48 @@ export async function searchProfiles(
   return { items };
 }
 
-export { requirePermission };
+type Visible = ReturnType<typeof visibilitySql>;
+
+async function latinHits(
+  tx: TxContext,
+  q: string,
+  visible: Visible,
+  limit: number,
+  matched: string,
+): Promise<Hit[]> {
+  if (!q) return [];
+  const { rows } = await sql<Hit>`
+    select p.id, ${matched} as matched_on,
+           greatest(similarity(p.search_name, ${q}), word_similarity(${q}, p.search_name))::float8 as score
+    from guests.profiles p
+    where p.status = 'active' and (p.search_name % ${q} or ${q} <% p.search_name or p.search_name like ${`${q}%`})
+      and ${visible}
+    order by score desc, p.family_name limit ${limit}`.execute(tx.db);
+  return rows;
+}
+
+async function nativeHits(tx: TxContext, q: string, visible: Visible, limit: number): Promise<Hit[]> {
+  const compact = `%${q.replace(/\s+/g, '')}%`;
+  const { rows } = await sql<Hit>`
+    select p.id, 'native_name' as matched_on,
+           greatest(similarity(p.search_name_native, ${q}),
+                    case when replace(p.search_name_native, ' ', '') like ${compact} then 0.9 else 0 end)::float8 as score
+    from guests.profiles p
+    where p.status = 'active'
+      and (p.search_name_native % ${q} or replace(p.search_name_native, ' ', '') like ${compact})
+      and ${visible}
+    order by score desc limit ${limit}`.execute(tx.db);
+  return rows;
+}
+
+async function companyHits(tx: TxContext, q: string, visible: Visible, limit: number): Promise<Hit[]> {
+  if (!q) return [];
+  const { rows } = await sql<Hit>`
+    select p.id, 'company' as matched_on, max(similarity(co.search_name, ${q}))::float8 as score
+    from guests.profiles p
+      join guests.company_contacts cc on cc.profile_id = p.id
+      join guests.companies co on co.id = cc.company_id
+    where p.status = 'active' and (co.search_name % ${q} or co.search_name like ${`%${q}%`}) and ${visible}
+    group by p.id order by score desc limit ${limit}`.execute(tx.db);
+  return rows.map((r) => ({ ...r, score: Math.max(Number(r.score), 0.5) }));
+}

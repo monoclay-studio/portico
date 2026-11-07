@@ -9,6 +9,7 @@ import { isExpired } from '../domain/documents';
 import { displayName } from '../domain/names';
 import { documentVisible, itemVisible } from '../domain/visibility';
 import { actorKey, db, iso, today, type VisibleProfile } from './internal';
+import { profileRecord } from './record';
 
 export async function buildProfileView(tx: TxContext, vp: VisibleProfile): Promise<GuestProfile> {
   const { row, view, access, consent } = vp;
@@ -61,9 +62,23 @@ export async function buildProfileView(tx: TxContext, vp: VisibleProfile): Promi
   const ownProperty = (p: string) => access.readAll || access.readPropertyIds.includes(p);
   const sharingRequiresConsent = access.sharingRequiresConsent;
 
+  const record = await profileRecord(tx, vp, {
+    mirroredFrom: ext?.system_name ?? null,
+    documents: docs.filter((d) => documentVisible(access, view, d.property_id)),
+    contacts,
+    alerts: alerts.filter((a) =>
+      itemVisible(access, view, { visibility: a.visibility, propertyId: a.property_id }, consent),
+    ),
+    companies,
+    relationships: [
+      ...relOut.map((r) => ({ id: r.id, other: r.related_profile_id, kind: r.kind })),
+      ...relIn.map((r) => ({ id: r.id, other: r.profile_id, kind: r.kind })),
+    ],
+  });
   return {
     id,
-    status: row.status,
+    status: { profile: row.status, privacy: row.legal_hold ? 'legal_hold' : 'normal' },
+    ...record,
     ...(vp.resolvedFrom ? { resolvedFrom: vp.resolvedFrom } : {}),
     visibility: view,
     provenance: row.provenance,
