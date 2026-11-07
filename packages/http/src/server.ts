@@ -54,6 +54,10 @@ export const LOG_REDACT = [
   '*.cvc',
   '*.documentNumber',
   '*.token',
+  '*.providerToken',
+  '*.vaultToken',
+  '*.providerCustomerRef',
+  'req.headers["stripe-signature"]',
 ];
 
 export async function createServer(opts: ServerOptions): Promise<PorticoApp> {

@@ -200,18 +200,26 @@ Events: `finance.posting.created`, `finance.folio.settled`, `finance.invoice.iss
 
 ## payments (provider)
 
+**Canonical shapes: `modules/payments/README.md` § Provider contract** (merged 2026-11-07). Every call runs in the
+caller's transaction, takes an `idempotencyKey`, and calls the provider after commit.
+
 ```ts
-createPaymentRequest(tx, { legalEntityId, payer, amount, purpose, ref, expiresAt }): Promise<PaymentRequest>
-authorize(tx, { methodId, amount, ref, idempotencyKey }): Promise<PaymentAttempt>   // status may be 'pending_verification'
-capture(tx, { authorizationId, amount?, idempotencyKey }): Promise<PaymentAttempt>
-charge(tx, { methodId, amount, ref, idempotencyKey, initiator: 'customer'|'merchant' })
-refund(tx, { paymentId, amount, reason, idempotencyKey }): Promise<Refund>
-getPaymentStatus(tx, ref)                                    // authoritative status incl. 'pending_verification'
-listUnresolved(tx, { propertyId })                           // Day Close + dashboards
+createPaymentRequest(tx, { propertyId, legalEntityId?, payer, amount, purpose, ref: LedgerRef, expiresAt, idempotencyKey })
+authorize(tx, { propertyId, methodId, amount, ref, idempotencyKey })   // returns 'processing'; settles after commit
+                                                                       // (payments.authorization.authorized|failed)
+capture / charge / refund(tx, …)
+getPaymentStatus(tx, ref)   // read FIRST; never charge again while pending_verification
+listUnresolved(tx, { propertyId })
 ```
-Payments calls finance through its `LedgerPort` (record payment/refund/deposit/payout) **only after the
-provider confirms**. Provider calls happen outside the DB transaction with persisted idempotency keys
-(`payments.provider_operations` table) — see ADR-0007.
+`LedgerRef = { type: 'folio' | 'booking'; id }` (booking = deposit). Refusal codes: `ledger_target_unknown`,
+`ledger_target_other_property`, `wrong_merchant_of_record`, `payment_pending_verification`,
+`collection_owned_by_payment_request`, `duplicate_reference`, `mit_not_agreed`, `card_payments_unavailable` (503),
+`payment_declined` (402).
+**Port payments needs from finance — `LedgerPort`** (`modules/payments/src/ports.ts`, bound in composition via
+`financeLedgerForPayments`): `describeTarget(tx, ref) → { propertyId, legalEntityId } | null` (checked before any
+money moves), postings carrying property + legal entity + clearing account per provider, `markPaymentVerified`,
+`recordSettlementFees`. Until finance merges, folio collections are refused (503) and deposits are flagged
+"not yet on the bill".
 
 ## operations (provider)
 
