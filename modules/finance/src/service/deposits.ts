@@ -164,7 +164,7 @@ export interface RecordDepositInput {
   /** Tax group of the prepaid supply (default accommodation). */
   taxGroup?: string;
   cashierSessionId?: string;
-  verification?: 'provider_confirmed' | 'recorded_unverified';
+  verification?: 'provider_confirmed' | 'recorded_unverified' | 'recorded_verified';
   /** See RecordPaymentInput.cashWithoutSession. */
   cashWithoutSession?: 'reject' | 'flag';
 }

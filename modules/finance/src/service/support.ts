@@ -232,7 +232,7 @@ export interface PostingDraft {
   counterAccountId?: string | null;
   paymentRef?: EntityRef | null;
   paymentMethod?: string | null;
-  paymentVerification?: 'provider_confirmed' | 'recorded_unverified' | null;
+  paymentVerification?: 'provider_confirmed' | 'recorded_unverified' | 'recorded_verified' | null;
   cashierSessionId?: string | null;
   source?: EntityRef | null;
   postDeparture?: boolean;

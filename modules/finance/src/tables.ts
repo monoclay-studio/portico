@@ -430,6 +430,18 @@ export interface ExceptionsTable {
   version: Generated<number>;
 }
 
+export interface PaymentVerificationsTable {
+  id: string;
+  tenant_id: string;
+  payment_ref_type: string;
+  payment_ref_id: string;
+  evidence_type: string;
+  evidence_id: string;
+  idempotency_key: string;
+  verified_at: Date;
+  verified_by: string;
+}
+
 export interface FinanceDB {
   'finance.accounts': AccountsTable;
   'finance.charge_codes': ChargeCodesTable;
@@ -455,4 +467,5 @@ export interface FinanceDB {
   'finance.opening_balance_imports': OpeningBalanceImportsTable;
   'finance.exceptions': ExceptionsTable;
   'finance.legal_holds': LegalHoldsTable;
+  'finance.payment_verifications': PaymentVerificationsTable;
 }

@@ -404,6 +404,24 @@ export async function getUnbalancedItems(
       details: { exceptionId: e.id, ...e.details },
     });
   }
+  // 6b. Recorded (Route D) payments not yet matched to a statement — they remain "awaiting verification".
+  const unverified = await sql<{ folio_id: string; n: string; total: string; currency: string }>`
+    select p.folio_id, count(*) as n, sum(p.amount_minor) as total, p.currency
+      from finance.postings p
+     where p.property_id = ${input.propertyId}
+       and p.payment_verification = 'recorded_unverified'
+       and not exists (select 1 from finance.payment_verifications v
+                        where v.payment_ref_type = p.payment_ref_type and v.payment_ref_id = p.payment_ref_id)
+     group by p.folio_id, p.currency`.execute(tx.db);
+  for (const u of unverified.rows) {
+    items.push({
+      code: 'payments_awaiting_verification',
+      severity: 'warning',
+      ref: { type: 'folio', id: u.folio_id },
+      message: `${u.n} recorded payment(s) are not yet matched to a bank or acquirer statement. Reconcile them in Payments.`,
+      details: { count: Number(u.n), amountMinor: Number(u.total), currency: u.currency },
+    });
+  }
   // 7. Invoices overdue for issue (Maldives: within 3 days of completing the service).
   for (const o of await invoicesOverdueForIssue(tx, input)) {
     items.push({

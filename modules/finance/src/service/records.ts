@@ -216,10 +216,20 @@ export async function folioRecord(
     });
   }
   const unverified = await db(tx)
-    .selectFrom('finance.postings')
-    .select(['id'])
-    .where('folio_id', '=', f.id)
-    .where('payment_verification', '=', 'recorded_unverified')
+    .selectFrom('finance.postings as p')
+    .select(['p.id'])
+    .where('p.folio_id', '=', f.id)
+    .where('p.payment_verification', '=', 'recorded_unverified')
+    .where(({ not, exists, selectFrom }) =>
+      not(
+        exists(
+          selectFrom('finance.payment_verifications as v')
+            .select('v.id')
+            .whereRef('v.payment_ref_type', '=', 'p.payment_ref_type')
+            .whereRef('v.payment_ref_id', '=', 'p.payment_ref_id'),
+        ),
+      ),
+    )
     .execute();
   if (unverified.length) {
     issues.push({

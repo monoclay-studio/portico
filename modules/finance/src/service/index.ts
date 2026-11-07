@@ -48,6 +48,11 @@ export function createFinance(ports: FinancePorts) {
     recordPayout: bind(deps, payouts.recordPayout),
     recordPaymentAdjustment: bind(deps, ledgerPort.recordPaymentAdjustment),
     recordDisputeMovement: bind(deps, ledgerPort.recordDisputeMovement),
+    recordSettlementFees: bind(deps, ledgerPort.recordSettlementFees),
+    markPaymentVerified: ledgerPort.markPaymentVerified,
+    describeTarget: ledgerPort.describeTarget,
+    assertTargetInScope: bind(deps, ledgerPort.assertTargetInScope),
+    assertPropertyScope: bind(deps, ledgerPort.assertPropertyScope),
     getFolioBalance: folios.getFolioBalance,
     listFolios: folios.listFolios,
     getUnbalancedItems: bind(deps, reports.getUnbalancedItems),
@@ -189,74 +194,80 @@ export function financeProvider(service: FinanceService, caller: keyof typeof PR
 }
 
 type LedgerMethod = 'card' | 'virtual_card' | 'payment_link' | 'external_terminal' | 'cash' | 'bank_transfer';
-type Verification = 'provider_confirmed' | 'recorded_unverified';
+type Verification = 'provider_confirmed' | 'recorded_unverified' | 'recorded_verified';
+/** Payments' clearing reference: one clearing account per provider (and provider account). */
+type ClearingRef = { provider: 'simulator' | 'stripe_connect' | 'external_terminal' | 'cash' | 'bank_transfer'; accountId: string | null };
+type LedgerScope = { propertyId: string; legalEntityId: string };
+
+/** Finance provider key for a clearing ref ('stripe_connect_acct_123' → account `card_clearing:stripe_connect_acct_123`). */
+function clearingProvider(c: ClearingRef): string {
+  return c.accountId ? `${c.provider}_${c.accountId}` : c.provider;
+}
+function clearingMethod(c: ClearingRef, method: LedgerMethod): LedgerMethod {
+  if (c.provider === 'cash') return 'cash';
+  if (c.provider === 'bank_transfer') return 'bank_transfer';
+  return method === 'cash' || method === 'bank_transfer' ? 'card' : method;
+}
 
 /**
  * The exact `LedgerPort` the payments module declares (modules/payments/src/ports.ts), so the composition root
- * can bind it directly: `ledger: financeLedgerForPayments(finance)`. Payments calls it only after a provider
- * confirmed (or when a Route D payment is recorded), inside its own transaction and savepoint. Cash recorded by
- * payments without an open cashier session is posted and flagged instead of refused (the money was received).
+ * binds `ledger: financeLedgerForPayments(finance)`. Every money call carries the scope payments authorized
+ * (ADR-0015): finance refuses a folio or booking of another property or legal entity before anything moves.
+ * Payments calls only after the provider confirmed (or a Route D payment is recorded), inside its own transaction
+ * and savepoint. Cash recorded without an open cashier session is posted and flagged instead of refused.
  * Deposits have no folio posting: their `postingId` carries the journal entry id.
  */
 export function financeLedgerForPayments(service: FinanceService) {
   const d = (tx: TxContext) => delegated(tx, PROVIDER_DELEGATION.payments ?? []);
+  const scope = (s: LedgerScope) => ({ propertyId: s.propertyId, legalEntityId: s.legalEntityId });
   return {
+    describeTarget: (tx: TxContext, ref: { type: 'folio' | 'booking'; id: string }) => service.describeTarget(d(tx), ref),
     async recordPayment(
       tx: TxContext,
-      input: {
-        folioId: string;
-        amount: Money;
-        paymentRef: EntityRef;
-        method: LedgerMethod;
-        idempotencyKey: string;
-        verification: Verification;
-      },
+      input: LedgerScope & { folioId: string; amount: Money; paymentRef: EntityRef; method: LedgerMethod; idempotencyKey: string; verification: Verification; clearing: ClearingRef },
     ): Promise<{ postingId: string }> {
-      const r = await service.recordPayment(d(tx), { ...input, cashWithoutSession: 'flag' });
+      await service.assertTargetInScope(d(tx), { type: 'folio', id: input.folioId }, scope(input));
+      const r = await service.recordPayment(d(tx), {
+        folioId: input.folioId,
+        amount: input.amount,
+        paymentRef: input.paymentRef,
+        method: clearingMethod(input.clearing, input.method),
+        provider: clearingProvider(input.clearing),
+        idempotencyKey: input.idempotencyKey,
+        verification: input.verification,
+        cashWithoutSession: 'flag',
+      });
       return { postingId: r.postingId };
     },
     async recordDeposit(
       tx: TxContext,
-      input: {
-        bookingId: string;
-        amount: Money;
-        paymentRef: EntityRef;
-        idempotencyKey: string;
-        method: LedgerMethod;
-        verification: Verification;
-        propertyId?: string;
-      },
+      input: LedgerScope & { bookingId: string; amount: Money; paymentRef: EntityRef; idempotencyKey: string; method: LedgerMethod; verification: Verification; clearing: ClearingRef },
     ): Promise<{ postingId: string }> {
-      const r = await service.recordDeposit(d(tx), { ...input, cashWithoutSession: 'flag' });
+      await service.assertTargetInScope(d(tx), { type: 'booking', id: input.bookingId }, scope(input));
+      const r = await service.recordDeposit(d(tx), {
+        bookingId: input.bookingId,
+        amount: input.amount,
+        paymentRef: input.paymentRef,
+        idempotencyKey: input.idempotencyKey,
+        propertyId: input.propertyId,
+        method: clearingMethod(input.clearing, input.method),
+        provider: clearingProvider(input.clearing),
+        verification: input.verification,
+        cashWithoutSession: 'flag',
+      });
       return { postingId: r.entryId };
     },
     async recordRefund(
       tx: TxContext,
-      input: {
-        folioId: string | null;
-        bookingId: string | null;
-        amount: Money;
-        refundRef: EntityRef;
-        originalPaymentRef: EntityRef;
-        idempotencyKey: string;
-      },
+      input: LedgerScope & { folioId: string | null; bookingId: string | null; amount: Money; refundRef: EntityRef; originalPaymentRef: EntityRef; idempotencyKey: string; clearing: ClearingRef },
     ): Promise<{ postingId: string }> {
-      const common = {
-        amount: input.amount,
-        refundRef: input.refundRef,
-        originalPaymentRef: input.originalPaymentRef,
-        idempotencyKey: input.idempotencyKey,
-        cashWithoutSession: 'flag' as const,
-      };
-      if (input.folioId)
-        return {
-          postingId: (await service.recordRefund(d(tx), { folioId: input.folioId, ...common })).postingId,
-        };
-      if (!input.bookingId)
-        throw new ValidationError(
-          'target_required',
-          'A refund needs the folio or booking of the original payment.',
-        );
+      const common = { amount: input.amount, refundRef: input.refundRef, originalPaymentRef: input.originalPaymentRef, idempotencyKey: input.idempotencyKey, cashWithoutSession: 'flag' as const };
+      if (input.folioId) {
+        await service.assertTargetInScope(d(tx), { type: 'folio', id: input.folioId }, scope(input));
+        return { postingId: (await service.recordRefund(d(tx), { folioId: input.folioId, ...common })).postingId };
+      }
+      if (!input.bookingId) throw new ValidationError('target_required', 'A refund needs the folio or booking of the original payment.');
+      await service.assertTargetInScope(d(tx), { type: 'booking', id: input.bookingId }, scope(input));
       // Deposit still held → deposit refund; already applied to a folio → refund on that folio.
       const held = await service.getDeposits(d(tx), input.bookingId);
       if (held && held.balance.amountMinor >= input.amount.amountMinor) {
@@ -265,55 +276,57 @@ export function financeLedgerForPayments(service: FinanceService) {
       }
       const applied = [...(held?.movements ?? [])].reverse().find((m) => m.kind === 'applied' && m.folioId);
       if (!applied?.folioId) {
-        throw new BusinessRuleError(
-          'deposit_insufficient',
-          'The deposit held for this booking is smaller than the refund and was not applied to a folio.',
-        );
+        throw new BusinessRuleError('deposit_insufficient', 'The deposit held for this booking is smaller than the refund and was not applied to a folio.');
       }
-      return {
-        postingId: (await service.recordRefund(d(tx), { folioId: applied.folioId, ...common })).postingId,
-      };
+      return { postingId: (await service.recordRefund(d(tx), { folioId: applied.folioId, ...common })).postingId };
     },
     async recordPayout(
       tx: TxContext,
-      input: {
-        legalEntityId: string;
-        payoutRef: EntityRef;
-        gross: Money;
-        fees: Money;
-        net: Money;
-        currency: string;
-        idempotencyKey: string;
-      },
+      input: { legalEntityId: string; payoutRef: EntityRef; gross: Money; fees: Money; net: Money; currency: string; clearing: ClearingRef; idempotencyKey: string },
     ): Promise<{ journalEntryId: string }> {
-      return { journalEntryId: (await service.recordPayout(d(tx), input)).entryId };
+      const { clearing, ...rest } = input;
+      return { journalEntryId: (await service.recordPayout(d(tx), { ...rest, provider: clearingProvider(clearing) })).entryId };
     },
     async recordPaymentAdjustment(
       tx: TxContext,
-      input: {
-        folioId: string | null;
-        bookingId: string | null;
-        amount: Money;
-        paymentRef: EntityRef;
-        adjustmentRef: EntityRef;
-        reason: string;
-        idempotencyKey: string;
-      },
+      input: LedgerScope & { folioId: string | null; bookingId: string | null; amount: Money; paymentRef: EntityRef; adjustmentRef: EntityRef; reason: string; idempotencyKey: string; clearing: ClearingRef },
     ): Promise<{ postingId: string }> {
-      return { postingId: (await service.recordPaymentAdjustment(d(tx), input)).postingId };
+      const target = input.folioId ? { type: 'folio' as const, id: input.folioId } : { type: 'booking' as const, id: input.bookingId ?? '' };
+      await service.assertTargetInScope(d(tx), target, scope(input));
+      const { clearing: _c, propertyId: _p, legalEntityId: _l, ...rest } = input;
+      return { postingId: (await service.recordPaymentAdjustment(d(tx), rest)).postingId };
     },
     async recordDisputeMovement(
       tx: TxContext,
-      input: {
-        legalEntityId: string;
-        paymentRef: EntityRef;
-        disputeRef: EntityRef;
-        amount: Money;
-        kind: 'debit' | 'reversal';
-        idempotencyKey: string;
-      },
+      input: { legalEntityId: string; paymentRef: EntityRef; disputeRef: EntityRef; amount: Money; kind: 'debit' | 'reversal'; clearing: ClearingRef; idempotencyKey: string },
     ): Promise<{ journalEntryId: string }> {
-      return { journalEntryId: (await service.recordDisputeMovement(d(tx), input)).journalEntryId };
+      const { clearing: _c, ...rest } = input;
+      return { journalEntryId: (await service.recordDisputeMovement(d(tx), rest)).journalEntryId };
+    },
+    async markPaymentVerified(
+      tx: TxContext,
+      input: LedgerScope & { paymentRef: EntityRef; evidenceRef: EntityRef; idempotencyKey: string },
+    ): Promise<void> {
+      await service.markPaymentVerified(d(tx), {
+        paymentRef: input.paymentRef,
+        evidenceRef: input.evidenceRef,
+        idempotencyKey: input.idempotencyKey,
+        scope: scope(input),
+      });
+    },
+    async recordSettlementFees(
+      tx: TxContext,
+      input: LedgerScope & { statementRef: EntityRef; amount: Money; clearing: ClearingRef; idempotencyKey: string },
+    ): Promise<{ journalEntryId: string }> {
+      await service.assertPropertyScope(d(tx), scope(input));
+      const r = await service.recordSettlementFees(d(tx), {
+        legalEntityId: input.legalEntityId,
+        statementRef: input.statementRef,
+        amount: input.amount,
+        provider: clearingProvider(input.clearing),
+        idempotencyKey: input.idempotencyKey,
+      });
+      return { journalEntryId: r.journalEntryId };
     },
   };
 }

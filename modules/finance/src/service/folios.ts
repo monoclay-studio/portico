@@ -147,6 +147,20 @@ export async function getFolio(tx: TxContext, folioId: string): Promise<FolioDet
     .orderBy('p.created_at')
     .orderBy('p.id')
     .execute();
+  // Route D verification is a separate fact (the posting stays immutable): a matched statement line shows as verified.
+  const verifiedIds = new Set(
+    (
+      await db(tx)
+        .selectFrom('finance.payment_verifications')
+        .select(['payment_ref_type', 'payment_ref_id'])
+        .where(
+          'payment_ref_id',
+          'in',
+          rows.flatMap((r) => (r.payment_verification === 'recorded_unverified' && r.payment_ref_id ? [r.payment_ref_id] : [])).concat(['-']),
+        )
+        .execute()
+    ).map((v) => `${v.payment_ref_type}:${v.payment_ref_id}`),
+  );
   const postings: Posting[] = rows.map((p) => ({
     id: p.id,
     folioId: p.folio_id,
@@ -171,7 +185,10 @@ export async function getFolio(tx: TxContext, folioId: string): Promise<FolioDet
     paymentRef:
       p.payment_ref_type && p.payment_ref_id ? { type: p.payment_ref_type, id: p.payment_ref_id } : null,
     paymentMethod: p.payment_method,
-    paymentVerification: (p.payment_verification as Posting['paymentVerification']) ?? null,
+    paymentVerification:
+      p.payment_verification === 'recorded_unverified' && verifiedIds.has(`${p.payment_ref_type}:${p.payment_ref_id}`)
+        ? 'recorded_verified'
+        : ((p.payment_verification as Posting['paymentVerification']) ?? null),
     postDeparture: p.post_departure,
     invoicedOn: p.document_id ?? null,
     createdAt: new Date(p.created_at).toISOString(),

@@ -213,7 +213,7 @@ export const posting = z.object({
   paymentRef: entityRef.nullable(),
   paymentMethod: z.string().nullable(),
   /** provider_confirmed | recorded_unverified (awaiting statement reconciliation) — never shown as verified otherwise. */
-  paymentVerification: z.enum(['provider_confirmed', 'recorded_unverified']).nullable(),
+  paymentVerification: z.enum(['provider_confirmed', 'recorded_unverified', 'recorded_verified']).nullable(),
   postDeparture: z.boolean(),
   invoicedOn: uuid.nullable(),
   createdAt: z.string(),

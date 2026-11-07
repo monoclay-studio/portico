@@ -230,6 +230,43 @@ export async function setupOrg(
   };
 }
 
+/** A second property in the same organization, optionally operated by a second legal entity. */
+export async function addProperty(
+  h: Harness,
+  org: Org,
+  opts: { newLegalEntity?: boolean } = {},
+): Promise<{ propertyId: string; legalEntityId: string }> {
+  const legalEntityId = opts.newLegalEntity
+    ? (
+        await org.run((tx) =>
+          platform.createLegalEntity(tx, {
+            name: 'Lagoon Holdings',
+            legalName: 'Lagoon Holdings Private Limited',
+            taxId: '1000999GST501',
+            countryCode: 'MV',
+            baseCurrency: 'USD',
+            address: { line1: 'Majeedhee Magu', city: 'Malé' },
+          }),
+        )
+      ).id
+    : org.legalEntityId;
+  const p = await org.run((tx) =>
+    platform.createProperty(tx, {
+      code: `Q${newId().slice(-6).toUpperCase()}`,
+      name: 'Lagoon Island Retreat',
+      profile: 'resort',
+      legalEntityId,
+      countryCode: 'MV',
+      timezone: 'Indian/Maldives',
+      baseCurrency: 'USD',
+      businessDate: '2026-11-07',
+      classification: { 'mv.establishmentType': 'resort' },
+    }),
+  );
+  await org.run((tx) => h.finance.seedDefaultChargeCodes(tx, p.id));
+  return { propertyId: p.id, legalEntityId };
+}
+
 export const usd = (amountMinor: number) => money(amountMinor, 'USD');
 
 export async function advanceBusinessDate(org: Org, from: string): Promise<string> {

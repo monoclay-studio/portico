@@ -232,7 +232,7 @@ create table finance.postings (
   payment_method      text,
   -- provider_confirmed (PSP confirmed) or recorded_unverified (entered from a terminal slip, cash, bank transfer;
   -- verified later by statement reconciliation in payments).
-  payment_verification text check (payment_verification in ('provider_confirmed', 'recorded_unverified')),
+  payment_verification text check (payment_verification in ('provider_confirmed', 'recorded_unverified', 'recorded_verified')),
   cashier_session_id  uuid references finance.cashier_sessions(id),
   source_type         text,
   source_id           text,
@@ -414,7 +414,7 @@ create table finance.deposit_movements (
   payment_ref_type text,
   payment_ref_id   text,
   payment_method   text,
-  payment_verification text check (payment_verification in ('provider_confirmed', 'recorded_unverified')),
+  payment_verification text check (payment_verification in ('provider_confirmed', 'recorded_unverified', 'recorded_verified')),
   -- Tax declared (+) or released (−) by this movement: [{ accountKey, ruleId, ruleVersionId, name, rate, amountMinor }]
   taxes            jsonb not null default '[]',
   business_date    date not null,
@@ -585,6 +585,23 @@ create table finance.posting_document_locks (
 create index posting_locks_document_idx on finance.posting_document_locks (document_id);
 select core.enable_tenant_isolation('finance.posting_document_locks');
 
+-- Route D verification facts (payments matched a recorded payment to a statement line or bank confirmation). The
+-- payment posting stays immutable; the folio stops showing it as "awaiting verification".
+create table finance.payment_verifications (
+  id               uuid primary key,
+  tenant_id        uuid not null,
+  payment_ref_type text not null,
+  payment_ref_id   text not null,
+  evidence_type    text not null,
+  evidence_id      text not null,
+  idempotency_key  text not null,
+  verified_at      timestamptz not null,
+  verified_by      text not null,
+  unique (tenant_id, idempotency_key)
+);
+create index payment_verifications_ref_idx on finance.payment_verifications (tenant_id, payment_ref_type, payment_ref_id);
+select core.enable_tenant_isolation('finance.payment_verifications');
+
 -- Legal holds extend retention of a legal entity's financial records beyond the statutory minimum.
 create table finance.legal_holds (
   id               uuid primary key,
@@ -684,6 +701,7 @@ select core.make_append_only('finance.fiscal_documents');
 select core.make_append_only('finance.cash_movements');
 select core.make_append_only('finance.opening_balance_imports');
 select core.make_append_only('finance.fx_rates');
+select core.make_append_only('finance.payment_verifications');
 -- Mutable aggregates must never be deleted (only state transitions).
 revoke delete on finance.folios, finance.accounts, finance.charge_codes, finance.deposit_accounts,
   finance.allowance_instances, finance.receivables_accounts, finance.fiscal_series, finance.fiscal_chains,

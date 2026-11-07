@@ -829,7 +829,7 @@ export interface RecordPaymentInput {
   cashierSessionId?: string;
   reference?: string;
   /** Provider-confirmed (PSP) or recorded from a slip/cash/bank transfer awaiting statement verification. */
-  verification?: 'provider_confirmed' | 'recorded_unverified';
+  verification?: 'provider_confirmed' | 'recorded_unverified' | 'recorded_verified';
   /**
    * Cash recorded by another module without an open cashier session: 'reject' (default, desk flows) or 'flag'
    * (money already received — post it to cash without a session and raise an exception for the cashier).
