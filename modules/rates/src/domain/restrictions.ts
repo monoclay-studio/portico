@@ -203,13 +203,3 @@ export function evaluateRestrictions(c: RestrictionCheck): Violation[] {
     );
   return out;
 }
-
-/** Most-restrictive merge of explicit values for display (calendar grid). */
-export function mergeValues(a: RestrictionValues, b: RestrictionValues): RestrictionValues {
-  const out: RestrictionValues = { ...a };
-  for (const [k, val] of Object.entries(b) as Array<[keyof RestrictionValues, unknown]>) {
-    if (val === undefined) continue;
-    (out as Record<string, unknown>)[k] = val;
-  }
-  return out;
-}
