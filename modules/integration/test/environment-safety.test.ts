@@ -47,7 +47,7 @@ describe('trial organizations read but never write', () => {
     );
     expect(conn.issues.map((i) => i.code)).toContain('trial_write_capable_credential');
     const run = await integration.runSync(h.t.db, h.deps, org.ctx, conn.id, { trigger: 'manual' });
-    expect(run.counts.applied).toBe(2);
+    expect(run.counts.applied).toBe(3); // 2 reservations + 1 room status, read only
     await expect(
       tx(h, org.ctx, (t) =>
         integration.enqueueOutbound(t, h.deps, {

@@ -55,7 +55,8 @@ describe('credential expiry and rotation', () => {
     expect((await reminders())[0]?.occurrences).toBe(2);
     h.clock.advance(9.5 * DAY);
     await integration.runSync(h.t.db, h.deps, ctx, conn.id, { trigger: 'manual' });
-    expect((await reminders()).map((e) => e.severity).sort()).toEqual(['routine', 'routine', 'urgent']);
+    // The 7-day threshold was skipped (no job ran in between); the 1-day reminder is urgent.
+    expect((await reminders()).map((e) => e.severity).sort()).toEqual(['routine', 'urgent']);
     health = await tx(h, ctx, (t) => integration.getConnectionHealth(t, h.deps, conn.id));
     expect(health.urgent.map((s) => s.code)).toContain('credential_expiring');
     const expiring = await sql<{
@@ -63,7 +64,7 @@ describe('credential expiry and rotation', () => {
     }>`select count(*)::int as n from core.outbox where tenant_id = ${org.tenantId}::uuid and type = 'integration.credentials.expiring'`.execute(
       h.t.admin.kysely,
     );
-    expect(expiring.rows[0]?.n).toBe(3);
+    expect(expiring.rows[0]?.n).toBe(2);
 
     // Expired: the vendor rejects the key → connection suspended (error), ONE urgent exception, no retry storm.
     h.clock.advance(1 * DAY);
