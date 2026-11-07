@@ -306,6 +306,7 @@ describe('R2-P2-2: a write racing an erasure never leaves personal data behind',
       union all select 'needs', count(*)::int from guests.special_needs where profile_id = ${pid}
       union all select 'rels', count(*)::int from guests.relationships where related_profile_id = ${pid}
       union all select 'company', count(*)::int from guests.company_contacts where profile_id = ${pid}
+      union all select 'consents', count(*)::int from guests.consents where profile_id = ${pid}
       union all select 'notes', count(*)::int from guests.notes where profile_id = ${pid} and redacted_at is null`.execute(
       t.admin.kysely,
     );
@@ -317,6 +318,7 @@ describe('R2-P2-2: a write racing an erasure never leaves personal data behind',
       needs: 0,
       rels: 0,
       company: 0,
+      consents: 0,
       notes: 0,
     });
     const p = await t.admin.kysely
@@ -325,6 +327,56 @@ describe('R2-P2-2: a write racing an erasure never leaves personal data behind',
       .where('id', '=', pid)
       .executeTakeFirstOrThrow();
     expect(p).toEqual({ status: 'anonymized', legal_hold: false, vip_level: null });
+  });
+
+  it('a mirror sync racing an erasure never writes the person back', async () => {
+    const org = await setupOrg(t);
+    const [A] = org.properties as [string];
+    const connectionId = newId();
+    const mirror = (given: string) =>
+      org.sys((tx) =>
+        org.svc.upsertMirroredProfile(tx, {
+          connectionId,
+          systemName: 'Legacy PMS (simulated)',
+          externalId: 'G-RACE',
+          propertyId: A,
+          syncedAt: new Date('2026-11-07T06:00:00Z'),
+          profile: { givenName: given, familyName: 'Mirrorrace' },
+        }),
+      );
+    const { profileId } = await mirror('Quilla');
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    let erasedNow: () => void = () => {};
+    const didErase = new Promise<void>((r) => {
+      erasedNow = r;
+    });
+    // Hold the erasure open after it erased, but BEFORE it removed the mirror mapping is impossible to separate,
+    // so race the sync's profile write instead: the sync found the mapping before the erasure committed.
+    const erasure = org.sys(async (tx) => {
+      await org.svc.eraseProfile(tx, { kind: 'erasure', profileId, reason: 'race' });
+      erasedNow();
+      await gate;
+    });
+    await didErase;
+    const sync = mirror('Quilla').then(
+      (r) => r,
+      (e: { code?: string }) => e.code,
+    );
+    await new Promise((r) => setTimeout(r, 200));
+    release();
+    await erasure;
+    await sync;
+    const row = await t.admin.kysely
+      .selectFrom('guests.profiles')
+      .select(['given_name', 'family_name', 'status'])
+      .where('id', '=', profileId)
+      .executeTakeFirstOrThrow();
+    expect(row.status).toBe('anonymized');
+    expect(row.given_name).toBeNull();
+    expect(row.family_name).not.toBe('Mirrorrace');
   });
 
   it('a channel booking racing an erasure never reuses the erased profile', async () => {
@@ -361,6 +413,74 @@ describe('R2-P2-2: a write racing an erasure never leaves personal data behind',
     const { rows } = await sql<{ n: number }>`
       select count(*)::int as n from guests.contact_points where profile_id = ${pid}`.execute(t.admin.kysely);
     expect(rows[0]?.n).toBe(0);
+  });
+});
+
+describe('invariant closure: repeat and inverse operations', () => {
+  it('inverse (unmerge): erasing the survivor after an unmerge never redacts the restored person’s records', async () => {
+    const org = await setupOrg(t);
+    const survivor = await newGuest(org, [{ kind: 'email', value: 'survivor.person@guest.example' }]);
+    const restored = await newGuest(org, [{ kind: 'email', value: 'restored.person@guest.example' }], {
+      givenName: 'Restored',
+      familyName: 'Person',
+    });
+    const { mergeId } = await org.sys((tx) =>
+      org.svc.mergeProfiles(tx, { survivorId: survivor, mergedId: restored, reason: 'mistake' }),
+    );
+    await org.sys((tx) => org.svc.unmergeProfiles(tx, { mergeId, reason: 'Different people' }));
+    const kRestoredId = newId();
+    await otherModule(org, kRestoredId, { bookerProfileId: restored });
+    const kRestoredEmail = newId();
+    await otherModule(org, kRestoredEmail, { email: 'restored.person@guest.example' });
+    const kSurvivor = newId();
+    await otherModule(org, kSurvivor, { email: 'survivor.person@guest.example' });
+    await erase(org, survivor);
+    expect(await replayStatus(org, kRestoredId)).toBe('kept');
+    expect(await replayStatus(org, kRestoredEmail)).toBe('kept');
+    expect(await replayStatus(org, kSurvivor)).toBe('erased');
+  });
+
+  it('repeat: a second erasure (another subject) never touches erased markers; erasing twice is refused', async () => {
+    const org = await setupOrg(t);
+    const a = await newGuest(org, [{ kind: 'email', value: 'first.subject@guest.example' }]);
+    const b = await newGuest(org, [{ kind: 'email', value: 'second.subject@guest.example' }], {
+      givenName: 'Second',
+      familyName: 'Subject',
+    });
+    const kA = newId();
+    await otherModule(org, kA, { profileId: a });
+    const first = await erase(org, a);
+    expect((first.result as { counts: { idempotencyResponses: number } }).counts.idempotencyResponses).toBe(
+      1,
+    );
+    const marker = await t.admin.kysely
+      .selectFrom('core.idempotency_keys')
+      .select(['response_body', 'request_hash'])
+      .where('key', '=', kA)
+      .executeTakeFirstOrThrow();
+    expect(marker).toEqual({ response_body: { $erased: true }, request_hash: 'erased' });
+    const second = await erase(org, b);
+    expect((second.result as { counts: { idempotencyResponses: number } }).counts.idempotencyResponses).toBe(
+      0,
+    );
+    await expect(erase(org, a)).rejects.toMatchObject({ code: 'already_anonymized' });
+    expect(await replayStatus(org, kA)).toBe('erased');
+  });
+
+  it('inverse (hold released): once the held guest is released, the shared email identifies the erased person again', async () => {
+    const org = await setupOrg(t);
+    const shared = 'family.release@guest.example';
+    const held = await newGuest(org, [{ kind: 'email', value: shared }], {
+      givenName: 'Held',
+      familyName: 'Member',
+    });
+    const erased = await newGuest(org, [{ kind: 'email', value: shared }]);
+    await org.sys((tx) => org.svc.setLegalHold(tx, held, { hold: true, reason: 'Litigation hold on file' }));
+    await org.sys((tx) => org.svc.setLegalHold(tx, held, { hold: false, reason: 'Litigation closed' }));
+    const k = newId();
+    await otherModule(org, k, { contact: shared });
+    await erase(org, erased);
+    expect(await replayStatus(org, k)).toBe('erased');
   });
 });
 
