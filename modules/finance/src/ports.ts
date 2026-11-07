@@ -109,6 +109,8 @@ export interface CollectionRequest {
   idempotencyKey: string;
   /** The folio payer's name, for the payment request payments creates. */
   payerName?: string;
+  /** The folio payer (review P3-5), so payments can address the request to the guest or company. */
+  payer?: { type: string; id?: string };
 }
 
 export interface PaymentsPort {

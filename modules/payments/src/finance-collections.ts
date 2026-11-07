@@ -21,6 +21,20 @@ export interface FinanceCollectionRequest {
   idempotencyKey: string;
   /** The folio payer's name (finance knows it), for the payment request. */
   payerName?: string;
+  /** The folio payer (finance's types: guest / company / agency), so the request is addressed to them (P3-5). */
+  payer?: { type: string; id?: string };
+}
+
+/** Finance's payer → payments' payer (glossary § Payer: finance `guest` = payments `guest_profile`). */
+function payerOf(input: FinanceCollectionRequest): {
+  type: 'guest_profile' | 'company' | 'agency' | 'other';
+  id?: string;
+  name: string;
+} {
+  const name = input.payerName?.trim() || 'Guest';
+  const t = input.payer?.type;
+  const type = t === 'guest' ? 'guest_profile' : t === 'company' || t === 'agency' ? t : 'other';
+  return type !== 'other' && input.payer?.id ? { type, id: input.payer.id, name } : { type: 'other', name };
 }
 
 /** Days a late-charge payment request stays open before it expires. */
@@ -36,7 +50,7 @@ export function paymentsCollectionsForFinance(service: Pick<PaymentsService, 'pr
         const r = await withSavepoint(tx, 'payments_collection', () =>
           service.provider.createPaymentRequest(tx, {
             propertyId: input.propertyId,
-            payer: { type: 'other', name: input.payerName?.trim() || 'Guest' },
+            payer: payerOf(input),
             amount: { amountMinor: input.amount.amountMinor, currency: input.amount.currency },
             purpose: 'balance',
             ref: { type: 'folio', id: input.folioId },

@@ -744,18 +744,29 @@ export async function postCharge(
     for (const folioId of folioIds) {
       const share = postings.filter((p) => p.folioId === folioId).reduce((s, p) => s + p.amountMinor, 0);
       const f = await loadFolio(tx, folioId);
+      // Review P1-3: ask the guest for what the folio actually owes after this charge — never the full charge on a
+      // folio still in credit (e.g. an applied deposit larger than the stay's charges).
+      const owed = await db(tx)
+        .selectFrom('finance.postings')
+        .select(sql<string>`coalesce(sum(amount_minor), 0)`.as('b'))
+        .where('folio_id', '=', folioId)
+        .executeTakeFirstOrThrow();
+      const due = Math.max(0, Math.min(share, Number(owed.b)));
       // A refused or failed collection request never loses the late charge (ADR-0015 §6): it is listed instead.
       const collection: { status: string; detail?: string } =
-        share > 0
+        due > 0
           ? await withSavepoint(tx, 'finance_collection', () =>
               deps.ports.payments.requestCollection(tx, {
                 propertyId: input.propertyId,
                 folioId,
-                amount: money(share, currency),
+                amount: money(due, f.currency),
                 reason: 'late_charge',
                 ref: { type: 'journal_entry', id: claim.entryId },
                 idempotencyKey: `${idempotencyKey}:collect:${folioId}`,
                 payerName: f.payer_name,
+                ...(f.payer_type !== 'house'
+                  ? { payer: { type: f.payer_type, ...(f.payer_id ? { id: f.payer_id } : {}) } }
+                  : {}),
               }),
             ).catch((err: unknown) => ({
               status: 'failed',
@@ -764,17 +775,26 @@ export async function postCharge(
                   ? err.message
                   : 'Payments could not record the collection request. Arrange collection manually.',
             }))
-          : { status: 'not_possible', detail: 'Nothing to collect' };
+          : share > 0
+            ? {
+                status: 'covered_by_credit',
+                detail: 'The folio is still in credit after this charge; nothing to collect.',
+              }
+            : { status: 'not_possible', detail: 'Nothing to collect' };
       await raiseException(tx, {
         propertyId: input.propertyId,
         kind: 'late_charge',
-        severity: 'urgent',
+        severity: due > 0 ? 'urgent' : 'routine',
         ref: { type: 'folio', id: folioId },
-        message: `Charge "${input.description}" (${share} ${currency} minor units) was posted after departure to ${f.payer_name}'s folio. Collect payment from the guest or the card on file.`,
+        message:
+          due > 0
+            ? `Charge "${input.description}" (${share} ${currency} minor units) was posted after departure to ${f.payer_name}'s folio, which now owes ${due} ${f.currency} minor units. Collect payment from the guest or the card on file.`
+            : `Charge "${input.description}" (${share} ${currency} minor units) was posted after departure to ${f.payer_name}'s folio; the folio is still in credit, so nothing is collected. Review the folio before refunding the credit.`,
         details: {
           entryId: claim.entryId,
           departedOn: departure.departedOn,
           collection: collection.status,
+          amountRequested: due,
           ...(collection.detail ? { collectionDetail: collection.detail } : {}),
         },
         businessDate,

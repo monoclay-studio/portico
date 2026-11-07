@@ -5,6 +5,7 @@
  */
 import { sql } from '@portico/db';
 import { newId, type RequestContext, staticAuthorizer } from '@portico/kernel';
+import { platform } from '@portico/platform';
 import type { Booking } from '@portico/reservations';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
@@ -304,5 +305,98 @@ describe("P1-2 — check-in holds only the guest's card, for the agreed amount, 
         ),
       ).rejects.toMatchObject({ code });
     }
+  });
+});
+
+describe('P1-3 — a late charge asks the guest for what the folio owes, never more', () => {
+  it('a folio still in credit gets no payment request; one that owes gets exactly the debt', async () => {
+    const org = await organization(s);
+    const k = await kandu(s, org, '2027-03-10');
+    const desk = org.staff('front_desk', 'Hassan', [k.id]);
+    const { reservations, payments, finance } = s.c.services;
+    const { profileId, card } = await guestWithCard(s, org, k);
+    const b = applied<Booking>(
+      await org.run(desk, (tx) =>
+        reservations.createBooking(
+          tx,
+          bookingInput(
+            k,
+            { arrival: '2027-03-10', departure: '2027-03-12', unit: '214', guestProfileId: profileId },
+            { guarantee: { kind: 'card', paymentMethodId: card.id } },
+          ),
+        ),
+      ),
+    );
+    const stay = b.stays[0];
+    if (!stay) throw new Error('no stay');
+    await s.drain();
+    await readyUnit(s, org, k.id, k.units['214'] as string);
+    await payments.chargeNow(desk, {
+      propertyId: k.id,
+      methodId: card.id,
+      amount: { amountMinor: 50_000, currency: 'USD' },
+      ref: { type: 'booking', id: b.id },
+      businessKey: `deposit:${b.id}:1`,
+    });
+    const checkIn = await reservations.performWorkflow(s.t.db, desk, {
+      stayId: stay.id,
+      kind: 'check_in',
+      checkIn: { registration: { identityVerified: true }, access: { kind: 'card', count: 1 } },
+    });
+    expect(checkIn.run?.status).toBe('completed');
+    await org.run(org.setup, (tx) => platform.advanceBusinessDate(tx, k.id, '2027-03-10'));
+    await org.run(org.setup, (tx) => platform.advanceBusinessDate(tx, k.id, '2027-03-11'));
+    const manager = org.staff('general_manager', 'Duty manager', [k.id]);
+    const out = await reservations.performWorkflow(s.t.db, manager, {
+      stayId: stay.id,
+      kind: 'check_out',
+      checkOut: { settle: { leaveOpenReason: 'Deposit credit to be refunded' } },
+    });
+    expect(out.run?.status).toBe('completed');
+    await s.drain();
+    const folioOf = async () =>
+      (await org.run(desk, (tx) => finance.listFolios(tx, { owner: { type: 'stay', id: stay.id } })))[0];
+    const folio = await folioOf();
+    expect(folio?.balance.amountMinor).toBe(-50_000);
+    const late = (amountMinor: number, what: string) =>
+      org.run(desk, (tx) =>
+        finance.postCharge(tx, {
+          propertyId: k.id,
+          target: { type: 'stay', id: stay.id },
+          chargeCode: 'MISC',
+          amount: { amountMinor, currency: 'USD' },
+          description: what,
+          serviceDate: '2027-03-12',
+          sourceRef: { type: 'pos_check', id: newId() },
+          idempotencyKey: `pos:${newId()}`,
+        }),
+      );
+    const requests = async () =>
+      (
+        await sql<{ amount_minor: number; status: string; payer_type: string }>`
+          select amount_minor, status, payer->>'type' as payer_type from payments.payment_requests
+           where ref_type = 'folio' and ref_id = ${folio?.id} order by id`.execute(s.t.admin.kysely)
+      ).rows;
+    // USD 100 minibar: the guest is still in credit → no request, a routine exception says why.
+    await late(10_000, 'Minibar');
+    expect((await folioOf())?.balance.amountMinor).toBeLessThan(0);
+    expect(await requests()).toEqual([]);
+    const ex = await sql<{ severity: string; details: { collection: string; amountRequested: number } }>`
+      select severity, details from finance.exceptions where kind = 'late_charge' and ref_id = ${folio?.id}`.execute(
+      s.t.admin.kysely,
+    );
+    expect(ex.rows).toEqual([
+      {
+        severity: 'routine',
+        details: expect.objectContaining({ collection: 'covered_by_credit', amountRequested: 0 }),
+      },
+    ]);
+    // A USD 600 dinner: the folio now owes its balance — exactly that is requested, addressed to the guest.
+    await late(60_000, 'Dinner at the overwater grill');
+    const owed = (await folioOf())?.balance.amountMinor as number;
+    expect(owed).toBeGreaterThan(0);
+    const reqs = await requests();
+    expect(reqs).toHaveLength(1);
+    expect(reqs[0]).toMatchObject({ amount_minor: owed, status: 'open', payer_type: 'guest_profile' });
   });
 });

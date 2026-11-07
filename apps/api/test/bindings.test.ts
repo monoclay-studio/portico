@@ -289,11 +289,16 @@ describe('reservations → guests, payments, finance, operations (check-in and c
       }),
     );
     expect(late.postingIds.length).toBeGreaterThan(0);
-    const requests = await sql<{ id: string; purpose: string; status: string }>`
-      select id, purpose, status from payments.payment_requests where ref_type = 'folio' and ref_id = ${folios[0]?.id}`.execute(
+    const requests = await sql<{ id: string; purpose: string; status: string; amount_minor: number }>`
+      select id, purpose, status, amount_minor from payments.payment_requests where ref_type = 'folio' and ref_id = ${folios[0]?.id}`.execute(
       s.t.admin.kysely,
     );
-    expect(requests.rows).toMatchObject([{ purpose: 'balance', status: 'open' }]);
+    // Review P1-3: exactly what the folio owes after the late charge (the applied deposit credit is netted).
+    const owed = (
+      await org.run(desk, (tx) => finance.listFolios(tx, { owner: { type: 'stay', id: stay.id } }))
+    )[0]?.balance.amountMinor as number;
+    expect(owed).toBeGreaterThan(0);
+    expect(requests.rows).toMatchObject([{ purpose: 'balance', status: 'open', amount_minor: owed }]);
     await assertGlobalConsistency(s, org, {
       auditActions: ['reservations.booking.create', 'finance.posting.charge'],
     });
