@@ -34,6 +34,7 @@ import {
   credentialSummary,
   hasAnyCredential,
   isHumanSelf,
+  lockPerson,
   verifyEmailOwnership,
 } from './guard';
 import {
@@ -93,11 +94,12 @@ async function issueToken(
     .where('revoked_at', 'is', null)
     .execute();
   const token = `${kind === 'invitation' ? 'inv' : 'prt'}.${tx.tenantId}.${randomToken(32)}`;
+  const id = newId();
   const expiresAt = new Date(tx.now.getTime() + ttlMs);
   await db(tx)
     .insertInto('identity.credential_tokens')
     .values({
-      id: newId(),
+      id,
       tenant_id: tx.tenantId,
       user_id: userId,
       kind,
@@ -108,7 +110,16 @@ async function issueToken(
       created_by: actorRef(tx),
     })
     .execute();
-  return { token, expiresAt };
+  return { token, expiresAt, tokenId: id };
+}
+
+/** R3-P3-3: remember how the link was delivered; only `queued` (sent to the real address) proves the email. */
+async function recordDelivery(tx: TxContext, tokenId: string, mode: NotifierResult['mode']) {
+  await db(tx)
+    .updateTable('identity.credential_tokens')
+    .set({ delivery_mode: mode })
+    .where('id', '=', tokenId)
+    .execute();
 }
 
 function link(ports: Pick<IdentityPorts, 'config'>, path: string, token: string): string {
@@ -306,7 +317,12 @@ export async function sendInvitation(
   ports: Pick<IdentityPorts, 'notifier' | 'config' | 'organizationName'>,
   input: { userId: string; email: string; displayName: string },
 ): Promise<{ invitationExpiresAt: string; delivery: NotifierResult }> {
-  const { token, expiresAt } = await issueToken(tx, input.userId, 'invitation', INVITATION_DAYS * 86_400_000);
+  const { token, expiresAt, tokenId } = await issueToken(
+    tx,
+    input.userId,
+    'invitation',
+    INVITATION_DAYS * 86_400_000,
+  );
   const orgName = ports.organizationName ? await ports.organizationName(tx) : 'your organization';
   const delivery = await send(tx, ports, {
     kind: 'staff.invitation',
@@ -315,6 +331,7 @@ export async function sendInvitation(
     body: `${input.displayName}, you have been invited to join ${orgName}. The invitation is valid until ${expiresAt.toISOString()}. If you already use Portico, sign in and accept it from your account.`,
     link: link(ports, '/accept-invitation', token),
   });
+  await recordDelivery(tx, tokenId, delivery.mode);
   await tx.emit({
     type: 'identity.membership.invited',
     aggregate: { type: 'user', id: input.userId },
@@ -383,6 +400,8 @@ export async function acceptInvitation(
 ): Promise<{ organizationId: string; userId: string }> {
   const ctx = await tokenContext(database, input.token, 'inv');
   if (!ctx) throw new UnauthenticatedError(INVALID_TOKEN);
+  // R3-P1-1 (d): hash a possible first password BEFORE the transaction, so the person's row lock is short.
+  const newHash = input.password && input.password.length >= 12 ? await hashPassword(input.password) : null;
   const outcome = await withTenantTx(
     database,
     ctx,
@@ -402,7 +421,12 @@ export async function acceptInvitation(
         .where('user_id', '=', t.user_id)
         .executeTakeFirst();
       if (m?.status !== 'invited') throw new UnauthenticatedError(INVALID_TOKEN);
+      // R3-P1-1: the person's row lock before any credential state is read.
+      await lockPerson(tx, t.user_id);
       const creds = await credentialSummary(tx, t.user_id);
+      // R3-P3-3: only a link actually sent to the person's address proves it; a simulated link (non-live
+      // organizations, read from the operator mailbox) never verifies an email.
+      const proves = t.delivery_mode === 'queued';
       const sso = await db(tx)
         .selectFrom('identity.sso_connections')
         .select(['sso_required', 'status'])
@@ -417,11 +441,11 @@ export async function acceptInvitation(
             'password_required',
             'Choose a password (at least 12 characters) to finish joining.',
           );
-        await verifyEmailOwnership(tx, t.user_id);
-        if (!ssoOnly && input.password)
+        if (proves) await verifyEmailOwnership(tx, t.user_id);
+        if (!ssoOnly && newHash)
           await db(tx)
             .updateTable('identity.users')
-            .set({ password_hash: await hashPassword(input.password), failed_logins: 0, locked_until: null })
+            .set({ password_hash: newHash, failed_logins: 0, locked_until: null })
             .where('id', '=', t.user_id)
             .execute();
       } else if (creds.hasPassword) {
@@ -604,7 +628,7 @@ async function sendReset(
   ports: Pick<IdentityPorts, 'notifier' | 'config'>,
   user: { id: string; email: string },
 ) {
-  const { token, expiresAt } = await issueToken(
+  const { token, expiresAt, tokenId } = await issueToken(
     tx,
     user.id,
     'password_reset',
@@ -617,6 +641,7 @@ async function sendReset(
     body: `Use this link within ${PASSWORD_RESET_MINUTES} minutes to choose a new password. If you did not ask for this, ignore this message.`,
     link: link(ports, '/reset-password', token),
   });
+  await recordDelivery(tx, tokenId, delivery.mode);
   await tx.audit({
     action: 'identity.password.resetRequested',
     target: { type: 'user', id: user.id },
@@ -717,7 +742,8 @@ export async function completePasswordReset(
   return withTenantTx(database, ctx, async (tx) => {
     const t = await consumeToken(tx, input.token, 'password_reset');
     if (!t) throw new UnauthenticatedError(INVALID_TOKEN);
-    await verifyEmailOwnership(tx, t.user_id);
+    await lockPerson(tx, t.user_id);
+    if (t.delivery_mode === 'queued') await verifyEmailOwnership(tx, t.user_id);
     await db(tx)
       .updateTable('identity.users')
       .set({ password_hash: hash, failed_logins: 0, locked_until: null })

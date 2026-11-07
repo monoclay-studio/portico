@@ -1,5 +1,11 @@
 import { sql, type TxContext, typed } from '@portico/db';
-import { type Actor, BusinessRuleError, ForbiddenError } from '@portico/kernel';
+import {
+  type Actor,
+  BusinessRuleError,
+  ForbiddenError,
+  NotFoundError,
+  UnauthenticatedError,
+} from '@portico/kernel';
 import { entryCovers } from '../domain/permissions';
 import type { IdentityPorts } from '../ports';
 import type { IdentityDB } from '../tables';
@@ -267,4 +273,36 @@ export function assertRootChange(tx: TxContext, what: string): void {
     throw new ForbiddenError('*', {
       reason: `${what} is a root change: only an administrator with full organization-wide access can make it.`,
     });
+}
+
+/**
+ * Review R3-P1-1: lock the person's row BEFORE reading any credential state. A first-verification wipe takes the same
+ * lock, so a credential write either completes before the wipe (and is wiped) or starts after it (and sees the new
+ * epoch). Returns the current email verification and credential epoch.
+ */
+export async function lockPerson(
+  tx: TxContext,
+  userId: string,
+): Promise<{ emailVerified: boolean; epoch: number }> {
+  const { rows } = await sql<{ email_verified: boolean; credential_epoch: number }>`
+    select * from identity.lock_person(${userId}::uuid)`.execute(tx.db);
+  const r = rows[0];
+  if (!r) throw new NotFoundError('user', userId);
+  return { emailVerified: r.email_verified, epoch: r.credential_epoch };
+}
+
+/**
+ * The acting session must still be valid AFTER the person's row lock: not revoked, and from the current credential
+ * epoch. A request authenticated just before a first-verification wipe cannot finish a credential change after it.
+ */
+export async function assertSessionCurrent(tx: TxContext, epoch: number): Promise<void> {
+  const actor = tx.actor;
+  if (actor.kind !== 'user' || !actor.sessionId) return;
+  const s = await db(tx)
+    .selectFrom('identity.sessions')
+    .select(['revoked_at', 'credential_epoch'])
+    .where('id', '=', actor.sessionId)
+    .executeTakeFirst();
+  if (!s || s.revoked_at || s.credential_epoch !== epoch)
+    throw new UnauthenticatedError('Your session ended because your sign-in details changed. Sign in again.');
 }

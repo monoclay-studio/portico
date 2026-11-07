@@ -30,6 +30,8 @@ import {
   assertCanGrantRole,
   assertNotElevated,
   assertPowerOver,
+  assertSessionCurrent,
+  lockPerson,
   revokeApiKeysIssuedBy,
 } from './services/guard';
 import { createMfaChallenge, hasActiveTotp } from './services/mfa';
@@ -432,6 +434,11 @@ export async function login(
   input: LoginInput,
   ports: Pick<IdentityPorts, 'geo'> = {},
 ): Promise<LoginResult> {
+  // R3-P1-1: read the credential epoch BEFORE the password hash. If a first-verification wipe commits in between, the
+  // hash read sees the wipe; if it commits after, the session below is refused for its stale epoch.
+  const { rows: epochRows } = await sql<{ epoch: number | null }>`
+    select identity.credential_epoch_for_email(${input.email}) as epoch`.execute(database.kysely);
+  const epochAtCheck = epochRows[0]?.epoch ?? 0;
   const { rows } = await sql<{
     user_id: string;
     password_hash: string | null;
@@ -497,9 +504,12 @@ export async function login(
     if (sso?.status === 'active' && sso.sso_required && !sso.sso_exempt_user_ids.includes(user.user_id)) {
       throw new SsoRequiredError(chosen.id);
     }
+    const person = await lockPerson(tx, user.user_id);
+    if (person.epoch !== epochAtCheck) throw new UnauthenticatedError(GENERIC_LOGIN_ERROR);
     if (await hasActiveTotp(tx, user.user_id)) {
       const challenge = await createMfaChallenge(tx, {
         userId: user.user_id,
+        credentialEpoch: person.epoch,
         ip: input.ip,
         userAgent: input.userAgent,
       });
@@ -507,6 +517,7 @@ export async function login(
     }
     const session = await createSession(tx, {
       userId: user.user_id,
+      credentialEpoch: person.epoch,
       authMethod: 'password',
       mfaVerifiedAt: null,
       ip: input.ip,
@@ -581,12 +592,16 @@ export async function authenticateToken(
           'm.created_at',
           'u.status as user_status',
           'u.first_activated_at',
+          's.credential_epoch',
+          'u.credential_epoch as user_epoch',
         ])
         .where('s.token_hash', '=', sha256Hex(token))
         .executeTakeFirst();
       if (
         !session ||
         session.revoked_at ||
+        // R3-P1-1: a session from before a first-verification wipe never authenticates.
+        session.credential_epoch !== session.user_epoch ||
         session.expires_at <= now ||
         session.idle_expires_at <= now ||
         session.status !== 'active' ||
@@ -676,6 +691,11 @@ export async function createApiClient(
   assertNotElevated(tx, 'Issuing API keys');
   // ADR-0010 / ADR-0017 §9: production credentials are never issued outside the live environment.
   assertExternalEffectAllowed(tx, 'credentials.production');
+  // R3-P1-1: a key is a credential of its creator; issue it only from a session of their current credential epoch.
+  if (tx.actor.kind === 'user' && tx.actor.sessionId && !tx.actor.impersonatedBy) {
+    const creator = await lockPerson(tx, tx.actor.userId);
+    await assertSessionCurrent(tx, creator.epoch);
+  }
   const clientId = newId();
   const token = `ptk.${tx.tenantId}.${clientId}.${randomToken(32)}`;
   await db(tx)

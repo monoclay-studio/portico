@@ -40,6 +40,7 @@ import {
   identityManifest,
   operatorDirectoryFromConfig,
   outboxNotifier,
+  ssoDomainRecheckJob,
   systemTxtResolver,
   unknownGeo,
 } from '@portico/identity';
@@ -601,6 +602,7 @@ export function compose(database: PorticoDatabase, options: CompositionOptions =
     jobs: [
       ...CORE_JOBS,
       ...IDENTITY_JOBS,
+      ssoDomainRecheckJob(systemTxtResolver),
       ...createInventoryJobs(inventoryService),
       ...guestsJobs(guestsService),
       ...reservationsJobs(reservations),

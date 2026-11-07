@@ -1,5 +1,13 @@
 import { createHash } from 'node:crypto';
-import { type PorticoDatabase, type Selectable, sql, type TxContext, typed, withTenantTx } from '@portico/db';
+import {
+  type PorticoDatabase,
+  type ScheduledJob,
+  type Selectable,
+  sql,
+  type TxContext,
+  typed,
+  withTenantTx,
+} from '@portico/db';
 import {
   BusinessRuleError,
   EntitlementError,
@@ -28,6 +36,7 @@ import {
   credentialSummary,
   hasAnyCredential,
   isHumanSelf,
+  lockPerson,
   membershipsElsewhere,
   notifyAdministrators,
   verifyEmailOwnership,
@@ -232,18 +241,39 @@ export async function configureSso(
   const d =
     discovery && discovery.issuer === input.issuer ? discovery : await discoverIssuer(ports, input.issuer);
   const existing = await db(tx).selectFrom('identity.sso_connections').selectAll().executeTakeFirst();
-  // ADR-0017 rule 15 (review R2-P1-1): the issuer, the email allow-list and trusting the IdP's MFA decide who can sign
-  // in as whom, so changing them is a root change.
-  const sameDomains = (a: readonly string[], b: readonly string[]) =>
+  // ADR-0017 rule 15 (reviews R2-P1-1, R3-P1-2): anything that decides who can sign in or which roles a sign-in grants
+  // is a root change — every setting except the display name and a client-secret rotation. Omitted optional settings
+  // keep their current value.
+  const sameList = (a: readonly string[], b: readonly string[]) =>
     a.length === b.length && [...a].sort().join() === [...b].sort().join();
+  const next = {
+    issuer: input.issuer,
+    client_id: input.clientId,
+    token_endpoint_auth_method:
+      input.tokenEndpointAuthMethod ?? existing?.token_endpoint_auth_method ?? 'client_secret_basic',
+    scopes: input.scopes ?? existing?.scopes ?? ['openid', 'email', 'profile'],
+    groups_claim: input.groupsClaim ?? existing?.groups_claim ?? 'groups',
+    jit_provisioning: input.jitProvisioning ?? existing?.jit_provisioning ?? true,
+    trust_idp_mfa: input.trustIdpMfa ?? existing?.trust_idp_mfa ?? false,
+    status: input.status ?? existing?.status ?? 'active',
+  };
   const issuerChanged = !!existing && existing.issuer !== input.issuer;
   const rootChange =
     !existing ||
     issuerChanged ||
-    !sameDomains(existing.allowed_email_domains, domains) ||
-    existing.trust_idp_mfa !== (input.trustIdpMfa ?? existing.trust_idp_mfa);
+    existing.client_id !== next.client_id ||
+    existing.token_endpoint_auth_method !== next.token_endpoint_auth_method ||
+    !sameList(existing.scopes, next.scopes) ||
+    existing.groups_claim !== next.groups_claim ||
+    existing.jit_provisioning !== next.jit_provisioning ||
+    existing.trust_idp_mfa !== next.trust_idp_mfa ||
+    existing.status !== next.status ||
+    !sameList(existing.allowed_email_domains, domains);
   if (rootChange)
-    assertRootChange(tx, 'Changing the identity provider, the allowed email domains or trust in its MFA');
+    assertRootChange(
+      tx,
+      'Changing who can sign in through single sign-on (identity provider, client, allowed domains, groups claim, automatic accounts or MFA trust)',
+    );
   if (existing && expectedVersion === undefined)
     throw new ValidationError('if_match_required', 'Send If-Match with the connection version to change it.');
   if (!existing && !input.clientSecret)
@@ -259,19 +289,12 @@ export async function configureSso(
   const by = tx.actor.kind === 'user' ? `user:${tx.actor.userId}` : tx.actor.kind;
   const values = {
     display_name: input.displayName,
-    issuer: input.issuer,
-    client_id: input.clientId,
+    ...next,
     client_secret_ref: secretRef,
-    token_endpoint_auth_method: input.tokenEndpointAuthMethod ?? 'client_secret_basic',
     authorization_endpoint: d.authorization_endpoint,
     token_endpoint: d.token_endpoint,
     jwks_uri: d.jwks_uri,
-    scopes: input.scopes ?? ['openid', 'email', 'profile'],
     allowed_email_domains: domains,
-    groups_claim: input.groupsClaim ?? 'groups',
-    jit_provisioning: input.jitProvisioning ?? true,
-    trust_idp_mfa: input.trustIdpMfa ?? existing?.trust_idp_mfa ?? false,
-    status: input.status ?? 'active',
     updated_by: by,
   };
   let row: Connection | undefined;
@@ -303,14 +326,21 @@ export async function configureSso(
   if (issuerChanged) {
     // ADR-0017 rule 15: a new issuer re-confirms domain ownership (verification is not inherited, R2-P3-5) and the
     // old issuer's links stop meaning anything.
-    await db(tx).updateTable('identity.sso_domains').set({ verified_at: null }).execute();
+    const verified = await db(tx)
+      .selectFrom('identity.sso_domains')
+      .select('domain')
+      .where('verified_at', 'is not', null)
+      .execute();
+    await db(tx).updateTable('identity.sso_domains').set({ verified_at: null, checked_at: null }).execute();
+    for (const v of verified)
+      await sql`select identity.release_verified_domain(${v.domain}, ${tx.tenantId}::uuid)`.execute(tx.db);
     await db(tx).deleteFrom('identity.sso_identities').where('issuer', '=', existing.issuer).execute();
   }
   if (rootChange && existing) {
     const by = tx.actor.kind === 'user' ? (tx.actor.displayName ?? tx.actor.userId) : tx.actor.kind;
     const summary = issuerChanged
       ? `Single sign-on now trusts a different identity provider (${input.issuer}); email domains must be verified again.`
-      : 'Single sign-on root settings changed (allowed email domains or trust in the identity provider’s MFA).';
+      : 'Single sign-on root settings changed (who can sign in, or which roles a sign-in grants).';
     await raiseSecurityAlert(tx, {
       rule: 'sso_root_change',
       severity: 'high',
@@ -355,6 +385,27 @@ export async function setGroupRoleMappings(
     await assertCanGrantRole(tx, role.permissions, { type: m.scopeType, id: m.scopeId ?? null }, ports);
   }
   const before = await db(tx).selectFrom('identity.group_role_mappings').selectAll().execute();
+  // R3-P2-1: removing (or changing) a mapping takes away the role it grants, so it needs the same power as adding it.
+  const key = (group: string, roleId: string, scopeType: string, scopeId: string | null) =>
+    `${group.toLowerCase()}|${roleId}|${scopeType}|${scopeId ?? ''}`;
+  const kept = new Set(
+    mappings.map((m) =>
+      key(m.group, (roles.get(m.roleKey) as { id: string }).id, m.scopeType, m.scopeId ?? null),
+    ),
+  );
+  const rolesById = new Map([...roles.values()].map((r) => [r.id, r]));
+  for (const b of before) {
+    if (kept.has(key(b.group_name, b.role_id, b.scope_type, b.scope_id))) continue;
+    const role = rolesById.get(b.role_id);
+    if (role)
+      await assertCanGrantRole(
+        tx,
+        role.permissions,
+        { type: b.scope_type, id: b.scope_id },
+        ports,
+        'You can only remove group mappings for roles whose permissions you hold yourself.',
+      );
+  }
   await db(tx).deleteFrom('identity.group_role_mappings').execute();
   const by = tx.actor.kind === 'user' ? `user:${tx.actor.userId}` : tx.actor.kind;
   for (const m of mappings) {
@@ -521,6 +572,7 @@ export async function startSsoLogin(
         code_verifier_enc: cipher.encrypt(verifier, `sso:${id}`),
         redirect_uri: redirectUri,
         link_user_id: input.linkUserId ?? null,
+        issuer: c.issuer,
         expires_at: expiresAt,
         consumed_at: null,
       })
@@ -543,12 +595,15 @@ export async function startSsoLogin(
 /**
  * ADR-0017 rule 15: a member who already has their own credentials proves them before their identity-provider account
  * is linked. They start SSO from a session signed in with their password (and a fresh second factor when they have
- * one); the callback then links the IdP account to them, and only to them.
+ * one); the callback then links the IdP account to them, and only to them. R3-P2-3: the proving session may be in ANY
+ * organization the person belongs to, so an organization that requires SSO (no password sessions) can still be linked;
+ * `organizationId` names the organization whose identity provider is linked (default: the session's).
  */
 export async function startSsoLink(
   database: PorticoDatabase,
   ports: Pick<IdentityPorts, 'cipher' | 'config'>,
   ctx: RequestContext,
+  organizationId?: string,
 ): Promise<{ authorizationUrl: string; expiresAt: Date; browserBinding: string }> {
   const actor = ctx.actor;
   if (!isHumanSelf(actor) || !actor.sessionId)
@@ -578,7 +633,20 @@ export async function startSsoLink(
         );
     }
   });
-  return startSsoLogin(database, ports, { organizationId: ctx.tenantId, linkUserId: actor.userId });
+  const target = organizationId ?? ctx.tenantId;
+  if (target !== ctx.tenantId) {
+    const targetCtx = await orgContext(database, target);
+    const member = await withTenantTx(database, targetCtx, (tx) =>
+      db(tx)
+        .selectFrom('identity.memberships')
+        .select('status')
+        .where('user_id', '=', actor.userId)
+        .executeTakeFirst(),
+    );
+    if (member?.status !== 'active' && member?.status !== 'invited')
+      throw new NotFoundError('organization', target);
+  }
+  return startSsoLogin(database, ports, { organizationId: target, linkUserId: actor.userId });
 }
 
 const jwksCache = new Map<string, { jwks: JSONWebKeySet; fetchedAt: number }>();
@@ -676,7 +744,7 @@ async function auditFailure(
  */
 export async function completeSsoLogin(
   database: PorticoDatabase,
-  ports: Pick<IdentityPorts, 'cipher' | 'secrets' | 'oidcHttp' | 'geo'>,
+  ports: Pick<IdentityPorts, 'cipher' | 'secrets' | 'oidcHttp' | 'geo' | 'dnsTxt'>,
   input: {
     state: string;
     code: string;
@@ -715,6 +783,8 @@ export async function completeSsoLogin(
       .execute();
     const c = await db(tx).selectFrom('identity.sso_connections').selectAll().executeTakeFirst();
     if (c?.status !== 'active') return { ok: false as const, reason: 'sso_not_active' };
+    // R3-P3-4: the identity provider may not change between the start of a login and its callback.
+    if (st.issuer && st.issuer !== c.issuer) return { ok: false as const, reason: 'issuer_changed' };
     return {
       ok: true as const,
       c,
@@ -756,6 +826,13 @@ export async function completeSsoLogin(
     throw new UnauthenticatedError(SSO_FAILED);
   }
 
+  // Phase 2b — R3-P2-2: a verified domain about to verify an email for the FIRST time is re-checked live in DNS (no
+  // cache), outside any transaction; a record that is gone ends the verification.
+  const claimedEmail = typeof claims.email === 'string' ? claims.email.trim().toLowerCase() : '';
+  const claimedDomain = emailDomain(claimedEmail);
+  if (claimedDomain)
+    await recheckDomainBeforeFirstVerification(database, ctx, ports, claimedDomain, claimedEmail);
+
   // Phase 3 — every check first, then the writes (R2-P1-3): a refused sign-in throws, so the transaction rolls back
   // and persists neither a user nor a link; the refusal is audited in its own transaction.
   let result: { ok: true; userId: string; token: string; expiresAt: Date };
@@ -776,18 +853,22 @@ export async function completeSsoLogin(
       const { rows: found } = await sql<{ user_id: string }>`
         select user_id from identity.login_lookup(${email})`.execute(tx.db);
       const emailUserId = found[0]?.user_id;
-      const domainVerified = !!(await db(tx)
-        .selectFrom('identity.sso_domains')
-        .select('id')
-        .where('domain', '=', domain)
-        .where('verified_at', 'is not', null)
-        .executeTakeFirst());
-      const link = await db(tx)
-        .selectFrom('identity.sso_identities')
-        .selectAll()
-        .where('issuer', '=', c.issuer)
-        .where('subject', '=', subject)
-        .executeTakeFirst();
+      const domainVerified = await domainVerifiedHere(tx, domain);
+      const findLink = () =>
+        db(tx)
+          .selectFrom('identity.sso_identities as s')
+          .innerJoin('identity.users as u', 'u.id', 's.user_id')
+          .select(['s.id', 's.user_id'])
+          .where('s.issuer', '=', c.issuer)
+          .where('s.subject', '=', subject)
+          // R3-P1-1: a link from before a first-verification wipe means nothing.
+          .whereRef('s.credential_epoch', '=', 'u.credential_epoch')
+          .executeTakeFirst();
+      const firstLook = await findLink();
+      // R3-P1-1: lock every person this sign-in could touch BEFORE reading their credential state, then re-read.
+      for (const id of [...new Set([firstLook?.user_id, emailUserId].filter((x): x is string => !!x))].sort())
+        await lockPerson(tx, id);
+      const link = await findLink();
       // Link mode: a signed-in member proved their own credentials and asked to link this IdP account to them.
       const provedUserId = st.link_user_id;
       if (provedUserId && emailUserId !== provedUserId) return refuse('link_email_mismatch', fp);
@@ -864,6 +945,7 @@ export async function completeSsoLogin(
         const { rows } = await sql<{ id: string }>`
           select identity.ensure_user(${newId()}::uuid, ${email}) as id`.execute(tx.db);
         userId = rows[0]?.id as string;
+        await lockPerson(tx, userId);
       }
       const name = typeof claims.name === 'string' && claims.name.trim() ? claims.name.trim() : email;
       if (!member) {
@@ -907,6 +989,7 @@ export async function completeSsoLogin(
       // A sign-in through an identity provider whose domain this organization verified proves control of the email
       // (rule 12): the first time, everything set before is wiped — including older links, so ours is (re)written.
       if (domainVerified && (await verifyEmailOwnership(tx, userId))) newLink = true;
+      const person = await lockPerson(tx, userId); // the epoch after any wipe above
       if (newLink) {
         await db(tx)
           .insertInto('identity.sso_identities')
@@ -918,8 +1001,13 @@ export async function completeSsoLogin(
             user_id: userId,
             email_at_link: email,
             linked_at: tx.now,
+            credential_epoch: person.epoch,
           })
-          .onConflict((oc) => oc.columns(['tenant_id', 'issuer', 'subject']).doNothing())
+          .onConflict((oc) =>
+            oc
+              .columns(['tenant_id', 'issuer', 'subject'])
+              .doUpdateSet({ credential_epoch: person.epoch, user_id: userId }),
+          )
           .execute();
         await tx.audit({
           action: 'identity.sso.link',
@@ -933,6 +1021,7 @@ export async function completeSsoLogin(
         c.trust_idp_mfa || amr.some((m) => ['mfa', 'otp', 'hwk', 'swk', 'sms', 'fpt', 'face'].includes(m));
       const session = await createSession(tx, {
         userId,
+        credentialEpoch: person.epoch,
         authMethod: 'sso',
         mfaVerifiedAt: idpMfa ? tx.now : null,
         idpMfa,
@@ -1033,9 +1122,19 @@ export async function verifySsoDomain(
     );
   }
   return withTenantTx(database, ctx, async (tx) => {
+    // R3-P2-2: a verified domain verifies emails, so only ONE organization may hold it; first verified wins.
+    const { rows: claim } = await sql<{ held: boolean }>`
+      select identity.claim_verified_domain(${d}, ${tx.tenantId}::uuid, ${tx.now}::timestamptz) as held`.execute(
+      tx.db,
+    );
+    if (!claim[0]?.held)
+      throw new BusinessRuleError(
+        'domain_held_by_another_organization',
+        `Another organization has already verified ${d}. If your organization now owns it, contact Monoclay support to transfer it.`,
+      );
     const updated = await db(tx)
       .updateTable('identity.sso_domains')
-      .set({ verified_at: tx.now })
+      .set({ verified_at: tx.now, checked_at: tx.now })
       .where('id', '=', row.id)
       .returningAll()
       .executeTakeFirstOrThrow();
@@ -1046,6 +1145,114 @@ export async function verifySsoDomain(
     });
     return domainView(updated);
   });
+}
+
+/** A domain verification lapses unless its DNS record is seen again within this many days (R3-P2-2). */
+export const DOMAIN_RECHECK_DAYS = 30;
+
+/**
+ * Whether THIS organization currently holds a valid verification for the email domain: verified, seen in DNS within
+ * the re-check period, and the organization is the domain's single holder (R3-P2-2).
+ */
+async function domainVerifiedHere(tx: TxContext, domain: string): Promise<boolean> {
+  const row = await db(tx)
+    .selectFrom('identity.sso_domains')
+    .select(['verified_at', 'checked_at'])
+    .where('domain', '=', domain)
+    .where('verified_at', 'is not', null)
+    .executeTakeFirst();
+  if (!row?.checked_at) return false;
+  if (row.checked_at.getTime() < tx.now.getTime() - DOMAIN_RECHECK_DAYS * 86_400_000) return false;
+  const { rows } = await sql<{ holder: string | null }>`
+    select identity.verified_domain_holder(${domain}) as holder`.execute(tx.db);
+  return rows[0]?.holder === tx.tenantId;
+}
+
+/**
+ * R3-P2-2: before a verified-domain sign-in counts as a person's FIRST email verification (a new identity, or one whose
+ * email is not verified yet), the TXT record is checked live — outside any transaction, no cache. A record that is gone
+ * ends this organization's verification (and alerts its administrators).
+ */
+async function recheckDomainBeforeFirstVerification(
+  database: PorticoDatabase,
+  ctx: RequestContext,
+  ports: Pick<IdentityPorts, 'dnsTxt'>,
+  domain: string,
+  email: string,
+): Promise<void> {
+  const row = await withTenantTx(database, ctx, (tx) =>
+    db(tx)
+      .selectFrom('identity.sso_domains')
+      .select(['domain', 'verification_token'])
+      .where('domain', '=', domain)
+      .where('verified_at', 'is not', null)
+      .executeTakeFirst(),
+  );
+  if (!row) return;
+  const { rows } = await sql<{ verified: boolean | null }>`
+    select (select email_verified from identity.credential_summary(u.id)) as verified
+      from identity.users u where lower(u.email) = ${email}`.execute(database.kysely);
+  if (rows[0]?.verified === true) return; // not a first verification
+  const records = ports.dnsTxt ? await ports.dnsTxt(`_portico-verification.${domain}`).catch(() => []) : [];
+  const ok = records.includes(`portico-verify=${row.verification_token}`);
+  await recordDomainCheck(database, ctx, domain, ok);
+}
+
+async function recordDomainCheck(
+  database: PorticoDatabase,
+  ctx: RequestContext,
+  domain: string,
+  ok: boolean,
+) {
+  await withTenantTx(database, ctx, async (tx) => {
+    await sql`select identity.record_domain_check(${tx.tenantId}::uuid, ${domain}, ${ok}, ${tx.now}::timestamptz)`.execute(
+      tx.db,
+    );
+    if (!ok)
+      await raiseSecurityAlert(tx, {
+        rule: 'sso_root_change',
+        severity: 'high',
+        summary: `The DNS record proving ownership of ${domain} is gone, so the domain is no longer verified. Publish it again and re-verify the domain if your organization still owns it.`,
+        details: { domain },
+        dedupeKey: `domain_lapsed:${domain}:${tx.now.toISOString().slice(0, 10)}`,
+      });
+  });
+}
+
+/**
+ * R3-P2-2: re-check every verified domain whose DNS record has not been seen for a day; a missing record ends the
+ * verification. Registered by the composition root with the system DNS resolver.
+ */
+export function ssoDomainRecheckJob(dnsTxt: (name: string) => Promise<string[]>): ScheduledJob {
+  return {
+    name: 'identity.recheckSsoDomains',
+    intervalSeconds: 3600,
+    async run(database, now) {
+      const before = new Date(now.getTime() - 86_400_000);
+      const { rows } = await sql<{ tenant_id: string; domain: string; verification_token: string }>`
+        select * from identity.sso_domains_due(${before}::timestamptz)`.execute(database.kysely);
+      for (const r of rows) {
+        const records = await dnsTxt(`_portico-verification.${r.domain}`).catch(() => [] as string[]);
+        const ok = records.includes(`portico-verify=${r.verification_token}`);
+        const { rows: orgs } = await sql<{ environment: string }>`
+          select environment from platform.tenant_summaries(${[r.tenant_id]}::uuid[])`.execute(
+          database.kysely,
+        );
+        await recordDomainCheck(
+          database,
+          {
+            tenantId: r.tenant_id,
+            environment: (orgs[0]?.environment ?? 'live') as TenantEnvironment,
+            actor: { kind: 'system', process: 'sso-domain-recheck' },
+            authz: systemAuthorizer,
+            correlationId: newId(),
+          },
+          r.domain,
+          ok,
+        );
+      }
+    },
+  };
 }
 
 /** For tests: forget cached provider keys. */

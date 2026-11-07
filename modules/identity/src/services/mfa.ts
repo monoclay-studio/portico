@@ -25,7 +25,9 @@ import type { IdentityPorts } from '../ports';
 import type { IdentityDB } from '../tables';
 import {
   assertPowerOver,
+  assertSessionCurrent,
   assertSoleOrganizationMember,
+  lockPerson,
   membershipsElsewhere,
   revokeApiKeysIssuedBy,
 } from './guard';
@@ -73,12 +75,17 @@ function selfUserId(tx: TxContext): string {
   return tx.actor.userId;
 }
 
+/** R3-P1-1: credentials from an older epoch (before a first-verification wipe) are ignored everywhere. */
+const sameEpoch = (userId: string) =>
+  sql<boolean>`credential_epoch = (select u.credential_epoch from identity.users u where u.id = ${userId}::uuid)`;
+
 export async function hasActiveTotp(tx: TxContext, userId: string): Promise<boolean> {
   const f = await db(tx)
     .selectFrom('identity.mfa_factors')
     .select('id')
     .where('user_id', '=', userId)
     .where('status', '=', 'active')
+    .where(sameEpoch(userId))
     .executeTakeFirst();
   return !!f;
 }
@@ -89,6 +96,7 @@ export async function mfaStatus(tx: TxContext, userId: string) {
     .select(['status', 'confirmed_at'])
     .where('user_id', '=', userId)
     .where('status', 'in', ['active', 'pending'])
+    .where(sameEpoch(userId))
     .execute();
   const codes = await db(tx)
     .selectFrom('identity.mfa_recovery_codes')
@@ -96,6 +104,7 @@ export async function mfaStatus(tx: TxContext, userId: string) {
     .where('user_id', '=', userId)
     .where('used_at', 'is', null)
     .where('revoked_at', 'is', null)
+    .where(sameEpoch(userId))
     .executeTakeFirstOrThrow();
   const active = factors.find((f) => f.status === 'active');
   return {
@@ -298,6 +307,9 @@ export async function enrolTotp(
 ): Promise<Outcome<{ factorId: string; secret: string; otpauthUri: string }>> {
   const userId = selfUserId(tx);
   const cipher = cipherOf(ports);
+  // R3-P1-1: the person's row lock first, then the session must still belong to the current credential epoch.
+  const person = await lockPerson(tx, userId);
+  await assertSessionCurrent(tx, person.epoch);
   const proven = await proveExistingCredential(tx, ports, userId, proof);
   if (!proven.ok) return proven;
   const user = await db(tx)
@@ -326,6 +338,7 @@ export async function enrolTotp(
       confirmed_at: null,
       disabled_at: null,
       created_at: tx.now,
+      credential_epoch: person.epoch,
     })
     .execute();
   await tx.audit({ action: 'identity.mfa.enrolStart', target: { type: 'user', id: userId } });
@@ -357,6 +370,7 @@ async function verifyFactorCode(
     .updateTable('identity.mfa_factors')
     .set({ last_used_step: step })
     .where('id', '=', factor.id)
+    .where('status', 'in', ['pending', 'active'])
     .where((eb) => eb.or([eb('last_used_step', 'is', null), eb('last_used_step', '<', step)]))
     .executeTakeFirst();
   return Number(res.numUpdatedRows) === 1;
@@ -377,11 +391,16 @@ export async function confirmTotp(
 ): Promise<Outcome<{ recoveryCodes: string[] }>> {
   const userId = selfUserId(tx);
   const cipher = cipherOf(ports);
+  // R3-P1-1: lock the person BEFORE reading the pending factor; a first-verification wipe that committed meanwhile
+  // has revoked this session and moved the epoch, so nothing set before it can be activated after it.
+  const person = await lockPerson(tx, userId);
+  await assertSessionCurrent(tx, person.epoch);
   const pending = await db(tx)
     .selectFrom('identity.mfa_factors')
     .selectAll()
     .where('user_id', '=', userId)
     .where('status', '=', 'pending')
+    .where('credential_epoch', '=', person.epoch)
     .where('created_at', '>', new Date(tx.now.getTime() - MFA_PENDING_MINUTES * 60_000))
     .executeTakeFirst();
   if (!pending)
@@ -419,12 +438,18 @@ export async function confirmTotp(
     .where('user_id', '=', userId)
     .where('status', '=', 'active')
     .execute();
-  await db(tx)
+  const activated = await db(tx)
     .updateTable('identity.mfa_factors')
     .set({ status: 'active', confirmed_at: tx.now, version: sql`version + 1` })
     .where('id', '=', pending.id)
-    .execute();
-  const codes = await replaceRecoveryCodes(tx, userId);
+    .where('status', '=', 'pending')
+    .executeTakeFirst();
+  if (Number(activated.numUpdatedRows) !== 1)
+    throw new BusinessRuleError(
+      'no_pending_enrolment',
+      'This authenticator set-up is no longer pending. Start the set-up again.',
+    );
+  const codes = await replaceRecoveryCodes(tx, userId, person.epoch);
   if (tx.actor.kind === 'user' && tx.actor.sessionId) {
     await db(tx)
       .updateTable('identity.sessions')
@@ -455,7 +480,7 @@ async function revokeRecoveryCodes(tx: TxContext, userId: string) {
     .execute();
 }
 
-async function replaceRecoveryCodes(tx: TxContext, userId: string): Promise<string[]> {
+async function replaceRecoveryCodes(tx: TxContext, userId: string, epoch: number): Promise<string[]> {
   await revokeRecoveryCodes(tx, userId);
   const codes = generateRecoveryCodes();
   await db(tx)
@@ -466,6 +491,7 @@ async function replaceRecoveryCodes(tx: TxContext, userId: string): Promise<stri
         user_id: userId,
         code_hash: hashRecoveryCode(c) as string,
         used_at: null,
+        credential_epoch: epoch,
       })),
     )
     .execute();
@@ -478,11 +504,13 @@ export async function regenerateRecoveryCodes(
   proof: CredentialProof,
 ): Promise<Outcome<{ recoveryCodes: string[] }>> {
   const userId = selfUserId(tx);
+  const person = await lockPerson(tx, userId);
+  await assertSessionCurrent(tx, person.epoch);
   if (!(await hasActiveTotp(tx, userId)))
     throw new BusinessRuleError('mfa_not_enrolled', 'Set up an authenticator app first.');
   const proven = await proveExistingCredential(tx, ports, userId, proof);
   if (!proven.ok) return proven;
-  const codes = await replaceRecoveryCodes(tx, userId);
+  const codes = await replaceRecoveryCodes(tx, userId, person.epoch);
   await tx.audit({ action: 'identity.mfa.recoveryCodes.regenerate', target: { type: 'user', id: userId } });
   return { ok: true, value: { recoveryCodes: codes } };
 }
@@ -500,6 +528,7 @@ export async function verifySecondFactor(
       .select(['id', 'secret_enc', 'last_used_step'])
       .where('user_id', '=', userId)
       .where('status', '=', 'active')
+      .where(sameEpoch(userId))
       .executeTakeFirst();
     if (factor && (await verifyFactorCode(tx, cipherOf(ports), factor, input.code))) return 'totp';
     return null;
@@ -514,6 +543,7 @@ export async function verifySecondFactor(
       .where('code_hash', '=', hash)
       .where('used_at', 'is', null)
       .where('revoked_at', 'is', null)
+      .where(sameEpoch(userId))
       .executeTakeFirst();
     if (Number(res.numUpdatedRows) === 1) {
       await tx.audit({ action: 'identity.mfa.recoveryCodeUsed', target: { type: 'user', id: userId } });
@@ -538,6 +568,8 @@ export async function stepUp(
   input: { code?: string | undefined; recoveryCode?: string | undefined },
 ): Promise<StepUpOutcome> {
   const userId = selfUserId(tx);
+  const person = await lockPerson(tx, userId);
+  await assertSessionCurrent(tx, person.epoch);
   const session = await currentSession(tx);
   if (!session) throw new UnauthenticatedError();
   const lock = await reserveSecondFactorAttempt(tx, userId);
@@ -597,6 +629,8 @@ export async function disableOwnMfa(
   proof: CredentialProof,
 ): Promise<Outcome<null>> {
   const userId = selfUserId(tx);
+  const person = await lockPerson(tx, userId);
+  await assertSessionCurrent(tx, person.epoch);
   if (!(await hasActiveTotp(tx, userId)))
     throw new BusinessRuleError('mfa_not_enrolled', 'Two-step verification is not set up.');
   const proven = await proveExistingCredential(tx, ports, userId, proof);
@@ -671,7 +705,7 @@ export async function resetMemberMfa(
 
 export async function createMfaChallenge(
   tx: TxContext,
-  input: { userId: string; ip?: string | undefined; userAgent?: string | undefined },
+  input: { userId: string; credentialEpoch: number; ip?: string | undefined; userAgent?: string | undefined },
 ): Promise<{ challengeToken: string; expiresAt: Date }> {
   const challengeToken = `pmc.${tx.tenantId}.${randomToken(32)}`;
   const expiresAt = new Date(tx.now.getTime() + MFA_CHALLENGE_MINUTES * 60_000);
@@ -684,6 +718,7 @@ export async function createMfaChallenge(
       token_hash: sha256Hex(challengeToken),
       expires_at: expiresAt,
       consumed_at: null,
+      credential_epoch: input.credentialEpoch,
       ip: input.ip ?? null,
       user_agent: input.userAgent?.slice(0, 500) ?? null,
     })
@@ -730,6 +765,9 @@ export async function completeMfaChallenge(
       .executeTakeFirst();
     if (!c || c.consumed_at || c.expires_at <= tx.now || c.attempts >= MFA_MAX_ATTEMPTS)
       return { ok: false as const };
+    // R3-P1-1: the password behind this challenge was checked in an epoch; a wipe since then voids it.
+    const person = await lockPerson(tx, c.user_id);
+    if (person.epoch !== c.credential_epoch) return { ok: false as const };
     const lock = await reserveSecondFactorAttempt(tx, c.user_id);
     if (lock) return { ok: false as const, lock };
     const method = await verifySecondFactor(tx, ports, c.user_id, input);
@@ -751,6 +789,7 @@ export async function completeMfaChallenge(
       .execute();
     const session = await createSession(tx, {
       userId: c.user_id,
+      credentialEpoch: person.epoch,
       authMethod: 'password',
       mfaVerifiedAt: tx.now,
       ip: input.ip ?? c.ip ?? undefined,

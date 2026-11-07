@@ -5,6 +5,7 @@
 -- Extensions of wave-0 tables
 ---------------------------------------------------------------------------------------------------------
 alter table identity.sessions
+  add column credential_epoch int not null default 0,  -- the person's credential epoch when the session began
   add column mfa_verified_at timestamptz,
   add column auth_method     text not null default 'password' check (auth_method in ('password', 'sso')),
   add column idp_mfa         boolean not null default false,
@@ -20,8 +21,15 @@ alter table identity.users
   add column mfa_locked_until     timestamptz,
   -- ADR-0017 amendment 1 (rules 12-13): set only when the person completes an emailed link (invitation, reset) or
   -- signs in through an identity provider whose email domain the organization verified. Null = email_unverified.
-  add column email_verified_at    timestamptz;
-update identity.users set email_verified_at = created_at where password_hash is not null;
+  add column email_verified_at    timestamptz,
+  -- Review R3-P1-1: incremented by the first email verification; every factor, recovery code, SSO link, session and
+  -- MFA challenge carries the epoch it was created in, and rows from an older epoch are ignored.
+  add column credential_epoch     int not null default 0;
+-- R3-P3-2: only fictitious seeded identities count as verified; any other existing password may have been chosen by an
+-- organization (wave-0 createUser) and must be replaced through an emailed link.
+update identity.users set email_verified_at = created_at
+ where password_hash is not null
+   and (lower(email) like '%@portico.invalid' or lower(email) like '%.portico.invalid');
 
 alter table identity.memberships
   add column activated_at    timestamptz,
@@ -59,6 +67,7 @@ create table identity.mfa_factors (
   confirmed_at    timestamptz,
   disabled_at     timestamptz,
   confirm_failures int not null default 0,  -- wrong codes while confirming a pending factor (capped)
+  credential_epoch int not null default 0,
   version         int not null default 1
 );
 create unique index mfa_factors_one_active_idx on identity.mfa_factors (user_id, kind) where status = 'active';
@@ -71,6 +80,7 @@ create table identity.mfa_recovery_codes (
   created_at  timestamptz not null default now(),
   used_at     timestamptz,
   revoked_at  timestamptz,           -- replaced by new codes or MFA disabled (distinct from "used")
+  credential_epoch int not null default 0,
   unique (user_id, code_hash)
 );
 
@@ -95,6 +105,7 @@ create table identity.mfa_challenges (
   token_hash   text not null unique,
   expires_at   timestamptz not null,
   attempts     int not null default 0,
+  credential_epoch int not null default 0,  -- the epoch the password was checked in
   consumed_at  timestamptz,
   ip           text,
   user_agent   text,
@@ -135,6 +146,8 @@ create table identity.credential_tokens (
   used_at      timestamptz,
   revoked_at   timestamptz,
   created_by   text not null,
+  -- R3-P3-3: how the link was delivered; only a link actually sent to the person (`queued`) proves their email.
+  delivery_mode text,
   created_at   timestamptz not null default now()
 );
 create index credential_tokens_user_idx on identity.credential_tokens (tenant_id, user_id, kind);
@@ -199,6 +212,7 @@ create table identity.sso_login_states (
   code_verifier_enc   text not null,
   redirect_uri        text not null,
   link_user_id        uuid,              -- ADR-0017 rule 15: set when a signed-in member proves they own the IdP account
+  issuer              text,              -- R3-P3-4: the issuer the login started with; the callback must match it
   created_at          timestamptz not null default now(),
   expires_at          timestamptz not null,
   consumed_at         timestamptz
@@ -226,6 +240,7 @@ create table identity.sso_identities (
   user_id     uuid not null references identity.users(id),
   email_at_link text not null,
   linked_at   timestamptz not null,
+  credential_epoch int not null default 0,
   unique (tenant_id, issuer, subject)
 );
 create index sso_identities_user_idx on identity.sso_identities (tenant_id, user_id);
@@ -239,6 +254,7 @@ create table identity.sso_domains (
   domain              text not null,
   verification_token  text not null,
   verified_at         timestamptz,
+  checked_at          timestamptz,       -- R3-P2-2: last time the TXT record was seen; verification lapses after 30 days
   created_at          timestamptz not null default now(),
   created_by          text not null,
   unique (tenant_id, domain)
@@ -547,7 +563,7 @@ declare
 begin
   update identity.users
      set email_verified_at = p_now, password_hash = null, failed_logins = 0, locked_until = null,
-         mfa_failed_attempts = 0, mfa_locked_until = null
+         mfa_failed_attempts = 0, mfa_locked_until = null, credential_epoch = credential_epoch + 1
    where id = p_user_id and email_verified_at is null;
   get diagnostics c = row_count;
   if c = 0 then return false; end if;
@@ -557,14 +573,31 @@ begin
      where user_id = p_user_id and status in ('active', 'pending');
     update identity.mfa_recovery_codes set revoked_at = p_now
      where user_id = p_user_id and used_at is null and revoked_at is null;
-    delete from identity.sso_identities where user_id = p_user_id;
+    -- R3-P3-1: explicit tenant predicates (correct even when the owner bypasses row-level security).
+    delete from identity.sso_identities where tenant_id = t and user_id = p_user_id;
     update identity.sessions set revoked_at = p_now, revoked_reason = 'email_verified'
-     where user_id = p_user_id and revoked_at is null;
-    update identity.api_clients set status = 'revoked' where created_by = p_user_id::text and status = 'active';
+     where tenant_id = t and user_id = p_user_id and revoked_at is null;
+    update identity.api_clients set status = 'revoked'
+     where tenant_id = t and created_by = p_user_id::text and status = 'active';
   end loop;
   perform set_config('app.tenant_id', coalesce(previous, ''), true);
   return true;
 end $$;
+
+-- Review R3-P1-1: lock the person's row BEFORE reading any credential state. Every path that creates or activates a
+-- credential calls this first, so it either finishes before a first-verification wipe or starts after it and sees the
+-- new epoch.
+create or replace function identity.lock_person(p_user_id uuid)
+  returns table (email_verified boolean, credential_epoch int)
+  language sql security definer set search_path = identity, pg_temp as $$
+    select u.email_verified_at is not null, u.credential_epoch from identity.users u where u.id = p_user_id for update
+$$;
+
+-- The credential epoch of the person with this email, read BEFORE the password hash at sign-in (R3-P1-1).
+create or replace function identity.credential_epoch_for_email(p_email text) returns int
+  language sql stable security definer set search_path = identity, pg_temp as $$
+    select credential_epoch from identity.users where lower(email) = lower(p_email)
+$$;
 
 -- What credentials a person holds anywhere (ADR-0017 rule 14: the first-password decision depends on credentials,
 -- never on memberships). Counts only; never says where.
@@ -580,9 +613,12 @@ declare
 begin
   for t in select ut.tenant_id from identity.user_tenants ut where ut.user_id = p_user_id loop
     perform set_config('app.tenant_id', t::text, true);
-    select count(*) into c from identity.sso_identities where user_id = p_user_id;
+    select count(*) into c from identity.sso_identities s join identity.users u on u.id = s.user_id
+     where s.tenant_id = t and s.user_id = p_user_id and s.credential_epoch = u.credential_epoch;
     links := links + c;
-    factor := factor or exists (select 1 from identity.mfa_factors where user_id = p_user_id and status = 'active');
+    factor := factor or exists (select 1 from identity.mfa_factors f join identity.users u on u.id = f.user_id
+                                  where f.user_id = p_user_id and f.status = 'active'
+                                    and f.credential_epoch = u.credential_epoch);
   end loop;
   perform set_config('app.tenant_id', coalesce(previous, ''), true);
   return query select u.email_verified_at is not null, u.password_hash is not null, factor, links
@@ -602,18 +638,90 @@ begin
   for t in select distinct ut.tenant_id from identity.user_tenants ut loop
     perform set_config('app.tenant_id', t::text, true);
     delete from identity.sso_identities s
-     where not exists (select 1 from identity.memberships m
-                        where m.user_id = s.user_id and m.status in ('active', 'invited', 'suspended'));
+     where s.tenant_id = t
+       and not exists (select 1 from identity.memberships m
+                        where m.tenant_id = s.tenant_id and m.user_id = s.user_id
+                          and m.status in ('active', 'invited', 'suspended'));
     get diagnostics c = row_count;
     n := n + c;
   end loop;
   perform set_config('app.tenant_id', coalesce(previous, ''), true);
   return n;
 end $$;
+-- Review R3-P2-2: a verified email domain is an email-verification authority, so at most ONE organization holds it.
+-- First verified wins; a second organization needs the first to release it, or Monoclay support.
+create table identity.verified_domains (
+  domain       text primary key,
+  tenant_id    uuid not null,
+  verified_at  timestamptz not null
+);
+revoke all on identity.verified_domains from portico_app;
+
+create or replace function identity.claim_verified_domain(p_domain text, p_tenant_id uuid, p_now timestamptz)
+  returns boolean
+  language plpgsql security definer set search_path = identity, pg_temp as $$
+declare holder uuid;
+begin
+  insert into identity.verified_domains (domain, tenant_id, verified_at) values (lower(p_domain), p_tenant_id, p_now)
+    on conflict (domain) do nothing;
+  select tenant_id into holder from identity.verified_domains where domain = lower(p_domain);
+  return holder = p_tenant_id;
+end $$;
+
+create or replace function identity.release_verified_domain(p_domain text, p_tenant_id uuid) returns void
+  language sql security definer set search_path = identity, pg_temp as $$
+    delete from identity.verified_domains where domain = lower(p_domain) and tenant_id = p_tenant_id
+$$;
+
+create or replace function identity.verified_domain_holder(p_domain text) returns uuid
+  language sql stable security definer set search_path = identity, pg_temp as $$
+    select tenant_id from identity.verified_domains where domain = lower(p_domain)
+$$;
+
+-- Scheduled re-check (R3-P2-2): verified domains whose TXT record was last seen before p_before, in every organization.
+create or replace function identity.sso_domains_due(p_before timestamptz)
+  returns table (tenant_id uuid, domain text, verification_token text)
+  language plpgsql security definer set search_path = identity, pg_temp as $$
+declare
+  previous text := current_setting('app.tenant_id', true);
+  t uuid;
+begin
+  -- Every verified domain is in the cross-organization registry, so it lists exactly the organizations to visit.
+  for t in select distinct v.tenant_id from identity.verified_domains v loop
+    perform set_config('app.tenant_id', t::text, true);
+    return query select d.tenant_id, d.domain, d.verification_token from identity.sso_domains d
+                  where d.tenant_id = t and d.verified_at is not null
+                    and (d.checked_at is null or d.checked_at < p_before);
+  end loop;
+  perform set_config('app.tenant_id', coalesce(previous, ''), true);
+end $$;
+
+create or replace function identity.record_domain_check(p_tenant_id uuid, p_domain text, p_ok boolean,
+  p_now timestamptz) returns void
+  language plpgsql security definer set search_path = identity, pg_temp as $$
+declare previous text := current_setting('app.tenant_id', true);
+begin
+  perform set_config('app.tenant_id', p_tenant_id::text, true);
+  if p_ok then
+    update identity.sso_domains set checked_at = p_now where tenant_id = p_tenant_id and domain = p_domain;
+  else
+    update identity.sso_domains set verified_at = null, checked_at = p_now
+     where tenant_id = p_tenant_id and domain = p_domain;
+    delete from identity.verified_domains where domain = lower(p_domain) and tenant_id = p_tenant_id;
+  end if;
+  perform set_config('app.tenant_id', coalesce(previous, ''), true);
+end $$;
+
 revoke execute on function identity.first_email_verification(uuid, timestamptz),
-  identity.credential_summary(uuid), identity.purge_orphan_sso_links() from public;
+  identity.credential_summary(uuid), identity.purge_orphan_sso_links(), identity.lock_person(uuid),
+  identity.credential_epoch_for_email(text), identity.claim_verified_domain(text, uuid, timestamptz),
+  identity.release_verified_domain(text, uuid), identity.sso_domains_due(timestamptz),
+  identity.record_domain_check(uuid, text, boolean, timestamptz), identity.verified_domain_holder(text) from public;
 grant execute on function identity.first_email_verification(uuid, timestamptz),
-  identity.credential_summary(uuid), identity.purge_orphan_sso_links() to portico_app;
+  identity.credential_summary(uuid), identity.purge_orphan_sso_links(), identity.lock_person(uuid),
+  identity.credential_epoch_for_email(text), identity.claim_verified_domain(text, uuid, timestamptz),
+  identity.release_verified_domain(text, uuid), identity.sso_domains_due(timestamptz),
+  identity.record_domain_check(uuid, text, boolean, timestamptz), identity.verified_domain_holder(text) to portico_app;
 
 -- Pending invitations of a person across organizations (the person lists and accepts them while signed in).
 create or replace function identity.pending_invitations(p_user_id uuid) returns setof uuid

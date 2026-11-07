@@ -10,5 +10,6 @@ export * from './manifest';
 export type * from './ports';
 export * from './routes';
 export type { AuthenticatedPrincipal, AuthorizerOptions, LoginResult } from './service';
+export { ssoDomainRecheckJob } from './services/sso';
 export { operatorDirectoryFromConfig } from './services/support';
 export type { IdentityDB } from './tables';

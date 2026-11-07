@@ -20,6 +20,8 @@ export async function createSession(
   tx: TxContext,
   input: {
     userId: string;
+    /** The person's credential epoch, read under their row lock (R3-P1-1). */
+    credentialEpoch: number;
     authMethod: 'password' | 'sso';
     mfaVerifiedAt: Date | null;
     idpMfa?: boolean;
@@ -47,6 +49,7 @@ export async function createSession(
       mfa_verified_at: input.mfaVerifiedAt,
       auth_method: input.authMethod,
       idp_mfa: input.idpMfa ?? false,
+      credential_epoch: input.credentialEpoch,
     })
     .execute();
   await tx.audit({

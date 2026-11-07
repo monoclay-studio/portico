@@ -416,9 +416,15 @@ function registerSelfRoutes(app: PorticoApp, database: PorticoDatabase, ports: I
   // ADR-0017 rule 15: link your own identity-provider account after proving your Portico credentials.
   app.post(
     '/me/sso/link',
-    { schema: { tags: ['Single sign-on'], response: { 200: ssoStartResponse } } },
+    {
+      schema: {
+        tags: ['Single sign-on'],
+        body: z.object({ organizationId: z.uuid().optional() }).default({}),
+        response: { 200: ssoStartResponse },
+      },
+    },
     async (req) => {
-      const r = await svc.startSsoLink(database, ports, req.ctx);
+      const r = await svc.startSsoLink(database, ports, req.ctx, req.body.organizationId);
       return {
         authorizationUrl: r.authorizationUrl,
         expiresAt: r.expiresAt.toISOString(),

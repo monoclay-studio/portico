@@ -18,6 +18,7 @@ export interface IdentityDB {
     mfa_failed_attempts: Generated<number>;
     mfa_locked_until: Date | null;
     email_verified_at: Date | null;
+    credential_epoch: Generated<number>;
   };
   'identity.memberships': {
     id: string;
@@ -85,6 +86,7 @@ export interface IdentityDB {
     mfa_verified_at: Date | null;
     auth_method: Generated<'password' | 'sso'>;
     idp_mfa: Generated<boolean>;
+    credential_epoch: Generated<number>;
     mfa_failures: Generated<number>;
     revoked_by: string | null;
   };
@@ -112,6 +114,7 @@ export interface IdentityDB {
     confirmed_at: Date | null;
     disabled_at: Date | null;
     confirm_failures: Generated<number>;
+    credential_epoch: Generated<number>;
     version: Generated<number>;
   };
   'identity.mfa_recovery_codes': {
@@ -121,6 +124,7 @@ export interface IdentityDB {
     created_at: Generated<Date>;
     used_at: Date | null;
     revoked_at: Generated<Date | null>;
+    credential_epoch: Generated<number>;
   };
   'identity.mfa_challenges': {
     id: string;
@@ -130,6 +134,7 @@ export interface IdentityDB {
     expires_at: Date;
     attempts: Generated<number>;
     consumed_at: Date | null;
+    credential_epoch: Generated<number>;
     ip: string | null;
     user_agent: string | null;
     created_at: Generated<Date>;
@@ -157,6 +162,7 @@ export interface IdentityDB {
     expires_at: Date;
     used_at: Date | null;
     revoked_at: Date | null;
+    delivery_mode: string | null;
     created_by: string;
     created_at: Generated<Date>;
   };
@@ -204,6 +210,7 @@ export interface IdentityDB {
     code_verifier_enc: string;
     redirect_uri: string;
     link_user_id: string | null;
+    issuer: string | null;
     created_at: Generated<Date>;
     expires_at: Date;
     consumed_at: Date | null;
@@ -216,6 +223,7 @@ export interface IdentityDB {
     user_id: string;
     email_at_link: string;
     linked_at: Date;
+    credential_epoch: Generated<number>;
   };
   'identity.sso_domains': {
     id: string;
@@ -223,6 +231,7 @@ export interface IdentityDB {
     domain: string;
     verification_token: string;
     verified_at: Date | null;
+    checked_at: Date | null;
     created_at: Generated<Date>;
     created_by: string;
   };

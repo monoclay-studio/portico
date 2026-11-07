@@ -9,9 +9,10 @@ import type { Notifier, StaffMessage } from '../src/ports';
 let t: TestDatabase;
 const sent: StaffMessage[] = [];
 const notifier: Notifier = {
-  async send(_tx, message) {
+  async send(tx, message) {
     sent.push(message);
-    return { mode: 'simulated' };
+    // Live organizations deliver to the person's address (which is what proves the email, R3-P3-3).
+    return { mode: tx.environment === 'live' ? 'queued' : 'simulated' };
   },
 };
 const ports = { propertyIdsInScope: platform.propertyIdsInScope, notifier };
