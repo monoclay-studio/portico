@@ -2,3 +2,7 @@
 - reservations: waitlist consumer must read inventory.availability.changed 'range' shape (unitTypeId + from/to), not 'cells'; error-shape for UnitAssignmentConflictError.details.conflicts = { ref, nights }[]
 - payments: recordDeposit must pass propertyId (finance cannot resolve the property for a booking's first deposit otherwise); finance adapter financeLedgerForPayments already accepts it
 - finance: remove local test-teardown workaround (fixed on main b484de3); use @portico/db pgCode/withSavepoint
+- reservations (after rates fix round): adopt rates' canonical provider contract (README "Provider contract" in modules/rates): priceChange request/result names, TermsSnapshot shape; use rates.evaluateCancellationPenalty and rates.complimentaryTerms instead of local penalty/comp logic (keep Green Tax on comps); call rates.recordPlanSale / releasePlanSale so sales limits work; use kernel zonedTimeToInstant/instantToZoned instead of local tz code
+- finance (after rates fix round): tax port must use rates' field names (taxCategory/taxInclusion …) and getRulePackStatus as published by rates
+- operations: use kernel time-zone helpers instead of local copy
+- all modules adapting to identity-plus behaviour changes: updateProperty no longer changes status (use activation workflow); setDataAuthority money/availability domains need an authority transition; assignRole refuses self-grant/escalation; login may return mfa_required (backoffice must handle)
