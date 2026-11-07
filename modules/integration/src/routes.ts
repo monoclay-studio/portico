@@ -688,14 +688,12 @@ export function integrationHttp(deps: {
             },
           );
           const secret = (res as unknown as { secret?: string }).secret;
-          return reply
-            .status(201)
-            .send({
-              ...res.body,
-              signingSecret: res.replayed
-                ? '(shown once at creation — rotate the secret to get a new one)'
-                : (secret ?? ''),
-            });
+          return reply.status(201).send({
+            ...res.body,
+            signingSecret: res.replayed
+              ? '(shown once at creation — rotate the secret to get a new one)'
+              : (secret ?? ''),
+          });
         },
       );
       app.get(

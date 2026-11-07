@@ -1,5 +1,6 @@
 /** Application services (one namespace for tests, the composition root and the worker). */
 export * from './service/catalogue';
+export { loadConnection } from './service/common';
 export * from './service/connections';
 export * from './service/credentials';
 export * from './service/exceptions';

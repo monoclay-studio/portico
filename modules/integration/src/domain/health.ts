@@ -420,8 +420,9 @@ export function computeHealth(input: HealthInput): HealthResult {
   } else if (!monitored) {
     overall = 'not_monitored';
   } else {
-    const timeBound = workflows.filter((w) => w.freshnessTargetSeconds !== null);
-    const allFailing = timeBound.length > 0 && timeBound.every((w) => w.status === 'failing');
+    // The connection shows its worst workflow (spec §6.3): any failing workflow means the connection is down for
+    // the hotel function it serves.
+    const allFailing = workflows.some((w) => w.status === 'failing');
     if (input.state === 'error' || credentialStatus === 'invalid' || allFailing) {
       overall = 'down';
       reason =
@@ -429,7 +430,12 @@ export function computeHealth(input: HealthInput): HealthResult {
           ? `${sys} no longer accepts Portico's credential.`
           : input.state === 'error'
             ? 'The connection is suspended and needs attention.'
-            : `No workflow with ${sys} is succeeding.`;
+            : `${workflows
+                .filter((w) => w.status === 'failing')
+                .map((w) => w.label)
+                .join(
+                  ', ',
+                )} from ${sys} ${workflows.filter((w) => w.status === 'failing').length === 1 ? 'is' : 'are'} not updating.`;
     } else if (urgent.length > 0 || STATUS_RANK[worstWorkflowStatus] >= STATUS_RANK.delayed) {
       overall = 'degraded';
       reason = urgent[0]?.title ?? routine[0]?.title ?? null;

@@ -297,7 +297,6 @@ describe('connect alongside: the 9-step setup journey on the simulated PMS', () 
 
   it('a second connection cannot take over a domain another active connection controls', async () => {
     const org = await setupOrg(h);
-    const { account, apiKey } = h.hub.createAccount(org.tenantId, {});
     const { activeSimulatorConnection } = await import('./harness');
     await activeSimulatorConnection(h, org);
     const other = await tx(h, org.ctx, (t) =>
@@ -307,8 +306,6 @@ describe('connect alongside: the 9-step setup journey on the simulated PMS', () 
         propertyIds: [org.propertyId],
       }),
     );
-    void account;
-    void apiKey;
     await expect(
       tx(h, org.ctx, (t) => integration.reviewCompatibility(t, h.deps, other.id, other.version, FULL_SCOPE)),
     ).rejects.toThrow(/already controlled by Lagoon PMS/);

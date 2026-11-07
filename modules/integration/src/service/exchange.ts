@@ -384,14 +384,17 @@ async function upsertWorkflowState(
   workflow: string,
   set: Record<string, unknown>,
 ): Promise<void> {
+  // Insert the row if missing, then update it (the update may refer to the row's current values).
   await db(tx)
     .insertInto('integration.workflow_state')
-    .values({ tenant_id: tx.tenantId, connection_id: connectionId, workflow, ...(set as object) })
-    .onConflict((oc) =>
-      oc
-        .columns(['connection_id', 'workflow'])
-        .doUpdateSet({ ...(set as object), version: sql`integration.workflow_state.version + 1` }),
-    )
+    .values({ tenant_id: tx.tenantId, connection_id: connectionId, workflow })
+    .onConflict((oc) => oc.columns(['connection_id', 'workflow']).doNothing())
+    .execute();
+  await db(tx)
+    .updateTable('integration.workflow_state')
+    .set({ ...(set as object), version: sql`version + 1` })
+    .where('connection_id', '=', connectionId)
+    .where('workflow', '=', workflow)
     .execute();
 }
 
@@ -654,7 +657,7 @@ export async function ingestRecords(
       counts.applied++;
       if (decision.action === 'apply' && decision.gapDetected) {
         await upsertWorkflowState(tx, conn.id, rec.workflow, {
-          incomplete_since: sql`coalesce(integration.workflow_state.incomplete_since, ${tx.now})`,
+          incomplete_since: sql`coalesce(incomplete_since, ${tx.now})`,
           incomplete_reason: `A missed update was detected for ${rec.externalId} (jumped to revision ${rec.revision} from ${watermark?.last_revision ?? 'none'}).`,
         });
       }
@@ -890,7 +893,7 @@ export async function recordWorkflowFailure(
     last_failure_at: tx.now,
     last_failure_kind: err.kind,
     last_failure_reason: err.message,
-    consecutive_failures: sql`coalesce(integration.workflow_state.consecutive_failures, 0) + 1`,
+    consecutive_failures: sql`consecutive_failures + 1`,
   });
   const state = await db(tx)
     .selectFrom('integration.workflow_state')
@@ -1760,7 +1763,12 @@ export async function dispatchOutbound(
       .forUpdate()
       .skipLocked()
       .execute();
-    const claimed: Array<Selectable<OutboundCommandsTable> & { verifyFirst: boolean }> = [];
+    const claimed: Array<
+      Selectable<OutboundCommandsTable> & {
+        verifyFirst: boolean;
+        prevStatus: OutboundCommandsTable['status'];
+      }
+    > = [];
     for (const c of due) {
       const gate = sendGate(
         {
@@ -1784,7 +1792,7 @@ export async function dispatchOutbound(
         .where('id', '=', c.id)
         .returningAll()
         .executeTakeFirstOrThrow();
-      claimed.push({ ...row, verifyFirst: gate.verifyFirst });
+      claimed.push({ ...row, verifyFirst: gate.verifyFirst, prevStatus: c.status });
     }
     if (claimed.length === 0) return null;
     const call = await prepareCall(tx, deps, conn, {
@@ -1803,7 +1811,26 @@ export async function dispatchOutbound(
   });
   if (!claim) return result;
 
+  let stopAfter: Date | null = null;
   for (const c of claim.claimed) {
+    if (stopAfter) {
+      // The vendor is unreachable: release the rest of the batch untouched (no retry storm).
+      const until = stopAfter;
+      await withTenantTx(database, ctx, (tx) =>
+        db(tx)
+          .updateTable('integration.outbound_commands')
+          .set({
+            status: c.prevStatus,
+            attempts: sql`attempts - 1`,
+            lease_until: null,
+            next_attempt_at: until,
+          })
+          .where('id', '=', c.id)
+          .where('status', '=', 'sending')
+          .execute(),
+      );
+      continue;
+    }
     result.attempted++;
     const req = {
       workflow: c.workflow,
@@ -2009,6 +2036,7 @@ export async function dispatchOutbound(
               : `Not delivered to ${conn.name} (${err.message}); retry in ${retryIn}s with the same key.`,
           });
           await scheduleTenant(tx, next);
+          if (err.kind === 'outage' || err.kind === 'rate_limited' || err.kind === 'auth') stopAfter = next;
           if (pending) result.pendingVerification++;
           else result.retrying++;
           conn = await recordWorkflowFailure(tx, deps, conn, c.workflow, err);
