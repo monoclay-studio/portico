@@ -18,12 +18,20 @@
   },
   "dependencies": {
     "@portico/db": "workspace:*",
+    "@portico/finance": "workspace:*",
+    "@portico/guests": "workspace:*",
     "@portico/http": "workspace:*",
     "@portico/identity": "workspace:*",
+    "@portico/integration": "workspace:*",
+    "@portico/inventory": "workspace:*",
     "@portico/kernel": "workspace:*",
+    "@portico/operations": "workspace:*",
+    "@portico/payments": "workspace:*",
     "@portico/platform": "workspace:*",
-    "zod": "catalog:",
-    "pg": "catalog:"
+    "@portico/reservations": "workspace:*",
+    "@portico/rates": "workspace:*",
+    "pg": "catalog:",
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@portico/testing": "workspace:*",

@@ -1,0 +1,87 @@
+/**
+ * PoC (steward review, integration step) — FD-15 / C11.2 "money fields only for roles that handle money" is only
+ * partly enforced. With payments now bound (and its reads delegated to reservations at the property), the
+ * housekeeping supervisor (reservations.booking.read, no finance/payments key) still learns each arrival's payment
+ * state from the arrivals board (`payment_secured.status`, `ready`, `blockingReason.key`) and reads full money detail
+ * from the booking record (totals, deposit requirement, payment status).
+ */
+import { newId } from '@portico/kernel';
+import type { Booking } from '@portico/reservations';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import {
+  applied,
+  bookingInput,
+  cardOnFile,
+  kandu,
+  organization,
+  type Scenario,
+  startScenario,
+} from './scenarios/harness';
+
+let s: Scenario;
+beforeAll(async () => {
+  s = await startScenario();
+});
+afterAll(async () => s?.close());
+
+describe('PoC: FD-15 money redaction is incomplete', () => {
+  it('housekeeping tells paid from unpaid arrivals and reads booking money', async () => {
+    const org = await organization(s);
+    const k = await kandu(s, org, '2027-03-10');
+    const { reservations, payments } = s.c.services;
+    const desk = org.staff('front_desk', 'Hassan', [k.id]);
+    const paid = applied<Booking>(
+      await org.run(desk, (tx) =>
+        reservations.createBooking(
+          tx,
+          bookingInput(k, {
+            arrival: '2027-03-10',
+            departure: '2027-03-12',
+            guest: { firstName: 'Paid', lastName: 'Guest' },
+          }),
+        ),
+      ),
+    );
+    const unpaid = applied<Booking>(
+      await org.run(desk, (tx) =>
+        reservations.createBooking(
+          tx,
+          bookingInput(k, {
+            arrival: '2027-03-10',
+            departure: '2027-03-12',
+            guest: { firstName: 'Unpaid', lastName: 'Guest' },
+          }),
+        ),
+      ),
+    );
+    const card = await cardOnFile(s, org, k.id, k.legalEntityId);
+    await payments.chargeNow(desk, {
+      propertyId: k.id,
+      methodId: card.id,
+      amount: { amountMinor: 90_000, currency: 'USD' },
+      ref: { type: 'booking', id: paid.id },
+      businessKey: `dep:${newId()}`,
+    });
+
+    const hk = org.staff('housekeeping_supervisor', 'Mariyam', [k.id]);
+    const board = await org.run(hk, (tx) => reservations.listArrivals(tx, { propertyId: k.id }));
+    const pay = (bookingId: string) =>
+      board.items
+        .find((r) => r.bookingId === bookingId)
+        ?.readiness?.checks.find((c) => c.key === 'payment_secured');
+    expect(board.items.every((r) => r.redacted === true)).toBe(true);
+    console.log('paid:', JSON.stringify(pay(paid.id)), 'unpaid:', JSON.stringify(pay(unpaid.id)));
+    // BUG: the redacted rows still say which guest has paid and which has not.
+    expect(pay(paid.id)?.status).toBe('ok');
+    expect(pay(unpaid.id)?.status).not.toBe('ok');
+
+    // BUG: the booking record (GET /v1/bookings/:id) returns money to the same role.
+    const rec = await org.run(hk, (tx) => reservations.getBooking(tx, paid.id));
+    console.log(
+      'booking record for housekeeping:',
+      JSON.stringify({ totals: rec.totals, status: rec.status, deposit: rec.depositRequirement }),
+    );
+    expect(rec.totals.gross.amountMinor).toBeGreaterThan(0);
+    expect(rec.status.payment).toBeDefined();
+  });
+});

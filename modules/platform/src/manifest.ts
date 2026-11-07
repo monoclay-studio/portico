@@ -6,6 +6,20 @@ export const platformManifest: ModuleManifest = {
   name: 'platform',
   schema: 'platform',
   migrationsDir: join(dirname(fileURLToPath(import.meta.url)), '..', 'migrations'),
+  recordTypes: [
+    {
+      type: 'property',
+      label: 'Property',
+      readPermission: 'platform.property.read',
+      route: '/settings/properties/:id',
+    },
+    {
+      type: 'legal_entity',
+      label: 'Legal entity',
+      readPermission: 'platform.property.read',
+      route: '/settings/legal-entities/:id',
+    },
+  ],
   permissions: [
     {
       key: 'platform.organization.manage',
@@ -44,6 +58,12 @@ export const platformManifest: ModuleManifest = {
       key: 'platform.policy.override',
       description: 'Set a local policy override for a property',
       scope: 'property',
+    },
+    {
+      key: 'platform.dataAuthority.manage',
+      description: 'Change which system is the system of record for a property (adoption path)',
+      scope: 'property',
+      sensitive: true,
     },
   ],
 };

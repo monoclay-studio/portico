@@ -1,0 +1,10 @@
+@import "@portico/ui/styles.css";
+
+/* Scan the app's own sources for classes as well. */
+@source "./";
+
+html,
+body,
+#root {
+  height: 100%;
+}

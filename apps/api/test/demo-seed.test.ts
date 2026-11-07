@@ -31,5 +31,5 @@ describe('demo environment (adoption brief §3 stage 1)', () => {
       headers: { authorization: `Bearer ${login.json().token}` },
     });
     expect(props.json().items).toHaveLength(3);
-  });
+  }, 120_000); // seeds every composed module for two organizations; slow when many test packages run at once
 });

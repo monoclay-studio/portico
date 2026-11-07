@@ -32,7 +32,10 @@ export interface DemoSeedStep {
   run(tx: TxContext, org: DemoOrganization): Promise<void>;
 }
 
-/** Wave-1+ modules register their demo data here (inventory, rates, guests, reservations, finance, …). */
+/**
+ * Extra demo steps (tests/tools). Module demo data is registered in the composition root
+ * (`Composition.demoSeedSteps`) because steps need the composed module services.
+ */
 export const DEMO_SEED_STEPS: DemoSeedStep[] = [];
 
 /** Shared demo password — demo environment only; printed by the CLI; never valid in live organizations. */
@@ -98,13 +101,21 @@ const ORGS: Array<{
         code: 'AZH',
         name: 'Azure Lagoon Hotel, Hulhumalé',
         profile: 'hotel',
-        classification: { 'mv.establishmentType': 'hotel', 'mv.inhabitedIsland': true, 'mv.registeredRooms': 64 },
+        classification: {
+          'mv.establishmentType': 'hotel',
+          'mv.inhabitedIsland': true,
+          'mv.registeredRooms': 64,
+        },
       },
       {
         code: 'AZA',
         name: 'Azure Reef Residences, Malé',
         profile: 'serviced_apartments',
-        classification: { 'mv.establishmentType': 'hotel', 'mv.inhabitedIsland': true, 'mv.registeredRooms': 24 },
+        classification: {
+          'mv.establishmentType': 'hotel',
+          'mv.inhabitedIsland': true,
+          'mv.registeredRooms': 24,
+        },
       },
     ],
     staff: [
@@ -130,8 +141,12 @@ const emailFor = (slug: string, staffName: string) =>
 
 export async function seedDemo(
   database: PorticoDatabase,
-  opts: { businessDate: string; log?: (m: string) => void },
+  opts: { businessDate: string; log?: (m: string) => void; steps?: DemoSeedStep[] },
 ): Promise<DemoOrganization[]> {
+  const steps = opts.steps ?? [
+    ...(await import('../composition')).compose(database).demoSeedSteps,
+    ...DEMO_SEED_STEPS,
+  ];
   const log = opts.log ?? (() => {});
   const result: DemoOrganization[] = [];
   for (const spec of ORGS) {
@@ -197,7 +212,7 @@ export async function seedDemo(
         users.push({ email, role: s.role });
       }
       const demoOrg: DemoOrganization = { tenantId, name: spec.name, properties, users };
-      for (const step of DEMO_SEED_STEPS) {
+      for (const step of steps) {
         log(`  ${spec.name}: ${step.name}`);
         await step.run(tx, demoOrg);
       }

@@ -1,0 +1,75 @@
+/**
+ * PoC (steward review, integration step) — check-in in connected mode (ADR-0014): when an external system is the
+ * system of record for charges or payments, the newly bound finance / payments ports refuse and the check-in run is
+ * left "in progress" with an "Interrupted" step. The step should recognise external authority (record "guarantee /
+ * deposit handled in <system>" with an attestation) instead of failing; today the desk needs a mandatory-step skip.
+ */
+import type { Booking } from '@portico/reservations';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import {
+  applied,
+  bookingInput,
+  cardOnFile,
+  kandu,
+  makeExternal,
+  organization,
+  readyUnit,
+  type Scenario,
+  startScenario,
+} from './scenarios/harness';
+
+let s: Scenario;
+beforeAll(async () => {
+  s = await startScenario();
+});
+afterAll(async () => s?.close());
+
+describe('PoC: check-in when charges / payments are external', () => {
+  for (const domain of ['charges', 'payments'] as const) {
+    it(`${domain} external`, async () => {
+      const org = await organization(s);
+      const k = await kandu(s, org, '2027-03-10');
+      const card = await cardOnFile(s, org, k.id, k.legalEntityId);
+      const desk = org.staff('front_desk', 'Hassan', [k.id]);
+      const { reservations } = s.c.services;
+      const b = applied<Booking>(
+        await org.run(desk, (tx) =>
+          reservations.createBooking(
+            tx,
+            bookingInput(
+              k,
+              { arrival: '2027-03-10', departure: '2027-03-12', unit: '214' },
+              { guarantee: { kind: 'card', paymentMethodId: card.id } },
+            ),
+          ),
+        ),
+      );
+      await s.drain();
+      await readyUnit(s, org, k.id, k.units['214'] as string);
+      await makeExternal(s, org, k.id, domain);
+      const r = await reservations
+        .performWorkflow(s.t.db, desk, {
+          stayId: b.stays[0]?.id as string,
+          kind: 'check_in',
+          checkIn: { registration: { identityVerified: true }, access: { kind: 'card', count: 1 } },
+        })
+        .catch((e: unknown) => ({ thrown: e }));
+      const summary =
+        'thrown' in r
+          ? { thrown: r.thrown }
+          : {
+              status: r.run?.status,
+              interrupted: r.interrupted,
+              steps: r.run?.steps.map((st) => [st.key, st.status, st.message]),
+            };
+      console.log(`${domain} external →`, JSON.stringify(summary).slice(0, 900));
+      expect(summary).toMatchObject({
+        status: 'in_progress',
+        interrupted: {
+          step: domain === 'charges' ? 'deposits' : 'guarantee',
+          error: { code: 'external_system_of_record' },
+        },
+      });
+    });
+  }
+});

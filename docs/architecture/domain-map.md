@@ -30,6 +30,16 @@ All functions are async. Dates are `LocalDate` strings (`YYYY-MM-DD`). Night ran
 | `integration` | `integration` | **Connector framework** (catalogue of connectors with workflow-level capabilities, connection lifecycle with the 9-step setup journey, encrypted credentials, mappings with suggestions + review, exchange log, sync runs, health, exceptions), webhook subscriptions & deliveries, partner apps; later: import/migration jobs & reconciliation, data export | 1 (framework) / 2 (migration) |
 | `ai` | `ai` | Assistant sessions, permission-aware retrieval, cited answers, action proposals requiring approval | 3 |
 | `billing` | `billing` | Monoclay's own SaaS subscriptions & invoices to organizations (Stripe Billing on the platform account) — never mixed with hotel money | 3 |
+| `access` | `access` | Door locks, key encoders, RFID wristbands, mobile keys: issue/duplicate/extend/cancel on move & checkout, lock-vendor connectors (often via local connector), manual fallback, key audit | 2 (spec: docs/specs/access.md) |
+| `guest-experience` | `guest_experience` | Guest web portal & kiosk: pre-arrival, online check-in (registration card, ID, e-signature, authorization), upsells, itinerary, requests, chat, digital folio, express checkout, feedback | 3 |
+| `crm` | `crm` | Segments, consented campaigns, abandoned-booking recovery, surveys/NPS, reputation (reviews & replies), loyalty/recognition, gift vouchers | 3 |
+| `contracting` | `contracting` | Tour operator / DMC / wholesale contracts: seasons, net rates, allotments & release, stop-sale, combinable offers, statements (Maldives-critical) | 2 |
+| `accounting` | `accounting` | Back-office accounting on the finance ledger: GL journals, period close, AP, bank reconciliation, fixed assets, budgets, consolidation, owner statements, financial statements, tax-return data, ERP exports | 3 |
+| `fnb-pos` | `fnb_pos` | Outlet point of sale: menus, tables, orders, kitchen tickets/KDS, split checks, room charge with posting privileges, meal-plan consumption, voids/comps, offline tablets | 3 |
+| `procurement` | `procurement` | Suppliers, requisitions, approvals, purchase orders, receiving, three-way match → AP, import/landed cost | 3 |
+| `stock` | `stock` | Goods inventory (not accommodation): items, stores, issues/transfers, par levels, counts, costing, recipes & menu costing, minibar & amenity consumption | 3 |
+| `workforce` | `workforce` | Staff records, rosters from forecast, time & attendance, leave, staff housing, certifications, work permits, service-charge distribution; payroll export (computation is a boundary) | 4 |
+| `concessions` | `concessions` | Third-party operators inside resorts (dive, spa, boutique): room charges on their behalf, revenue share, settlements; utilities & sustainability metering | 4 |
 
 Dependency direction (who calls whom synchronously). Arrows point at the provider. No cycles allowed.
 
@@ -116,20 +126,33 @@ Events: `inventory.availability.changed` (coalescible, for distribution), `inven
 
 ## rates (provider)
 
+**Canonical shapes: `modules/rates/README.md` § Provider contract** (merged 2026-11-07; reservations and finance adapt).
+
 ```ts
-quote(tx, { propertyId, nights: DateRange, occupancy: Occupancy, unitTypeIds?, ratePlanIds?,
-            channelId?, companyId?, promoCode?, bookingDate?: LocalDate }): Promise<Offer[]>
-   // Offer = { unitTypeId, ratePlanId, nightly: NightPrice[], inclusions, taxesAndFees: TaxLine[],
-   //           totals: { net, taxes, fees, gross }, policies: { cancellation, guarantee, deposit },
-   //           restrictionViolations: Violation[], terms: TermsSnapshot }
-priceChange(tx, { terms: TermsSnapshot, change: StayChangeRequest }): Promise<RepricingResult>
-   // used by change previews: keeps agreed nights at agreed prices, prices new nights by policy
-computeTaxes(tx, { propertyId, lines: ChargeLine[], occupancy?, stayContext? }): Promise<TaxLine[]>
-   // used by finance for non-room charges too (single tax engine for everything)
-getRatePlan / listRatePlans
+quote / quoteDetailed(tx, QuoteRequest): Promise<Offer[]> / { quoteId, configVector, offers }
+   // channel is derived from the principal; bookingDate = today unless rates.quote.backdate;
+   // companyId is staff-only and verified; non-staff never see unbookable offers.
+   // Offer.taxesAndFees: TaxLine[] (TaxLine.basis, nature, base|null, quantity, fixedAmount, fx, taxPointDate, estimated)
+priceChange(tx, { terms, change }): Promise<{ nightly, penalties, before, after, difference, violations, terms }>
+   // verifies the seal first; supports ratePlanId / typeChange / asOf; returns new sealed terms
+overridePrice / complimentaryTerms(tx, …): Promise<TermsSnapshot>   // rates.price.override, audited; Green Tax kept on comps
+evaluateCancellationPenalty(terms, at, { event?, nights? })          // pure; basis = price + hotel fees, never levies
+instantiatePaymentSchedule(terms); postingPlan / postingChargeLines(terms, stayId)  // lines carry agreedRuleVersionIds
+levyDays(checkInAt, checkOutAt, 12) / levyTrueUp(terms, { checkInAt, checkOutAt })  // Green Tax 12-hour rule
+computeTaxes / computeTaxesDetailed(tx, { lines: ChargeLine[], fullPaymentDate?, expectedInvoiceDate?,
+                                        ruleVersionIds?, fxRates? })  // single tax engine for every charge
+getRulePackStatus(tx, propertyId)                                     // finance live gate (adviser-confirmed rules)
+recordPlanSale / releasePlanSale; getRatePlan / listRatePlans
 ```
-`TermsSnapshot` is a self-contained JSON document (versioned schema) persisted by reservations; it must be
+`TermsSnapshot` v1 is a self-contained JSON document persisted by reservations, sealed with HMAC-SHA256
+(`seal`, `supersedesSeal`; key `PORTICO_TERMS_SEAL_KEY`, required in production); `verifyTerms(terms)`. It is
 sufficient to post every night's charges without reading current rate configuration.
+**Breaking renames for consumers:** `TaxLine.kind` → `basis`; `paymentDate` → `fullPaymentDate` +
+`ChargeLine.taxPointSplits`; `nights`/`candidateTerms` → `nightly`/`terms`; plain hash → `seal`; finance
+`taxGroup`/`priceMode` → `taxCategory`/`taxInclusion`.
+**Ports rates needs:** `listUnitTypes` (inventory, bound), `companyExists` (guests, bound), `channelForApiClient`
+(distribution, wave 2; until then API clients sell as `api_client:<id>`), `affectedAgreements` (reservations/finance,
+for the tax change report).
 Events: `rates.prices.changed`, `rates.restrictions.changed` (for distribution).
 
 ## guests (provider)
@@ -177,18 +200,26 @@ Events: `finance.posting.created`, `finance.folio.settled`, `finance.invoice.iss
 
 ## payments (provider)
 
+**Canonical shapes: `modules/payments/README.md` § Provider contract** (merged 2026-11-07). Every call runs in the
+caller's transaction, takes an `idempotencyKey`, and calls the provider after commit.
+
 ```ts
-createPaymentRequest(tx, { legalEntityId, payer, amount, purpose, ref, expiresAt }): Promise<PaymentRequest>
-authorize(tx, { methodId, amount, ref, idempotencyKey }): Promise<PaymentAttempt>   // status may be 'pending_verification'
-capture(tx, { authorizationId, amount?, idempotencyKey }): Promise<PaymentAttempt>
-charge(tx, { methodId, amount, ref, idempotencyKey, initiator: 'customer'|'merchant' })
-refund(tx, { paymentId, amount, reason, idempotencyKey }): Promise<Refund>
-getPaymentStatus(tx, ref)                                    // authoritative status incl. 'pending_verification'
-listUnresolved(tx, { propertyId })                           // Day Close + dashboards
+createPaymentRequest(tx, { propertyId, legalEntityId?, payer, amount, purpose, ref: LedgerRef, expiresAt, idempotencyKey })
+authorize(tx, { propertyId, methodId, amount, ref, idempotencyKey })   // returns 'processing'; settles after commit
+                                                                       // (payments.authorization.authorized|failed)
+capture / charge / refund(tx, …)
+getPaymentStatus(tx, ref)   // read FIRST; never charge again while pending_verification
+listUnresolved(tx, { propertyId })
 ```
-Payments calls finance through its `LedgerPort` (record payment/refund/deposit/payout) **only after the
-provider confirms**. Provider calls happen outside the DB transaction with persisted idempotency keys
-(`payments.provider_operations` table) — see ADR-0007.
+`LedgerRef = { type: 'folio' | 'booking'; id }` (booking = deposit). Refusal codes: `ledger_target_unknown`,
+`ledger_target_other_property`, `wrong_merchant_of_record`, `payment_pending_verification`,
+`collection_owned_by_payment_request`, `duplicate_reference`, `mit_not_agreed`, `card_payments_unavailable` (503),
+`payment_declined` (402).
+**Port payments needs from finance — `LedgerPort`** (`modules/payments/src/ports.ts`, bound in composition via
+`financeLedgerForPayments`): `describeTarget(tx, ref) → { propertyId, legalEntityId } | null` (checked before any
+money moves), postings carrying property + legal entity + clearing account per provider, `markPaymentVerified`,
+`recordSettlementFees`. Until finance merges, folio collections are refused (503) and deposits are flagged
+"not yet on the bill".
 
 ## operations (provider)
 
@@ -228,6 +259,26 @@ re-validation. Events: `integration.connection.statusChanged`, `integration.exce
 `integration.mapping.changed`.
 
 ---
+
+## Universal record contract (every module — docs/product/experience-architecture.md)
+
+Every primary aggregate's `GET` response includes, in addition to its own fields:
+
+```ts
+status: Record<string, string>      // one entry per status family — never merged into one field
+allowedActions: RecordAction[]      // { action, label, enabled, reason?, previewRequired? } computed server-side
+issues: RecordIssue[]               // { code, severity: blocking|warning|info, message, owner?, since? }
+owner?: RecordOwner                 // responsible user or department
+links: RecordLink[]                 // { rel, type, id, title? } related records across modules
+provenance?: Provenance             // when data is mirrored/simulated/copied/delayed
+```
+Types live in `@portico/kernel` (`records.ts`). Each module also:
+- declares `recordTypes` in its manifest (the `type` equals the `target.type` used in its audit entries), which
+  powers `GET /v1/records/{type}/{id}/history` (one cross-module timeline from the audit log);
+- exports a `SearchProvider` (`@portico/db`) with `search` + `summarize`, permission- and property-scope-aware,
+  registered in the composition root → `GET /v1/search` and hover previews. Reference: `modules/platform/src/search.ts`.
+- never writes secrets or sensitive identity values into audit `before`/`after` (mask them) — history is shown to
+  anyone with read permission on the record.
 
 ## Rules for changing a contract
 

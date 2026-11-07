@@ -1,0 +1,266 @@
+{
+ "taken_at": "20261107T1636Z",
+ "head": "38ccff8",
+ "git": {
+  "commits_main": 300,
+  "commits_all_refs": 360,
+  "branches": [
+   "docs/adoption-integration",
+   "docs/back-of-house-specs",
+   "docs/guest-journey-audit",
+   "docs/market-deep-dive",
+   "docs/operational-readiness",
+   "docs/parity-finance",
+   "docs/parity-front",
+   "docs/parity-ops",
+   "docs/product-strategy",
+   "docs/ux-round-1",
+   "feat/backoffice-core",
+   "feat/finance-core",
+   "feat/guests-core",
+   "feat/identity-platform-enterprise",
+   "feat/infra-aws",
+   "feat/integration-core",
+   "feat/integration-step",
+   "feat/inventory-core",
+   "feat/operations-core",
+   "feat/payments-core",
+   "feat/rates-core",
+   "feat/reservations-core",
+   "main",
+   "ux/lab"
+  ],
+  "module_merges_to_main": [
+   "2026-11-07T12:24:59+00:00 merge: feat/finance-core \u2014 ledger, folios, billing rules, AR, invoices, cashier (steward review fixes verified)",
+   "2026-11-07T12:23:03+00:00 merge: feat/integration-core \u2014 connector framework, setup, health, webhooks, safeFetch (steward review fixes verified)",
+   "2026-11-07T12:20:47+00:00 merge: feat/reservations-core \u2014 bookings, stays, front desk, change previews (steward review fixes verified)",
+   "2026-11-07T12:13:37+00:00 merge: feat/payments-core \u2014 payments, Stripe Connect adapter, Route D terminal records (steward review fixes verified)",
+   "2026-11-07T12:07:41+00:00 merge: feat/rates-core \u2014 rates, restrictions, policies, tax engine, sealed terms (steward review fixes verified)",
+   "2026-11-07T12:03:07+00:00 merge: docs/market-deep-dive \u2014 market, vendors, research, patents, Maldives, one-button migration (docs/research/05-*)",
+   "2026-11-07T11:57:27+00:00 merge: feat/operations-core \u2014 housekeeping, maintenance, tasks, offline sync (steward review fixes verified)",
+   "2026-11-07T11:44:23+00:00 Merge branch 'docs/parity-finance': parity matrices + edge cases for finance, payments, day-close, accounting, fnb-pos, procurement, stock, analytics",
+   "2026-11-07T11:38:28+00:00 Merge branch 'feat/inventory-core': inventory module (unit types, units, composites, availability ledger, holds, assignments, blocks, overbooking vs conflicts, external availability) \u2014 steward-reviewed, fixes verified",
+   "2026-11-07T11:32:12+00:00 Merge branch 'docs/parity-front': parity matrices + edge cases for inventory, rates, reservations, groups, distribution, platform",
+   "2026-11-07T11:30:27+00:00 Merge branch 'feat/guests-core': guests module (profiles, companies/agencies, consent, encrypted documents, duplicates, reversible merges, cross-property sharing, DSR) \u2014 steward-reviewed",
+   "2026-11-07T11:19:01+00:00 Merge branch 'docs/back-of-house-specs': accounting, F&B POS, procurement, stock, workforce, concessions, utilities specs",
+   "2026-11-07T11:16:13+00:00 Merge branch 'docs/guest-journey-audit': guest journey coverage (235 touchpoints), gap register, 5 new module specs, spec change requests",
+   "2026-11-07T07:53:03+00:00 Merge branch 'docs/product-strategy': competitive synthesis, editions, personas, UX principles, 18 module specs, scenario catalogue",
+   "2026-11-07T07:52:01+00:00 Merge branch 'docs/adoption-integration': adoption, integration and migration deliverables",
+   "2026-11-07T07:32:42+00:00 Merge branch 'docs/operational-readiness': 12 operational readiness deliverables"
+  ]
+ },
+ "code": {
+  "apps/api": {
+   "files": 24,
+   "lines": 3732,
+   "test_files": 12,
+   "migrations": 0
+  },
+  "apps/worker": {
+   "files": 1,
+   "lines": 65,
+   "test_files": 0,
+   "migrations": 0
+  },
+  "modules/finance": {
+   "files": 61,
+   "lines": 20520,
+   "test_files": 17,
+   "migrations": 1
+  },
+  "modules/guests": {
+   "files": 50,
+   "lines": 13503,
+   "test_files": 14,
+   "migrations": 1
+  },
+  "modules/identity": {
+   "files": 10,
+   "lines": 1349,
+   "test_files": 1,
+   "migrations": 1
+  },
+  "modules/integration": {
+   "files": 62,
+   "lines": 20112,
+   "test_files": 18,
+   "migrations": 1
+  },
+  "modules/inventory": {
+   "files": 47,
+   "lines": 13691,
+   "test_files": 12,
+   "migrations": 3
+  },
+  "modules/operations": {
+   "files": 54,
+   "lines": 17785,
+   "test_files": 18,
+   "migrations": 1
+  },
+  "modules/payments": {
+   "files": 50,
+   "lines": 18990,
+   "test_files": 12,
+   "migrations": 1
+  },
+  "modules/platform": {
+   "files": 11,
+   "lines": 1857,
+   "test_files": 1,
+   "migrations": 1
+  },
+  "modules/rates": {
+   "files": 46,
+   "lines": 15698,
+   "test_files": 12,
+   "migrations": 1
+  },
+  "modules/reservations": {
+   "files": 74,
+   "lines": 19806,
+   "test_files": 23,
+   "migrations": 2
+  },
+  "packages/db": {
+   "files": 16,
+   "lines": 1258,
+   "test_files": 1,
+   "migrations": 4
+  },
+  "packages/http": {
+   "files": 6,
+   "lines": 439,
+   "test_files": 1,
+   "migrations": 0
+  },
+  "packages/kernel": {
+   "files": 16,
+   "lines": 1386,
+   "test_files": 3,
+   "migrations": 0
+  },
+  "packages/testing": {
+   "files": 3,
+   "lines": 117,
+   "test_files": 0,
+   "migrations": 0
+  }
+ },
+ "code_totals": {
+  "files": 531,
+  "lines": 150308,
+  "test_files": 145,
+  "migrations": 17
+ },
+ "docs": {
+  "markdown_files": 198,
+  "markdown_lines": 36646,
+  "specs": 31,
+  "adrs": 17,
+  "parity_files": 18,
+  "open_questions_total": 57,
+  "open_questions_answered": 1
+ },
+ "reviews": {
+  "review-backoffice.md": {
+   "counts": "**P0 1 \u00b7 P1 6 \u00b7 P2 18 \u00b7 P3 10**",
+   "verdict": "merge after fixes"
+  },
+  "review-finance.md": {
+   "counts": "P0 = 2 \u00b7 P1 = 10 \u00b7 P2 = 17 \u00b7 P3 = 12",
+   "verdict": "do not merge"
+  },
+  "review-guests.md": {
+   "counts": "P0 = 2, P1 = 6, P2 = 13, P3 = 10.",
+   "verdict": "do not merge"
+  },
+  "review-identity-plus.md": {
+   "counts": "**P0 2 \u00b7 P1 8 \u00b7 P2 17 \u00b7 P3 12**.",
+   "verdict": "do not merge"
+  },
+  "review-integration.md": {
+   "counts": "**P0 1 \u00b7 P1 8 \u00b7 P2 10 \u00b7 P3 10**",
+   "verdict": "merge after fixes"
+  },
+  "review-inventory.md": {
+   "counts": "erexample tests (scratch copy)",
+   "verdict": "merge after fixes"
+  },
+  "review-operations.md": {
+   "counts": null,
+   "verdict": "merge after fixes"
+  },
+  "review-payments.md": {
+   "counts": "**P0 3 \u00b7 P1 12 \u00b7 P2 14 \u00b7 P3 10**",
+   "verdict": "merge after fixes"
+  },
+  "review-rates.md": {
+   "counts": "P0 = 1 \u00b7 P1 = 10 \u00b7 P2 = 18 \u00b7 P3 = 7",
+   "verdict": "merge after fixes"
+  },
+  "review-reservations.md": {
+   "counts": "P0 1 \u00b7 P1 16 \u00b7 P2 12 \u00b7 P3 6.**",
+   "verdict": "merge after fixes"
+  }
+ },
+ "tests": {
+  "@portico/kernel": {
+   "passed": 25,
+   "failed": 0
+  },
+  "@portico/db": {
+   "passed": 12,
+   "failed": 0
+  },
+  "@portico/identity": {
+   "passed": 5,
+   "failed": 0
+  },
+  "@portico/platform": {
+   "passed": 9,
+   "failed": 0
+  },
+  "@portico/http": {
+   "passed": 3,
+   "failed": 0
+  },
+  "@portico/payments": {
+   "passed": 113,
+   "failed": 0
+  },
+  "@portico/guests": {
+   "passed": 173,
+   "failed": 0
+  },
+  "@portico/finance": {
+   "passed": 85,
+   "failed": 0
+  },
+  "@portico/inventory": {
+   "passed": 96,
+   "failed": 0
+  },
+  "@portico/rates": {
+   "passed": 128,
+   "failed": 0
+  },
+  "@portico/integration": {
+   "passed": 173,
+   "failed": 0
+  },
+  "@portico/reservations": {
+   "passed": 147,
+   "failed": 0
+  },
+  "@portico/operations": {
+   "passed": 120,
+   "failed": 0
+  },
+  "@portico/api": {
+   "passed": 46,
+   "failed": 0
+  }
+ },
+ "tests_total_passed": 1135
+}

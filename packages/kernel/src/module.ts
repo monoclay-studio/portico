@@ -21,4 +21,6 @@ export interface ModuleManifest {
   permissions: PermissionDefinition[];
   /** Feature keys this module gates via entitlements (see platform plans). */
   features?: string[];
+  /** Primary record types (universal record contract, global search, history). */
+  recordTypes?: import('./records').RecordTypeDefinition[];
 }
