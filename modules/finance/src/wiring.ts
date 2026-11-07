@@ -9,7 +9,11 @@ import { db, ensureChart } from './service/support';
  * them with real providers at merge. Tax computation fails loudly (nothing is posted with silently missing
  * taxes); collection requests report 'unavailable' so a late charge still posts and is listed as an exception.
  */
-export function unavailableFinancePorts(): { tax: TaxPort; payments: PaymentsPort; payers: PayerDirectoryPort } {
+export function unavailableFinancePorts(): {
+  tax: TaxPort;
+  payments: PaymentsPort;
+  payers: PayerDirectoryPort;
+} {
   return {
     // Without a directory, payers referenced only by id keep a placeholder name (live invoices then ask for it).
     payers: {

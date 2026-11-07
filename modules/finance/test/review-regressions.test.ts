@@ -454,10 +454,14 @@ describe('ADR-0016 §3: a missing exchange rate blocks; no silent fallback to an
         }),
       );
     await expect(post('a')).rejects.toMatchObject({ code: 'fx_rate_missing' });
-    await expect(rate('2026-11-07', 'Hotel board rate')).rejects.toMatchObject({ code: 'fx_reason_required' });
+    await expect(rate('2026-11-07', 'Hotel board rate')).rejects.toMatchObject({
+      code: 'fx_reason_required',
+    });
     await rate('2026-11-07', 'Hotel board rate', 'MMA rate not yet published this morning');
     await post('b');
     const rates = await org.run((tx) => h.finance.listFxRates(tx, org.legalEntityId));
-    expect(rates.find((r) => r.businessDate === '2026-11-07')?.reason).toBe('MMA rate not yet published this morning');
+    expect(rates.find((r) => r.businessDate === '2026-11-07')?.reason).toBe(
+      'MMA rate not yet published this morning',
+    );
   });
 });

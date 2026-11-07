@@ -681,7 +681,12 @@ export async function issueInvoice(
     // The buyer named for the invoice becomes the folio's payer name (it was a placeholder).
     await db(tx)
       .updateTable('finance.folios')
-      .set({ payer_name: named.name, payer_name_unresolved: false, updated_at: tx.now, version: sql`version + 1` })
+      .set({
+        payer_name: named.name,
+        payer_name_unresolved: false,
+        updated_at: tx.now,
+        version: sql`version + 1`,
+      })
       .where('id', '=', folio.id)
       .execute();
     await tx.audit({

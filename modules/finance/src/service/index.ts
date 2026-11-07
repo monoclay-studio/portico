@@ -17,8 +17,8 @@ import * as fiscal from './fiscal';
 import * as folios from './folios';
 import * as ledgerPort from './ledger-port';
 import * as payouts from './payouts';
-import * as postings from './postings';
 import type { ProvidedTaxLineInput } from './postings';
+import * as postings from './postings';
 import * as receivables from './receivables';
 import * as reports from './reports';
 import * as setup from './setup';
@@ -173,7 +173,8 @@ export interface ProviderScope {
 export function financeProvider(service: FinanceService, caller: keyof typeof PROVIDER_DELEGATION) {
   const perms = PROVIDER_DELEGATION[caller] ?? [];
   const d = async (tx: TxContext, scope: ProviderScope): Promise<TxContext> => {
-    if (scope.legalEntityId) await service.assertPropertyScope(tx, { ...scope, legalEntityId: scope.legalEntityId });
+    if (scope.legalEntityId)
+      await service.assertPropertyScope(tx, { ...scope, legalEntityId: scope.legalEntityId });
     return delegated(tx, perms, scope.propertyId);
   };
   type S = FinanceService;
@@ -187,7 +188,11 @@ export function financeProvider(service: FinanceService, caller: keyof typeof PR
     recordRefund: async (tx: TxContext, scope: ProviderScope, input: Parameters<S['recordRefund']>[1]) =>
       service.recordRefund(await d(tx, scope), input),
     recordDeposit: async (tx: TxContext, scope: ProviderScope, input: Parameters<S['recordDeposit']>[1]) => {
-      await service.assertTargetInScope(tx, { type: 'booking', id: input.bookingId }, await entityScope(tx, scope));
+      await service.assertTargetInScope(
+        tx,
+        { type: 'booking', id: input.bookingId },
+        await entityScope(tx, scope),
+      );
       return service.recordDeposit(await d(tx, scope), { ...input, propertyId: scope.propertyId });
     },
     applyDeposits: async (tx: TxContext, scope: ProviderScope, input: Parameters<S['applyDeposits']>[1]) =>
@@ -204,25 +209,40 @@ export function financeProvider(service: FinanceService, caller: keyof typeof PR
     ) => service.recordDisputeMovement(await d(tx, scope), input),
     recordPayout: async (tx: TxContext, scope: ProviderScope, input: Parameters<S['recordPayout']>[1]) =>
       service.recordPayout(await d(tx, scope), input),
-    markPaymentVerified: async (tx: TxContext, scope: ProviderScope, input: Parameters<S['markPaymentVerified']>[1]) =>
-      service.markPaymentVerified(await d(tx, scope), { ...input, scope: await entityScope(tx, scope) }),
+    markPaymentVerified: async (
+      tx: TxContext,
+      scope: ProviderScope,
+      input: Parameters<S['markPaymentVerified']>[1],
+    ) => service.markPaymentVerified(await d(tx, scope), { ...input, scope: await entityScope(tx, scope) }),
     getFolioBalance: async (tx: TxContext, scope: ProviderScope, folioId: string) =>
       service.getFolioBalance(await d(tx, scope), folioId),
     listFolios: async (tx: TxContext, scope: ProviderScope, input: Parameters<S['listFolios']>[1]) =>
       service.listFolios(await d(tx, scope), input),
     getUnbalancedItems: async (tx: TxContext, scope: ProviderScope, businessDate: LocalDate) =>
       service.getUnbalancedItems(await d(tx, scope), { propertyId: scope.propertyId, businessDate }),
-    markOwnerDeparted: async (tx: TxContext, scope: ProviderScope, input: Parameters<S['markOwnerDeparted']>[1]) =>
-      service.markOwnerDeparted(await d(tx, scope), { ...input, propertyId: scope.propertyId }),
+    markOwnerDeparted: async (
+      tx: TxContext,
+      scope: ProviderScope,
+      input: Parameters<S['markOwnerDeparted']>[1],
+    ) => service.markOwnerDeparted(await d(tx, scope), { ...input, propertyId: scope.propertyId }),
     grantAllowance: async (tx: TxContext, scope: ProviderScope, input: Parameters<S['grantAllowance']>[1]) =>
       service.grantAllowance(await d(tx, scope), { ...input, propertyId: scope.propertyId }),
-    closeAllowances: async (tx: TxContext, scope: ProviderScope, input: Parameters<S['closeAllowances']>[1]) =>
-      service.closeAllowances(await d(tx, scope), input),
-    createBillingRule: async (tx: TxContext, scope: ProviderScope, input: Parameters<S['createBillingRule']>[1]) =>
-      service.createBillingRule(await d(tx, scope), { ...input, propertyId: scope.propertyId }),
+    closeAllowances: async (
+      tx: TxContext,
+      scope: ProviderScope,
+      input: Parameters<S['closeAllowances']>[1],
+    ) => service.closeAllowances(await d(tx, scope), input),
+    createBillingRule: async (
+      tx: TxContext,
+      scope: ProviderScope,
+      input: Parameters<S['createBillingRule']>[1],
+    ) => service.createBillingRule(await d(tx, scope), { ...input, propertyId: scope.propertyId }),
   };
 
-  async function entityScope(tx: TxContext, scope: ProviderScope): Promise<{ propertyId: string; legalEntityId: string }> {
+  async function entityScope(
+    tx: TxContext,
+    scope: ProviderScope,
+  ): Promise<{ propertyId: string; legalEntityId: string }> {
     return {
       propertyId: scope.propertyId,
       legalEntityId: scope.legalEntityId ?? (await service.getPropertyLegalEntity(tx, scope.propertyId)),
@@ -341,10 +361,15 @@ export function financeLedgerForPayments(service: FinanceService) {
       };
       if (input.folioId) {
         await service.assertTargetInScope(t, { type: 'folio', id: input.folioId }, scope(input));
-        return { postingId: (await service.recordRefund(t, { folioId: input.folioId, ...common })).postingId };
+        return {
+          postingId: (await service.recordRefund(t, { folioId: input.folioId, ...common })).postingId,
+        };
       }
       if (!input.bookingId)
-        throw new ValidationError('target_required', 'A refund needs the folio or booking of the original payment.');
+        throw new ValidationError(
+          'target_required',
+          'A refund needs the folio or booking of the original payment.',
+        );
       await service.assertTargetInScope(t, { type: 'booking', id: input.bookingId }, scope(input));
       // Deposit still held → deposit refund; already applied to a folio → refund on that folio.
       const held = await service.getDeposits(t, input.bookingId);
@@ -359,7 +384,9 @@ export function financeLedgerForPayments(service: FinanceService) {
           'The deposit held for this booking is smaller than the refund and was not applied to a folio.',
         );
       }
-      return { postingId: (await service.recordRefund(t, { folioId: applied.folioId, ...common })).postingId };
+      return {
+        postingId: (await service.recordRefund(t, { folioId: applied.folioId, ...common })).postingId,
+      };
     },
     async recordPayout(
       tx: TxContext,
@@ -396,7 +423,10 @@ export function financeLedgerForPayments(service: FinanceService) {
         ? { type: 'folio' as const, id: input.folioId }
         : { type: 'booking' as const, id: input.bookingId ?? '' };
       if (!input.folioId && !input.bookingId)
-        throw new ValidationError('target_required', 'An adjustment needs the folio or booking of the payment.');
+        throw new ValidationError(
+          'target_required',
+          'An adjustment needs the folio or booking of the payment.',
+        );
       await service.assertTargetInScope(t, target, scope(input));
       const { clearing: _c, propertyId: _p, legalEntityId: _l, ...rest } = input;
       return { postingId: (await service.recordPaymentAdjustment(t, rest)).postingId };
@@ -414,7 +444,10 @@ export function financeLedgerForPayments(service: FinanceService) {
       },
     ): Promise<{ journalEntryId: string }> {
       const { clearing, ...rest } = input;
-      const r = await service.recordDisputeMovement(d(tx, null), { ...rest, provider: clearingProvider(clearing) });
+      const r = await service.recordDisputeMovement(d(tx, null), {
+        ...rest,
+        provider: clearingProvider(clearing),
+      });
       return { journalEntryId: r.journalEntryId };
     },
     async markPaymentVerified(
@@ -430,7 +463,12 @@ export function financeLedgerForPayments(service: FinanceService) {
     },
     async recordSettlementFees(
       tx: TxContext,
-      input: LedgerScope & { statementRef: EntityRef; amount: Money; clearing: ClearingRef; idempotencyKey: string },
+      input: LedgerScope & {
+        statementRef: EntityRef;
+        amount: Money;
+        clearing: ClearingRef;
+        idempotencyKey: string;
+      },
     ): Promise<{ journalEntryId: string }> {
       const t = d(tx, input.propertyId);
       await service.assertPropertyScope(t, scope(input));
@@ -582,7 +620,13 @@ export function financeForReservations(service: FinanceService) {
     },
     async recordDeposit(
       tx: TxContext,
-      input: { bookingId: string; amount: Money; paymentRef: EntityRef; idempotencyKey: string; propertyId?: string },
+      input: {
+        bookingId: string;
+        amount: Money;
+        paymentRef: EntityRef;
+        idempotencyKey: string;
+        propertyId?: string;
+      },
     ): Promise<void> {
       await service.recordDeposit(d(tx, input.propertyId), input);
     },
@@ -656,7 +700,11 @@ export function financeForReservations(service: FinanceService) {
               : {}),
           },
           cap: rule.cap
-            ? { kind: rule.cap.kind, amountMinor: rule.cap.amount.amountMinor, currency: rule.cap.amount.currency }
+            ? {
+                kind: rule.cap.kind,
+                amountMinor: rule.cap.amount.amountMinor,
+                currency: rule.cap.amount.currency,
+              }
             : null,
           source: rule.source,
         })),

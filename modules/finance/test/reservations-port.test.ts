@@ -72,7 +72,9 @@ describe('reservations → finance port', () => {
         (tx) =>
           port.setBillingRules(tx, {
             owner: stay,
-            rules: [{ destinationFolioId: accommodation.folioId, chargeCodeGroups: ['rooms'], source: 'manual' }],
+            rules: [
+              { destinationFolioId: accommodation.folioId, chargeCodeGroups: ['rooms'], source: 'manual' },
+            ],
           }),
         agent,
       ),
@@ -201,7 +203,9 @@ describe('reservations → finance port', () => {
     expect(folio?.folioId).toBe(posted.folioId);
     expect(folio?.balance).toEqual(usd(30000));
     await expect(
-      org.run((tx) => h.finance.issueInvoice(tx, { folioId: posted.folioId, idempotencyKey: `inv:${bookingId}` })),
+      org.run((tx) =>
+        h.finance.issueInvoice(tx, { folioId: posted.folioId, idempotencyKey: `inv:${bookingId}` }),
+      ),
     ).rejects.toMatchObject({ code: 'buyer_name_required' });
     const doc = await org.run((tx) =>
       h.finance.issueInvoice(tx, {
@@ -261,7 +265,12 @@ describe('reservations → finance port', () => {
     );
     await expect(
       org.run(
-        (tx) => port.applyDeposits(tx, { bookingId: stayId, toFolioId: folio.folioId, propertyId: sister.propertyId }),
+        (tx) =>
+          port.applyDeposits(tx, {
+            bookingId: stayId,
+            toFolioId: folio.folioId,
+            propertyId: sister.propertyId,
+          }),
         agent,
       ),
     ).rejects.toMatchObject({ code: 'forbidden' });

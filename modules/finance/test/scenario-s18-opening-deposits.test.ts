@@ -130,7 +130,9 @@ describe('S18: imported deposits vs the previous system closing balance', () => 
       }),
     );
     expect(report.status).toBe('difference'); // the unknown tax account row is rejected with a reason
-    expect(report.rejected).toEqual([expect.objectContaining({ row: 2, reason: expect.stringMatching(/vat_unknown/) })]);
+    expect(report.rejected).toEqual([
+      expect.objectContaining({ row: 2, reason: expect.stringMatching(/vat_unknown/) }),
+    ]);
     const folio = await org.run((tx) =>
       h.finance.openFolio(tx, {
         propertyId: org.propertyId,
@@ -156,7 +158,9 @@ describe('S18: imported deposits vs the previous system closing balance', () => 
     // Charges carry TGST 18,700 (17% of 1,100.00); 17,000 was declared by the previous system → 1,700 due here.
     expect(bal('tax:tgst')).toBe(-1700);
     expect(bal('deposit_tax_declared')).toBe(0);
-    expect((await org.run((tx) => h.finance.getFolio(tx, folio.folioId))).balance).toEqual(usd(128700 - 117000));
+    expect((await org.run((tx) => h.finance.getFolio(tx, folio.folioId))).balance).toEqual(
+      usd(128700 - 117000),
+    );
     await assertLedgerIntegrity(h, org);
   });
 });

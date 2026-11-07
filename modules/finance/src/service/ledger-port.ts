@@ -1,5 +1,12 @@
 import type { TxContext } from '@portico/db';
-import { BusinessRuleError, type EntityRef, type Money, newId, requirePermission, ValidationError } from '@portico/kernel';
+import {
+  BusinessRuleError,
+  type EntityRef,
+  type Money,
+  newId,
+  requirePermission,
+  ValidationError,
+} from '@portico/kernel';
 import type { LineDraft } from '../domain/ledger';
 import { recordDeposit, refundDeposit } from './deposits';
 import { prepareDestination } from './folios';
@@ -7,8 +14,8 @@ import { findOriginalPayment } from './postings';
 import {
   actorKey,
   claimEntry,
-  db,
   type Deps,
+  db,
   type FolioRow,
   findEntryByKey,
   loadFolio,
@@ -271,10 +278,18 @@ export async function describeTarget(
   ref: { type: 'folio' | 'booking'; id: string },
 ): Promise<{ propertyId: string; legalEntityId: string } | null> {
   if (ref.type === 'folio') {
-    const f = await db(tx).selectFrom('finance.folios').select(['property_id', 'legal_entity_id']).where('id', '=', ref.id).executeTakeFirst();
+    const f = await db(tx)
+      .selectFrom('finance.folios')
+      .select(['property_id', 'legal_entity_id'])
+      .where('id', '=', ref.id)
+      .executeTakeFirst();
     return f ? { propertyId: f.property_id, legalEntityId: f.legal_entity_id } : null;
   }
-  const acct = await db(tx).selectFrom('finance.deposit_accounts').select(['property_id', 'legal_entity_id']).where('booking_id', '=', ref.id).executeTakeFirst();
+  const acct = await db(tx)
+    .selectFrom('finance.deposit_accounts')
+    .select(['property_id', 'legal_entity_id'])
+    .where('booking_id', '=', ref.id)
+    .executeTakeFirst();
   if (acct) return { propertyId: acct.property_id, legalEntityId: acct.legal_entity_id };
   const f = await db(tx)
     .selectFrom('finance.folios')
@@ -301,7 +316,10 @@ export async function assertTargetInScope(
     if (ref.type === 'folio') throw new ValidationError('folio_not_found', 'The folio was not found.');
     const property = await deps.ports.platform.getProperty(tx, scope.propertyId);
     if (property.legalEntityId !== scope.legalEntityId) {
-      throw new BusinessRuleError('scope_mismatch', 'The property is operated by another legal entity than the one given.');
+      throw new BusinessRuleError(
+        'scope_mismatch',
+        'The property is operated by another legal entity than the one given.',
+      );
     }
     return;
   }
@@ -340,7 +358,11 @@ export async function markPaymentVerified(
     scope?: { propertyId: string; legalEntityId: string };
   },
 ): Promise<{ verified: boolean; replayed: boolean }> {
-  const exists = await db(tx).selectFrom('finance.payment_verifications').select('id').where('idempotency_key', '=', input.idempotencyKey).executeTakeFirst();
+  const exists = await db(tx)
+    .selectFrom('finance.payment_verifications')
+    .select('id')
+    .where('idempotency_key', '=', input.idempotencyKey)
+    .executeTakeFirst();
   if (exists) return { verified: true, replayed: true };
   const posting = await db(tx)
     .selectFrom('finance.postings as p')
@@ -360,10 +382,15 @@ export async function markPaymentVerified(
         .executeTakeFirst();
   const owner = posting ?? movement;
   if (!owner) {
-    throw new BusinessRuleError('payment_not_found', 'The payment to verify is not recorded in the ledger.', { paymentRef: input.paymentRef });
+    throw new BusinessRuleError('payment_not_found', 'The payment to verify is not recorded in the ledger.', {
+      paymentRef: input.paymentRef,
+    });
   }
   requirePermission(tx, 'finance.posting.create', { propertyId: owner.property_id });
-  if (input.scope && (owner.property_id !== input.scope.propertyId || owner.legal_entity_id !== input.scope.legalEntityId)) {
+  if (
+    input.scope &&
+    (owner.property_id !== input.scope.propertyId || owner.legal_entity_id !== input.scope.legalEntityId)
+  ) {
     throw new BusinessRuleError(
       'scope_mismatch',
       'This payment belongs to another property or legal entity than the one you are working in. Nothing was verified.',
@@ -399,7 +426,13 @@ export async function markPaymentVerified(
 export async function recordSettlementFees(
   tx: TxContext,
   deps: Deps,
-  input: { legalEntityId: string; statementRef: EntityRef; amount: Money; provider: string; idempotencyKey: string },
+  input: {
+    legalEntityId: string;
+    statementRef: EntityRef;
+    amount: Money;
+    provider: string;
+    idempotencyKey: string;
+  },
 ): Promise<{ journalEntryId: string; replayed: boolean }> {
   requirePermission(tx, 'finance.ledger.manage');
   if (input.amount.amountMinor <= 0) throw new ValidationError('invalid_amount', 'Fees must be positive.');
@@ -420,10 +453,30 @@ export async function recordSettlementFees(
     description: `Acquirer fees (${input.statementRef.id})`,
   });
   if (!claim.claimed) return { journalEntryId: claim.entryId, replayed: true };
-  await writeEntryBody(tx, deps, claim.entryId, { legalEntityId: input.legalEntityId, propertyId: null, businessDate, description: 'Acquirer fees' }, [], [
-    { accountKey: 'payment_fees', amountMinor: input.amount.amountMinor, currency: input.amount.currency, memo: `statement ${input.statementRef.id}` },
-    { ...clearingSide('card', input.provider, null), amountMinor: -input.amount.amountMinor, currency: input.amount.currency },
-  ]);
-  await tx.audit({ action: 'finance.payout.fees', target: { type: 'journal_entry', id: claim.entryId }, after: rest });
+  await writeEntryBody(
+    tx,
+    deps,
+    claim.entryId,
+    { legalEntityId: input.legalEntityId, propertyId: null, businessDate, description: 'Acquirer fees' },
+    [],
+    [
+      {
+        accountKey: 'payment_fees',
+        amountMinor: input.amount.amountMinor,
+        currency: input.amount.currency,
+        memo: `statement ${input.statementRef.id}`,
+      },
+      {
+        ...clearingSide('card', input.provider, null),
+        amountMinor: -input.amount.amountMinor,
+        currency: input.amount.currency,
+      },
+    ],
+  );
+  await tx.audit({
+    action: 'finance.payout.fees',
+    target: { type: 'journal_entry', id: claim.entryId },
+    after: rest,
+  });
   return { journalEntryId: claim.entryId, replayed: false };
 }

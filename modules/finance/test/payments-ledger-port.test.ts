@@ -279,7 +279,9 @@ describe('payments → finance LedgerPort', () => {
     const s = await openStay(h, org);
     const sister = await addProperty(h, org);
     const otherEntity = await addProperty(h, org, { newLegalEntity: true });
-    expect(await org.run((tx) => ledger.describeTarget(tx, { type: 'folio', id: s.guestFolioId }))).toEqual(scope(org));
+    expect(await org.run((tx) => ledger.describeTarget(tx, { type: 'folio', id: s.guestFolioId }))).toEqual(
+      scope(org),
+    );
     expect(await org.run((tx) => ledger.describeTarget(tx, { type: 'booking', id: newId() }))).toBeNull();
     const pay = (sc: { propertyId: string; legalEntityId: string }) =>
       org.run((tx) =>
@@ -295,7 +297,9 @@ describe('payments → finance LedgerPort', () => {
         }),
       );
     await expect(pay(sister)).rejects.toMatchObject({ code: 'scope_mismatch' });
-    await expect(pay({ propertyId: org.propertyId, legalEntityId: otherEntity.legalEntityId })).rejects.toMatchObject({
+    await expect(
+      pay({ propertyId: org.propertyId, legalEntityId: otherEntity.legalEntityId }),
+    ).rejects.toMatchObject({
       code: 'scope_mismatch',
     });
     // First deposit binds the booking to the property; a later deposit from the sister property is refused.
@@ -313,11 +317,15 @@ describe('payments → finance LedgerPort', () => {
           verification: 'provider_confirmed',
         }),
       );
-    await expect(deposit({ propertyId: sister.propertyId, legalEntityId: otherEntity.legalEntityId })).rejects.toMatchObject({
+    await expect(
+      deposit({ propertyId: sister.propertyId, legalEntityId: otherEntity.legalEntityId }),
+    ).rejects.toMatchObject({
       code: 'scope_mismatch',
     });
     await deposit(scope(org));
-    expect(await org.run((tx) => ledger.describeTarget(tx, { type: 'booking', id: bookingId }))).toEqual(scope(org));
+    expect(await org.run((tx) => ledger.describeTarget(tx, { type: 'booking', id: bookingId }))).toEqual(
+      scope(org),
+    );
     await expect(deposit(sister)).rejects.toMatchObject({ code: 'scope_mismatch' });
     await expect(
       org.run((tx) =>
@@ -353,7 +361,9 @@ describe('payments → finance LedgerPort', () => {
     const before = await org.run((tx) => h.finance.getFolio(tx, s.guestFolioId));
     expect(before.issues.map((i) => i.code)).toContain('payments_awaiting_verification');
     const checks = () =>
-      org.run((tx) => h.finance.getUnbalancedItems(tx, { propertyId: org.propertyId, businessDate: '2026-11-07' }));
+      org.run((tx) =>
+        h.finance.getUnbalancedItems(tx, { propertyId: org.propertyId, businessDate: '2026-11-07' }),
+      );
     expect((await checks()).map((i) => i.code)).toContain('payments_awaiting_verification');
     // Another property cannot verify it.
     const sister = await addProperty(h, org);

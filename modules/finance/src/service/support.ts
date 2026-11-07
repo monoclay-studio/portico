@@ -45,12 +45,17 @@ export function isUniqueViolation(err: unknown): boolean {
  * legal-entity ledger operations); `null` grants only checks without a property; omitted grants everywhere — used
  * only by finance itself after it has checked the actor's own permission for the command.
  */
-export function delegated(tx: TxContext, permissions: readonly string[], propertyId?: string | null): TxContext {
+export function delegated(
+  tx: TxContext,
+  permissions: readonly string[],
+  propertyId?: string | null,
+): TxContext {
   const base: Authorizer = tx.authz;
   const covers = (scope?: { propertyId?: string | null }) =>
     propertyId === undefined || !scope?.propertyId || scope.propertyId === propertyId;
   const authz: Authorizer = {
-    can: (permission, scope) => (permissions.includes(permission) && covers(scope)) || base.can(permission, scope),
+    can: (permission, scope) =>
+      (permissions.includes(permission) && covers(scope)) || base.can(permission, scope),
     propertyScope: (permission) => {
       if (!permissions.includes(permission)) return base.propertyScope(permission);
       if (propertyId === undefined) return 'all';
