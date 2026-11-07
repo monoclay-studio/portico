@@ -59,5 +59,11 @@ export const platformManifest: ModuleManifest = {
       description: 'Set a local policy override for a property',
       scope: 'property',
     },
+    {
+      key: 'platform.dataAuthority.manage',
+      description: 'Change which system is the system of record for a property (adoption path)',
+      scope: 'property',
+      sensitive: true,
+    },
   ],
 };

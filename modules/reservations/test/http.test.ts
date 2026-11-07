@@ -9,6 +9,8 @@ import { type Org, setupOrg, startDb } from './helpers';
 let t: TestDatabase;
 let org: Org;
 let app: PorticoApp;
+/** Stable user ids per test user (idempotency keys are bound to the actor). */
+const userIds = new Map<string, string>();
 beforeAll(async () => {
   t = await startDb();
   org = await setupOrg(t);
@@ -28,7 +30,11 @@ beforeAll(async () => {
         return {
           tenantId: org.tenantId,
           environment: 'live',
-          actor: { kind: 'user', userId: newId(), displayName: name },
+          actor: {
+            kind: 'user',
+            userId: userIds.get(name) ?? (userIds.set(name, newId()).get(name) as string),
+            displayName: name,
+          },
           authz: staticAuthorizer(grants),
         };
       },

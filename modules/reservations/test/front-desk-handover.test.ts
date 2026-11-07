@@ -226,6 +226,7 @@ describe('shift handover (RES-R37, RES-I10)', () => {
           actor: { kind: 'system', process: 'test' },
           correlationId: newId(),
           version: 1,
+          aggregateVersion: null,
           payload: {
             unitId: org.units.V101,
             kind: 'out_of_order',
@@ -265,6 +266,7 @@ describe('event consumers', () => {
       actor: { kind: 'system' as const, process: 'test' },
       correlationId: newId(),
       version: 1,
+      aggregateVersion: null,
       payload: {
         unitId: org.units.V101,
         kind: 'out_of_order',
@@ -326,6 +328,7 @@ describe('event consumers', () => {
           actor: { kind: 'system', process: 'test' },
           correlationId: newId(),
           version: 1,
+          aggregateVersion: null,
           payload: {
             propertyId: org.propertyId,
             cells: [{ unitTypeId: org.types.family, night: '2026-12-10' }],
@@ -352,6 +355,7 @@ describe('guest profile merges (guests.profile.merged / unmerged)', () => {
     actor: { kind: 'system' as const, process: 'test' },
     correlationId: newId(),
     version: 1,
+    aggregateVersion: null,
     payload,
   });
 
