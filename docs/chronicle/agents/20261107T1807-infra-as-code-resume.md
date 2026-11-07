@@ -1,7 +1,7 @@
 # Agent run: Infra-as-code (resume)
 
-- Started: 2026-11-07T18:07:15.924Z · last activity: 2026-11-07T22:38:11.321Z
-- Turns: 374 · tool uses: 393 · output tokens: 493,734
+- Started: 2026-11-07T18:07:15.924Z · last activity: 2026-11-07T22:49:37.790Z
+- Turns: 392 · tool uses: 414 · output tokens: 511,075
 - Type: general-purpose
 
 ## Brief (2026-11-07T18:07:15.924Z)
@@ -235,6 +235,179 @@ These live in the README because docs/OPEN_QUESTIONS.md is outside my write scop
 - **kernel:** key rotation and KMS envelope encryption.
 - **identity:** an SES adapter for staff email.
 - **apps/api:** add a build step, and fix the `TRUSTED_PROXY_CIDRS` comment in config.ts.
+
+````
+
+## Report (2026-11-07T22:49:37.670Z)
+
+````text
+## Infra security fix round: all 3 P1 and all 11 P2 fixed, plus 8 of 12 P3; every gate exit 0
+
+Branch `feat/infra-aws` in `/home/user/wt/infra`, merged with the latest main (which includes identity-plus and round-3 quality). Committed, not pushed, no commits rewritten. Nothing deployed: no `terraform apply`, no AWS call that changes state. Docker images are still not built (no daemon). The four P3s left open are listed under "Not done".
+
+### Finding → commit → test
+Every test named below was shown to fail with its fix removed, either by a mutant run or by running the pre-fix scripts.
+
+| Finding | Commit | Test (red without the fix) |
+|---|---|---|
+| **P1-1** deploy role was admin-equivalent; trust pinned only the repo name and environment | `c168bc5` (+ `5e149f6`) | `ci-deploy-role/tests/least-privilege.tftest.hcl`, 6 runs (mutants: PassRole/RunTask added back; trust by name only); cell `ci_cannot_reach_guest_money_keys`; deploy test "no task definition registered…"; `envs/github` tests (3) |
+| **P1-2** lean egress default contradicted Q158 | `5e149f6` | cell `lean_tier_plans` (mutant `lean="none"`); `lean_public_task_ips_is_an_explicit_opt_in`; `public_task_ips_refused_on_resilient` |
+| **P1-3** drill never ran and nobody was told | `44d71fd` | `restore-drill/tests/fails-loudly.tftest.hcl` (mutant: notBreaching); `event-pattern.test.mjs` (mutant: no missing-exit-code branch); cell backup missing-job alarms (mutant) |
+| P2-1 LIVE-key guard checked names only | `15966d4`, `5e149f6` | `env-guard.test.mjs` "staging refuses a LIVE Stripe key under the TEST name" (mutant); cell `live_key_under_a_test_name…`, `channex_production_and_billing_keys…` (mutant) |
+| P2-2 unreviewed definer function only warned | `65b301a` | `verify-roles.sh` step 8 (3 checks fail with the pre-fix scripts) |
+| P2-3 ops read-only role reached directory PII | `65b301a` | `verify-roles.sh` step 9 (2 checks fail pre-fix) |
+| P2-4 drill missed policy and worker defects | `65b301a` | `verify-roles.sh` step 7: 7 planted defects, all missed pre-fix |
+| P2-5 PII in Postgres logs | `65b301a` | database `no_bind_values_in_logs` (mutant); `verify-roles.sh` step 10, a log probe with a positive control |
+| P2-6 keys could be destroyed or replaced; DR replica unusable | `5e149f6`, `43c56e1` | cell: protected and replicated keys, exact resource-policy statements, reader list (3 mutants) |
+| P2-7 base images and pnpm unpinned | `15966d4` | `supply-chain.test.mjs` (mutant); corepack accepts the right hash and refuses a wrong one (manual) |
+| P2-8 pipeline used the latest task-definition revision | `c168bc5` | deploy test "no task definition registered" (mutant) |
+| P2-9 NODE_ENV and PORTICO_DEPLOYMENT per environment | `5e149f6` | cell `staging_runs_development_mode_behind_the_guard` (mutant); env-guard key test (mutant) |
+| P2-10 Backup and SES could not page | `5e149f6` | cell on-call publishers assertion (mutant) |
+| P2-11 no CloudTrail, GuardDuty or destructive-call alarms | `5e149f6` | `account-security/tests` (mutant) |
+| P3-1, P3-3, P3-4, P3-5, P3-6, P3-7, P3-8, P3-9, P3-12 | various | P3-1: cell `/8` assertion (its mutant run was confounded, so no clean red proof). P3-6: `ci.yml` `infra` job. P3-7: deploy test, which refuses a copy without `--all` (mutant). P3-9: `definer-lists.test.mjs` (mutant). P3-3, P3-4, P3-5, P3-8 and P3-12 are code only, no test. |
+
+**Not done:**
+- P3-2 (a CloudFront VPC origin): too large for this round.
+- P3-10: the readiness register is outside my write scope.
+- P3-11: identity's SCIM URL is cross-module.
+- P3-6 is only partly done: the infra job runs in CI, but the deploy test has no explicit grants-failure case (a failed init container only shows up as a failed rollout, which is tested).
+
+### What changed in substance
+- **Deploy role (P1-1).**
+  - It can now only push to the cell's image repositories and move the one mutable tag, `release` (the repositories use `IMMUTABLE_WITH_EXCLUSION`).
+  - It can force new deployments of the task definitions Terraform registered, read the deploy-config parameter, publish the web app and read logs under `/portico/<prefix>/*`.
+  - It has no PassRole, RunTask, RegisterTaskDefinition, Secrets Manager, KMS or `AWS-RunShellScript`. The demo host gets an SSM document whose parameters SSM validates.
+  - Migrations and grants run as init containers of every api task, as `portico_owner`. The role bootstrap is a human break-glass step.
+  - The trust policy matches one exact OIDC subject with StringEquals: owner id, repository id, environment, `ref=refs/heads/main` and `job_workflow_ref=deploy.yml`.
+  - The new root `envs/github` codifies the GitHub side: the subject template, environments limited to main with reviewers and no self-review, and branch protection.
+  - The role is still as powerful as the code it deploys. That is stated in the README and runbooks, not hidden.
+- **Lean tier egress (P1-2).** Defaults to one NAT gateway with private tasks. Public task IPs are a lean-only opt-in that raises a warning.
+- **Restore drill (P1-3).**
+  - It runs the release's own image.
+  - A daily freshness task publishes the evidence age; the alarm fires at more than 35 days or when no datapoint arrives (missing data counts as breaching).
+  - A stop rule pages on TaskFailedToStart, a non-zero exit code or no exit code at all.
+  - A TERM trap deletes the restored copy, and a daily sweep removes orphaned copies.
+  - A skipped check is treated as a failure.
+  - AWS Backup now has missing-job alarms for both backups and DR copies.
+
+### Gates (final merged tree)
+- `pnpm lint`: exit 0. Main now runs `--error-on-warnings`; one warning was fixed in `ca3d708`.
+- `pnpm turbo run typecheck --force`: exit 0, 18/18.
+- `pnpm turbo run test --force --concurrency=2`: exit 0, 16/16.
+- `terraform fmt -check`: exit 0. `validate`: 22/22 (5 env roots, 17 modules).
+- `terraform test`: 38/38 (cell 21, ci-deploy-role 6, database 3, restore-drill 3, account-security 2, envs/github 3).
+- `node --test` infra unit tests: 20/20.
+- `deploy-cell.test.sh`: 28/28.
+- `verify-roles.sh`: 53/53 on a throwaway SCRAM Postgres 16.15 with the production runtime layout. In source mode, as CI runs it, 51/51 plus 1 SKIP (the log probe needs `PG_LOG_FILE`).
+- `.github/workflows/ci.yml` now pins every action by SHA and has an `infra` job running fmt, validate, test, the unit tests, `deploy-cell.test.sh` and `verify-roles.sh` (Postgres service with SCRAM). It has never run on GitHub.
+
+### Self-check v6
+
+**§3 re-attack**
+
+| Finding | (a) reverse | (b) siblings checked | (c) failure path | (d) griefing |
+|---|---|---|---|---|
+| P1-1 | a squatted name or re-created repo fails closed: the repository id differs | demo SSM document; drill scheduler (the only PassRole/RunTask left, service-assumed); humans with the infra role (out of scope, alarmed by P2-11) | migrate fails → api never starts → tags roll back (test) | a reviewer can stall a deploy (accepted) |
+| P1-3 | drill disabled or schedule deleted → the stale alarm still fires | DR copy jobs (missing-job alarms); freshness task broken → missing data | killed drill → TERM trap deletes the copy, sweep catches leftovers | none |
+| P2-2 | unreviewed function granted only to the worker → also caught | `verify.sql` check 7, both groups; demo `portico.sh` (same script) | revocations committed, then exit non-zero; app and worker then refused (test) | a migration re-granting a function is revoked on the next deploy |
+
+**§5.1 state machine: restore drill**
+
+| From | To | Trigger | Pages? (test) |
+|---|---|---|---|
+| scheduled | started | scheduler RunTask | — |
+| scheduled | failed to start | image pull, capacity, IAM | **yes**, stop rule TaskFailedToStart / no exit code (`event-pattern` tests) |
+| started | passed | all checks pass, `…-passed.json` written | resets freshness age |
+| started | failed | restore or check fails | **yes**, failure alarm plus stop rule non-zero exit (`fails-loudly`) |
+| started | incomplete | a check prints SKIPPED | **yes**, exit 1 → failure (code only) |
+| started | killed | SIGTERM from ECS | stop rule, copy deleted (code only) |
+| never scheduled / freshness broken | — | — | **yes**, stale alarm, missing = breaching (`fails-loudly`, mutant red) |
+
+The AWS Backup daily backup and DR copy jobs get the same rule: no completed job in 2 days, or no datapoint at all, pages on-call (cell assertion, mutant red).
+
+**External holders.**
+- ECR holds the `release` tag. ECS resolves it to a digest once per deployment, so a rollback moves the tag back and redeploys.
+- AWS-side behaviour (ECS version consistency, the init-container ordering, the `ecs:task-definition` condition key on UpdateService) is modelled only by the fake AWS CLI. That closure is **unproven** until the first apply.
+
+**Pasted searches.**
+- `grep -rn "iam:PassRole\|ecs:RunTask\|ecs:RegisterTaskDefinition" infra/terraform/modules` → only `restore-drill/main.tf:233,237` (the drill scheduler service role).
+- `grep -rn "secretsmanager:GetSecretValue" …` → `compute/iam.tf:83` (execution roles) and `secrets/main.tf:238` (the resource-policy Deny for everyone else).
+- Writers of the `release` tag → only `deploy-cell.sh:133`.
+
+**Control-fact grid: OIDC trust**
+
+| Path | repository id | owner id | environment | ref | workflow file |
+|---|---|---|---|---|---|
+| `sts:AssumeRoleWithWebIdentity` | `ci-deploy-role/main.tf` subject string | same | same | same, StringEquals | same |
+| GitHub side | `envs/github` subject template | same | environments main-only, reviewers | branch protection | — |
+
+**§5.2 invariants**
+
+| Invariant | Writers checked | Concurrency | Test |
+|---|---|---|---|
+| No principal reachable from CI can read guest-money or encryption keys | deploy role policy; resource policies on app keys and payment secrets; execution-role names | n/a (IAM is static) | `ci_cannot_reach_guest_money_keys`, least-privilege (mutants red) |
+| A drill that didn't run always pages | drill schedule, freshness schedule, image tag, alarms, stop rule | n/a | `fails-loudly`, `event-pattern` (mutants red) |
+| No unreviewed cross-tenant definer function reachable by a login group | migrations, the grants phase, `verify.sql` | advisory lock, two concurrent runs tested | `verify-roles` 7–8 (pre-fix red) |
+
+**§5.4 mutation.** 25 mutants in total:
+- 24 turned their test red. The 23 listed in the README, plus a key resource-policy mutant (`43c56e1`) added after it.
+- 1 stayed green: removing the `TaskFailedToStart` branch. That event is still matched by the "no exit code" branch, so the branch is redundant rather than untested.
+- Separately, the pre-fix database scripts fail 13 of the role-model checks.
+
+**§6 claim ledger.** The grep found 134 hits across the README and 6 runbooks. I triaged them; these were wrong and are now rewritten:
+- `database-roles.md:15` said the owner is "not used at runtime". Now: init containers use it; the api and worker never receive its URL (cell assertion).
+- `deploy.md` (deploy-role powers): now backed by the least-privilege test.
+- The ops-role and "unreviewed definer warns" lines: rewritten to match `verify-roles` steps 8–9.
+- `incident-response:51`: the ops role is status-only.
+- `backup-restore-verification` paging claims: now backed by `fails-loudly` and the cell backup alarms.
+
+Kept as planned or code-only: TERM cleanup, the SourceAccount conditions, `log_statement=none` (RDS permission unverified), ALB access logs keeping query strings for 90 days (now disclosed in the new README section on personal data in logs).
+
+**§2 checklist:**
+- **Yes:**
+  - 9, 11 (advisory lock, concurrent runs).
+  - 10 (immutable SHA tags, digest checks).
+  - 12 (grants and their verification in one transaction).
+  - 14, 15 (rollout and smoke failures roll back).
+  - 20, 21 (the real API and worker run in the runtime contract; the fakes refuse unhandled calls).
+  - 23 (variable validations).
+  - 25 (env guard, LIVE-key validation).
+  - 26 (the OIDC repository and owner ids are immutable).
+  - 27 (trusted proxies never shorter than /8).
+  - 29 (no bind values in Postgres logs).
+  - 30 (write-only secrets, nothing on command lines).
+  - 31, 32 (README claims cite tests; readiness stays R3 code / R1 AWS).
+- **No:** item 29 partly — ALB access logs keep query strings for 90 days, which erasure does not reach.
+- **N/A:** items about money, events, port scope and the UI.
+
+### Cost (estimates)
+- Lean is now ≈ **$163/month**, because the NAT default adds about $45 and drops $7 of task IPs. With the public-IP opt-in it is ≈ $124.
+- Staging: about $0.30 off, $11 for a 2-day rehearsal, $153 always on.
+- Resilient: about $408 quiet, $539 busy, or $335 with RDS Multi-AZ.
+- Per account (CloudTrail plus alarms): about $0.05. GuardDuty is usage-based and not in the price files I have.
+- Demo is unchanged at $15–20.
+
+### New owner decisions
+- **D17:** the break-glass role for the irreplaceable keys and which two people may use it.
+- **D18:** compliance-mode vault lock for production backups (it can never be undone).
+- **D19:** GitHub reviewers for staging and production.
+- **D20:** whether release tags may deploy.
+- **D6 (Q158) now defaults to NAT.**
+- **cost-model §4a:** the lean figure there needs updating to ≈ $163.
+
+### Not verified
+- Any AWS evaluation of the new policies: the `ecs:task-definition` condition on UpdateService; `IMMUTABLE_WITH_EXCLUSION`; the Secrets Manager DeleteSecret condition keys; whether Terraform's refresh needs GetSecretValue (I kept the Terraform role as a reader just in case).
+- ECS init-container ordering and the version consistency of the `release` tag.
+- The exact format of GitHub's customized OIDC subject on a real run.
+- The AWS/Backup metric dimensions.
+- EventBridge matching on real ECS events (I tested the pattern only with a local matcher).
+- RDS allowing `SET log_statement`.
+- Image builds and skopeo on the deploy runner image.
+- The `ci.yml` `infra` job on GitHub.
+- GuardDuty cost.
+- First deploy ordering is awkward: the first release fails at the api, a person runs `db-bootstrap`, then the release is re-run. This is documented in `deploy.md`.
+
+The full finding → commit → test table and the personal-data-in-logs section are in `infra/README.md`.
 
 ````
 

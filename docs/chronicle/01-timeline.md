@@ -390,3 +390,27 @@ Each agent's brief and report are in `agents/`.
 - **22:38 — Usage 41% of 5 h, 88% of the week; fix round 4 sent** <!-- t: now @ 2026-11-07T22:38:28Z -->. The rule was narrowed: at seven-day ≥ 85%
   only critical-path finishing work runs (fix rounds, merges). New modules and new reviews, including distribution's,
   wait. The round includes self-check v6 and the E-114 collection-lock mutant.
+- **22:49 — Infra security fix round done** <!-- t: agent-a5fe5dfcc8ccf4f59 @ 2026-11-07T22:49:37.670Z (Infra-as-code (resume)) -->: all 3 P1 and 11 P2 fixed, plus 8 of 12 P3; the infra agent ran under self-check v6.
+  - The deploy role can no longer reach guest-money keys, pass roles or run tasks. Its trust matches one exact OIDC
+    subject: repository id, owner id, environment, `main` and the workflow file.
+  - NAT is the lean default.
+  - The restore drill pages when it fails, cannot start or never runs (missing data counts as breaching).
+  - 24 of 25 mutants were red; the one survivor was a redundant branch.
+  - Four new pre-production decisions became Q161. Lean cost rose to ≈ $163/month with NAT.
+- **22:52 — Infra merged to main** <!-- t: commit:a6733ca @ 2026-11-07T22:52:33Z -->; nothing deployed.
+  - The orchestrator spot-checked instead of launching a re-review (seven-day usage ≥ 85%).
+  - The P1 tests passed: ci-deploy-role 6/6, restore-drill 3/3 and cell 21/21, run with the agent's Terraform 1.16.
+    The container's own Terraform 1.9.8 is too old for `>= 1.11`.
+  - Two orchestrator mutants were both red: alarm missing data set to notBreaching, and PassRole added to the deploy
+    role.
+  - Readiness: infrastructure as code R3; AWS R1.
+- **22:52 — Day Close build done** <!-- t: agent-a6c837ce590a0c220 @ 2026-11-07T22:52:40.658Z (Build day-close module) -->; branch `feat/day-close` was pushed.
+  - Nine steps run from one Start. Nobody is logged out: there is no global lock, and a bar posting during the close
+    lands correctly.
+  - The interruption proof:
+    - S09 crashes after 67 of 112 stays; resume posts exactly the 45 remaining, each attempted once.
+    - A real `kill -9` lands mid-item and once inside the advance.
+    - A chaos run of 24 crash points over 24 dates leaves no ledger key twice.
+  - 87 module tests and 2 HTTP tests. The § 5.4 mutation table has 22 guards, all red.
+  - P0 parity rows still open: 57 → 11.
+  - 17 contract requests went to the other modules. The steward review waits for the usage rule.

@@ -1,7 +1,7 @@
 # Agent run: Integration step: bind module ports
 
-- Started: 2026-11-07T16:16:26.294Z · last activity: 2026-11-07T22:38:26.255Z
-- Turns: 886 · tool uses: 912 · output tokens: 767,481
+- Started: 2026-11-07T16:16:26.294Z · last activity: 2026-11-07T22:53:12.761Z
+- Turns: 953 · tool uses: 981 · output tokens: 838,024
 - Type: general-purpose
 
 ## Brief (2026-11-07T16:16:26.294Z)
@@ -522,6 +522,251 @@ Merge main into your branch first.
 Lint must also pass with `--error-on-warnings`, which is now the main gate. Commit after every meaningful step. Do not push, and never rewrite or amend existing commits, including checkpoint WIP.
 
 Address this before completing your current task.
+````
+
+## Follow-up message (2026-11-07T22:52:50.946Z)
+
+````text
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+<system-reminder>
+<tools-used-before-summary>Bash, Edit, Monitor, Read, SubagentHandback, ToolSearch, Write</tools-used-before-summary>
+</system-reminder>
+Summary:
+1. Primary Request and Intent:
+   - **Role.** I am the integration engineer for Portico, a TypeScript modular monolith. I work in the worktree /home/user/wt/integration-step on branch feat/integration-step.
+   - **Commit rules.** Commit locally after every meaningful step with Conventional Commits.
+     - **Never push. Never rewrite or amend existing commits, including checkpoint WIP.**
+     - Every commit message ends with:
+       `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`
+       `Claude-Session: https://claude.ai/code/session_01XDtqZDkxkzHxUrbV9kDsKR`
+   - **Project rules (CLAUDE.md).**
+     - Never activate paid contracts, live transactions, production keys or live connections.
+     - No secrets in code, tests or logs.
+     - Never import across modules; owner questions go to docs/OPEN_QUESTIONS.md.
+   - **Database.** Postgres is at postgres://postgres@127.0.0.1:5432/postgres.
+   - **Rounds 2 and 3 are complete.** Both reports were delivered via SubagentHandback.
+     - Round 2 commits: 60b3238, 73c9931, 8fda978, 8605368, 00c7639, c3855a1, db6ae8c.
+     - Round 3 commits: 7026624, 915d82b, 7b0c59c, 5e6605c, 1424662.
+   - **Current request: fix round 4.** Coordinator message, verbatim essentials. Re-review #4 says "merge after fixes" (P0 0, P1 2, P2 2, P3 6). Merge main first.
+     1. **R4-P1-1.** A card-on-file agreement covers only the bookings (and folios) it names, recorded with evidence when consent was given.
+        - No staff-editable relationship extends it: booker, occupant, payer, add-stay or profile merge.
+        - Anything else needs a payment link, the terminal or hosted entry.
+        - Q160 default: no future-stays mandate, but leave room in the data model for a named payer-account scope.
+        - Make both of the reviewer's attacks into regression tests: the new booking naming Vera, and add-stay onto Otto's booking.
+     2. **R4-P1-2.** Lock the saved card (or the agreement) before reading the running total, on charge, authorize, hold increase and capture.
+        - Open holds count against the limit (this also fixes the P3 where two holds both use the full limit).
+        - Turn the reviewer's 5×USD 100 parallel attack into a regression test.
+     3. **R4-P2-1.**
+        - The refund exception states the over-collected amount (paid minus still owed), not the whole payment.
+        - An "already paid" answer from the provider stops the replacement link.
+        - The simulator can produce "already paid", so that path gets a test.
+        - Expired links are deactivated at the provider.
+     4. **R4-P2-2.**
+        - A deactivation the provider never confirms raises an owned exception, aged and with an alarm.
+        - The late-charge item never says a link is open before one exists.
+     5. **R4-P3-2.** Deposit application at check-in takes the shared collection lock first. Order: shared lock → folio → payment request.
+     6. **The other P3s:**
+        - A balance charge right after a paid deposit link requires the reason.
+        - The no-show purpose matches no-show fees.
+        - Fix the "per use" comment.
+        - Stripe link expiry ≤ 24 h, with a deactivation test.
+        - Consent check on the two guest-facing paths.
+     7. **E-114.** Add a test where link creation or the link-payment webhook runs inside the lock window of a desk charge (barrier or held transaction). Show it fails with `assertCollectionOwnership`'s per-reference lock removed; that mutant must die.
+     - **Self-check v6** (docs/quality/playbooks/module-builder-self-check.md) before reporting done, with the tables in the report:
+       - § 5 with the v5 steps: the state machine for agreements and limits, external holders, pasted writer searches for every reader and writer of the running total and the agreement scope, and the concurrency column;
+       - the § 5.4 mutation table for every P0/P1 fix and for E-114 (each guard removed in turn → its named test fails → guard restored);
+       - the § 6 claim ledger.
+     - **Gates.** Lint must pass with `--error-on-warnings` (now part of `pnpm lint`). Run `pnpm lint && pnpm turbo run typecheck --force && pnpm turbo run test --force --concurrency=2` with PORTICO_TEST_DB_PREFIX=w1_intstep_fix4 (following the earlier pattern). Commit after every meaningful step; do not push.
+     - **Reply** via SubagentHandback: finding → commit → test, the tables, and the exit codes.
+
+2. Key Technical Concepts:
+   - **ADR-0015:**
+     - Amendment 1: the agreed guarantee is a card supplied by the cardholder or covered by a mandate.
+     - Amendment 2: staff permission never exceeds cardholder consent; links are externally writable.
+     - Amendment 3 (in /home/user/portico working tree, not yet committed on main): agreements cover only named bookings; limits hold under concurrency; lock order is shared collection lock, then folio, then payment request, and deposit modules take the shared lock first.
+   - **Q160:** a future-stays mandate. Default is no; leave room for a payer-account scope.
+   - **Payments consent** (`service/consent.ts`, `consentProblem`):
+     - card row lock (FOR UPDATE);
+     - purpose mapping;
+     - named-booking coverage, with a stay created after consent not covered;
+     - running total = taken (merchant charges and captures that are processing, pending_verification or succeeded) + open holds + this use.
+   - **Lock order to document:** authorization row → card row → collection lock (per booking family) → folio → payment request.
+   - **Payment request state machine:**
+     - link_status values: pending, created, failed, unknown, deactivating, completed, deactivated;
+     - retire before replace; the replacement waits while any sibling is deactivating or completed;
+     - `already_completed` → completed until the payment is recorded;
+     - the urgent overpaid amount is computed from the folio balance after posting.
+   - **Simulator:** a link becomes `completed` when cumulative paid ≥ its amount; deactivating a completed link returns `already_completed`; deactivated or completed links refuse payment.
+   - **Finance:** `syncDepartedFolios`; `lockMoneyFolios` (payments.lockCollections first); the `finance.departed-folio-payment-ended` consumer.
+   - **Self-check v6:** BS5-1..7 (state machine, external holders, derived lists, control facts grid, key fields, concurrency column, mutation proof); BS6 claim ledger.
+
+3. Files and Code Sections (worktree /home/user/wt/integration-step):
+   - **Merge:** fe0ad18 "Merge branch 'main' into feat/integration-step". It has a default message without attribution and cannot be amended. Main's code changes were only tools/chronicle and tools/quality; `package.json` lint is now `biome check . --error-on-warnings && node tools/check-boundaries.mjs`.
+   - **modules/payments/src/service/consent.ts** — fully rewritten for round 4.
+     - Signature: `consentProblem(d, tx, methodIn, property, initiator, use: ConsentUse, opts: { lock?: boolean } = {})`.
+     - `ConsentUse` has `kind`, `purpose`, `amount?`, `ref` and `authorizationId?`.
+     - It re-reads the method FOR UPDATE unless `lock: false` and refuses an inactive card.
+     - Customer path: requires `entry_channel === 'hosted_entry'` and that the owner is the actor's profile or booking (`card_not_yours`).
+     - `suppliedForBooking`: an implicit scope (legal entity, purposes guarantee/deposit/balance/no_show, bookingIds [owner]).
+     - Codes: `mit_not_agreed`, `mandate_scope_missing`, `mandate_out_of_scope`, `mandate_purpose_not_covered`.
+     - Coverage: `ctx.bookingId` must be in `scope.bookingIds`, and `stayCreatedAt` must be ≤ `consentedAt` (`scope.bookingEvidence[bookingId].at` or `acceptedAt`); otherwise `mandate_reference_not_covered`.
+     - `maxAmount` is checked against `runningTotal()`:
+       - taken = sum of merchant payments that are processing, pending_verification or succeeded;
+       - plus open holds (amount − captured − capture_reserved) on merchant authorizations that are processing, pending_verification, authorized or partially_captured, excluding `authorizationId`;
+       - plus this use (a capture counts its own hold's open amount).
+     - `assertWithinConsent` throws BusinessRuleError(code).
+   - **modules/payments/src/service/shared.ts:**
+     - `referenceContext` returns `{ bookingId, people, stayCreatedAt }`;
+     - `lockCollectionRefs(d, tx, refs)` uses family keys (`payments:collect:family:<bookingId>`);
+     - `ownerKeyOfPayer`.
+   - **modules/payments/src/ports.ts:**
+     - `ReferenceOwner` gains `bookingId?`, `people?` and `stayCreatedAt?`;
+     - `LedgerTargetInfo` (owner, payer);
+     - `LedgerPort.balanceOf(tx, ref): Promise<number|null>` (new);
+     - `assertTargetUsable`.
+   - **modules/payments/src/service/collect.ts:**
+     - `CollectionPurpose` adds `no_show`.
+     - `assertCollectionOwnership(d, tx, ref, purpose, override, opts: {amountMinor?})`:
+       - family query;
+       - `balanceFree` = balance purpose on a folio with amount ≤ `ledger.balanceOf`;
+       - a reason is needed when the link is on the same ref, unpaid in the family, of the same purpose, or the new label is custom, incidentals or a non-free balance.
+     - Call sites pass amounts.
+     - `incrementAuthorization` consent with `authorizationId`.
+     - `capture`: the consent check (merchant, `authorizationId`) comes BEFORE the collection lock; a customer hold must stay in the same family (`capture_outside_booking`); then lock and guard.
+   - **modules/payments/src/contracts.ts:**
+     - `mandateScope`: `maxAmount` documented as a total; `coverage: z.enum(['named_bookings']).optional()`; `bookingIds` doc.
+     - Charge and record purposes add `no_show`.
+     - A mandate requires a scope (refine plus a service check).
+   - **modules/payments/migrations/0004_consent_and_link_states.sql** (new): payments purpose check adds no_show; link_status check adds `completed`; `link_status_at` timestamptz with a partial index. `tables.ts` updated to match.
+   - **modules/payments/src/service/requests.ts:**
+     - `retireRequestLink` sets `link_status_at`.
+     - `ensurePaymentLink` waits for deactivating or completed siblings and passes `now: d.database.clock.now()`.
+     - `ensureLinkDeactivated`: unknown-link recovery uses `r.amount_minor`; `failed` → `raiseLinkNotStopped`; `already_completed` → `deactivated` if a link payment is recorded, else `completed`; release only when recorded.
+     - New: `releaseWaitingLinks(d, ctx, ref)`, `raiseLinkNotStopped(tx, r, why)` (kind `payment_link_not_stopped`, urgent, owner finance, dedupeKey `link-not-stopped:<id>`), and `confirmLinkStopped(d, tx, {requestId, reason})` (permission `payments.paymentRequest.create`, audited, resolves the exception, releases).
+     - `BalanceSyncResult.linkReady` is set on every return.
+   - **modules/payments/src/service/operations.ts:**
+     - `creditPaymentRequest` returns `{before, paid}` and moves completed → deactivated.
+     - New `raiseIfOvercollected(d, tx, before, paid, amountMinor, paymentId)`:
+       - reads the balance only when `ledger_status` is posted;
+       - balance ≥ 0 → no item;
+       - balance < 0 → refund `min(amount, -balance)`;
+       - balance null → "check before refunding".
+     - The completion path calls credit → post → raiseIfOvercollected.
+   - **modules/payments/src/service/webhooks.ts:** link payments do the same, plus `releaseWaitingLinks` after commit if the request was completed; a provider `expired` event sets link_status deactivated.
+   - **modules/payments/src/service/reconcile.ts:**
+     - `LINK_STOP_DEADLINE_MS = 30 min`; retiring rows are ordered by `link_status_at`;
+     - overdue deactivating or completed links → `raiseLinkNotStopped`;
+     - expiry retires links (`expiredLinks`), then `ensureLinkDeactivated` runs after the transaction.
+   - **modules/payments/src/providers:**
+     - `simulator.ts`: `already_completed` on completed links; links complete on cumulative payment; payments refused on deactivated or completed links.
+     - `provider.ts`: `PaymentLinkCall.now?`; `STRIPE_LINK_MAX_LIFETIME_MS = 23h`.
+     - `stripe-connect.ts`: caps `expires_at`.
+     - `stripe-connect.test.ts`: 2 new tests (lifetime cap; deactivate expired / complete / error / timeout); 17 passed.
+   - **modules/payments/src/service/accounts.ts:**
+     - New `confirmCardForBooking(d, tx, {methodId, bookingId})`: guest actor only (owner is the actor's profile or booking); appends `bookingIds` and `bookingEvidence` with channel `guest_self_service`; audits `payments.method.bookingConsented`.
+     - `assessGuaranteeCard` uses `consentProblem(..., {lock:false})`.
+   - **modules/payments/src/service/index.ts:** `tx.confirmCardForBooking` and `tx.confirmLinkStopped`; provider `lockCollections`.
+   - **modules/payments/src/finance-collections.ts:** returns `linkReady` and `oldLinkStopping`.
+   - **modules/payments/test/harness.ts:**
+     - LedgerControls: `defaultPayer`, `folioOwners`, `balances`, `defaultBooking`, `bookingOf`.
+     - Org: `payerId`, `bookingId`.
+     - The fake references map a booking ref to itself, and stays/folios to `bookingOf` or the default booking.
+     - The fake ledger: a folio's owner defaults to `{type:'stay', id: folioId}`; `balanceOf` reads the `balances` map.
+     - `addMethod` and `standingMandate` name `org.bookingId`; `ALL_PURPOSES`.
+   - **Payments tests adapted:**
+     - review-sweep-regressions: booking refs → `org.bookingId`; `cardAtB` scope gets bookingIds; the SW-PAY-2 test was rewritten in round 3; the "paid part" test.
+     - review-regressions: P1-5 booking = `org.bookingId`.
+     - scenario-s20: `h.ledger.bookingOf.set(folioLink, newId())`.
+     - environment-safety: `standingMandate`, owner `org.payerId`.
+     - request-lifecycle.test.ts (5 tests) unchanged.
+     - All payments tests pass: 144.
+   - **modules/finance:**
+     - `ports.ts`: `BalanceSyncResult` gains `linkReady?` and `oldLinkStopping?`; `PaymentsPort.lockCollections`.
+     - `departed-folios.ts`: messages only say "send it" when `linkReady`; resolution notes "being stopped at the provider".
+     - `deposits.ts` `applyDeposits` calls `deps.ports.payments.lockCollections(tx, { folioIds: [input.toFolioId] })` before the deposit-account FOR UPDATE.
+     - `service/index.ts`: `balanceOf` in `financeLedgerForPayments` and `folioBalanceMinor` in the service; imports `folioBalance` from support.
+     - Finance tests pass: 92.
+   - **modules/reservations/src/service/provider.ts:** `describeReference` also returns `stayCreatedAt` (from `reservations.stays.created_at`) for stay refs.
+   - **Not yet updated:** apps/api tests and the scenario harness. `guestWithCard`/`cardOnFile` standing mandates no longer cover any booking, so many api tests will fail. The planned fix is a harness helper (e.g. `bookWithCard`, or a consent helper): create the booking without a guarantee → the cardholder confirms via `payments.tx.confirmCardForBooking` with a guest-actor ctx (`actor: {kind:'guest', guestProfileId}`) → patch the guarantee. The alternative is `cardOnFile(..., { mandateFor: [bookingId] })` for cards created after the booking.
+
+4. Errors and fixes:
+   - **Round-3 / earlier fixes** (already applied):
+     - duplicate data-authority route;
+     - harness admin email must be `*.portico.invalid`;
+     - MFA enrolment in `signIn`;
+     - authority transition flow in `makeExternal` (`org_admin` planner and approver; `general_manager` lacked `platform.dataAuthority.manage`);
+     - lint unused imports.
+   - **Round 4:**
+     - Writing consent.ts first failed because the file had not been Read; I read it, then wrote.
+     - TS error: the `runningTotal` argument type was fixed with `{ ...use, amount: use.amount }`.
+     - A script assertion failed because the simulator code was biome-formatted multi-line; re-applied with the exact text.
+     - Missing imports (`RequestRow` in operations; `requestContextOf`, `raiseException`, `resolveExceptionsByKey` in requests/webhooks) were added.
+     - The fake `describeTarget` replace was silently not applied (folio owner null), so 34 tests failed on coverage; fixed with sed.
+     - The fake mapped all bookings to the default family, which broke VCC coverage; switched to natural booking families and changed tests to `org.bookingId`.
+     - One-payment-per-link broke partial-payment tests; the simulator now completes a link when the cumulative amount reaches it.
+     - s20: an open link in the same default family blocked charges; registered `folioLink` under its own booking.
+
+5. Problem Solving:
+   - Round 4 payments and finance changes are implemented; payments (144) and finance (92) tests pass.
+   - Reservations src typechecks; its module tests have not been rerun after round 4.
+   - The api suite has not been run yet; it is expected to break broadly because standing agreements no longer cover bookings.
+   - Nothing from round 4 is committed except the merge fe0ad18.
+
+6. All user messages:
+   - **Earlier messages** (summarized in prior context):
+     - the original integration task;
+     - UX round 1 coordinator notes;
+     - fix round 1;
+     - the resume message;
+     - round 2: R2-P1/P2/P3 and SW-PAY-1..4, with self-check v3 and "never rewrite pushed commits";
+     - self-check v4 § 5 invariant closure, invariants (a)–(f);
+     - round 3: R3-P1-1/2, R3-P2s, P3s, Amendment 2, gates with w1_intstep_fix3.
+   - **Latest coordinator message (round 4)**, verbatim essentials:
+     - "Integration-step fix round 4: re-review #4 says 'merge after fixes' (P0 0, P1 2, P2 2, P3 6). Every r3 attack is now refused. Thank you, the state-machine round worked."
+     - Read first: review-integration-step-4.md, r4-fix-attacks.test.ts.txt (13 attacks), ADR-0015 Amendment 3, OPEN_QUESTIONS Q160, the pending-fixes "integration-step fix round 4" line. "Merge main into your branch first."
+     - Fixes 1–7 as listed in section 1.
+     - "Self-check v6 … before you report done. Include the tables in your report: § 5 with the v5 steps …; The § 5.4 mutation table for every P0/P1 fix and for E-114 …; § 6 claim ledger."
+     - "Lint must also pass with --error-on-warnings, which is now the main gate. Commit after every meaningful step. Do not push, and never rewrite or amend existing commits, including checkpoint WIP."
+
+7. Pending Tasks:
+   - Run the reservations module tests.
+   - Fix the api scenario harness and tests for named-booking consent. Add a cardholder-consent helper using `confirmCardForBooking` with a guest ctx (or `mandateFor`). Restructure bookings that use a guarantee card at creation by desk (create → consent → patch guarantee). Update the r2/r3/intstep tests and scenarios s03, s05, s06, s07, s15, bindings and payments.test.
+   - Write the round-4 api regression file (e.g. apps/api/test/review-regressions-r4.test.ts), flipping every r4 PoC:
+     - R4-A (new booking naming Vera) and R4-A2 (add_stay onto Otto's booking) → refused;
+     - R4-B: 5 parallel USD 100 charges on a USD 100 agreement → total ≤ 100;
+     - R4-C: two holds → the second refused;
+     - R4-D1 / R4-D2: refund amount correct, or no item when owed;
+     - R4-E: owned exception after the deadline; item text does not claim a link;
+     - R4-J: a balance charge before the deposit is applied needs a reason;
+     - R4-K: clean; F, G clean; R4-H: applyDeposits lock order probe (no deadlock);
+     - siblings: already_completed stops the replacement; expiry deactivates; no_show purpose; profile merge does not widen; channel modify; Stripe cap.
+   - Write the E-114 barrier test: a desk charge holds the transaction open after `assertCollectionOwnership`; createPaymentRequest or the link webhook inside the window must wait and then be refused. Run the mutant with the lock removed and show it fails.
+   - Mutation table runs for the P1 guards: card lock in consent, open holds, named-booking coverage, stayCreatedAt check, the E-114 lock, plus others.
+   - Pre-fix runs of the new tests against the pre-round commit 1424662 / fe0ad18.
+   - Docs:
+     - domain map: lock order including the card row, Amendment 3 behaviour;
+     - payments README (claim ledger accuracy);
+     - pending-fixes: mark round-4 items; residuals such as terminal/link consent capture not built;
+     - possibly a route for `confirmLinkStopped`.
+   - Self-check v6 tables (§ 5 with the state machine, external holders, pasted writer greps and the control-facts grid; § 5.4 mutation table; § 6 claim ledger).
+   - Gates with PORTICO_TEST_DB_PREFIX=w1_intstep_fix4: `pnpm install --frozen-lockfile`, `pnpm lint` (`--error-on-warnings`), `pnpm turbo run typecheck --force`, `pnpm turbo run test --force --concurrency=2`. Check exit codes and clean leftover DBs.
+   - Commit in meaningful steps (never amend or push), then deliver the report via SubagentHandback.
+
+8. Current Work:
+   - Immediately before the summary I finished the payments and finance round-4 code changes.
+     - Payments tests: 144 passed. Finance tests: 92 passed.
+     - I added `stayCreatedAt` to reservations `describeReference` and confirmed typecheck for reservations and apps/api.
+     - The last command ran the finance tests: "fin=0, Tests 92 passed (92)".
+   - None of the round-4 work is committed yet; the latest commit is merge fe0ad18.
+
+9. Optional Next Step:
+   - Commit the current payments, finance and reservations round-4 changes now (Conventional Commit with attribution, no amend).
+   - Then run the reservations module tests and the api suite. Fix the api scenario harness for named-booking consent (cardholder-confirmed booking consent via `confirmCardForBooking`, guest actor), per the coordinator's instruction: "R4-P1-1: a card-on-file agreement covers only the bookings (and folios) it names … Make both of the reviewer's attacks into regression tests: the new booking naming Vera, and add-stay onto Otto's booking."
+   - Then continue with the r4 regression tests, the E-114 barrier test and mutant, the mutation table, the self-check v6 tables and the gates with PORTICO_TEST_DB_PREFIX=w1_intstep_fix4.
+
+If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /root/.claude/projects/-home-user-portico/4f98af2a-3564-5e4b-aedc-2d94c911507d/subagents/agent-a29fdf2e9c7d0e9dc.jsonl
+Continue the conversation from where it left off without asking the user any further questions. Resume directly — do not acknowledge the summary, do not recap what was happening, do not preface with "I'll continue" or similar. Pick up the last task as if the break never happened.
 ````
 
 ## Report (2026-11-07T17:04:17.381Z)
