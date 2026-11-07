@@ -30,7 +30,13 @@ import {
   inventoryManifest,
   inventorySearch,
 } from '@portico/inventory';
-import { fieldCryptoFromEnv, type ModuleManifest, systemAuthorizer } from '@portico/kernel';
+import {
+  DomainError,
+  fieldCryptoFromEnv,
+  type ModuleManifest,
+  randomToken,
+  systemAuthorizer,
+} from '@portico/kernel';
 import {
   createOperationsDemoSeed,
   createOperationsService,
@@ -42,6 +48,16 @@ import {
   operationsSearch,
   operationsSubscriptions,
 } from '@portico/operations';
+import {
+  createPaymentsModule,
+  envProviderSecrets,
+  type LedgerPort,
+  type PlatformPort as PaymentsPlatformPort,
+  type PaymentsService,
+  paymentsManifest,
+  paymentsSearch,
+  seedPaymentsDemo,
+} from '@portico/payments';
 import { platform, platformHttp, platformManifest, platformSearch } from '@portico/platform';
 import {
   createRatesDemoSeed,
@@ -64,7 +80,44 @@ export const MANIFESTS: readonly ModuleManifest[] = [
   operationsManifest,
   ratesManifest,
   // wave-1 modules register here
+  paymentsManifest,
 ];
+
+/**
+ * Stub for a port whose provider is another wave-1 module not merged yet. Every call fails with a clear,
+ * retryable error (except the operations given in `available`).
+ */
+function unavailablePort<T extends object>(module: string, available: Partial<T> = {}): T {
+  return new Proxy({} as T, {
+    get: (_t, prop) =>
+      prop in available
+        ? available[prop as keyof T]
+        : () => {
+            throw new DomainError(
+              'module_unavailable',
+              `The ${module} module is not connected yet (${String(prop)}). The action was recorded where possible; it will be completed once ${module} is available.`,
+              { status: 503, retryable: true, details: { module, operation: String(prop) } },
+            );
+          },
+  });
+}
+
+/**
+ * Finance is not merged yet. Payments may not collect against a folio it cannot place (P0-1: the folio might belong
+ * to another property or company), so folio collections are refused with a clear reason; a booking deposit is
+ * accepted (finance binds the booking to the property when it posts the deposit, and refuses a mismatch) and shows
+ * "not yet on the bill" until finance is connected. Every posting fails retryably and is retried by reconciliation.
+ */
+const ledgerUntilFinanceMerges = unavailablePort<LedgerPort>('finance', {
+  async describeTarget(_tx, ref) {
+    if (ref.type === 'booking') return null;
+    throw new DomainError(
+      'module_unavailable',
+      'Finance is not connected yet, so Portico cannot confirm which property this folio belongs to and will not collect against it. Take the payment as a booking deposit, or record it once finance is connected.',
+      { status: 503, retryable: true, details: { module: 'finance', operation: 'describeTarget' } },
+    );
+  },
+});
 
 // ── inventory ── bound once; inventory's only port is platform (exists on main), so nothing is stubbed.
 // Other modules (reservations, operations, groups, distribution, day-close) bind their inventory ports to this.
@@ -95,6 +148,7 @@ export interface Composition {
     inventory: InventoryService;
     operations: OperationsService;
     rates: RatesService;
+    payments: PaymentsService;
   };
   /** Demo data contributed by each module, run in order inside each demo organization (apps/api/src/seed). */
   demoSeedSteps: DemoSeedStep[];
@@ -220,6 +274,30 @@ export function compose(database: PorticoDatabase): Composition {
   const rates = ratesService(ratesPorts, { termsSealKey: termsSealKeyFromEnv().key });
   const ratesModule = ratesHttp({ database, rates });
 
+  // ── payments ── (finance LedgerPort: bind `financeLedgerForPayments(finance)` when finance merges)
+  const paymentsPlatform: PaymentsPlatformPort = {
+    // Payments has already checked its own permission; it needs the merchant (legal entity) and time zone.
+    async getProperty(tx, propertyId) {
+      const p = await platform.getProperty(asSystem(tx), propertyId);
+      return { id: p.id, legalEntityId: p.legalEntityId, timezone: p.timezone, baseCurrency: p.baseCurrency };
+    },
+    async getLegalEntity(tx, id) {
+      const le = await platform.getLegalEntity(tx, id);
+      return { id: le.id, countryCode: le.countryCode, baseCurrency: le.baseCurrency };
+    },
+    assertWritable: (tx, propertyId, domain) => platform.assertWritable(tx, propertyId, domain),
+    async resolvePolicy(tx, propertyId, key, defaultValue) {
+      return { value: (await platform.resolvePolicy(tx, propertyId, key, defaultValue)).value };
+    },
+  };
+  const payments = createPaymentsModule({
+    database,
+    ledger: ledgerUntilFinanceMerges,
+    platform: paymentsPlatform,
+    secrets: envProviderSecrets(process.env),
+    simulatorSigningSecret: process.env.PAYMENTS_SIMULATOR_SIGNING_SECRET ?? randomToken(),
+  });
+
   // ── cross-module experience: global search, summaries, record history ──
   const searchProviders: SearchProvider[] = [
     platformSearch,
@@ -227,6 +305,7 @@ export function compose(database: PorticoDatabase): Composition {
     guestsSearchProvider(guestsService),
     operationsSearch,
     ratesSearch,
+    paymentsSearch,
   ];
   const recordsModule = recordsHttp({ database, manifests: MANIFESTS, searchProviders });
 
@@ -239,14 +318,16 @@ export function compose(database: PorticoDatabase): Composition {
       guestsModule,
       operationsModule,
       ratesModule,
+      payments.http,
       recordsModule,
     ],
-    subscriptions: [...operationsSubscriptions(operationsPorts)],
+    subscriptions: [...operationsSubscriptions(operationsPorts), ...payments.subscriptions],
     searchProviders,
     jobs: [
       ...CORE_JOBS,
       ...createInventoryJobs(inventoryService),
       ...guestsJobs(guestsService),
+      ...payments.jobs,
       ...operationsJobs(operationsPorts, {
         onError: (job, propertyId, err) =>
           console.error(
@@ -260,13 +341,20 @@ export function compose(database: PorticoDatabase): Composition {
           ),
       }),
     ],
-    services: { guests: guestsService, inventory: inventoryService, operations: operationsService, rates },
+    services: {
+      guests: guestsService,
+      inventory: inventoryService,
+      operations: operationsService,
+      rates,
+      payments: payments.service,
+    },
     demoSeedSteps: [
       { name: 'inventory', run: inventoryDemoSeed },
       createGuestsDemoSeed(guestsService),
       createOperationsDemoSeed(operationsService),
       // After inventory: prices the demo properties' unit types by profile (resort vs guesthouse).
       { name: 'rates', run: createRatesDemoSeed(rates, ratesPorts) },
+      { name: 'payments', run: seedPaymentsDemo },
     ],
   };
 }
