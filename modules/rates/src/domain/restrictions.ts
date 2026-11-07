@@ -29,6 +29,8 @@ export interface PlanChainLink {
 
 /** Which plan's own rows define `kind` for the last plan of `chain` (root first). */
 export function ownerPlanForKind(chain: readonly PlanChainLink[], kind: RestrictionKind): string {
+  // A sales limit counts the plan's OWN sales, so it is never inherited.
+  if (kind === 'salesLimit') return (chain[chain.length - 1] as PlanChainLink).id;
   for (let i = chain.length - 1; i > 0; i--) {
     const link = chain[i] as PlanChainLink;
     if (!link.inheritedKinds.includes(kind)) return link.id;

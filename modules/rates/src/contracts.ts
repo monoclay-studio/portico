@@ -664,8 +664,8 @@ export const derivationInput = z.object({
 export type DerivationInput = z.output<typeof derivationInput>;
 
 export const inheritance = z.object({
-  /** Restriction kinds taken from the parent plan (others are the plan's own values). */
-  restrictions: z.array(restrictionKind).default([...restrictionKind.options]),
+  /** Restriction kinds taken from the parent plan (others are the plan's own values). Sales limits are never inherited. */
+  restrictions: z.array(restrictionKind).default(restrictionKind.options.filter((k) => k !== 'salesLimit')),
   cancellationPolicy: z.boolean().default(true),
   guaranteePolicy: z.boolean().default(true),
   depositPolicy: z.boolean().default(true),
@@ -708,7 +708,7 @@ export const ratePlanInput = z.object({
   currency: currencyCode.optional(),
   derivation: derivationInput.optional(),
   inherit: inheritance.default({
-    restrictions: [...restrictionKind.options],
+    restrictions: restrictionKind.options.filter((k) => k !== 'salesLimit'),
     cancellationPolicy: true,
     guaranteePolicy: true,
     depositPolicy: true,

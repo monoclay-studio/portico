@@ -3,7 +3,7 @@
  * night price ("included" — revenue split) or charged on top ("added"). Allowances additionally carry an
  * entitlement (monetary or quantity per night/stay) that finance consumes and closes with the remainder policy.
  */
-import { addDays, Decimal, type LocalDate, type Occupancy } from '@portico/kernel';
+import { addDays, allocate, Decimal, type LocalDate, money, type Occupancy } from '@portico/kernel';
 import type { AllowanceEntitlement, InclusionSnapshot, Violation } from '../contracts';
 import type { ChildAgeBand } from './pricing';
 
@@ -83,7 +83,8 @@ function amountFor(inc: InclusionSnapshot, occ: Occupancy, bands: readonly Child
 
 export function computeInclusions(input: {
   inclusions: readonly InclusionSnapshot[];
-  nights: ReadonlyArray<{ date: LocalDate; amountMinor: number }>;
+  /** amountMinor = agreed night price (after promotions); baseAmountMinor = before promotions (default: same). */
+  nights: ReadonlyArray<{ date: LocalDate; amountMinor: number; baseAmountMinor?: number }>;
   departure: LocalDate;
   occupancy: Occupancy;
   bands: readonly ChildAgeBand[];
@@ -126,18 +127,30 @@ export function computeInclusions(input: {
       });
     }
   }
+  const baseAmount = new Map(input.nights.map((n) => [n.date, n.baseAmountMinor ?? n.amountMinor]));
   for (const [date, occs] of included) {
     const allocated = occs.reduce((s, o) => s + o.amountMinor, 0);
-    const night = nightAmount.get(date) ?? 0;
-    if (allocated > night) {
+    const base = baseAmount.get(date) ?? 0;
+    // Configuration problem: the inclusions are worth more than the undiscounted night price.
+    if (allocated > base) {
       violations.push({
         kind: 'inclusion_exceeds_price',
         date,
         message: `Included items (${occs.map((o) => o.inclusion.code).join(', ')}) are worth more than the night price on ${date}. Raise the price or reduce the inclusion allocation.`,
         required: allocated,
-        actual: night,
+        actual: base,
         overridable: false,
         source: null,
+      });
+      continue;
+    }
+    // A promotion reduced the night below its inclusions' value (e.g. a free night): the inclusions are still
+    // delivered, so their revenue share shrinks in proportion (largest remainder, exact) — never a negative room.
+    const night = nightAmount.get(date) ?? 0;
+    if (allocated > night && allocated > 0) {
+      const shares = allocate(money(night, input.currency), occs.map((o) => o.amountMinor));
+      occs.forEach((o, i) => {
+        o.amountMinor = shares[i]?.amountMinor ?? 0;
       });
     }
   }

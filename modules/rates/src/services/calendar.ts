@@ -406,7 +406,7 @@ async function restrictionPreviewFor(tx: TxContext, u: RestrictionBulkUpdate, lo
       changes.push({ ratePlanId: u.ratePlanId, unitTypeId, date, before, after, version: r ? r.version + 1 : 1 });
     }
   }
-  const changedKinds = RESTRICTION_KINDS.filter((k) => k in u.set);
+  const changedKinds = RESTRICTION_KINDS.filter((k) => k in u.set && k !== 'salesLimit');
   let affected: Array<{ ratePlanId: string; code: string }> = [];
   if (u.ratePlanId) {
     const plans = asNodes(await loadPlansForProperty(tx, u.propertyId));

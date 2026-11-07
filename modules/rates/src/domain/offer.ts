@@ -240,7 +240,7 @@ export function assemble(input: AssembleInput): Assembled {
   const nightIndex = new Map(eachNight({ from: input.arrival, to: input.departure }).map((d, i) => [d, i]));
   const inc = computeInclusions({
     inclusions: input.inclusions,
-    nights: nights.map((n) => ({ date: n.date, amountMinor: n.amountMinor })),
+    nights: nights.map((n) => ({ date: n.date, amountMinor: n.amountMinor, baseAmountMinor: n.baseAmountMinor })),
     departure: input.departure,
     occupancy: input.occupancy,
     bands: input.bands,
@@ -504,7 +504,7 @@ export function assemble(input: AssembleInput): Assembled {
     policies,
     commission,
     violations: inc.violations,
-    unverifiedTaxRules: [...new Set(taxesAndFees.filter((t) => t.verificationStatus === 'unverified').map((t) => t.ruleCode))],
+    unverifiedTaxRules: [...new Set(taxesAndFees.filter((t) => t.verificationStatus !== 'verified').map((t) => t.ruleCode))],
     terms,
   };
 }

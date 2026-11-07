@@ -56,6 +56,14 @@ describe('restrictions', () => {
     expect(room.map((x) => x.kind)).toEqual(['closed_to_departure']);
   });
 
+  it('never inherits sales limits (they count the plan\'s own sales)', () => {
+    const rows = [row({ date: '2026-12-20', ratePlanId: 'bar', values: { salesLimit: 1 } }), row({ date: '2026-12-21', ratePlanId: 'nr', values: { salesLimit: 2 } })];
+    const allKinds = [{ id: 'bar', inheritedKinds: [] }, { id: 'nr', inheritedKinds: ['salesLimit', 'closed'] as const }];
+    const eff = effectiveRestrictions(rows, allKinds, 'room');
+    expect(eff.get('2026-12-20')?.salesLimit).toBeUndefined();
+    expect(eff.get('2026-12-21')?.salesLimit?.value).toBe(2);
+  });
+
   it('takes the most restrictive value across scopes', () => {
     const rows = [
       row({ date: '2026-12-20', values: { minLos: 3, maxLos: 14 } }),
@@ -164,6 +172,36 @@ describe('inclusions and allowances', () => {
     expect(r.added[0]).toMatchObject({ serviceDate: '2026-12-03', nightDate: '2026-12-02', quantity: 3, amountMinor: 105_000 });
     expect(r.allowances[0]?.periods.map((p) => p.amount?.amountMinor)).toEqual([15_000, 15_000]);
     expect(r.violations).toEqual([]);
+  });
+
+  it('shrinks included revenue shares in proportion when a promotion discounts the night (never a negative room)', () => {
+    const inclusion = (id: string, code: string, amountMinor: number) => ({
+      ...base,
+      id,
+      code,
+      name: code,
+      kind: 'component' as const,
+      chargeCode: code,
+      taxCategory: 'food_beverage',
+      pricing: { kind: 'fixed' as const, amountMinor },
+      basis: 'per_unit' as const,
+      rhythm: { kind: 'nightly' as const },
+      priceMode: 'included' as const,
+    });
+    const r = computeInclusions({
+      inclusions: [inclusion('a', 'BRKF', 3_000), inclusion('b', 'DINNER', 6_000)],
+      nights: [
+        { date: '2026-12-01', amountMinor: 0, baseAmountMinor: 50_000 },
+        { date: '2026-12-02', amountMinor: 4_501, baseAmountMinor: 50_000 },
+      ],
+      departure: '2026-12-03',
+      occupancy: { adults: 2, childrenAges: [] },
+      bands: DEFAULT_CHILD_AGE_BANDS,
+      currency: 'USD',
+    });
+    expect(r.violations).toEqual([]);
+    expect(r.included.get('2026-12-01')?.map((o) => o.amountMinor)).toEqual([0, 0]);
+    expect(r.included.get('2026-12-02')?.map((o) => o.amountMinor)).toEqual([1_500, 3_001]);
   });
 
   it('flags inclusions worth more than the night price', () => {
