@@ -96,3 +96,13 @@ literals (self-check BS3-1).
 `Provenance` from it.
 **Workaround.** Guests declares its subset with `as const satisfies readonly Provenance[]` (type-only import), so
 drift fails the build.
+
+## 10. Indexed erasure redaction (`packages/db`) — R2-P2-3, tracked in pending-fixes
+
+**Problem.** `redactIdempotencyResponses` finds rows by scanning every stored response of the organization (a
+substring pre-filter, then an exact whole-value test). Measured by the re-review: 50,000 rows ≈ 4.4 s; the 30 s
+statement timeout is reached near 340,000 stored responses in 30 days.
+**Proposal.** `subject_refs text[]` on `core.idempotency_keys` with a GIN index, filled at write time
+(`ReplayPlan.subjects(body)`, and an optional `subjects` callback for raw-body endpoints); redact with
+`subject_refs && $identifiers`; keep a batched background sweep (consumer of `guests.profile.anonymized`) for
+untagged rows.
