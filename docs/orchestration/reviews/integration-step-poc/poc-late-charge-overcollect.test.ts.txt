@@ -1,0 +1,117 @@
+/**
+ * PoC (steward review, integration step) — finance → payments late-charge collection ignores the folio balance.
+ *
+ * finance.postCharge asks payments for a payment request of the late charge's full share on the folio
+ * (postings.ts: `amount: money(share, currency)`), even when the folio is still in CREDIT (an applied deposit). Now
+ * that the port is bound, the guest is sent a payment link for money they do not owe.
+ */
+import { sql } from '@portico/db';
+import { newId } from '@portico/kernel';
+import { platform } from '@portico/platform';
+import type { Booking } from '@portico/reservations';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import {
+  applied,
+  bookingInput,
+  cardOnFile,
+  kandu,
+  organization,
+  readyUnit,
+  type Scenario,
+  startScenario,
+} from './scenarios/harness';
+
+let s: Scenario;
+beforeAll(async () => {
+  s = await startScenario();
+});
+afterAll(async () => s?.close());
+
+describe('PoC: late-charge collection on a folio in credit', () => {
+  it('asks the guest to pay a late charge that the remaining deposit credit already covers', async () => {
+    const org = await organization(s);
+    const k = await kandu(s, org, '2027-03-10');
+    const desk = org.staff('front_desk', 'Hassan', [k.id]);
+    const { reservations, payments, finance } = s.c.services;
+    const card = await cardOnFile(s, org, k.id, k.legalEntityId);
+    const b = applied<Booking>(
+      await org.run(desk, (tx) =>
+        reservations.createBooking(
+          tx,
+          bookingInput(
+            k,
+            { arrival: '2027-03-10', departure: '2027-03-12', unit: '214' },
+            { guarantee: { kind: 'card', paymentMethodId: card.id } },
+          ),
+        ),
+      ),
+    );
+    const stay = b.stays[0];
+    if (!stay) throw new Error('no stay');
+    await s.drain();
+    await readyUnit(s, org, k.id, k.units['214'] as string);
+    await payments.chargeNow(desk, {
+      propertyId: k.id,
+      methodId: card.id,
+      amount: { amountMinor: 50_000, currency: 'USD' },
+      ref: { type: 'booking', id: b.id },
+      businessKey: `deposit:${b.id}:1`,
+    });
+    const checkIn = await reservations.performWorkflow(s.t.db, desk, {
+      stayId: stay.id,
+      kind: 'check_in',
+      checkIn: { registration: { identityVerified: true }, access: { kind: 'card', count: 1 } },
+    });
+    expect(checkIn.run?.status).toBe('completed');
+    await org.run(org.setup, (tx) => platform.advanceBusinessDate(tx, k.id, '2027-03-10'));
+    await org.run(org.setup, (tx) => platform.advanceBusinessDate(tx, k.id, '2027-03-11'));
+    const manager = org.staff('general_manager', 'Duty manager', [k.id]);
+    const out = await reservations.performWorkflow(s.t.db, manager, {
+      stayId: stay.id,
+      kind: 'check_out',
+      checkOut: { settle: { leaveOpenReason: 'Deposit credit to be refunded' } },
+    });
+    expect(out.run?.status).toBe('completed');
+    await s.drain();
+
+    const [folio] = await org.run(desk, (tx) =>
+      finance.listFolios(tx, { owner: { type: 'stay', id: stay.id } }),
+    );
+    expect(folio?.balance.amountMinor).toBe(-50_000); // the guest is owed USD 500
+
+    // A USD 100 minibar charge arrives after departure: the guest is still USD 400 in credit.
+    await org.run(desk, (tx) =>
+      finance.postCharge(tx, {
+        propertyId: k.id,
+        target: { type: 'stay', id: stay.id },
+        chargeCode: 'MISC',
+        amount: { amountMinor: 10_000, currency: 'USD' },
+        description: 'Minibar',
+        serviceDate: '2027-03-12',
+        sourceRef: { type: 'pos_check', id: newId() },
+        idempotencyKey: `pos:${newId()}`,
+      }),
+    );
+    const [after] = await org.run(desk, (tx) =>
+      finance.listFolios(tx, { owner: { type: 'stay', id: stay.id } }),
+    );
+    expect(after?.balance.amountMinor).toBeLessThan(0);
+    const requests = await sql<{ amount_minor: number; status: string }>`
+      select amount_minor, status from payments.payment_requests where ref_type = 'folio' and ref_id = ${folio?.id}`.execute(
+      s.t.admin.kysely,
+    );
+    const ex = await sql<{ details: unknown }>`
+      select details from finance.exceptions where kind = 'late_charge'`.execute(s.t.admin.kysely);
+    console.log(
+      'folio balance after late charge:',
+      after?.balance,
+      'payment requests:',
+      requests.rows,
+      'exceptions:',
+      JSON.stringify(ex.rows),
+    );
+    // BUG: a payment link for the full late charge although nothing is owed.
+    expect(requests.rows).toHaveLength(1);
+    expect(requests.rows[0]?.amount_minor).toBeGreaterThan(0);
+  });
+});

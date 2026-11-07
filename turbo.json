@@ -1,9 +1,44 @@
 {
   "$schema": "https://turbo.build/schema.json",
   "tasks": {
-    "build": { "dependsOn": ["^build"], "outputs": ["dist/**"] },
-    "typecheck": { "dependsOn": [], "outputs": [] },
-    "test": { "dependsOn": [], "outputs": [], "env": ["DATABASE_URL", "PORTICO_TEST_DB_PREFIX"] },
-    "dev": { "cache": false, "persistent": true }
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": ["dist/**"]
+    },
+    "typecheck": {
+      "dependsOn": [],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/packages/*/src/**",
+        "$TURBO_ROOT$/packages/*/package.json",
+        "$TURBO_ROOT$/modules/*/src/**",
+        "$TURBO_ROOT$/modules/*/migrations/**",
+        "$TURBO_ROOT$/modules/*/package.json",
+        "$TURBO_ROOT$/tsconfig*.json",
+        "$TURBO_ROOT$/apps/*/src/**",
+        "$TURBO_ROOT$/apps/*/package.json"
+      ],
+      "outputs": []
+    },
+    "test": {
+      "dependsOn": [],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/packages/*/src/**",
+        "$TURBO_ROOT$/packages/*/package.json",
+        "$TURBO_ROOT$/modules/*/src/**",
+        "$TURBO_ROOT$/modules/*/migrations/**",
+        "$TURBO_ROOT$/modules/*/package.json",
+        "$TURBO_ROOT$/tsconfig*.json",
+        "$TURBO_ROOT$/apps/*/src/**",
+        "$TURBO_ROOT$/apps/*/package.json"
+      ],
+      "outputs": [],
+      "env": ["DATABASE_URL", "PORTICO_TEST_DB_PREFIX"]
+    },
+    "dev": {
+      "cache": false,
+      "persistent": true
+    }
   }
 }

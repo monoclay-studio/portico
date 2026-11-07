@@ -1,3 +1,5 @@
+> **Evidence note (orchestrator, 2026-11-07, from the quality steward's hand-off check H-2):** `screens/p2-08-live-guest.jpg` is byte-identical to `screens/p2-01-home.jpg` and does not show the palette state its finding describes — treat it as invalid evidence. The six `x-0*` screenshots were restored from the tester's originals (they had been skipped by the first copy step).
+
 # Portico: black-box UX evaluation, round 1
 
 **Evaluator:** "mystery user". I am a hotel operations professional who has used OPERA, Mews, Cloudbeds and small-property systems. I used only the running product at http://127.0.0.1:5380, driven with Playwright (Chromium, deviceScaleFactor 1). I read no code or docs.
@@ -316,7 +318,7 @@ Search covers only today's arrivals and stand-alone guest profiles. In-house and
 **Done?** **No. Blocker.**
 
 - Settings has only Organization / Properties / Legal entities / Users & roles. There is no Integrations, Connections, API keys, webhooks or data-authority screen.
-- Search for "connect" and "integration" returns nothing. `/integrations` returns "Page not found" `[x-05-404.png]`.
+- Search for "connect" and "integration" returns nothing. `/integrations` returns "Page not found" `[screens/x-05-404.jpg]`.
 - One honest touch: the Organization page has a "**What is live in this build**" table listing each capability as Live API or SIMULATED `[screens/p7-03-settings-org.jpg]`. Its wording ("this build", module names) is still developer language.
 
 ---
@@ -325,7 +327,7 @@ Search covers only today's arrivals and stand-alone guest profiles. In-house and
 
 **Done?** **Partly. Major.**
 
-`[screens/p9-01-learn.jpg] [screens/p9-02-practise.jpg] [screens/p9-03-training-org.jpg] [screens/p9-04-training-arrivals.jpg] [x-03-account-menu.png]`
+`[screens/p9-01-learn.jpg] [screens/p9-02-practise.jpg] [screens/p9-03-training-org.jpg] [screens/p9-04-training-arrivals.jpg] [screens/x-03-account-menu.jpg]`
 
 - Good:
   - a role-based Learning centre with progress;
@@ -342,7 +344,7 @@ Search covers only today's arrivals and stand-alone guest profiles. In-house and
 
 ## Cross-cutting checks
 
-**Light vs dark** `[x-01-dark-arrivals.png] [x-02-dark-record.png] [x-03-account-menu.png]`
+**Light vs dark** `[screens/x-01-dark-arrivals.jpg] [screens/x-02-dark-record.jpg] [screens/x-03-account-menu.jpg]`
 - Dark mode is well done: chips keep their meaning and contrast, the focus ring is visible and the banners keep their identity.
 - The theme can follow the system, and the menu also offers Compact/Comfortable density and an Arabic stub.
 
@@ -352,9 +354,9 @@ Search covers only today's arrivals and stand-alone guest profiles. In-house and
 |---|---|---|
 | Wrong password | Clear text, odd title | OK |
 | Extend conflict | "…Nothing was changed" | Good |
-| Bad record link | "This record was not found or you do not have access to it" (with a `common.loading` key leak) `[x-06-bad-record.png]` | Good |
+| Bad record link | "This record was not found or you do not have access to it" (with a `common.loading` key leak) `[screens/x-06-bad-record.jpg]` | Good |
 | 404 | Plain page | Good |
-| Forbidden page | "Not allowed … (`identity.user.read`)" while the **Invite staff member** button stays visible `[x-04-forbidden.png]` | Poor |
+| Forbidden page | "Not allowed … (`identity.user.read`)" while the **Invite staff member** button stays visible `[screens/x-04-forbidden.jpg]` | Poor |
 | Property save | Raw JSON (see P7) | Bad |
 
 - "Trying again unchanged will fail the same way. Follow the steps above first." is appended to **every** error. That includes errors where retrying is exactly right.

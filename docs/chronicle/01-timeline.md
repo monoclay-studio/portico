@@ -129,6 +129,64 @@ Each agent's brief and report are in `agents/`.
 - **16:42 — Second identity review (in progress) says "do not merge" again.** Every attack from the first review is
   closed. But a new P0 takeover path exists: any organization can create a brand-new global identity, with a
   password it chooses, for an email address it does not own.
-- **16:45 — Gap strategist launches** on branch `docs/strategy`: 10x briefs per module and a platform gap plan.
+- **16:42 — Gap strategist launches** on branch `docs/strategy`: 10x briefs per module and a platform gap plan.
   Usage: 5-hour 12%, seven-day 57%. The seven-day allowance is now the binding constraint, at about 6–7 points per
   hour with 6 agents running.
+- **16:43 — Second identity review complete: do not merge.** P0 1 · P1 3 · P2 6 · P3 9 new.
+  - All 11 original attacks are refused.
+  - The new P0 is account pre-hijacking: any org could create a global identity with its own password for someone
+    else's email, then accept that person's later invitation to a real hotel, and even become the only admin of a
+    newly provisioned live organization.
+  - **16:43 — ADR-0017 Amendment 1:** email-verified identities, no organization ever sets a password, first
+    verification wipes earlier credentials, onboarding cannot be blocked, SSO configuration is a root change. Fix
+    round 3 is sent to the identity engineer.
+- **16:43 — UX refining agent, round 1, delivered 83 refinements:** 44 wiring, 6 missing capability, 33 design;
+  23 blockers.
+  - Also delivered: cross-module consistency rules C1–C12 and new-user metrics with baselines. The tester completed
+    5 of 34 tasks; the right action was found for 0 of 17 action words.
+  - The agent's summary file was refused by a harness policy on report files. The orchestrator committed it verbatim.
+    Merged to main at 16:46.
+- **16:44 — Build-cache root cause fixed:** `turbo.json` now hashes every workspace package's sources.
+- **16:52 — Owner: "a very very intelligent self improving system with many feedback loops"**, with an agent in
+  charge of the testing agents.
+  - The quality system is designed (`docs/quality/README.md`): eight loops L1–L8, a meta loop with escape analysis,
+    canary defects to measure recall, versioned playbooks and a pattern library.
+  - 16:54: the quality steward launches (round 0: playbooks v1/v2 from today's real briefs, escapes, patterns, canaries,
+    scorecard, retro).
+  - The 3-hourly heartbeat now also resumes the quality steward after every checking round.
+- **17:04 — Integration step done** (branch `feat/integration-step`; 331 tool uses, about 48 minutes).
+  - Every stubbed port between reservations, rates, finance, payments, guests, operations and inventory is bound to
+    its real provider.
+  - ADR-0015 is applied: providers refuse foreign-property records instead of re-checking the caller's permissions,
+    using a new kernel `delegateAtProperty`.
+  - 12 of the 20 proof scenarios pass end to end with global consistency checks; the rest are todo with the missing
+    capability named.
+  - Five contract bugs were found only by binding for real. The worst: every booking deposit failed to post when the
+    Maldives tax rules were installed, because Green Tax needs occupancy and the deposit has none.
+  - 17:04: an independent steward review launches before merge, because authorization moved across module
+    boundaries.
+- **17:08 — Identity fix round 3 done:** ADR-0017 Amendment 1 is implemented (no org ever sets a password; first
+  email verification wipes earlier credentials). All 9 new and all 11 original attacks are refused; identity has
+  135 tests. A short third review launches.
+- **17:09 — Gap strategist done:** `docs/strategy/gap-plan.md` (14 platform moves; "make it real" first) and 32 module
+  10x briefs, each with targets and the next 3 increments. Owner questions Q150–Q155 are added. Merged to main.
+  - It also flagged measurement problems: stale parity coverage, parity files under-reporting tested rows, and a
+    requirement-prefix collision. The orchestrator fixed the coverage and the collision (`ACS-R` for access).
+- **17:22 — Staff web app (backoffice) merged** after its fix round.
+  - Shared-desk data leak fixed; drawer focus fixed; uncertain outcomes shown as "pending verification"; vocabularies
+    aligned with the real module contracts; arrivals layout redesigned from the reviewer's prototype.
+  - Bulk selection and list keys added; the data layer is swappable per domain; Departures and In house added.
+  - Main bundle cut from 938 kB to 366 kB.
+  - Verified on a merged copy: lint, forced typecheck, every package's tests (ui 87, backoffice 36) and the Playwright
+    suite 11/11, including an axe scan with zero violations (WCAG 2.2 AA, every screen, drawer and palette open,
+    light and dark).
+  - All ten wave-1 code branches except identity-plus and the integration step are now on main.
+- **17:24 — Quality steward round 0 done.**
+  - 38 escapes traced (2 P0, 9 P1, 17 P2, 10 P3); L2 steward review is the largest source at 11.
+  - v2 playbooks for 7 checkers; 51 attack patterns and 17 UX traps; a canary catalogue; a checker scorecard.
+  - Top improvement: re-attack every fix before merge. The 14 P0 fixes already on main have never been re-attacked.
+  - Merged; its 8 process edits applied 17:30, including the `apps/*` turbo inputs, verified by canary C-L1-01.
+- **17:24 — Integration-step review: merge after fixes** (P0 0, P1 3, P2 7, P3 9). The P1s: a deposit can land on
+  another property's books, check-in can hold any card for any amount, and late charges over-collect from a folio in
+  credit. The fix round goes back to the integration engineer with the new self-check playbook.
+

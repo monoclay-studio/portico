@@ -1,0 +1,72 @@
+/**
+ * Third steward review — HTTP re-run of the second review's first-admin takeover (N-1 variant C).
+ * PASSES when the attack is REFUSED.
+ */
+import { outboxNotifier } from '@portico/identity';
+import { fieldCryptoFromEnv, newId } from '@portico/kernel';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { provisionOrganization } from '../src';
+import { type ApiHarness, signedInOrg, startApi } from './helpers';
+
+let h: ApiHarness;
+beforeAll(async () => {
+  h = await startApi();
+});
+afterAll(async () => h?.close());
+
+describe('R3 HTTP re-run: the first administrator of a new live organization cannot be captured', () => {
+  it('POST /v1/users refuses initialPassword; provisioning invites the admin; the attacker has no sign-in', async () => {
+    const gmEmail = `gm-${newId().slice(-8)}@new-hotel.mv`;
+    const ATTACKER_PW = 'attacker-chosen-password';
+    const attacker = await signedInOrg(h, 'Attacker org');
+    const pre = await h.app.inject({
+      method: 'POST',
+      url: '/v1/users',
+      headers: { ...attacker.auth, 'idempotency-key': newId() },
+      payload: { email: gmEmail, displayName: 'GM', initialPassword: ATTACKER_PW, roles: [] },
+    });
+    expect(pre.statusCode).toBeGreaterThanOrEqual(400);
+    expect(pre.json().code).toBe('password_not_allowed');
+    const plain = await h.app.inject({
+      method: 'POST',
+      url: '/v1/users',
+      headers: { ...attacker.auth, 'idempotency-key': newId() },
+      payload: { email: gmEmail, displayName: 'GM', roles: [] },
+    });
+    expect(plain.statusCode).toBe(201);
+    expect(plain.json().status).toBe('invited');
+    expect(plain.body).not.toMatch(/token=/);
+
+    const res = await provisionOrganization(
+      h.t.db,
+      {
+        name: 'New Hotel',
+        slug: `hotel-${newId().slice(-12)}`,
+        environment: 'live',
+        planCode: 'enterprise',
+        admin: { email: gmEmail, displayName: 'General manager' },
+      },
+      'test',
+      { notifier: outboxNotifier(fieldCryptoFromEnv({}).cipher), config: { appBaseUrl: 'http://localhost:5173' } },
+    );
+    expect(res.adminStatus).toBe('invited');
+    expect(res.delivery?.mode).toBe('queued');
+
+    const login = await h.app.inject({
+      method: 'POST',
+      url: '/v1/auth/login',
+      payload: { email: gmEmail, password: ATTACKER_PW },
+    });
+    expect(login.statusCode).toBe(401);
+    // A provisioning password for a real address in a live organization is refused.
+    await expect(
+      provisionOrganization(h.t.db, {
+        name: 'X',
+        slug: `x-${newId().slice(-12)}`,
+        environment: 'live',
+        planCode: 'enterprise',
+        admin: { email: `boss-${newId().slice(-6)}@new-hotel.mv`, displayName: 'B', password: ATTACKER_PW },
+      }),
+    ).rejects.toMatchObject({ code: 'password_not_allowed' });
+  }, 60_000);
+});

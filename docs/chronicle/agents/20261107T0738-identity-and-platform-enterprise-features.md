@@ -1,7 +1,7 @@
 # Agent run: Identity and platform enterprise features
 
-- Started: 2026-11-07T07:38:12.649Z · last activity: 2026-11-07T16:26:10.409Z
-- Turns: 885 · tool uses: 487 · output tokens: 2,157,550
+- Started: 2026-11-07T07:38:12.649Z · last activity: 2026-11-07T17:09:14.503Z
+- Turns: 1045 · tool uses: 583 · output tokens: 2,398,647
 - Type: general-purpose
 
 ## Brief (2026-11-07T07:38:12.649Z)
@@ -493,6 +493,63 @@ When done, run `pnpm lint && pnpm turbo run typecheck --force && pnpm turbo run 
 Address this before completing your current task.
 ````
 
+## Follow-up message (2026-11-07T16:44:06.830Z)
+
+````text
+The coordinator sent a message while you were working:
+Second steward review of feat/identity-platform-enterprise: verdict "do not merge".
+
+Good news first: all 11 original identity PoCs, the SSO PoC and the XFF PoC are now refused, and the guard design is sound.
+
+What's left:
+- 1 new P0, a pre-hijacking class, plus 3 P1s, 6 P2s and 9 P3s.
+- Report (on main): docs/orchestration/reviews/review-identity-plus-2.md
+- New attack tests: docs/orchestration/reviews/identity-plus-poc/
+  - identity-zz-review2-poc.test.ts.txt has 9 tests that pass today, meaning each attack works.
+  - api-zz-review2-poc.test.ts.txt is the HTTP takeover of a new live org's first admin.
+  - identity-zz-review2-original.test.ts.txt has the 11 originals, which must keep being refused.
+
+ADR-0017 is amended on main (commit 3056a49, "Amendment 1", rules 12–15). Implement it:
+- **R2-P0-1 (rules 12–13):**
+  - Remove `initialPassword` from createUser, POST /v1/users and provisioning.
+  - New people start credential-less, in `email_unverified`, and set their first password only through an emailed link. That link sets `email_verified_at`.
+  - First verification WIPES every earlier credential: password, factors, recovery codes, SSO links and sessions.
+  - Invitations are listed and accepted only with a verified email, and expire.
+  - Live provisioning must send the first admin a real invitation, never silently leave them `invited`.
+  - Demo and test seeding may set passwords only as a system process, in the `demo` environment, for `*.portico.invalid` emails. main's apps/api/src/seed/demo.ts uses `initialPassword` with `@<slug>.demo.portico.invalid` emails, so route that through the new seeding-only path. Test helpers may use a test-only path that is not reachable over HTTP.
+- **R2-P1-2 (rule 14):**
+  - Whether a person can set a first password depends on their credentials, not their memberships.
+  - Never-accepted invitations never block it.
+  - A password reset reaches people who only hold invitations.
+- **R2-P1-1 (rule 15):**
+  - SSO issuer, allow-list, trustIdpMfa and SSO-required are root changes: the editor holds org-wide `*`, or a second admin approves.
+  - An issuer change resets domain verification and alerts all admins.
+  - No linking of existing credentialed members through a new issuer without their proof.
+- **R2-P1-3 (rule 15):**
+  - Run the verified-domain check whenever a membership would be created or activated.
+  - A refused SSO sign-in persists neither user nor link; failure audits stay in their separate transaction.
+  - Purge orphan links.
+- **R2-P2:** fix all of these, or justify any you leave.
+  - R2-P2-1: make the second-factor counter atomic (the race).
+  - R2-P2-2: power ordering in transferMember.
+  - R2-P2-3: group reconciliation must not remove the last admin.
+  - R2-P2-4: SoD with self-created accounts. This mostly disappears with rule 12; confirm it.
+  - R2-P2-5: first admin left invited silently.
+  - Cheap P3s.
+
+Turn each new PoC into a regression test that asserts the attack is REFUSED, and keep the 11 originals refused.
+
+When you merge main, note the changes there: chronicle tooling, a demo-seed timeout raise, tools/commit-checked.sh, and the ADR amendment.
+
+Gates (the turbo cache can hide failures):
+`pnpm lint && pnpm turbo run typecheck --force && pnpm turbo run test --force --concurrency=2`
+Use PORTICO_TEST_DB_PREFIX=w1_idplus_fix3 and check the exit codes.
+
+Commit (Conventional Commits) and don't push. Reply with finding → commit → test, the command results, and any deviations with reasons. A third, short review will verify before merge.
+
+Address this before completing your current task.
+````
+
 ## Report (2026-11-07T11:24:15.114Z)
 
 ````text
@@ -677,5 +734,86 @@ Each test still proves the same thing; only the setup changed.
 - I removed the mapping from `apps/api/src/composition.ts`, so it is back to main's binding.
 
 Ready for findings from the second review.
+````
+
+## Report (2026-11-07T17:09:14.384Z)
+
+````text
+## Fix round 2: feat/identity-platform-enterprise (ADR-0017 amendment 1)
+
+All findings from the second review are fixed, except a few P2/P3s that are partial or left as documented gaps (listed below). The full gate chain passes with exit code 0.
+
+Each new attack from the review is now a regression test that asserts refusal. That includes N-1 to N-9, plus the HTTP capture of a new live organization's first administrator. The first review's 11 attacks are kept as tests too, and they are still refused.
+
+Everything is committed in /home/user/wt/identity-plus; nothing is pushed. No `w1_idplus_fix3*` databases are left over.
+
+### Commits
+| Commit | What |
+|---|---|
+| 6f2a737 | Merge of main: chronicle tooling, the 120 s demo-seed budget, `tools/commit-checked.sh`, ADR-0017 amendment 1, the second review and its PoCs |
+| 8f5b13a | `fix(identity)`: amendment 1 (rules 12–15) and the P2/P3 fixes, with the identity regression tests |
+| 4fe98e6 | `fix(api)`: provisioning invites the first admin; demo seeding is the only way to set a password; HTTP regressions |
+| 3f72a15 | `docs(identity)`: README updates |
+
+### Finding → commit → test
+Test files referred to below:
+- **identity regressions:** `modules/identity/test/review2-regressions.test.ts`
+- **identity originals:** `modules/identity/test/review2-original-attacks.test.ts`
+- **API regressions:** `apps/api/test/review-regressions.test.ts`
+
+| Finding | Commit | Test |
+|---|---|---|
+| R2-P0-1 A (in-app pre-hijack) | 8f5b13a | identity regressions, "createUser refuses a password; the pre-created identity has no sign-in…" and "an attacker IdP's ghost identity … can neither see nor accept invitations, and the real person's first link wipes it" |
+| R2-P0-1 B (SSO keeps pre-set credentials) | 8f5b13a | identity regressions, "N-1b: the resort's own verified-domain SSO verifies the GM and wipes anything another organization set before" |
+| R2-P0-1 C (first live admin) and R2-P2-5 | 4fe98e6 | API regressions, "no password can be pre-registered; provisioning invites the first admin by email; only the real GM gets in" |
+| Rule 12 seeding guard | 8f5b13a | identity regressions, "demo seeding sets passwords only in a demo organization…"; `demo-seed.test` passes through the seeding path |
+| R2-P1-1 (rule 15) | 8f5b13a | identity regressions, "identity.sso.manage alone cannot repoint the issuer…" and "requiring SSO is a root change" |
+| R2-P1-2 (rule 14) | 8f5b13a | identity regressions, "a griefer's earlier invitation does not stop the real link…" and "'forgot password' reaches a person who only holds invitations" |
+| R2-P1-3 | 8f5b13a | identity regressions, "a refused JIT persists neither user nor link…" and "the verified-domain check also runs when an EXISTING link would activate a membership" |
+| R2-P2-1 (race) | 8f5b13a | identity regressions, "a concurrent burst of wrong codes is cut off after five" |
+| R2-P2-2 | 8f5b13a | identity regressions, "a role assigner scoped to property Y cannot strip a manager of property X…" (also refuses self-transfer) |
+| R2-P2-3 | 8f5b13a | identity regressions, "SSO: a sign-in without the admin group keeps the only administrator…" and "SCIM: removing the only administrator from the mapped group keeps the role" |
+| R2-P2-4 | 8f5b13a | identity regressions, "the account they create has no password they know…" — confirmed to mostly disappear with rule 12 |
+| R2-P3-1 | 4fe98e6 | API regressions, "R2-P3-1: emergency access cannot create a trial" |
+| R2-P3-2 | 8f5b13a | identity regressions, "P3-2: five wrong confirmation codes discard the pending authenticator" |
+| R2-P3-3 | 8f5b13a | identity regressions, "P3-3: an expired invitation is neither listed nor accepted in-app" (SSO activation also needs an unexpired invitation) |
+| R2-P3-4, R2-P3-8 | 8f5b13a | identity regressions, "P3-8: a wrong browser binding does not burn the real login; P3-4: a malformed email is refused" |
+| R2-P3-6 | 8f5b13a | identity regressions, "P3-6: an invited person's credentials are not shown…" (same response shape for new and existing emails) |
+| The 11 original attacks | 8f5b13a | identity originals: all 11 refused. The only change: path B now expects `password_not_allowed` |
+
+### How the main fixes work
+- **No organization sets a password (rule 12).**
+  - `initialPassword` is gone from `createUser`, `POST /v1/users` (sending it gets a 400 `password_not_allowed`) and provisioning.
+  - `createUser` now always creates an invited membership and sends the invitation.
+  - The emailed link (invitation or reset) sets `users.email_verified_at`. So does a sign-in through an identity provider whose domain this organization verified.
+  - The first verification runs `identity.first_email_verification`. It wipes the password, MFA factors, recovery codes, SSO links, sessions and the API keys the person issued, in every organization.
+  - `seedDemoMember` is the only way to set a password. It works only for a system process, in a demo organization, for `*.portico.invalid` addresses. `seed/demo.ts` uses it.
+- **Verified email to accept (rule 13).** Invitations are listed and accepted in-app only by an identity with a verified email, and only before they expire.
+- **No blocking (rule 14).** Whether a person can set a first password depends on their credentials (`identity.credential_summary`), not on their memberships.
+- **SSO as a root change (rule 15).**
+  - Changing the issuer, the allowed email domains, trust in the IdP's MFA, or SSO-required needs organization-wide `*`.
+  - An issuer change resets domain verification, removes the old issuer's links, raises a high alert and emails every administrator.
+  - A person who already has credentials is linked only after proving them. They start the link from a password session with `POST /v1/me/sso/link`.
+  - In the SSO callback, all checks run before any write. A refusal rolls back and is audited in its own transaction.
+  - Orphan SSO links are removed when a member is removed or deleted by SCIM, and by a new hourly job.
+- **Atomic second-factor counter (R2-P2-1).** Each attempt is reserved with one guarded UPDATE before the code is checked. Concurrent attempts wait for each other on the person's row.
+
+### Gate results (PORTICO_TEST_DB_PREFIX=w1_idplus_fix3)
+`pnpm lint && pnpm turbo run typecheck --force && pnpm turbo run test --force --concurrency=2` → **exit 0**.
+- lint: 627 files; module boundaries OK.
+- typecheck: 16/16 tasks.
+- test: 14/14 packages. Identity 135, platform 62, API 62; all other modules pass.
+- A separate forced test run also exited 0 (1 min 14 s).
+
+### Deviations, with reasons
+1. **Rule 15, approval path:** only the "editor holds organization-wide `*`" branch is built. The "second administrator approves" flow is not, so a delegated SSO manager cannot change root settings at all. This is stricter, not weaker.
+2. **Rule 15, linking proof:** proof means starting the link from a password session, plus a fresh second factor if the person has one. An administrator cannot pre-link someone.
+3. **Lost SSO link:** someone who signs in only through SSO at an organization with an unverified domain loses that link when they verify their email elsewhere. That organization can re-link them only after verifying its domain or with their proof. This is in the README "Known gaps".
+4. **`createUser` always invites**, even brand-new people, so the person sets their own password from the link. A side effect: an SSO-only organization's new member is activated on first SSO sign-in, which needs an unexpired invitation.
+5. **R2-P2-4:** no approver-age or created-by check was added. Rule 12 removes the cheap path, and the remaining case (an admin who controls a second mailbox) is inherent.
+6. **R2-P3-5 and R2-P3-7 are partial or not built:** domain verification is reset on an issuer change but not re-checked periodically, and API keys still survive their creator's role revocation. Both are in the README with reasons.
+7. **R2-P2-6 (turbo cache):** `turbo.json` is outside my scope. The gates above were run with `--force`.
+8. **Test-only paths.** Test helpers read the real invitation link — from the developer mailbox, or decrypted from the queued outbox message — and accept it over HTTP. This needed one-line provisioning changes in `apps/api/test/payments.test.ts` and `integration.test.ts`, which follow from removing `initialPassword` from provisioning. The identity test harness also adds members through invitation and acceptance.
+9. **Confirming a new authenticator:** `confirmTotp` now returns a result object instead of throwing on a wrong code, so the failure counters are saved. The route unwraps it as before.
 ````
 

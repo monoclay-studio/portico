@@ -1,0 +1,11 @@
+/*
+ * Portico design system stylesheet. Apps import this once:  @import "@portico/ui/styles.css";
+ * It brings Tailwind, the tokens, the token-only theme and base styles, and tells Tailwind to scan the
+ * design-system sources for class names.
+ */
+@import "tailwindcss";
+@import "./tokens.css";
+@import "./theme.css";
+@import "./base.css";
+
+@source "../";
