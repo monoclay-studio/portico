@@ -200,3 +200,13 @@ describe('data authority (adoption paths)', () => {
     );
   });
 });
+
+describe('permission catalog', () => {
+  it('registers every permission the platform service checks', async () => {
+    const { readFileSync } = await import('node:fs');
+    const src = readFileSync(new URL('../src/service.ts', import.meta.url), 'utf8');
+    const checked = new Set([...src.matchAll(/requirePermission\(tx, '([^']+)'/g)].map((m) => m[1]));
+    const registered = new Set(platformManifest.permissions.map((p) => p.key));
+    expect([...checked].filter((k) => !registered.has(k as string))).toEqual([]);
+  });
+});
