@@ -22,9 +22,21 @@ export const SHORTCUTS: readonly ShortcutDef[] = [
   { id: 'help', combo: '?', display: ['?'], labelKey: 'shortcuts.help', group: 'global' },
   { id: 'new', combo: 'n', display: ['N'], labelKey: 'shortcuts.new', group: 'global' },
   { id: 'edit', combo: 'e', display: ['E'], labelKey: 'shortcuts.edit', group: 'record' },
-  { id: 'fullPage', combo: 'shift+enter', display: ['Shift', 'Enter'], labelKey: 'shortcuts.fullPage', group: 'record' },
+  {
+    id: 'fullPage',
+    combo: 'shift+enter',
+    display: ['Shift', 'Enter'],
+    labelKey: 'shortcuts.fullPage',
+    group: 'record',
+  },
   { id: 'back', combo: 'escape', display: ['Esc'], labelKey: 'shortcuts.closeDialog', group: 'record' },
-  { id: 'switchProperty', combo: 'g p', display: ['G', 'P'], labelKey: 'shortcuts.switchProperty', group: 'goTo' },
+  {
+    id: 'switchProperty',
+    combo: 'g p',
+    display: ['G', 'P'],
+    labelKey: 'shortcuts.switchProperty',
+    group: 'goTo',
+  },
   ...WORKSPACES.flatMap((w) =>
     w.items
       .filter((i) => i.goKey && i.goKey !== 'p')
@@ -36,5 +48,11 @@ export const SHORTCUTS: readonly ShortcutDef[] = [
         group: 'goTo' as const,
       })),
   ),
-  { id: 'tableNav', combo: '', display: ['↑', '↓', '←', '→', 'Enter'], labelKey: 'shortcuts.tableNav', group: 'lists' },
+  {
+    id: 'tableNav',
+    combo: '',
+    display: ['↑', '↓', '←', '→', 'Enter'],
+    labelKey: 'shortcuts.tableNav',
+    group: 'lists',
+  },
 ];

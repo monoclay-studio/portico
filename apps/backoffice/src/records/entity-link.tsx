@@ -7,7 +7,17 @@ import { definitionFor } from './registry';
 import { useRecordNav } from './use-record-nav';
 
 /** Entity link bound to the app: hover preview from the record registry, click opens the record drawer. */
-export function RecordLink({ type, id, children, fresh }: { type: string; id: string; children: ReactNode; fresh?: boolean }) {
+export function RecordLink({
+  type,
+  id,
+  children,
+  fresh,
+}: {
+  type: string;
+  id: string;
+  children: ReactNode;
+  fresh?: boolean;
+}) {
   const app = useApp();
   const { t, i18n } = useTranslation();
   const queryClient = useQueryClient();
@@ -19,7 +29,12 @@ export function RecordLink({ type, id, children, fresh }: { type: string; id: st
     <EntityLink
       type={type}
       id={id}
-      loadSummary={(ty, i) => queryClient.fetchQuery({ queryKey: ['summary', app.session.organization.id, app.property?.id, ty, i], queryFn: () => def.summary(ctx, i) })}
+      loadSummary={(ty, i) =>
+        queryClient.fetchQuery({
+          queryKey: ['summary', app.session.organization.id, app.property?.id, ty, i],
+          queryFn: () => def.summary(ctx, i),
+        })
+      }
       onOpen={(ty, i) => (fresh ? nav.openFresh(ty, i) : nav.open(ty, i))}
       {...(def.simulated ? { badge: <ProvenanceBadge provenance="simulated" compact /> } : {})}
     >

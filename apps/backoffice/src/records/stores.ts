@@ -17,7 +17,8 @@ function makeStore(prefix: string, max: number) {
     let list: RecordRef[] = [];
     try {
       const parsed: unknown = JSON.parse(localStorage.getItem(key(userId)) ?? '[]');
-      if (Array.isArray(parsed)) list = parsed.filter((x): x is RecordRef => typeof x?.type === 'string' && typeof x?.id === 'string');
+      if (Array.isArray(parsed))
+        list = parsed.filter((x): x is RecordRef => typeof x?.type === 'string' && typeof x?.id === 'string');
     } catch {
       list = [];
     }
@@ -36,10 +37,16 @@ function makeStore(prefix: string, max: number) {
   return {
     read,
     add(userId: string, ref: RecordRef) {
-      write(userId, [ref, ...read(userId).filter((r) => !(r.type === ref.type && r.id === ref.id))].slice(0, max));
+      write(
+        userId,
+        [ref, ...read(userId).filter((r) => !(r.type === ref.type && r.id === ref.id))].slice(0, max),
+      );
     },
     remove(userId: string, ref: Pick<RecordRef, 'type' | 'id'>) {
-      write(userId, read(userId).filter((r) => !(r.type === ref.type && r.id === ref.id)));
+      write(
+        userId,
+        read(userId).filter((r) => !(r.type === ref.type && r.id === ref.id)),
+      );
     },
     has(userId: string, ref: Pick<RecordRef, 'type' | 'id'>) {
       return read(userId).some((r) => r.type === ref.type && r.id === ref.id);

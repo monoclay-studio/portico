@@ -5,7 +5,13 @@ import { useTranslation } from 'react-i18next';
 import { useApp } from '../app-context';
 
 /** Property switcher (top bar). Properties come from GET /v1/properties; the choice is remembered per org. */
-export function PropertySwitcher({ open, onOpenChange }: { open?: boolean; onOpenChange?: (o: boolean) => void }) {
+export function PropertySwitcher({
+  open,
+  onOpenChange,
+}: {
+  open?: boolean;
+  onOpenChange?: (o: boolean) => void;
+}) {
   const { t } = useTranslation();
   const { properties, property, setPropertyId } = useApp();
   if (properties.length === 0) {
@@ -36,7 +42,9 @@ export function PropertySwitcher({ open, onOpenChange }: { open?: boolean; onOpe
           sideOffset={6}
           className="z-50 min-w-72 max-w-[calc(100vw-2rem)] rounded-md border border-line bg-surface p-1 shadow-lg"
         >
-          <DropdownMenu.Label className="px-2 py-1.5 text-xs font-semibold text-ink-muted">{t('app.switchProperty')}</DropdownMenu.Label>
+          <DropdownMenu.Label className="px-2 py-1.5 text-xs font-semibold text-ink-muted">
+            {t('app.switchProperty')}
+          </DropdownMenu.Label>
           <DropdownMenu.RadioGroup value={property?.id ?? ''} onValueChange={setPropertyId}>
             {properties.map((p) => (
               <DropdownMenu.RadioItem

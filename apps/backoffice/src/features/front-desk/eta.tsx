@@ -8,7 +8,9 @@ export function EtaCell({ row, timeZone }: { row: ArrivalRow; timeZone: string }
   const d = row.arrivalDetails;
   const Icon = d.transportMode === 'speedboat' ? Sailboat : Plane;
   const delayMin =
-    d.scheduledAt && d.estimatedAt ? Math.round((new Date(d.estimatedAt).getTime() - new Date(d.scheduledAt).getTime()) / 60_000) : 0;
+    d.scheduledAt && d.estimatedAt
+      ? Math.round((new Date(d.estimatedAt).getTime() - new Date(d.scheduledAt).getTime()) / 60_000)
+      : 0;
   return (
     <span className="flex min-w-0 flex-col leading-tight">
       <span className="pt-tabular flex items-center gap-1.5 font-medium">
@@ -22,7 +24,9 @@ export function EtaCell({ row, timeZone }: { row: ArrivalRow; timeZone: string }
           {t('arrivals.delayedBy', { minutes: delayMin })}
         </span>
       ) : (
-        <span className="truncate text-xs text-ink-muted">{t(`arrivals.transportModes.${d.transportMode}`)}</span>
+        <span className="truncate text-xs text-ink-muted">
+          {t(`arrivals.transportModes.${d.transportMode}`)}
+        </span>
       )}
     </span>
   );

@@ -20,14 +20,14 @@ import { problemFromUnknown } from '../../api/errors';
 import { useApp } from '../../app/app-context';
 import { PHONE_QUERY, useMediaQuery } from '../../app/use-media-query';
 import { workspaceSource } from '../../data/sources';
+import { learning } from '../../learning/progress';
 import type { ArrivalRow } from '../../mocks/contracts';
+import { RecordLink } from '../../records/entity-link';
+import { useRecordNav } from '../../records/use-record-nav';
 import { PageHeader } from '../common/page-header';
 import { toSimProperty } from '../common/sim-property';
 import { SimulatedNote } from '../common/simulated-note';
 import { builtInView, useSavedViews } from '../common/use-saved-views';
-import { learning } from '../../learning/progress';
-import { RecordLink } from '../../records/entity-link';
-import { useRecordNav } from '../../records/use-record-nav';
 import { EtaCell } from './eta';
 import { ReadinessCell } from './readiness';
 
@@ -65,10 +65,30 @@ export function ArrivalsPage() {
 
   const builtIn = useMemo<SavedView[]>(
     () => [
-      builtInView('all', t('arrivals.viewAll'), { sort: { columnId: 'eta', direction: 'asc' }, filters: {}, search: '', hidden: [] }),
-      builtInView('blocked', t('arrivals.viewBlocked'), { sort: { columnId: 'eta', direction: 'asc' }, filters: { readiness: 'blocked' }, search: '', hidden: [] }),
-      builtInView('vip', t('arrivals.viewVip'), { sort: { columnId: 'eta', direction: 'asc' }, filters: { vip: 'yes' }, search: '', hidden: [] }),
-      builtInView('seaplane', t('arrivals.viewSeaplane'), { sort: { columnId: 'eta', direction: 'asc' }, filters: { transport: 'seaplane' }, search: '', hidden: ['nights'] }),
+      builtInView('all', t('arrivals.viewAll'), {
+        sort: { columnId: 'eta', direction: 'asc' },
+        filters: {},
+        search: '',
+        hidden: ['nights'],
+      }),
+      builtInView('blocked', t('arrivals.viewBlocked'), {
+        sort: { columnId: 'eta', direction: 'asc' },
+        filters: { readiness: 'blocked' },
+        search: '',
+        hidden: ['nights'],
+      }),
+      builtInView('vip', t('arrivals.viewVip'), {
+        sort: { columnId: 'eta', direction: 'asc' },
+        filters: { vip: 'yes' },
+        search: '',
+        hidden: ['nights'],
+      }),
+      builtInView('seaplane', t('arrivals.viewSeaplane'), {
+        sort: { columnId: 'eta', direction: 'asc' },
+        filters: { transport: 'seaplane' },
+        search: '',
+        hidden: ['nights'],
+      }),
     ],
     [t],
   );
@@ -81,7 +101,7 @@ export function ArrivalsPage() {
         header: t('arrivals.guest'),
         accessor: (r) => r.guestName,
         hideable: false,
-        width: 'minmax(13rem, 1.4fr)',
+        width: 'minmax(11rem, 1.2fr)',
         cell: (r) => (
           <span className="flex min-w-0 flex-col leading-tight">
             <span className="flex items-center gap-1.5 truncate font-medium">
@@ -100,12 +120,18 @@ export function ArrivalsPage() {
           </span>
         ),
       },
-      { id: 'eta', header: t('arrivals.eta'), accessor: (r) => r.eta, width: '8.5rem', cell: (r) => <EtaCell row={r} timeZone={tz} /> },
+      {
+        id: 'eta',
+        header: t('arrivals.eta'),
+        accessor: (r) => r.eta,
+        width: '8.5rem',
+        cell: (r) => <EtaCell row={r} timeZone={tz} />,
+      },
       {
         id: 'unit',
         header: t('arrivals.villa'),
         accessor: (r) => r.unitName ?? '',
-        width: 'minmax(9rem, 1fr)',
+        width: 'minmax(8rem, 0.8fr)',
         cell: (r) => (
           <span className="flex min-w-0 flex-col leading-tight">
             {r.unitName && r.unitId ? (
@@ -125,16 +151,21 @@ export function ArrivalsPage() {
         id: 'condition',
         header: t('arrivals.condition'),
         accessor: (r) => r.unitCondition ?? '',
-        width: '10.5rem',
+        width: '9.5rem',
         filter: 'select',
         filterOptions: STATUS_VALUES.condition.map((v) => ({ value: v, label: strings.status.condition[v] })),
-        cell: (r) => (r.unitCondition ? <StatusBadge vocabulary="condition" value={r.unitCondition} /> : <span className="text-ink-subtle">—</span>),
+        cell: (r) =>
+          r.unitCondition ? (
+            <StatusBadge vocabulary="condition" value={r.unitCondition} />
+          ) : (
+            <span className="text-ink-subtle">—</span>
+          ),
       },
       {
         id: 'payment',
         header: t('arrivals.payment'),
         accessor: (r) => r.paymentStatus,
-        width: '11.5rem',
+        width: '11rem',
         filter: 'select',
         filterOptions: STATUS_VALUES.payment.map((v) => ({ value: v, label: strings.status.payment[v] })),
         cell: (r) => <StatusBadge vocabulary="payment" value={r.paymentStatus} />,
@@ -144,7 +175,7 @@ export function ArrivalsPage() {
         header: t('arrivals.readiness'),
         accessor: (r) => (r.readiness.ready ? 'ready' : 'blocked'),
         compare: (a, b) => (a === b ? 0 : a === 'blocked' ? -1 : 1),
-        width: 'minmax(16rem, 2.2fr)',
+        width: 'minmax(14rem, 2fr)',
         filter: 'select',
         filterOptions: [
           { value: 'ready', label: t('arrivals.ready') },
@@ -156,11 +187,16 @@ export function ArrivalsPage() {
         id: 'stay',
         header: t('arrivals.stayStatus'),
         accessor: (r) => r.stayStatus,
-        width: '8.5rem',
+        width: '7.5rem',
         cell: (r) => <StatusBadge vocabulary="stay" value={r.stayStatus} />,
       },
       { id: 'nights', header: t('arrivals.nights'), accessor: (r) => r.nights, width: '5rem', align: 'end' },
-      { id: 'owner', header: t('arrivals.owner'), accessor: (r) => r.owner ?? '', width: 'minmax(9rem, 1fr)' },
+      {
+        id: 'owner',
+        header: t('arrivals.owner'),
+        accessor: (r) => r.owner ?? '',
+        width: 'minmax(9rem, 1fr)',
+      },
       {
         id: 'vip',
         header: t('arrivals.vip'),
@@ -180,7 +216,11 @@ export function ArrivalsPage() {
   );
   // The VIP and transport columns exist for saved-view filters; hide them by default.
   const visibleViews = useMemo(
-    () => saved.views.map((v) => ({ ...v, state: { ...v.state, hidden: [...new Set([...v.state.hidden, 'vip', 'transport'])] } })),
+    () =>
+      saved.views.map((v) => ({
+        ...v,
+        state: { ...v.state, hidden: [...new Set([...v.state.hidden, 'vip', 'transport'])] },
+      })),
     [saved.views],
   );
 
@@ -197,19 +237,46 @@ export function ArrivalsPage() {
     <div>
       <PageHeader
         title={t('arrivals.title')}
-        subtitle={t('arrivals.subtitle', { count: rows.length, date: formatLocalDate(property.businessDate, i18n.resolvedLanguage) })}
-        meta={query.data && <ProvenanceBadge provenance={query.data.provenance} lastSyncedAt={query.data.generatedAt} />}
+        subtitle={t('arrivals.subtitle', {
+          count: rows.length,
+          date: formatLocalDate(property.businessDate, i18n.resolvedLanguage),
+        })}
+        meta={
+          query.data && (
+            <ProvenanceBadge provenance={query.data.provenance} lastSyncedAt={query.data.generatedAt} />
+          )
+        }
         helpKey="frontDesk.arrivals"
       />
       <SimulatedNote module="reservations + operations" />
       {query.isPending && <SkeletonList rows={8} />}
-      {query.isError && <ProblemAlert problem={problemFromUnknown(query.error, 'arrivals')} onRetry={() => void query.refetch()} />}
+      {query.isError && (
+        <ProblemAlert
+          problem={problemFromUnknown(query.error, 'arrivals')}
+          onRetry={() => void query.refetch()}
+        />
+      )}
       {query.data && (
         <>
           <div className="mb-4 flex flex-wrap gap-2" aria-label={t('arrivals.readiness')} role="group">
-            <Stat icon={<CircleCheck />} tone="text-success-fg" label={t('arrivals.summaryReady')} value={count((r) => r.readiness.ready && r.stayStatus === 'expected')} />
-            <Stat icon={<CircleX />} tone="text-danger-fg" label={t('arrivals.summaryBlocked')} value={count((r) => !r.readiness.ready)} />
-            <Stat icon={<DoorClosed />} tone="text-info-fg" label={t('arrivals.summaryInHouse')} value={count((r) => r.stayStatus === 'in_house')} />
+            <Stat
+              icon={<CircleCheck />}
+              tone="text-success-fg"
+              label={t('arrivals.summaryReady')}
+              value={count((r) => r.readiness.ready && r.stayStatus === 'expected')}
+            />
+            <Stat
+              icon={<CircleX />}
+              tone="text-danger-fg"
+              label={t('arrivals.summaryBlocked')}
+              value={count((r) => !r.readiness.ready)}
+            />
+            <Stat
+              icon={<DoorClosed />}
+              tone="text-info-fg"
+              label={t('arrivals.summaryInHouse')}
+              value={count((r) => r.stayStatus === 'in_house')}
+            />
             <Stat
               icon={<Timer />}
               tone="text-warning-fg"
@@ -218,7 +285,11 @@ export function ArrivalsPage() {
             />
           </div>
           {rows.length === 0 ? (
-            <EmptyState icon={<ConciergeBell />} title={t('arrivals.empty')} description={t('arrivals.emptyHelp')} />
+            <EmptyState
+              icon={<ConciergeBell />}
+              title={t('arrivals.empty')}
+              description={t('arrivals.emptyHelp')}
+            />
           ) : phone ? (
             <ul className="flex flex-col gap-2" aria-label={t('arrivals.title')}>
               {rows.map((r) => (
@@ -260,7 +331,12 @@ export function ArrivalsPage() {
               helpKey="frontDesk.arrivals.board"
               rowClassName={(r) => (!r.readiness.ready ? 'border-s-4 border-s-danger-solid' : undefined)}
               toolbar={
-                <Button size="sm" variant="ghost" onClick={() => void query.refetch()} loading={query.isFetching}>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => void query.refetch()}
+                  loading={query.isFetching}
+                >
                   {t('common.refresh')}
                 </Button>
               }

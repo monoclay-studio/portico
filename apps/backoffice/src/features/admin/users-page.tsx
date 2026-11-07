@@ -28,7 +28,14 @@ import { learning } from '../../learning/progress';
 import { useRecordNav } from '../../records/use-record-nav';
 import { PageHeader } from '../common/page-header';
 
-const EMPTY = { email: '', displayName: '', jobTitle: '', roleKey: 'front_desk', scope: 'organization', initialPassword: '' };
+const EMPTY = {
+  email: '',
+  displayName: '',
+  jobTitle: '',
+  roleKey: 'front_desk',
+  scope: 'organization',
+  initialPassword: '',
+};
 
 /** GET /v1/users + GET /v1/roles; POST /v1/users with an intent-scoped Idempotency-Key. */
 export function UsersPage() {
@@ -45,7 +52,8 @@ export function UsersPage() {
   const [problem, setProblem] = useState<ProblemDetails | null>(null);
   const intent = useRef(new IntentKeys()).current;
   useScreenAction('new', () => setOpen(true));
-  const propName = (id: string | null) => properties.find((p) => p.id === id)?.name ?? t('admin.wholeOrganization');
+  const propName = (id: string | null) =>
+    properties.find((p) => p.id === id)?.name ?? t('admin.wholeOrganization');
 
   const body = (): CreateUserRequest => ({
     email: form.email.trim(),
@@ -59,7 +67,8 @@ export function UsersPage() {
     ],
   });
   const create = useMutation({
-    mutationFn: (b: CreateUserRequest) => api.createUser(b, intent.keyFor({ ...b, initialPassword: b.initialPassword ? '•' : undefined })),
+    mutationFn: (b: CreateUserRequest) =>
+      api.createUser(b, intent.keyFor({ ...b, initialPassword: b.initialPassword ? '•' : undefined })),
     onSuccess: () => {
       intent.settle();
       setOpen(false);
@@ -92,8 +101,20 @@ export function UsersPage() {
 
   const columns = useMemo<ColumnDef<UserSummary>[]>(
     () => [
-      { id: 'name', header: t('admin.name'), accessor: (u) => u.displayName, hideable: false, width: 'minmax(12rem, 1fr)' },
-      { id: 'email', header: t('admin.email'), accessor: (u) => u.email, width: 'minmax(16rem, 1.5fr)', cell: (u) => <span className="pt-code truncate text-xs">{u.email}</span> },
+      {
+        id: 'name',
+        header: t('admin.name'),
+        accessor: (u) => u.displayName,
+        hideable: false,
+        width: 'minmax(12rem, 1fr)',
+      },
+      {
+        id: 'email',
+        header: t('admin.email'),
+        accessor: (u) => u.email,
+        width: 'minmax(16rem, 1.5fr)',
+        cell: (u) => <span className="pt-code truncate text-xs">{u.email}</span>,
+      },
       { id: 'status', header: t('admin.status'), accessor: (u) => u.status, width: '7rem', filter: 'select' },
       {
         id: 'roles',
@@ -102,7 +123,12 @@ export function UsersPage() {
         width: 'minmax(16rem, 2fr)',
         cell: (u) => (
           <span className="truncate text-sm">
-            {u.roles.map((r) => `${r.key} · ${r.scopeType === 'organization' ? t('admin.wholeOrganization') : propName(r.scopeId)}`).join('; ')}
+            {u.roles
+              .map(
+                (r) =>
+                  `${r.key} · ${r.scopeType === 'organization' ? t('admin.wholeOrganization') : propName(r.scopeId)}`,
+              )
+              .join('; ')}
           </span>
         ),
       },
@@ -134,7 +160,10 @@ export function UsersPage() {
             content: users.isPending ? (
               <SkeletonList rows={4} />
             ) : users.isError ? (
-              <ProblemAlert problem={problemFromUnknown(users.error, 'users')} onRetry={() => void users.refetch()} />
+              <ProblemAlert
+                problem={problemFromUnknown(users.error, 'users')}
+                onRetry={() => void users.refetch()}
+              />
             ) : (
               <DataTable
                 label={t('admin.usersTitle')}
@@ -154,7 +183,10 @@ export function UsersPage() {
             label: t('admin.rolesTab'),
             count: roles.data?.length,
             content: roles.isError ? (
-              <ProblemAlert problem={problemFromUnknown(roles.error, 'roles')} onRetry={() => void roles.refetch()} />
+              <ProblemAlert
+                problem={problemFromUnknown(roles.error, 'roles')}
+                onRetry={() => void roles.refetch()}
+              />
             ) : (
               <ul className="grid gap-2 sm:grid-cols-2" data-help-key="settings.users.roles">
                 {(roles.data ?? []).map((r) => (
@@ -192,12 +224,26 @@ export function UsersPage() {
           </>
         }
       >
-        <form id="user-form" onSubmit={submit} className="grid grid-cols-1 gap-3 sm:grid-cols-2" noValidate data-help-key="settings.users.new">
+        <form
+          id="user-form"
+          onSubmit={submit}
+          className="grid grid-cols-1 gap-3 sm:grid-cols-2"
+          noValidate
+          data-help-key="settings.users.new"
+        >
           <Field label={t('admin.email')} required error={errorFor('email')}>
-            <Input type="email" autoComplete="off" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
+            <Input
+              type="email"
+              autoComplete="off"
+              value={form.email}
+              onChange={(e) => setForm({ ...form, email: e.target.value })}
+            />
           </Field>
           <Field label={t('admin.name')} required error={errorFor('displayName')}>
-            <Input value={form.displayName} onChange={(e) => setForm({ ...form, displayName: e.target.value })} />
+            <Input
+              value={form.displayName}
+              onChange={(e) => setForm({ ...form, displayName: e.target.value })}
+            />
           </Field>
           <Field label={t('admin.jobTitle')}>
             <Input value={form.jobTitle} onChange={(e) => setForm({ ...form, jobTitle: e.target.value })} />
@@ -213,17 +259,31 @@ export function UsersPage() {
             <Select
               value={form.scope}
               onValueChange={(v) => setForm({ ...form, scope: v })}
-              options={[{ value: 'organization', label: t('admin.wholeOrganization') }, ...properties.map((p) => ({ value: p.id, label: p.name }))]}
+              options={[
+                { value: 'organization', label: t('admin.wholeOrganization') },
+                ...properties.map((p) => ({ value: p.id, label: p.name })),
+              ]}
             />
           </Field>
-          <Field label={t('admin.initialPassword')} description={t('admin.initialPasswordHelp')} error={errorFor('initialPassword')}>
-            <Input type="password" autoComplete="new-password" value={form.initialPassword} onChange={(e) => setForm({ ...form, initialPassword: e.target.value })} />
+          <Field
+            label={t('admin.initialPassword')}
+            description={t('admin.initialPasswordHelp')}
+            error={errorFor('initialPassword')}
+          >
+            <Input
+              type="password"
+              autoComplete="new-password"
+              value={form.initialPassword}
+              onChange={(e) => setForm({ ...form, initialPassword: e.target.value })}
+            />
           </Field>
           {problem && (
             <div className="sm:col-span-2">
               <ProblemAlert
                 problem={problem}
-                fieldLabel={(p) => t(`admin.leFields.${p.replace(/^\//, '').split('/')[0]}`, { defaultValue: p })}
+                fieldLabel={(p) =>
+                  t(`admin.leFields.${p.replace(/^\//, '').split('/')[0]}`, { defaultValue: p })
+                }
                 onRetry={() => create.mutate(body())}
                 retrying={create.isPending}
               />

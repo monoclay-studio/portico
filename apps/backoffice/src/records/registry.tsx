@@ -54,15 +54,19 @@ export interface RecordDefinition {
   onAction?: (ctx: RecordCtx, model: RecordModel, action: RecordAction, h: ActionHandlers) => void;
 }
 
-const disabled = (action: string, label: string, reason: string): RecordAction => ({ action, label, enabled: false, reason });
+const disabled = (action: string, label: string, reason: string): RecordAction => ({
+  action,
+  label,
+  enabled: false,
+  reason,
+});
 
 const property: RecordDefinition = {
   type: 'property',
   simulated: false,
   async load(ctx, id) {
     const org = ctx.app.session.organization.id;
-    const { property: p, version } = await ctx.queryClient.fetchQuery(queries.property(org, id),
-    );
+    const { property: p, version } = await ctx.queryClient.fetchQuery(queries.property(org, id));
     const entities = await ctx.queryClient.fetchQuery(queries.legalEntities(org)).catch(() => []);
     const le = entities.find((e) => e.id === p.legalEntityId);
     const t = ctx.t;
@@ -85,9 +89,7 @@ const property: RecordDefinition = {
             : { action: 'switch', label: t('records.actions.switchProperty'), enabled: true },
         ],
         issues:
-          p.status === 'setup'
-            ? [{ code: 'setup', severity: 'info', message: t('admin.setupIssue') }]
-            : [],
+          p.status === 'setup' ? [{ code: 'setup', severity: 'info', message: t('admin.setupIssue') }] : [],
         owner: { kind: 'department', id: 'org-admins', name: t('admin.ownerAdmins') },
         sections: [
           {
@@ -97,14 +99,29 @@ const property: RecordDefinition = {
             content: (
               <Facts
                 items={[
-                  [t('admin.code'), <span key="c" className="pt-code">{p.code}</span>],
+                  [
+                    t('admin.code'),
+                    <span key="c" className="pt-code">
+                      {p.code}
+                    </span>,
+                  ],
                   [t('admin.profile'), t(`profiles.${p.profile}`)],
                   [t('admin.timezone'), p.timezone],
                   [t('admin.currency'), p.baseCurrency],
-                  [t('app.businessDate'), <span key="bd" className="pt-code">{p.businessDate}</span>],
+                  [
+                    t('app.businessDate'),
+                    <span key="bd" className="pt-code">
+                      {p.businessDate}
+                    </span>,
+                  ],
                   [t('admin.checkInTime'), p.checkInTime],
                   [t('admin.checkOutTime'), p.checkOutTime],
-                  [t('common.version', { version }), ''],
+                  [
+                    t('common.versionLabel'),
+                    <span key="v" className="pt-code">
+                      {version}
+                    </span>,
+                  ],
                 ]}
               />
             ),
@@ -114,11 +131,20 @@ const property: RecordDefinition = {
             title: t('records.sections.classification'),
             collapsed: true,
             content: (
-              <Facts items={Object.entries(p.classification).map(([k, v]) => [<span key={k} className="pt-code">{k}</span>, String(v)])} />
+              <Facts
+                items={Object.entries(p.classification).map(([k, v]) => [
+                  <span key={k} className="pt-code">
+                    {k}
+                  </span>,
+                  String(v),
+                ])}
+              />
             ),
           },
         ],
-        links: le ? [{ rel: t('records.types.legal_entity'), type: 'legal_entity', id: le.id, title: le.name }] : [],
+        links: le
+          ? [{ rel: t('records.types.legal_entity'), type: 'legal_entity', id: le.id, title: le.name }]
+          : [],
         helpKey: 'settings.properties.record',
       },
     };
@@ -157,8 +183,16 @@ const legalEntity: RecordDefinition = {
         subtitle: le.legalName,
         status: [{ family: t('admin.country'), value: le.countryCode }],
         provenance: { kind: 'live' },
-        actions: [disabled('edit', t('records.actions.edit'), t('records.reasons.apiMissing', { what: 'PATCH /v1/legal-entities/:id' }))],
-        issues: le.taxId ? [] : [{ code: 'tax_id_missing', severity: 'warning', message: t('admin.taxIdMissing') }],
+        actions: [
+          disabled(
+            'edit',
+            t('records.actions.edit'),
+            t('records.reasons.apiMissing', { what: 'PATCH /v1/legal-entities/:id' }),
+          ),
+        ],
+        issues: le.taxId
+          ? []
+          : [{ code: 'tax_id_missing', severity: 'warning', message: t('admin.taxIdMissing') }],
         sections: [
           {
             id: 'details',
@@ -175,7 +209,12 @@ const legalEntity: RecordDefinition = {
             ),
           },
         ],
-        links: props.map((p) => ({ rel: t('records.types.property'), type: 'property', id: p.id, title: p.name })),
+        links: props.map((p) => ({
+          rel: t('records.types.property'),
+          type: 'property',
+          id: p.id,
+          title: p.name,
+        })),
         helpKey: 'settings.legalEntities.record',
       },
     };
@@ -183,7 +222,16 @@ const legalEntity: RecordDefinition = {
   async summary(ctx, id) {
     const list = await ctx.queryClient.fetchQuery(queries.legalEntities(ctx.app.session.organization.id));
     const le = list.find((e) => e.id === id);
-    return le ? { type: 'legal_entity', id, title: le.name, subtitle: `${le.legalName} · ${le.countryCode}`, propertyId: null, label: ctx.t('records.types.legal_entity') } : null;
+    return le
+      ? {
+          type: 'legal_entity',
+          id,
+          title: le.name,
+          subtitle: `${le.legalName} · ${le.countryCode}`,
+          propertyId: null,
+          label: ctx.t('records.types.legal_entity'),
+        }
+      : null;
   },
 };
 
@@ -196,7 +244,8 @@ const user: RecordDefinition = {
     const u = list.find((x) => x.userId === id);
     if (!u) return null;
     const t = ctx.t;
-    const propName = (pid: string | null) => ctx.app.properties.find((p) => p.id === pid)?.name ?? pid ?? t('admin.wholeOrganization');
+    const propName = (pid: string | null) =>
+      ctx.app.properties.find((p) => p.id === pid)?.name ?? pid ?? t('admin.wholeOrganization');
     return {
       history: { state: 'unavailable' },
       model: {
@@ -207,8 +256,17 @@ const user: RecordDefinition = {
         subtitle: u.email,
         status: [{ family: t('admin.status'), value: u.status }],
         provenance: { kind: 'live' },
-        actions: [disabled('assignRole', t('records.actions.assignRole'), t('records.reasons.apiMissing', { what: 'role assignment endpoint' }))],
-        issues: u.roles.length === 0 ? [{ code: 'no_roles', severity: 'warning', message: t('admin.noRolesIssue') }] : [],
+        actions: [
+          disabled(
+            'assignRole',
+            t('records.actions.assignRole'),
+            t('records.reasons.apiMissing', { what: 'role assignment endpoint' }),
+          ),
+        ],
+        issues:
+          u.roles.length === 0
+            ? [{ code: 'no_roles', severity: 'warning', message: t('admin.noRolesIssue') }]
+            : [],
         sections: [
           {
             id: 'roles',
@@ -218,7 +276,9 @@ const user: RecordDefinition = {
                 {u.roles.map((r) => (
                   <li key={`${r.key}:${r.scopeId}`} className="flex gap-2">
                     <span className="pt-code">{r.key}</span>
-                    <span className="text-ink-muted">· {r.scopeType === 'organization' ? t('admin.wholeOrganization') : propName(r.scopeId)}</span>
+                    <span className="text-ink-muted">
+                      · {r.scopeType === 'organization' ? t('admin.wholeOrganization') : propName(r.scopeId)}
+                    </span>
                   </li>
                 ))}
               </ul>
@@ -227,7 +287,12 @@ const user: RecordDefinition = {
         ],
         links: u.roles
           .filter((r) => r.scopeType === 'property' && r.scopeId)
-          .map((r) => ({ rel: r.key, type: 'property', id: r.scopeId as string, title: propName(r.scopeId) })),
+          .map((r) => ({
+            rel: r.key,
+            type: 'property',
+            id: r.scopeId as string,
+            title: propName(r.scopeId),
+          })),
         helpKey: 'settings.users.record',
       },
     };
@@ -235,7 +300,17 @@ const user: RecordDefinition = {
   async summary(ctx, id) {
     const list = await ctx.queryClient.fetchQuery(queries.users(ctx.app.session.organization.id));
     const u = list.find((x) => x.userId === id);
-    return u ? { type: 'user', id, title: u.displayName, subtitle: u.email, propertyId: null, label: ctx.t('records.types.user'), status: { status: u.status } } : null;
+    return u
+      ? {
+          type: 'user',
+          id,
+          title: u.displayName,
+          subtitle: u.email,
+          propertyId: null,
+          label: ctx.t('records.types.user'),
+          status: { status: u.status },
+        }
+      : null;
   },
 };
 
@@ -259,7 +334,11 @@ const stay: RecordDefinition = {
     const blocker = a?.readiness.blockingReason;
     const checkIn: RecordAction =
       s.status !== 'expected'
-        ? disabled('checkIn', t('records.actions.checkIn'), t('records.reasons.notExpected', { status: t(`ui.status.stay.${s.status}`) }))
+        ? disabled(
+            'checkIn',
+            t('records.actions.checkIn'),
+            t('records.reasons.notExpected', { status: t(`ui.status.stay.${s.status}`) }),
+          )
         : blocker
           ? disabled('checkIn', t('records.actions.checkIn'), blocker.message)
           : { action: 'checkIn', label: t('records.actions.checkIn'), enabled: true };
@@ -276,15 +355,30 @@ const stay: RecordDefinition = {
           { family: 'booking', vocabulary: 'booking', value: a?.bookingStatus ?? 'confirmed' },
           { family: 'stay', vocabulary: 'stay', value: s.status },
           ...(a ? [{ family: 'payment', vocabulary: 'payment' as const, value: a.paymentStatus }] : []),
-          ...(a?.unitCondition ? [{ family: 'condition', vocabulary: 'condition' as const, value: a.unitCondition }] : []),
+          ...(a?.unitCondition
+            ? [{ family: 'condition', vocabulary: 'condition' as const, value: a.unitCondition }]
+            : []),
         ],
         provenance: { kind: 'simulated', lastSyncedAt: res.generatedAt },
         actions: [
           checkIn,
-          { action: 'extend', label: t('records.actions.extendStay'), enabled: s.status !== 'departed', previewRequired: true },
-          disabled('move', t('records.actions.moveUnit'), t('records.reasons.moduleNotConnected', { module: 'reservations' })),
+          {
+            action: 'extend',
+            label: t('records.actions.extendStay'),
+            enabled: s.status !== 'departed',
+            previewRequired: true,
+          },
+          disabled(
+            'move',
+            t('records.actions.moveUnit'),
+            t('records.reasons.moduleNotConnected', { module: 'reservations' }),
+          ),
           { action: 'timeline', label: t('records.actions.showOnTimeline'), enabled: true },
-          disabled('cancel', t('records.actions.cancelBooking'), t('records.reasons.moduleNotConnected', { module: 'reservations' })),
+          disabled(
+            'cancel',
+            t('records.actions.cancelBooking'),
+            t('records.reasons.moduleNotConnected', { module: 'reservations' }),
+          ),
         ],
         issues: (a?.readiness.checks ?? [])
           .filter((c) => c.status !== 'ok')
@@ -292,15 +386,29 @@ const stay: RecordDefinition = {
             code: c.key,
             severity: c.status === 'attention' ? ('warning' as const) : ('blocking' as const),
             message: c.message,
-            ...(blocker?.key === c.key && blocker.owner ? { owner: { kind: 'department' as const, id: c.key, name: blocker.owner } } : {}),
+            ...(blocker?.key === c.key && blocker.owner
+              ? { owner: { kind: 'department' as const, id: c.key, name: blocker.owner } }
+              : {}),
           })),
         ...(a?.owner ? { owner: { kind: 'user' as const, id: a.owner, name: a.owner } } : {}),
         sections: [
           ...(a
             ? [
-                { id: 'readiness', title: t('records.sections.readiness'), helpKey: 'frontDesk.arrivals.readiness', content: <ReadinessChecks checks={a.readiness.checks} /> },
+                {
+                  id: 'readiness',
+                  title: t('records.sections.readiness'),
+                  helpKey: 'frontDesk.arrivals.readiness',
+                  content: <ReadinessChecks checks={a.readiness.checks} />,
+                },
                 ...(a.checkInRun
-                  ? [{ id: 'checkin', title: t('records.sections.checkIn'), helpKey: 'reservations.checkIn', content: <StepTracker steps={a.checkInRun.steps} /> }]
+                  ? [
+                      {
+                        id: 'checkin',
+                        title: t('records.sections.checkIn'),
+                        helpKey: 'reservations.checkIn',
+                        content: <StepTracker steps={a.checkInRun.steps} />,
+                      },
+                    ]
                   : []),
                 {
                   id: 'arrival',
@@ -308,7 +416,10 @@ const stay: RecordDefinition = {
                   content: (
                     <Facts
                       items={[
-                        [t('arrivals.transport'), `${t(`arrivals.transportModes.${a.arrivalDetails.transportMode}`)}${a.arrivalDetails.carrier ? ` · ${a.arrivalDetails.carrier}` : ''}${a.arrivalDetails.number ? ` ${a.arrivalDetails.number}` : ''}`],
+                        [
+                          t('arrivals.transport'),
+                          `${t(`arrivals.transportModes.${a.arrivalDetails.transportMode}`)}${a.arrivalDetails.carrier ? ` · ${a.arrivalDetails.carrier}` : ''}${a.arrivalDetails.number ? ` ${a.arrivalDetails.number}` : ''}`,
+                        ],
                         [t('arrivals.inbound'), a.arrivalDetails.inbound ?? '—'],
                         [
                           t('arrivals.eta'),
@@ -328,9 +439,32 @@ const stay: RecordDefinition = {
               <Facts
                 items={[
                   [t('arrivals.nights'), String(nights)],
-                  [t('arrivals.occupancy'), [t('arrivals.adults', { count: s.adults }), s.childrenAges.length ? t('arrivals.children', { count: s.childrenAges.length }) : ''].filter(Boolean).join(', ')],
-                  [t('timeline.nightlyRate'), <span key="r" className="pt-code">{formatMoney(s.nightlyRate, ctx.lng)}</span>],
-                  ...(a ? ([[t('arrivals.balance'), <span key="b" className="pt-code">{formatMoney(a.balance, ctx.lng)}</span>], [t('arrivals.requests'), a.requests.join(' · ') || t('arrivals.noRequests')]] as Array<[string, ReactNode]>) : []),
+                  [
+                    t('arrivals.occupancy'),
+                    [
+                      t('arrivals.adults', { count: s.adults }),
+                      s.childrenAges.length ? t('arrivals.children', { count: s.childrenAges.length }) : '',
+                    ]
+                      .filter(Boolean)
+                      .join(', '),
+                  ],
+                  [
+                    t('timeline.nightlyRate'),
+                    <span key="r" className="pt-code">
+                      {formatMoney(s.nightlyRate, ctx.lng)}
+                    </span>,
+                  ],
+                  ...(a
+                    ? ([
+                        [
+                          t('arrivals.balance'),
+                          <span key="b" className="pt-code">
+                            {formatMoney(a.balance, ctx.lng)}
+                          </span>,
+                        ],
+                        [t('arrivals.requests'), a.requests.join(' · ') || t('arrivals.noRequests')],
+                      ] as Array<[string, ReactNode]>)
+                    : []),
                 ]}
               />
             ),
@@ -338,8 +472,19 @@ const stay: RecordDefinition = {
         ],
         links: [
           { rel: t('records.types.guest'), type: 'guest', id: `${id}:guest`, title: s.guestName },
-          ...(s.unitId ? [{ rel: t('records.types.unit'), type: 'unit', id: s.unitId, title: s.unitName ?? '' }] : []),
-          ...(ctx.app.property ? [{ rel: t('records.types.property'), type: 'property', id: ctx.app.property.id, title: ctx.app.property.name }] : []),
+          ...(s.unitId
+            ? [{ rel: t('records.types.unit'), type: 'unit', id: s.unitId, title: s.unitName ?? '' }]
+            : []),
+          ...(ctx.app.property
+            ? [
+                {
+                  rel: t('records.types.property'),
+                  type: 'property',
+                  id: ctx.app.property.id,
+                  title: ctx.app.property.name,
+                },
+              ]
+            : []),
         ],
         helpKey: 'reservations.stay.record',
       },
@@ -380,7 +525,12 @@ const unit: RecordDefinition = {
       history: {
         state: 'ready',
         items: [
-          { at: res.generatedAt, action: 'operations.unit.conditionChanged', actor: { kind: 'user', label: r.assigneeName ?? 'Housekeeping' }, reason: `→ ${t(`ui.status.condition.${r.condition}`)}` },
+          {
+            at: res.generatedAt,
+            action: 'operations.unit.conditionChanged',
+            actor: { kind: 'user', label: r.assigneeName ?? 'Housekeeping' },
+            reason: `→ ${t(`ui.status.condition.${r.condition}`)}`,
+          },
         ],
       },
       model: {
@@ -392,22 +542,46 @@ const unit: RecordDefinition = {
         status: [
           { family: 'condition', vocabulary: 'condition', value: r.condition },
           { family: 'occupancy', vocabulary: 'occupancy', value: r.occupancy },
-          ...(r.discrepancy !== 'none' ? [{ family: 'discrepancy', vocabulary: 'occupancy' as const, value: r.discrepancy }] : []),
-          ...(r.block ? [{ family: 'availability', vocabulary: 'availability' as const, value: 'blocked' }] : []),
+          ...(r.discrepancy !== 'none'
+            ? [{ family: 'discrepancy', vocabulary: 'occupancy' as const, value: r.discrepancy }]
+            : []),
+          ...(r.block
+            ? [{ family: 'availability', vocabulary: 'availability' as const, value: 'blocked' }]
+            : []),
         ],
         provenance: { kind: 'simulated', lastSyncedAt: res.generatedAt },
         actions: [
           r.condition === 'clean'
             ? { action: 'inspect', label: t('records.actions.markInspected'), enabled: true }
-            : disabled('inspect', t('records.actions.markInspected'), t('housekeeping.inspectReason', { condition: t(`ui.status.condition.${r.condition}`) })),
-          disabled('report', t('records.actions.reportIssue'), t('records.reasons.moduleNotConnected', { module: 'operations' })),
+            : disabled(
+                'inspect',
+                t('records.actions.markInspected'),
+                t('housekeeping.inspectReason', { condition: t(`ui.status.condition.${r.condition}`) }),
+              ),
+          disabled(
+            'report',
+            t('records.actions.reportIssue'),
+            t('records.reasons.moduleNotConnected', { module: 'operations' }),
+          ),
         ],
         issues: [
-          ...(r.condition === 'failed_inspection' ? [{ code: 'failed', severity: 'blocking' as const, message: r.priorityReasons.join(' · ') }] : []),
+          ...(r.condition === 'failed_inspection'
+            ? [{ code: 'failed', severity: 'blocking' as const, message: r.priorityReasons.join(' · ') }]
+            : []),
           ...(r.block ? [{ code: 'ooo', severity: 'blocking' as const, message: r.block.reason }] : []),
-          ...(r.discrepancy !== 'none' ? [{ code: 'discrepancy', severity: 'warning' as const, message: t(`ui.status.occupancy.${r.discrepancy}`) }] : []),
+          ...(r.discrepancy !== 'none'
+            ? [
+                {
+                  code: 'discrepancy',
+                  severity: 'warning' as const,
+                  message: t(`ui.status.occupancy.${r.discrepancy}`),
+                },
+              ]
+            : []),
         ],
-        ...(r.assigneeName ? { owner: { kind: 'user' as const, id: r.assigneeName, name: r.assigneeName } } : {}),
+        ...(r.assigneeName
+          ? { owner: { kind: 'user' as const, id: r.assigneeName, name: r.assigneeName } }
+          : {}),
         sections: [
           {
             id: 'condition',
@@ -415,8 +589,18 @@ const unit: RecordDefinition = {
             content: (
               <Facts
                 items={[
-                  [t('housekeeping.priority'), r.topPriority ? `${t(`housekeeping.priorities.${r.topPriority}`)} · ${r.priorityReasons.join(' · ')}` : '—'],
-                  [t('housekeeping.readyEstimate'), r.expectedReadyAt ? `≈ ${formatTime(r.expectedReadyAt, tz, ctx.lng)} (${t('housekeeping.estimate')})` : '—'],
+                  [
+                    t('housekeeping.priority'),
+                    r.topPriority
+                      ? `${t(`housekeeping.priorities.${r.topPriority}`)} · ${r.priorityReasons.join(' · ')}`
+                      : '—',
+                  ],
+                  [
+                    t('housekeeping.readyEstimate'),
+                    r.expectedReadyAt
+                      ? `≈ ${formatTime(r.expectedReadyAt, tz, ctx.lng)} (${t('housekeeping.estimate')})`
+                      : '—',
+                  ],
                   [t('housekeeping.dnd'), r.dnd ? t('common.yes') : t('common.no')],
                 ]}
               />
@@ -433,7 +617,15 @@ const unit: RecordDefinition = {
   async summary(ctx, id) {
     const u = (await workspaceSource.unit(requireProperty(ctx), id)).data;
     return u
-      ? { type: 'unit', id, title: u.row.unitNumber, subtitle: u.row.unitTypeName, status: { condition: u.row.condition, occupancy: u.row.occupancy }, propertyId: ctx.app.property?.id ?? null, label: ctx.t('records.types.unit') }
+      ? {
+          type: 'unit',
+          id,
+          title: u.row.unitNumber,
+          subtitle: u.row.unitTypeName,
+          status: { condition: u.row.condition, occupancy: u.row.occupancy },
+          propertyId: ctx.app.property?.id ?? null,
+          label: ctx.t('records.types.unit'),
+        }
       : null;
   },
   onAction(ctx, _model, action, h) {
@@ -459,21 +651,43 @@ const guest: RecordDefinition = {
         subtitle: s.vip ? 'VIP' : undefined,
         status: [],
         provenance: { kind: 'simulated' },
-        actions: [disabled('edit', t('records.actions.edit'), t('records.reasons.moduleNotConnected', { module: 'guests' }))],
+        actions: [
+          disabled(
+            'edit',
+            t('records.actions.edit'),
+            t('records.reasons.moduleNotConnected', { module: 'guests' }),
+          ),
+        ],
         issues: [],
         sections: [],
-        links: [{ rel: t('records.types.stay'), type: 'stay', id: stayId, title: `${s.bookingCode} · ${s.from} → ${s.to}` }],
+        links: [
+          {
+            rel: t('records.types.stay'),
+            type: 'stay',
+            id: stayId,
+            title: `${s.bookingCode} · ${s.from} → ${s.to}`,
+          },
+        ],
         helpKey: 'guests.profile.record',
       } as RecordModel,
     };
   },
   async summary(ctx, id) {
     const s = (await workspaceSource.stay(requireProperty(ctx), id.replace(/:guest$/, ''))).data;
-    return s ? { type: 'guest', id, title: s.guestName, propertyId: null, label: ctx.t('records.types.guest') } : null;
+    return s
+      ? { type: 'guest', id, title: s.guestName, propertyId: null, label: ctx.t('records.types.guest') }
+      : null;
   },
 };
 
-export const RECORD_TYPES: Record<string, RecordDefinition> = { property, legal_entity: legalEntity, user, stay, unit, guest };
+export const RECORD_TYPES: Record<string, RecordDefinition> = {
+  property,
+  legal_entity: legalEntity,
+  user,
+  stay,
+  unit,
+  guest,
+};
 
 export function definitionFor(type: string): RecordDefinition | undefined {
   return RECORD_TYPES[type];

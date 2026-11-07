@@ -75,12 +75,19 @@ export type RecordHistoryDto = z.infer<typeof recordHistory>;
 export function endpoints(api: ApiClient) {
   return {
     login: (body: LoginRequest) =>
-      api.request({ method: 'POST', path: '/auth/login', body: loginRequest.parse(body), schema: loginResponse, expectUnauthenticated: true }),
+      api.request({
+        method: 'POST',
+        path: '/auth/login',
+        body: loginRequest.parse(body),
+        schema: loginResponse,
+        expectUnauthenticated: true,
+      }),
     logout: () => api.request({ method: 'POST', path: '/auth/logout', schema: null }),
     me: () => api.request({ path: '/me', schema: me }),
     organization: () => api.request({ path: '/organization', schema: organization }),
     properties: () => api.request({ path: '/properties', schema: items(property) }),
-    property: (id: string) => api.request({ path: `/properties/${encodeURIComponent(id)}`, schema: property }),
+    property: (id: string) =>
+      api.request({ path: `/properties/${encodeURIComponent(id)}`, schema: property }),
     updateProperty: (id: string, patch: PropertyUpdate, version: number) =>
       api.request({
         method: 'PATCH',
@@ -115,9 +122,15 @@ export function endpoints(api: ApiClient) {
         ...(opts.signal ? { signal: opts.signal } : {}),
       }),
     recordSummary: (type: string, id: string) =>
-      api.request({ path: `/records/${encodeURIComponent(type)}/${encodeURIComponent(id)}/summary`, schema: recordSummary }),
+      api.request({
+        path: `/records/${encodeURIComponent(type)}/${encodeURIComponent(id)}/summary`,
+        schema: recordSummary,
+      }),
     recordHistory: (type: string, id: string) =>
-      api.request({ path: `/records/${encodeURIComponent(type)}/${encodeURIComponent(id)}/history`, schema: recordHistory }),
+      api.request({
+        path: `/records/${encodeURIComponent(type)}/${encodeURIComponent(id)}/history`,
+        schema: recordHistory,
+      }),
   };
 }
 

@@ -10,14 +10,23 @@ import { PageHeader } from '../common/page-header';
 import { FirstRunChecklist } from './first-run-checklist';
 import { PractiseInTraining } from './practise-in-training';
 
-const kindIcon: Record<LessonKind, typeof BookOpen> = { tour: Compass, article: BookOpen, video: PlayCircle, practice: Dumbbell };
+const kindIcon: Record<LessonKind, typeof BookOpen> = {
+  tour: Compass,
+  article: BookOpen,
+  video: PlayCircle,
+  practice: Dumbbell,
+};
 
 function PathCard({ path, done, userId }: { path: LearningPath; done: readonly string[]; userId: string }) {
   const { t } = useTranslation();
   const completed = path.lessons.filter((l) => done.includes(`${path.id}:${l.id}`)).length;
   const ratio = completed / Math.max(1, path.lessons.length);
   return (
-    <section className="flex flex-col gap-3 rounded-lg border border-line bg-surface p-4" aria-labelledby={`path-${path.id}`} data-learning-path={path.id}>
+    <section
+      className="flex flex-col gap-3 rounded-lg border border-line bg-surface p-4"
+      aria-labelledby={`path-${path.id}`}
+      data-learning-path={path.id}
+    >
       <div className="flex items-baseline justify-between gap-2">
         <h3 id={`path-${path.id}`} className="font-semibold">
           {t(`learn.paths.${path.id}`)}
@@ -59,7 +68,10 @@ function PathCard({ path, done, userId }: { path: LearningPath; done: readonly s
                 </span>
               </span>
               {l.to && (
-                <Link to={l.to} className="shrink-0 text-xs font-medium text-accent underline underline-offset-2">
+                <Link
+                  to={l.to}
+                  className="shrink-0 text-xs font-medium text-accent underline underline-offset-2"
+                >
                   {t('learn.open')}
                 </Link>
               )}
@@ -82,7 +94,12 @@ export function LearnPage() {
   );
   return (
     <div className="flex flex-col gap-5">
-      <PageHeader title={t('learn.title')} subtitle={t('learn.subtitle')} helpKey="learning.centre" context={false} />
+      <PageHeader
+        title={t('learn.title')}
+        subtitle={t('learn.subtitle')}
+        helpKey="learning.centre"
+        context={false}
+      />
       <FirstRunChecklist />
       <PractiseInTraining />
       <h2 className="text-sm font-semibold">{t('learn.recommended')}</h2>

@@ -34,7 +34,10 @@ async function orgsFor(email: string) {
 let orgs = await orgsFor(GROUP_DIRECTOR);
 if (!orgs) {
   console.log('Seeding demo organizations…');
-  execFileSync('pnpm', ['--filter', '@portico/api', 'seed:demo', businessDate], { stdio: 'inherit', env: process.env });
+  execFileSync('pnpm', ['--filter', '@portico/api', 'seed:demo', businessDate], {
+    stdio: 'inherit',
+    env: process.env,
+  });
   orgs = await orgsFor(GROUP_DIRECTOR);
 }
 if (!orgs) throw new Error('Demo seed did not create the group director');

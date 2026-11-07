@@ -1,4 +1,13 @@
-import { addDays, EmptyState, ProblemAlert, ProvenanceBadge, SkeletonList, Timeline, type TimelineItem, useToast } from '@portico/ui';
+import {
+  addDays,
+  EmptyState,
+  ProblemAlert,
+  ProvenanceBadge,
+  SkeletonList,
+  Timeline,
+  type TimelineItem,
+  useToast,
+} from '@portico/ui';
 import { useQuery } from '@tanstack/react-query';
 import { useSearch } from '@tanstack/react-router';
 import { useMemo, useState } from 'react';
@@ -33,7 +42,8 @@ export function TimelinePage() {
   const days = 21;
   const query = useQuery({
     queryKey: ['sim', property?.id, property?.businessDate, 'timeline', start, days],
-    queryFn: () => workspaceSource.timeline(toSimProperty(property as NonNullable<typeof property>), start, days),
+    queryFn: () =>
+      workspaceSource.timeline(toSimProperty(property as NonNullable<typeof property>), start, days),
     enabled: Boolean(property),
     placeholderData: (prev) => prev,
   });
@@ -70,19 +80,40 @@ export function TimelinePage() {
       <PageHeader
         title={t('timeline.title')}
         subtitle={t('timeline.subtitle', { units: units.length })}
-        meta={query.data && <ProvenanceBadge provenance={query.data.provenance} lastSyncedAt={query.data.generatedAt} />}
+        meta={
+          query.data && (
+            <ProvenanceBadge provenance={query.data.provenance} lastSyncedAt={query.data.generatedAt} />
+          )
+        }
         helpKey="reservations.timeline"
       />
       <SimulatedNote module="reservations + inventory" />
       <ul className="mb-3 flex flex-wrap gap-4" aria-label={t('timeline.legend')}>
-        <Swatch className="border border-s-4 border-[var(--pt-bar-expected-line)] bg-[var(--pt-bar-expected)]" label={t('timeline.legendExpected')} />
+        <Swatch
+          className="border border-s-4 border-[var(--pt-bar-expected-line)] bg-[var(--pt-bar-expected)]"
+          label={t('timeline.legendExpected')}
+        />
         <Swatch className="bg-[var(--pt-bar-inhouse)]" label={t('timeline.legendInHouse')} />
-        <Swatch className="border border-line bg-[var(--pt-bar-departed)]" label={t('timeline.legendDeparted')} />
-        <Swatch className="pt-hatch border border-danger-line [--pt-hatch-a:var(--pt-bar-block)] [--pt-hatch-b:var(--pt-bar-block-stripe)]" label={t('timeline.legendBlock')} />
-        <Swatch className="border-2 border-dashed border-[var(--pt-bar-hold-line)] bg-pending-bg" label={t('timeline.legendHold')} />
+        <Swatch
+          className="border border-line bg-[var(--pt-bar-departed)]"
+          label={t('timeline.legendDeparted')}
+        />
+        <Swatch
+          className="pt-hatch border border-danger-line [--pt-hatch-a:var(--pt-bar-block)] [--pt-hatch-b:var(--pt-bar-block-stripe)]"
+          label={t('timeline.legendBlock')}
+        />
+        <Swatch
+          className="border-2 border-dashed border-[var(--pt-bar-hold-line)] bg-pending-bg"
+          label={t('timeline.legendHold')}
+        />
       </ul>
       {query.isPending && <SkeletonList rows={10} />}
-      {query.isError && <ProblemAlert problem={problemFromUnknown(query.error, 'timeline')} onRetry={() => void query.refetch()} />}
+      {query.isError && (
+        <ProblemAlert
+          problem={problemFromUnknown(query.error, 'timeline')}
+          onRetry={() => void query.refetch()}
+        />
+      )}
       {view && (
         <div className={query.isFetching ? 'opacity-70' : undefined}>
           <Timeline
@@ -100,7 +131,9 @@ export function TimelinePage() {
               if (it.kind === 'stay') nav.openFresh('stay', it.id);
               else nav.openFresh('unit', it.unitId);
             }}
-            onCellActivate={(u, d) => toast({ tone: 'info', title: t('timeline.walkIn', { unit: u.label, date: d }) })}
+            onCellActivate={(u, d) =>
+              toast({ tone: 'info', title: t('timeline.walkIn', { unit: u.label, date: d }) })
+            }
           />
         </div>
       )}

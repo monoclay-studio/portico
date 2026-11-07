@@ -53,7 +53,11 @@ export function FilterChips({
       ))}
       {chips.length > 1 && onClearAll && (
         <li>
-          <button type="button" onClick={onClearAll} className="min-h-7 px-1 text-xs font-medium text-accent underline underline-offset-2">
+          <button
+            type="button"
+            onClick={onClearAll}
+            className="min-h-7 px-1 text-xs font-medium text-accent underline underline-offset-2"
+          >
             {strings.chips.clearAll}
           </button>
         </li>

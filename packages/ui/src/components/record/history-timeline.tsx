@@ -28,7 +28,8 @@ export function HistoryTimeline({
   const { strings, locale } = useUi();
   const s = strings.record;
   if (history.state === 'loading') return <SkeletonList rows={3} />;
-  if (history.state === 'unavailable') return <p className="text-sm text-ink-muted">{s.historyUnavailable}</p>;
+  if (history.state === 'unavailable')
+    return <p className="text-sm text-ink-muted">{s.historyUnavailable}</p>;
   if (history.state === 'error') return <p className="text-sm text-danger-fg">{history.message}</p>;
   if (history.items.length === 0) return <p className="text-sm text-ink-muted">{s.historyEmpty}</p>;
   const items = [...history.items].reverse();
@@ -37,7 +38,11 @@ export function HistoryTimeline({
       {items.map((e, i) => {
         const changed = changedFields(e);
         return (
-          <li key={`${e.at}-${i}`} className="relative flex gap-3 pb-3 last:pb-0" data-history-action={e.action}>
+          <li
+            key={`${e.at}-${i}`}
+            className="relative flex gap-3 pb-3 last:pb-0"
+            data-history-action={e.action}
+          >
             {i < items.length - 1 && (
               <span aria-hidden className="absolute start-[0.4375rem] top-4 bottom-0 w-px bg-line" />
             )}

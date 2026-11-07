@@ -61,7 +61,8 @@ export function KpiTile({
   const { strings } = useUi();
   const s = strings.kpi;
   const good = delta && delta.direction !== 'flat' ? delta.direction === delta.goodWhen : null;
-  const DeltaIcon = delta?.direction === 'up' ? ArrowUpRight : delta?.direction === 'down' ? ArrowDownRight : ArrowRight;
+  const DeltaIcon =
+    delta?.direction === 'up' ? ArrowUpRight : delta?.direction === 'down' ? ArrowDownRight : ArrowRight;
   const countsText = counts
     ? `${fmt(s.of, { numerator: String(counts.numerator), denominator: String(counts.denominator) })}${counts.unit ? ` ${counts.unit}` : ''}`
     : null;
@@ -88,13 +89,18 @@ export function KpiTile({
       </span>
       {ratio !== undefined && (
         <span aria-hidden className="block h-1.5 w-full overflow-hidden rounded-full bg-viz-seq-track">
-          <span className="block h-full rounded-full bg-viz-seq" style={{ width: `${Math.max(0, Math.min(1, ratio)) * 100}%` }} />
+          <span
+            className="block h-full rounded-full bg-viz-seq"
+            style={{ width: `${Math.max(0, Math.min(1, ratio)) * 100}%` }}
+          />
         </span>
       )}
       <span className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
         {countsText && <span className="pt-data text-ink-muted">{countsText}</span>}
         {annotation && <span className="pt-data text-ink-muted">{annotation}</span>}
-        {delta && <span className="pt-data text-ink-muted normal-case">{fmt(s.vs, { period: delta.period })}</span>}
+        {delta && (
+          <span className="pt-data text-ink-muted normal-case">{fmt(s.vs, { period: delta.period })}</span>
+        )}
       </span>
     </>
   );
@@ -110,7 +116,13 @@ export function KpiTile({
     >
       <div className="flex items-center gap-1.5">
         {icon && (
-          <span aria-hidden className={cn('inline-flex [&_svg]:size-4', tone === 'attention' ? 'text-warning-fg' : 'text-ink-muted')}>
+          <span
+            aria-hidden
+            className={cn(
+              'inline-flex [&_svg]:size-4',
+              tone === 'attention' ? 'text-warning-fg' : 'text-ink-muted',
+            )}
+          >
             {icon}
           </span>
         )}
@@ -139,7 +151,11 @@ export function KpiTile({
       </div>
       {drill ? (
         href ? (
-          <a href={href} className="flex flex-col gap-3 after:absolute after:inset-0 after:rounded-lg" aria-label={`${label}: ${value}${countsText ? `, ${countsText}` : ''}. ${fmt(s.openRecords, { metric: label })}`}>
+          <a
+            href={href}
+            className="flex flex-col gap-3 after:absolute after:inset-0 after:rounded-lg"
+            aria-label={`${label}: ${value}${countsText ? `, ${countsText}` : ''}. ${fmt(s.openRecords, { metric: label })}`}
+          >
             {body}
           </a>
         ) : (

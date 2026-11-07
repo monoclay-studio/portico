@@ -20,7 +20,9 @@ function EnvironmentChip({ environment }: { environment: string }) {
     <span
       className={cn(
         'inline-flex items-center rounded-sm border px-1.5 text-[0.6875rem] font-semibold uppercase tracking-wide',
-        nonLive ? 'border-pending-line bg-pending-bg text-pending-fg' : 'border-success-line bg-success-bg text-success-fg',
+        nonLive
+          ? 'border-pending-line bg-pending-bg text-pending-fg'
+          : 'border-success-line bg-success-bg text-success-fg',
       )}
     >
       {label}
@@ -50,9 +52,17 @@ export function SignInPage() {
         return;
       }
       if (!choices) rememberOrgChoices([data.organization]);
-      sessionStore.set({ token: data.token, expiresAt: data.expiresAt, userId: data.userId, organization: data.organization });
+      sessionStore.set({
+        token: data.token,
+        expiresAt: data.expiresAt,
+        userId: data.userId,
+        organization: data.organization,
+      });
       setPassword('');
-      const target = search.redirect && search.redirect.startsWith('/') && !search.redirect.startsWith('//') ? search.redirect : '/';
+      const target =
+        search.redirect && search.redirect.startsWith('/') && !search.redirect.startsWith('//')
+          ? search.redirect
+          : '/';
       void navigate({ to: target });
     },
   });
@@ -66,7 +76,10 @@ export function SignInPage() {
     <main id="main" className="flex min-h-full items-center justify-center bg-canvas px-4 py-10">
       <div className="w-full max-w-md">
         <div className="mb-6 flex items-center gap-3">
-          <span aria-hidden className="inline-flex size-10 items-center justify-center rounded-lg bg-accent text-lg font-bold text-on-accent">
+          <span
+            aria-hidden
+            className="inline-flex size-10 items-center justify-center rounded-lg bg-accent text-lg font-bold text-on-accent"
+          >
             {PRODUCT_NAME.charAt(0)}
           </span>
           <div>
@@ -75,9 +88,14 @@ export function SignInPage() {
           </div>
         </div>
         <div className="rounded-lg border border-line bg-surface p-6 shadow-sm">
-          <h1 className="mb-4 text-xl font-semibold">{choices ? t('signIn.chooseOrganization') : t('signIn.title')}</h1>
+          <h1 className="mb-4 text-xl font-semibold">
+            {choices ? t('signIn.chooseOrganization') : t('signIn.title')}
+          </h1>
           {(search.reason === 'expired' || search.reason === 'signed_out') && !login.isError && !choices && (
-            <p role="status" className="mb-4 flex items-start gap-2 rounded-md border border-info-line bg-info-bg p-3 text-sm text-ink">
+            <p
+              role="status"
+              className="mb-4 flex items-start gap-2 rounded-md border border-info-line bg-info-bg p-3 text-sm text-ink"
+            >
               <Info aria-hidden className="mt-0.5 size-4 shrink-0 text-info-fg" />
               {search.reason === 'expired' ? t('signIn.sessionExpired') : t('signIn.signedOut')}
             </p>
@@ -135,9 +153,17 @@ export function SignInPage() {
               </fieldset>
             )}
             {login.isError && (
-              <ProblemAlert problem={problemFromUnknown(login.error, 'sign-in')} onRetry={() => login.mutate(orgId ?? undefined)} />
+              <ProblemAlert
+                problem={problemFromUnknown(login.error, 'sign-in')}
+                onRetry={() => login.mutate(orgId ?? undefined)}
+              />
             )}
-            <Button type="submit" variant="primary" loading={login.isPending} disabled={choices ? !orgId : !email || !password}>
+            <Button
+              type="submit"
+              variant="primary"
+              loading={login.isPending}
+              disabled={choices ? !orgId : !email || !password}
+            >
               {choices ? t('signIn.continue') : t('signIn.submit')}
             </Button>
             {choices && (

@@ -1,4 +1,13 @@
-import { type ColumnDef, DataTable, EmptyState, formatTime, ProblemAlert, ProvenanceBadge, type SavedView, SkeletonList } from '@portico/ui';
+import {
+  type ColumnDef,
+  DataTable,
+  EmptyState,
+  formatTime,
+  ProblemAlert,
+  ProvenanceBadge,
+  type SavedView,
+  SkeletonList,
+} from '@portico/ui';
 import { useQuery } from '@tanstack/react-query';
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -31,9 +40,24 @@ export function MyWorkPage() {
   const tz = property?.timezone ?? 'UTC';
   const builtIn = useMemo<SavedView[]>(
     () => [
-      builtInView('urgent', t('myWork.viewUrgent'), { sort: { columnId: 'priority', direction: 'asc' }, filters: {}, search: '', hidden: [] }),
-      builtInView('all', t('myWork.viewAll'), { sort: { columnId: 'due', direction: 'asc' }, filters: {}, search: '', hidden: [] }),
-      builtInView('approvals', t('myWork.viewApprovals'), { sort: null, filters: { kind: 'approval' }, search: '', hidden: [] }),
+      builtInView('urgent', t('myWork.viewUrgent'), {
+        sort: { columnId: 'priority', direction: 'asc' },
+        filters: {},
+        search: '',
+        hidden: [],
+      }),
+      builtInView('all', t('myWork.viewAll'), {
+        sort: { columnId: 'due', direction: 'asc' },
+        filters: {},
+        search: '',
+        hidden: [],
+      }),
+      builtInView('approvals', t('myWork.viewApprovals'), {
+        sort: null,
+        filters: { kind: 'approval' },
+        search: '',
+        hidden: [],
+      }),
     ],
     [t],
   );
@@ -46,7 +70,15 @@ export function MyWorkPage() {
         accessor: (w) => RANK[w.priority],
         width: '7rem',
         cell: (w) => (
-          <span className={w.priority === 'urgent' ? 'font-semibold text-danger-fg' : w.priority === 'high' ? 'font-semibold text-warning-fg' : ''}>
+          <span
+            className={
+              w.priority === 'urgent'
+                ? 'font-semibold text-danger-fg'
+                : w.priority === 'high'
+                  ? 'font-semibold text-warning-fg'
+                  : ''
+            }
+          >
             {t(`housekeeping.priorities.${w.priority}`)}
           </span>
         ),
@@ -57,7 +89,10 @@ export function MyWorkPage() {
         accessor: (w) => w.kind,
         width: '8rem',
         filter: 'select',
-        filterOptions: (['exception', 'task', 'approval', 'handover'] as const).map((k) => ({ value: k, label: t(`myWork.kinds.${k}`) })),
+        filterOptions: (['exception', 'task', 'approval', 'handover'] as const).map((k) => ({
+          value: k,
+          label: t(`myWork.kinds.${k}`),
+        })),
         cell: (w) => <span className="pt-data">{t(`myWork.kinds.${w.kind}`)}</span>,
       },
       {
@@ -87,10 +122,24 @@ export function MyWorkPage() {
             <span className="text-ink-subtle">—</span>
           ),
       },
-      { id: 'module', header: t('myWork.module'), accessor: (w) => w.module, width: '8rem', filter: 'select' },
+      {
+        id: 'module',
+        header: t('myWork.module'),
+        accessor: (w) => w.module,
+        width: '8rem',
+        filter: 'select',
+      },
       { id: 'department', header: t('myWork.department'), accessor: (w) => w.department, width: '9rem' },
       { id: 'assignee', header: t('myWork.assignee'), accessor: (w) => w.assignee ?? '', width: '10rem' },
-      { id: 'due', header: t('myWork.due'), accessor: (w) => w.dueAt ?? '', width: '6rem', cell: (w) => <span className="pt-code">{w.dueAt ? formatTime(w.dueAt, tz, i18n.resolvedLanguage) : '—'}</span> },
+      {
+        id: 'due',
+        header: t('myWork.due'),
+        accessor: (w) => w.dueAt ?? '',
+        width: '6rem',
+        cell: (w) => (
+          <span className="pt-code">{w.dueAt ? formatTime(w.dueAt, tz, i18n.resolvedLanguage) : '—'}</span>
+        ),
+      },
     ],
     [t, tz, i18n.resolvedLanguage],
   );
@@ -100,12 +149,21 @@ export function MyWorkPage() {
       <PageHeader
         title={t('myWork.title')}
         subtitle={t('myWork.subtitle')}
-        meta={query.data && <ProvenanceBadge provenance={query.data.provenance} lastSyncedAt={query.data.generatedAt} />}
+        meta={
+          query.data && (
+            <ProvenanceBadge provenance={query.data.provenance} lastSyncedAt={query.data.generatedAt} />
+          )
+        }
         helpKey="overview.myWork"
       />
       <SimulatedNote module="operations + integration" />
       {query.isPending && <SkeletonList rows={6} />}
-      {query.isError && <ProblemAlert problem={problemFromUnknown(query.error, 'my-work')} onRetry={() => void query.refetch()} />}
+      {query.isError && (
+        <ProblemAlert
+          problem={problemFromUnknown(query.error, 'my-work')}
+          onRetry={() => void query.refetch()}
+        />
+      )}
       {query.data && (
         <DataTable
           label={t('myWork.title')}

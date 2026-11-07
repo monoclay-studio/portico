@@ -18,21 +18,51 @@ export function PropertiesPage() {
   const query = useQuery(queries.properties(session.organization.id));
   const columns = useMemo<ColumnDef<Property>[]>(
     () => [
-      { id: 'code', header: t('admin.code'), accessor: (p) => p.code, width: '7rem', hideable: false, cell: (p) => <span className="pt-code font-medium">{p.code}</span> },
+      {
+        id: 'code',
+        header: t('admin.code'),
+        accessor: (p) => p.code,
+        width: '7rem',
+        hideable: false,
+        cell: (p) => <span className="pt-code font-medium">{p.code}</span>,
+      },
       { id: 'name', header: t('admin.name'), accessor: (p) => p.name, width: 'minmax(14rem, 2fr)' },
-      { id: 'profile', header: t('admin.profile'), accessor: (p) => p.profile, filter: 'select', width: '10rem', cell: (p) => t(`profiles.${p.profile}`) },
+      {
+        id: 'profile',
+        header: t('admin.profile'),
+        accessor: (p) => p.profile,
+        filter: 'select',
+        width: '10rem',
+        cell: (p) => t(`profiles.${p.profile}`),
+      },
       { id: 'timezone', header: t('admin.timezone'), accessor: (p) => p.timezone, width: '10rem' },
       { id: 'currency', header: t('admin.currency'), accessor: (p) => p.baseCurrency, width: '6rem' },
-      { id: 'businessDate', header: t('app.businessDate'), accessor: (p) => p.businessDate, width: '8rem', cell: (p) => <span className="pt-code">{p.businessDate}</span> },
+      {
+        id: 'businessDate',
+        header: t('app.businessDate'),
+        accessor: (p) => p.businessDate,
+        width: '8rem',
+        cell: (p) => <span className="pt-code">{p.businessDate}</span>,
+      },
       { id: 'status', header: t('admin.propertyStatus'), accessor: (p) => p.status, width: '7rem' },
     ],
     [t],
   );
   return (
     <div>
-      <PageHeader title={t('admin.propertiesTitle')} subtitle={t('admin.propertiesSubtitle')} helpKey="settings.properties" context={false} />
+      <PageHeader
+        title={t('admin.propertiesTitle')}
+        subtitle={t('admin.propertiesSubtitle')}
+        helpKey="settings.properties"
+        context={false}
+      />
       {query.isPending && <SkeletonList rows={4} />}
-      {query.isError && <ProblemAlert problem={problemFromUnknown(query.error, 'properties')} onRetry={() => void query.refetch()} />}
+      {query.isError && (
+        <ProblemAlert
+          problem={problemFromUnknown(query.error, 'properties')}
+          onRetry={() => void query.refetch()}
+        />
+      )}
       {query.data && (
         <DataTable
           label={t('admin.propertiesTitle')}

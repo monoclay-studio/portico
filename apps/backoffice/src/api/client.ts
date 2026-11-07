@@ -1,5 +1,5 @@
-import type { z } from 'zod';
 import { isProblemDetails, type ProblemDetails } from '@portico/ui';
+import type { z } from 'zod';
 import { ApiError, contractProblem, offlineProblem } from './errors';
 import { parseVersionTag, versionTag } from './etag';
 

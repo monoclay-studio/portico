@@ -55,7 +55,8 @@ export const en = {
   },
   shortcuts: {
     title: 'Keyboard shortcuts',
-    description: 'Shortcuts work anywhere except while typing in a field (combinations with Ctrl/⌘ always work).',
+    description:
+      'Shortcuts work anywhere except while typing in a field (combinations with Ctrl/⌘ always work).',
     palette: 'Open the command palette',
     search: 'Search',
     help: 'Show this list',
@@ -68,7 +69,12 @@ export const en = {
     new: 'New (on screens that create something)',
     edit: 'Edit the open record',
     fullPage: 'Open the record as a full page',
-    groups: { global: 'Everywhere', goTo: 'Go to (press G, then the key)', record: 'Open record', lists: 'Lists, boards and the timeline' },
+    groups: {
+      global: 'Everywhere',
+      goTo: 'Go to (press G, then the key)',
+      record: 'Open record',
+      lists: 'Lists, boards and the timeline',
+    },
     nothingNew: 'Nothing to create on this screen — use the command palette to start something.',
     closeDialog: 'Close a dialog or drawer',
   },
@@ -115,6 +121,7 @@ export const en = {
     none: 'None',
     unknown: 'Unknown',
     version: 'Version {{version}}',
+    versionLabel: 'Version',
     saved: 'Saved',
     owner: 'Owner',
     nextAction: 'Next action',
@@ -143,10 +150,12 @@ export const en = {
     departuresDef: 'Stays departing on the business date; checked out = departure completed at the desk.',
     checkedOut: 'checked out',
     inHouse: 'In house',
-    inHouseDef: 'Units occupied tonight by in-house stays (including today’s check-ins) and the guests staying in them.',
+    inHouseDef:
+      'Units occupied tonight by in-house stays (including today’s check-ins) and the guests staying in them.',
     guests: '{{count}} GUESTS',
     exceptions: 'Open exceptions',
-    exceptionsDef: 'Unresolved exceptions across modules (arrival blockers, discrepancies, failed actions). Fewer is better.',
+    exceptionsDef:
+      'Unresolved exceptions across modules (arrival blockers, discrepancies, failed actions). Fewer is better.',
     urgent: '{{count}} URGENT',
     pending: 'Payments pending verification',
     pendingDef:
@@ -166,7 +175,8 @@ export const en = {
   },
   myWork: {
     title: 'My work',
-    subtitle: 'Exceptions, tasks, approvals and handover items for you and your department — from every module.',
+    subtitle:
+      'Exceptions, tasks, approvals and handover items for you and your department — from every module.',
     kind: 'Kind',
     item: 'Item',
     record: 'Record',
@@ -221,7 +231,8 @@ export const en = {
     extendStay: 'Preview: extend by 2 nights',
     timelineLink: 'Show on timeline',
     resumed: 'Check-in resumed (simulated)',
-    checkInResumeNote: 'Completed steps are never repeated; the guarantee step re-reads the authoritative payment status.',
+    checkInResumeNote:
+      'Completed steps are never repeated; the guarantee step re-reads the authoritative payment status.',
     empty: 'No arrivals for this date',
     emptyHelp: 'Arrivals appear here once bookings for this business date exist.',
     checkKeys: {
@@ -316,7 +327,8 @@ export const en = {
   },
   learn: {
     title: 'Learning centre',
-    subtitle: 'Learning paths by role, with your progress. Courses and videos link here as the website publishes them.',
+    subtitle:
+      'Learning paths by role, with your progress. Courses and videos link here as the website publishes them.',
     recommended: 'Recommended for your roles',
     otherPaths: 'Other paths',
     progress: '{{done}} of {{total}} done',
@@ -333,7 +345,8 @@ export const en = {
     practiseConfirm: 'Switch to {{name}}',
     practisePassword: 'Confirm your password to switch organization',
     practiseSwitch: 'Switch to training',
-    alreadyTraining: 'You are in a non-live environment already — practise freely.',
+    alreadyTraining:
+      'You are in the training organization — practise freely. Sign out to return to your usual organization.',
     checklistTitle: 'Get started as {{role}}',
     checklistHelp: 'Five minutes to find your way around. Items tick themselves off as you use the product.',
     dismiss: 'Hide checklist',
@@ -429,6 +442,7 @@ export const en = {
       'reservations.stay.arrivalDetails.update': 'Arrival details received',
       'inventory.assignment.create': 'Unit assigned',
       'reservations.stay.checkIn': 'Checked in',
+      'operations.unit.conditionChanged': 'Condition changed',
     },
     notFound: 'This record was not found or you do not have access to it.',
   },
@@ -480,7 +494,8 @@ export const en = {
     rolesCatalog: 'Roles',
     permissions: '{{count}} permissions',
     systemRole: 'System role',
-    idempotencyNote: 'Safe to retry: this form reuses one request key until it succeeds, so it can never create duplicates.',
+    idempotencyNote:
+      'Safe to retry: this form reuses one request key until it succeeds, so it can never create duplicates.',
     noAccess: 'You do not have access to this page.',
     fields: {
       name: 'Name',

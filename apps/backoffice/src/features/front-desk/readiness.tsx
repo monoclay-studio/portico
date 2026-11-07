@@ -19,11 +19,11 @@ export function ReadinessCell({ row }: { row: ArrivalRow }) {
     return (
       <span className="flex min-w-0 items-center gap-1.5 text-sm">
         <CircleCheck aria-hidden className="size-4 shrink-0 text-success-fg" />
-        <span className="font-medium text-success-fg">{t('arrivals.noBlocker')}</span>
+        <span className="whitespace-nowrap font-medium text-success-fg">{t('arrivals.noBlocker')}</span>
         {attention > 0 && (
-          <span className="inline-flex items-center gap-1 truncate text-xs text-warning-fg">
-            <TriangleAlert aria-hidden className="size-3.5" />
-            {r.checks.find((c) => c.status === 'attention')?.message}
+          <span className="inline-flex min-w-0 items-center gap-1 text-xs text-warning-fg">
+            <TriangleAlert aria-hidden className="size-3.5 shrink-0" />
+            <span className="truncate">{r.checks.find((c) => c.status === 'attention')?.message}</span>
           </span>
         )}
       </span>
@@ -48,12 +48,19 @@ export function ReadinessChecks({ checks }: { checks: readonly ReadinessCheck[] 
       {checks.map((c) => {
         const { Icon, cls } = checkIcon[c.status];
         return (
-          <li key={c.key} className="flex items-start gap-2 text-sm" data-check={c.key} data-check-status={c.status}>
+          <li
+            key={c.key}
+            className="flex items-start gap-2 text-sm"
+            data-check={c.key}
+            data-check-status={c.status}
+          >
             <Icon aria-hidden className={cn('mt-0.5 size-4 shrink-0', cls)} />
             <div className="flex min-w-0 flex-col">
               <span className="font-medium">
                 {t(`arrivals.checkKeys.${c.key}`)}{' '}
-                <span className={cn('text-xs font-medium', cls)}>· {t(`arrivals.checkStatus.${c.status}`)}</span>
+                <span className={cn('text-xs font-medium', cls)}>
+                  · {t(`arrivals.checkStatus.${c.status}`)}
+                </span>
               </span>
               <span className="text-ink-muted">{c.message}</span>
             </div>

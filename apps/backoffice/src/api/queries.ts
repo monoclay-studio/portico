@@ -3,11 +3,18 @@ import { api } from './index';
 
 /** Query keys are scoped by organization so switching organization never shows another tenant's cache. */
 export const queries = {
-  me: (orgId: string) => queryOptions({ queryKey: ['org', orgId, 'me'], queryFn: async () => (await api.me()).data }),
+  me: (orgId: string) =>
+    queryOptions({ queryKey: ['org', orgId, 'me'], queryFn: async () => (await api.me()).data }),
   organization: (orgId: string) =>
-    queryOptions({ queryKey: ['org', orgId, 'organization'], queryFn: async () => (await api.organization()).data }),
+    queryOptions({
+      queryKey: ['org', orgId, 'organization'],
+      queryFn: async () => (await api.organization()).data,
+    }),
   properties: (orgId: string) =>
-    queryOptions({ queryKey: ['org', orgId, 'properties'], queryFn: async () => (await api.properties()).data.items }),
+    queryOptions({
+      queryKey: ['org', orgId, 'properties'],
+      queryFn: async () => (await api.properties()).data.items,
+    }),
   property: (orgId: string, id: string) =>
     queryOptions({
       queryKey: ['org', orgId, 'property', id],
@@ -18,7 +25,10 @@ export const queries = {
       },
     }),
   legalEntities: (orgId: string) =>
-    queryOptions({ queryKey: ['org', orgId, 'legal-entities'], queryFn: async () => (await api.legalEntities()).data.items }),
+    queryOptions({
+      queryKey: ['org', orgId, 'legal-entities'],
+      queryFn: async () => (await api.legalEntities()).data.items,
+    }),
   users: (orgId: string) =>
     queryOptions({ queryKey: ['org', orgId, 'users'], queryFn: async () => (await api.users()).data.items }),
   roles: (orgId: string) =>

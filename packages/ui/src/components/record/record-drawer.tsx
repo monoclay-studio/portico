@@ -78,7 +78,12 @@ export function RecordDrawer({
                           {t.title}
                         </button>
                       )}
-                      {!last && <ChevronRight aria-hidden className="size-3.5 shrink-0 text-ink-subtle rtl:rotate-180" />}
+                      {!last && (
+                        <ChevronRight
+                          aria-hidden
+                          className="size-3.5 shrink-0 text-ink-subtle rtl:rotate-180"
+                        />
+                      )}
                     </li>
                   );
                 })}
@@ -93,10 +98,18 @@ export function RecordDrawer({
                 onClick={onOpenFullPage}
               />
             )}
-            <IconButton size="sm" label={strings.common.close} icon={<X />} onClick={onClose} tooltip={false} />
+            <IconButton
+              size="sm"
+              label={strings.common.close}
+              icon={<X />}
+              onClick={onClose}
+              tooltip={false}
+            />
           </div>
           <DialogPrimitive.Title className="pt-sr-only">{title}</DialogPrimitive.Title>
-          <div className="min-h-0 flex-1 overflow-auto px-5 py-4">{loading ? <SkeletonList rows={6} /> : children}</div>
+          <div className="min-h-0 flex-1 overflow-auto px-5 py-4">
+            {loading ? <SkeletonList rows={6} /> : children}
+          </div>
         </DialogPrimitive.Content>
       </DialogPrimitive.Portal>
     </DialogPrimitive.Root>

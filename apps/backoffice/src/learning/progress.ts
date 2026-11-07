@@ -22,7 +22,12 @@ function read(userId: string): Progress {
   let p = EMPTY;
   try {
     const parsed = JSON.parse(localStorage.getItem(key(userId)) ?? 'null') as Partial<Progress> | null;
-    if (parsed) p = { lessons: parsed.lessons ?? [], events: parsed.events ?? [], checklistDismissed: Boolean(parsed.checklistDismissed) };
+    if (parsed)
+      p = {
+        lessons: parsed.lessons ?? [],
+        events: parsed.events ?? [],
+        checklistDismissed: Boolean(parsed.checklistDismissed),
+      };
   } catch {
     p = EMPTY;
   }
@@ -54,7 +59,10 @@ export const learning = {
   },
   toggleLesson(userId: string, id: string) {
     const p = read(userId);
-    write(userId, { ...p, lessons: p.lessons.includes(id) ? p.lessons.filter((l) => l !== id) : [...p.lessons, id] });
+    write(userId, {
+      ...p,
+      lessons: p.lessons.includes(id) ? p.lessons.filter((l) => l !== id) : [...p.lessons, id],
+    });
   },
   dismissChecklist(userId: string) {
     write(userId, { ...read(userId), checklistDismissed: true });

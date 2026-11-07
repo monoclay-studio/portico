@@ -9,6 +9,7 @@ export function HomeRedirect() {
   const { me } = useApp();
   const { t } = useTranslation();
   const to = homeFor(me);
-  if (!to) return <EmptyState title={t('admin.noAccess')} description={me.roles.map((r) => r.name).join(', ')} />;
+  if (!to)
+    return <EmptyState title={t('admin.noAccess')} description={me.roles.map((r) => r.name).join(', ')} />;
   return <Navigate to={to} replace />;
 }

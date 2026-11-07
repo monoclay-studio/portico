@@ -1,5 +1,12 @@
 import type { QueryClient } from '@tanstack/react-query';
-import { createRootRouteWithContext, createRoute, createRouter, lazyRouteComponent, Outlet, redirect } from '@tanstack/react-router';
+import {
+  createRootRouteWithContext,
+  createRoute,
+  createRouter,
+  lazyRouteComponent,
+  Outlet,
+  redirect,
+} from '@tanstack/react-router';
 import { z } from 'zod';
 import { sessionStore } from '../api/session';
 import { LegalEntitiesPage } from '../features/admin/legal-entities-page';
@@ -26,7 +33,10 @@ const rootRoute = createRootRouteWithContext<{ queryClient: QueryClient }>()({
 const signInRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/sign-in',
-  validateSearch: z.object({ redirect: z.string().optional(), reason: z.enum(['expired', 'signed_out']).optional() }),
+  validateSearch: z.object({
+    redirect: z.string().optional(),
+    reason: z.enum(['expired', 'signed_out']).optional(),
+  }),
   component: SignInPage,
 });
 
@@ -44,7 +54,10 @@ const appRoute = createRoute({
   validateSearch: z.object({ record: z.string().max(600).optional() }),
   beforeLoad: ({ location }) => {
     if (!sessionStore.get()) {
-      throw redirect({ to: '/sign-in', search: { redirect: location.href, reason: sessionStore.endedReason ?? undefined } });
+      throw redirect({
+        to: '/sign-in',
+        search: { redirect: location.href, reason: sessionStore.endedReason ?? undefined },
+      });
     }
   },
   component: AppShell,
@@ -54,20 +67,48 @@ const homeRoute = createRoute({ getParentRoute: () => appRoute, path: '/', compo
 const todayRoute = createRoute({ getParentRoute: () => appRoute, path: '/today', component: TodayPage });
 const myWorkRoute = createRoute({ getParentRoute: () => appRoute, path: '/my-work', component: MyWorkPage });
 const learnRoute = createRoute({ getParentRoute: () => appRoute, path: '/learn', component: LearnPage });
-const arrivalsRoute = createRoute({ getParentRoute: () => appRoute, path: '/front-desk/arrivals', component: ArrivalsPage });
-const housekeepingRoute = createRoute({ getParentRoute: () => appRoute, path: '/housekeeping', component: HousekeepingPage });
+const arrivalsRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/front-desk/arrivals',
+  component: ArrivalsPage,
+});
+const housekeepingRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/housekeeping',
+  component: HousekeepingPage,
+});
 const timelineRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/reservations/timeline',
   validateSearch: z.object({ stay: z.string().optional(), from: z.iso.date().optional() }),
   component: TimelinePage,
 });
-const organizationRoute = createRoute({ getParentRoute: () => appRoute, path: '/settings/organization', component: OrganizationPage });
-const propertiesRoute = createRoute({ getParentRoute: () => appRoute, path: '/settings/properties', component: PropertiesPage });
+const organizationRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/settings/organization',
+  component: OrganizationPage,
+});
+const propertiesRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/settings/properties',
+  component: PropertiesPage,
+});
 /** Matches the platform manifest's record route template ('/settings/properties/:id'). */
-const propertyDetailRoute = createRoute({ getParentRoute: () => appRoute, path: '/settings/properties/$propertyId', component: PropertyDetailPage });
-const legalEntitiesRoute = createRoute({ getParentRoute: () => appRoute, path: '/settings/legal-entities', component: LegalEntitiesPage });
-const usersRoute = createRoute({ getParentRoute: () => appRoute, path: '/settings/users', component: UsersPage });
+const propertyDetailRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/settings/properties/$propertyId',
+  component: PropertyDetailPage,
+});
+const legalEntitiesRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/settings/legal-entities',
+  component: LegalEntitiesPage,
+});
+const usersRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/settings/users',
+  component: UsersPage,
+});
 
 const routeTree = rootRoute.addChildren([
   signInRoute,
@@ -89,7 +130,12 @@ const routeTree = rootRoute.addChildren([
 ]);
 
 export function createAppRouter(queryClient: QueryClient) {
-  return createRouter({ routeTree, context: { queryClient }, defaultPreload: 'intent', scrollRestoration: true });
+  return createRouter({
+    routeTree,
+    context: { queryClient },
+    defaultPreload: 'intent',
+    scrollRestoration: true,
+  });
 }
 
 declare module '@tanstack/react-router' {

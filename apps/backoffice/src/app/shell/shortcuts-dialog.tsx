@@ -3,11 +3,23 @@ import { useTranslation } from 'react-i18next';
 import { SHORTCUTS, type ShortcutDef } from '../shortcuts';
 
 /** The ? overlay renders the one shortcut registry, grouped. */
-export function ShortcutsDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
+export function ShortcutsDialog({
+  open,
+  onOpenChange,
+}: {
+  open: boolean;
+  onOpenChange: (o: boolean) => void;
+}) {
   const { t } = useTranslation();
   const groups: ShortcutDef['group'][] = ['global', 'goTo', 'record', 'lists'];
   return (
-    <Dialog open={open} onOpenChange={onOpenChange} size="lg" title={t('shortcuts.title')} description={t('shortcuts.description')}>
+    <Dialog
+      open={open}
+      onOpenChange={onOpenChange}
+      size="lg"
+      title={t('shortcuts.title')}
+      description={t('shortcuts.description')}
+    >
       <div className="grid gap-6 sm:grid-cols-2">
         {groups.map((g) => (
           <section key={g} aria-labelledby={`sc-${g}`}>

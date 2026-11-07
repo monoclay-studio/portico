@@ -64,7 +64,8 @@ export function RecordHost() {
 
   if (!top) return null;
   const handlers = {
-    navigate: (to: string, search?: Record<string, string>) => void router.navigate({ to, search: search ?? {} } as never),
+    navigate: (to: string, search?: Record<string, string>) =>
+      void router.navigate({ to, search: search ?? {} } as never),
     toast,
     openExtend: (id: string) => setExtendStay(id),
     openRecord: nav.open,
@@ -72,7 +73,7 @@ export function RecordHost() {
   const historyState: HistoryState =
     record.data?.history && record.data.history !== 'server'
       ? record.data.history
-      : history.data ?? { state: 'loading' };
+      : (history.data ?? { state: 'loading' });
   const isPinned = model ? pinned.some((p) => p.type === model.type && p.id === model.id) : false;
   const fullPage = def?.fullPage && top ? def.fullPage(top.id) : undefined;
 
@@ -90,7 +91,12 @@ export function RecordHost() {
         onClose={nav.close}
         onOpenFullPage={fullPage ? () => void router.navigate({ to: fullPage } as never) : undefined}
       >
-        {record.isError && <ProblemAlert problem={problemFromUnknown(record.error, 'record')} onRetry={() => void record.refetch()} />}
+        {record.isError && (
+          <ProblemAlert
+            problem={problemFromUnknown(record.error, 'record')}
+            onRetry={() => void record.refetch()}
+          />
+        )}
         {record.isSuccess && !model && <p className="text-sm text-ink-muted">{t('records.notFound')}</p>}
         {model && (
           <RecordView

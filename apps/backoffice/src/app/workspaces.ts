@@ -67,13 +67,29 @@ export const WORKSPACES: readonly Workspace[] = [
     id: 'frontDesk',
     labelKey: 'nav.frontDesk',
     roles: ['org_admin', 'general_manager', 'front_desk', 'night_auditor'],
-    items: [{ to: '/front-desk/arrivals', labelKey: 'nav.arrivals', goKey: 'a', helpKey: 'frontDesk.arrivals' }],
+    items: [
+      { to: '/front-desk/arrivals', labelKey: 'nav.arrivals', goKey: 'a', helpKey: 'frontDesk.arrivals' },
+    ],
   },
   {
     id: 'reservations',
     labelKey: 'nav.reservations',
-    roles: ['org_admin', 'general_manager', 'reservations_agent', 'front_desk', 'revenue_manager', 'night_auditor'],
-    items: [{ to: '/reservations/timeline', labelKey: 'nav.timeline', goKey: 't', helpKey: 'reservations.timeline' }],
+    roles: [
+      'org_admin',
+      'general_manager',
+      'reservations_agent',
+      'front_desk',
+      'revenue_manager',
+      'night_auditor',
+    ],
+    items: [
+      {
+        to: '/reservations/timeline',
+        labelKey: 'nav.timeline',
+        goKey: 't',
+        helpKey: 'reservations.timeline',
+      },
+    ],
   },
   {
     id: 'housekeeping',
@@ -86,7 +102,9 @@ export const WORKSPACES: readonly Workspace[] = [
       'front_desk',
       'engineer',
     ],
-    items: [{ to: '/housekeeping', labelKey: 'nav.housekeepingBoard', goKey: 'h', helpKey: 'housekeeping.board' }],
+    items: [
+      { to: '/housekeeping', labelKey: 'nav.housekeepingBoard', goKey: 'h', helpKey: 'housekeeping.board' },
+    ],
   },
   {
     id: 'settings',
@@ -107,7 +125,10 @@ export function workspacesFor(
 ): Workspace[] {
   const keys = new Set((me?.roles ?? []).map((r) => r.key));
   return WORKSPACES.filter((w) => w.roles.some((r) => keys.has(r)))
-    .map((w) => ({ ...w, items: w.items.filter((i) => !i.profiles || !profile || i.profiles.includes(profile)) }))
+    .map((w) => ({
+      ...w,
+      items: w.items.filter((i) => !i.profiles || !profile || i.profiles.includes(profile)),
+    }))
     .filter((w) => w.items.length > 0);
 }
 

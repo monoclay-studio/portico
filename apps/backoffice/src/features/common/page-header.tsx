@@ -30,7 +30,11 @@ export function PageHeader({
   const { openHelp } = useHelp();
   useEffect(() => learning.event(`visit:${helpKey}`), [helpKey]);
   return (
-    <div className="mb-4 flex flex-wrap items-start justify-between gap-3" data-help-key={helpKey} data-screen={helpKey}>
+    <div
+      className="mb-4 flex flex-wrap items-start justify-between gap-3"
+      data-help-key={helpKey}
+      data-screen={helpKey}
+    >
       <div className="flex min-w-0 flex-col gap-1">
         {context && property && (
           <span className="pt-data text-ink-muted">
@@ -63,7 +67,10 @@ export function Panel({
   helpKey?: string;
 }) {
   return (
-    <section className={`rounded-lg border border-line bg-surface ${className ?? ''}`} data-help-key={helpKey}>
+    <section
+      className={`rounded-lg border border-line bg-surface ${className ?? ''}`}
+      data-help-key={helpKey}
+    >
       {(title || actions) && (
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-4 py-3">
           {title && <h2 className="text-sm font-semibold">{title}</h2>}

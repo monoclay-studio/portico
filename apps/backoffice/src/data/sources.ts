@@ -14,7 +14,11 @@ export const DOMAIN_BINDINGS = [
   { domain: 'Front desk arrivals', module: 'reservations + operations', mode: workspaceSource.mode },
   { domain: 'Housekeeping board', module: 'operations', mode: workspaceSource.mode },
   { domain: 'Reservations timeline', module: 'reservations + inventory', mode: workspaceSource.mode },
-  { domain: 'Change preview (extend stay)', module: 'reservations + rates + finance', mode: workspaceSource.mode },
+  {
+    domain: 'Change preview (extend stay)',
+    module: 'reservations + rates + finance',
+    mode: workspaceSource.mode,
+  },
 ] as const;
 
 export type { WorkspaceDataSource };

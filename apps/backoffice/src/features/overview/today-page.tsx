@@ -12,16 +12,25 @@ import {
 } from '@portico/ui';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
-import { BedDouble, CircleAlert, CircleCheck, ConciergeBell, DoorClosed, Hourglass, LogOut, TriangleAlert } from 'lucide-react';
+import {
+  BedDouble,
+  CircleAlert,
+  CircleCheck,
+  ConciergeBell,
+  DoorClosed,
+  Hourglass,
+  LogOut,
+  TriangleAlert,
+} from 'lucide-react';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { problemFromUnknown } from '../../api/errors';
 import { useApp } from '../../app/app-context';
 import { workspaceSource } from '../../data/sources';
-import { FirstRunChecklist } from '../learn/first-run-checklist';
 import { PageHeader, Panel } from '../common/page-header';
 import { toSimProperty } from '../common/sim-property';
 import { SimulatedNote } from '../common/simulated-note';
+import { FirstRunChecklist } from '../learn/first-run-checklist';
 
 const pct = (n: number, d: number) => (d ? Math.round((n / d) * 100) : 0);
 
@@ -50,16 +59,28 @@ export function TodayPage() {
       <PageHeader
         title={t('today.title')}
         subtitle={t('today.subtitle', { property: property.name })}
-        meta={query.data && <ProvenanceBadge provenance={query.data.provenance} lastSyncedAt={query.data.generatedAt} />}
+        meta={
+          query.data && (
+            <ProvenanceBadge provenance={query.data.provenance} lastSyncedAt={query.data.generatedAt} />
+          )
+        }
         helpKey="overview.today"
       />
       <FirstRunChecklist />
       <SimulatedNote module="reservations + operations + payments" />
       {query.isPending && <SkeletonList rows={6} />}
-      {query.isError && <ProblemAlert problem={problemFromUnknown(query.error, 'today')} onRetry={() => void query.refetch()} />}
+      {query.isError && (
+        <ProblemAlert
+          problem={problemFromUnknown(query.error, 'today')}
+          onRetry={() => void query.refetch()}
+        />
+      )}
       {d && (
         <>
-          <section aria-label={t('today.title')} className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          <section
+            aria-label={t('today.title')}
+            className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3"
+          >
             {(() => {
               const now = pct(d.occupancy.occupied, d.occupancy.sellable);
               const before = pct(d.occupancy.lastWeek.occupied, d.occupancy.lastWeek.sellable);
@@ -70,9 +91,20 @@ export function TodayPage() {
                   icon={<BedDouble />}
                   value={`${now}%`}
                   ratio={d.occupancy.occupied / Math.max(1, d.occupancy.sellable)}
-                  counts={{ numerator: nf.format(d.occupancy.occupied), denominator: nf.format(d.occupancy.sellable), unit: t('today.villas') }}
-                  annotation={d.occupancy.outOfOrder ? t('today.oooNote', { count: d.occupancy.outOfOrder }) : undefined}
-                  delta={{ label: `${delta >= 0 ? '+' : '−'}${Math.abs(delta)} pts`, direction: delta > 0 ? 'up' : delta < 0 ? 'down' : 'flat', goodWhen: 'up', period: t('today.vsLastWeek') }}
+                  counts={{
+                    numerator: nf.format(d.occupancy.occupied),
+                    denominator: nf.format(d.occupancy.sellable),
+                    unit: t('today.villas'),
+                  }}
+                  annotation={
+                    d.occupancy.outOfOrder ? t('today.oooNote', { count: d.occupancy.outOfOrder }) : undefined
+                  }
+                  delta={{
+                    label: `${delta >= 0 ? '+' : '−'}${Math.abs(delta)} pts`,
+                    direction: delta > 0 ? 'up' : delta < 0 ? 'down' : 'flat',
+                    goodWhen: 'up',
+                    period: t('today.vsLastWeek'),
+                  }}
                   definition={t('today.occupancyDef')}
                   provenance={sim}
                   onOpen={() => void navigate({ to: '/reservations/timeline' })}
@@ -84,10 +116,19 @@ export function TodayPage() {
               icon={<ConciergeBell />}
               value={nf.format(d.arrivals.total)}
               ratio={(d.arrivals.ready + d.arrivals.checkedIn) / Math.max(1, d.arrivals.total)}
-              counts={{ numerator: d.arrivals.ready + d.arrivals.checkedIn, denominator: d.arrivals.total, unit: t('today.readyOf') }}
+              counts={{
+                numerator: d.arrivals.ready + d.arrivals.checkedIn,
+                denominator: d.arrivals.total,
+                unit: t('today.readyOf'),
+              }}
               delta={{
                 label: `${d.arrivals.total - d.arrivals.lastWeek >= 0 ? '+' : '−'}${Math.abs(d.arrivals.total - d.arrivals.lastWeek)}`,
-                direction: d.arrivals.total > d.arrivals.lastWeek ? 'up' : d.arrivals.total < d.arrivals.lastWeek ? 'down' : 'flat',
+                direction:
+                  d.arrivals.total > d.arrivals.lastWeek
+                    ? 'up'
+                    : d.arrivals.total < d.arrivals.lastWeek
+                      ? 'down'
+                      : 'flat',
                 goodWhen: 'up',
                 period: t('today.vsLastWeek'),
               }}
@@ -100,7 +141,11 @@ export function TodayPage() {
               icon={<LogOut />}
               value={nf.format(d.departures.total)}
               ratio={d.departures.checkedOut / Math.max(1, d.departures.total)}
-              counts={{ numerator: d.departures.checkedOut, denominator: d.departures.total, unit: t('today.checkedOut') }}
+              counts={{
+                numerator: d.departures.checkedOut,
+                denominator: d.departures.total,
+                unit: t('today.checkedOut'),
+              }}
               definition={t('today.departuresDef')}
               provenance={sim}
             />
@@ -120,7 +165,12 @@ export function TodayPage() {
               annotation={t('today.urgent', { count: d.exceptions.urgent })}
               delta={{
                 label: `${d.exceptions.open - d.exceptions.yesterday >= 0 ? '+' : '−'}${Math.abs(d.exceptions.open - d.exceptions.yesterday)}`,
-                direction: d.exceptions.open > d.exceptions.yesterday ? 'up' : d.exceptions.open < d.exceptions.yesterday ? 'down' : 'flat',
+                direction:
+                  d.exceptions.open > d.exceptions.yesterday
+                    ? 'up'
+                    : d.exceptions.open < d.exceptions.yesterday
+                      ? 'down'
+                      : 'flat',
                 goodWhen: 'down',
                 period: t('today.vsYesterday'),
               }}
@@ -133,7 +183,9 @@ export function TodayPage() {
               label={t('today.pending')}
               icon={<Hourglass />}
               value={nf.format(d.pendingVerification.count)}
-              annotation={t('today.pendingAmount', { amount: formatMoney(d.pendingVerification.amount, lng) })}
+              annotation={t('today.pendingAmount', {
+                amount: formatMoney(d.pendingVerification.amount, lng),
+              })}
               definition={t('today.pendingDef')}
               provenance={sim}
               tone={d.pendingVerification.count > 0 ? 'attention' : 'default'}
@@ -148,10 +200,34 @@ export function TodayPage() {
               unit={t('today.arrivalsUnit')}
               onSelect={() => void navigate({ to: '/front-desk/arrivals' })}
               segments={[
-                { id: 'checkedIn', label: t('today.checkedIn'), value: d.arrivals.checkedIn, kind: 'neutral', icon: <DoorClosed /> },
-                { id: 'ready', label: t('today.ready'), value: d.arrivals.ready - d.arrivals.attention, kind: 'good', icon: <CircleCheck /> },
-                { id: 'attention', label: t('today.attention'), value: d.arrivals.attention, kind: 'warning', icon: <TriangleAlert /> },
-                { id: 'blocked', label: t('today.blocked'), value: d.arrivals.blocked, kind: 'critical', icon: <CircleAlert /> },
+                {
+                  id: 'checkedIn',
+                  label: t('today.checkedIn'),
+                  value: d.arrivals.checkedIn,
+                  kind: 'neutral',
+                  icon: <DoorClosed />,
+                },
+                {
+                  id: 'ready',
+                  label: t('today.ready'),
+                  value: d.arrivals.ready - d.arrivals.attention,
+                  kind: 'good',
+                  icon: <CircleCheck />,
+                },
+                {
+                  id: 'attention',
+                  label: t('today.attention'),
+                  value: d.arrivals.attention,
+                  kind: 'warning',
+                  icon: <TriangleAlert />,
+                },
+                {
+                  id: 'blocked',
+                  label: t('today.blocked'),
+                  value: d.arrivals.blocked,
+                  kind: 'critical',
+                  icon: <CircleAlert />,
+                },
               ]}
             />
           </Panel>

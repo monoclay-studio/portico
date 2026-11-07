@@ -1,5 +1,16 @@
 import { legalEntityInput } from '@portico/platform/contracts';
-import { Button, type ColumnDef, DataTable, Dialog, Field, Input, ProblemAlert, type ProblemDetails, SkeletonList, useToast } from '@portico/ui';
+import {
+  Button,
+  type ColumnDef,
+  DataTable,
+  Dialog,
+  Field,
+  Input,
+  ProblemAlert,
+  type ProblemDetails,
+  SkeletonList,
+  useToast,
+} from '@portico/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus } from 'lucide-react';
 import { type FormEvent, useMemo, useRef, useState } from 'react';
@@ -14,7 +25,14 @@ import { learning } from '../../learning/progress';
 import { useRecordNav } from '../../records/use-record-nav';
 import { PageHeader } from '../common/page-header';
 
-const EMPTY = { name: '', legalName: '', registrationNumber: '', taxId: '', countryCode: 'MV', baseCurrency: 'USD' };
+const EMPTY = {
+  name: '',
+  legalName: '',
+  registrationNumber: '',
+  taxId: '',
+  countryCode: 'MV',
+  baseCurrency: 'USD',
+};
 
 /**
  * GET/POST /v1/legal-entities. Creation uses one Idempotency-Key per intent: retries of the same form reuse it,
@@ -34,7 +52,12 @@ export function LegalEntitiesPage() {
   useScreenAction('new', () => setOpen(true));
 
   const payload = (): LegalEntityInput => {
-    const p: Record<string, string> = { name: form.name.trim(), legalName: form.legalName.trim(), countryCode: form.countryCode.trim().toUpperCase(), baseCurrency: form.baseCurrency.trim().toUpperCase() };
+    const p: Record<string, string> = {
+      name: form.name.trim(),
+      legalName: form.legalName.trim(),
+      countryCode: form.countryCode.trim().toUpperCase(),
+      baseCurrency: form.baseCurrency.trim().toUpperCase(),
+    };
     if (form.registrationNumber.trim()) p.registrationNumber = form.registrationNumber.trim();
     if (form.taxId.trim()) p.taxId = form.taxId.trim();
     return p as unknown as LegalEntityInput;
@@ -76,11 +99,34 @@ export function LegalEntitiesPage() {
 
   const columns = useMemo<ColumnDef<LegalEntity>[]>(
     () => [
-      { id: 'name', header: t('admin.displayName'), accessor: (l) => l.name, hideable: false, width: 'minmax(12rem, 1fr)' },
-      { id: 'legalName', header: t('admin.legalName'), accessor: (l) => l.legalName, width: 'minmax(16rem, 2fr)' },
-      { id: 'country', header: t('admin.country'), accessor: (l) => l.countryCode, width: '6rem', filter: 'select' },
+      {
+        id: 'name',
+        header: t('admin.displayName'),
+        accessor: (l) => l.name,
+        hideable: false,
+        width: 'minmax(12rem, 1fr)',
+      },
+      {
+        id: 'legalName',
+        header: t('admin.legalName'),
+        accessor: (l) => l.legalName,
+        width: 'minmax(16rem, 2fr)',
+      },
+      {
+        id: 'country',
+        header: t('admin.country'),
+        accessor: (l) => l.countryCode,
+        width: '6rem',
+        filter: 'select',
+      },
       { id: 'currency', header: t('admin.baseCurrency'), accessor: (l) => l.baseCurrency, width: '7rem' },
-      { id: 'taxId', header: t('admin.taxId'), accessor: (l) => l.taxId ?? '', width: '10rem', cell: (l) => <span className="pt-code">{l.taxId ?? '—'}</span> },
+      {
+        id: 'taxId',
+        header: t('admin.taxId'),
+        accessor: (l) => l.taxId ?? '',
+        width: '10rem',
+        cell: (l) => <span className="pt-code">{l.taxId ?? '—'}</span>,
+      },
     ],
     [t],
   );
@@ -99,7 +145,12 @@ export function LegalEntitiesPage() {
         }
       />
       {query.isPending && <SkeletonList rows={3} />}
-      {query.isError && <ProblemAlert problem={problemFromUnknown(query.error, 'legal-entities')} onRetry={() => void query.refetch()} />}
+      {query.isError && (
+        <ProblemAlert
+          problem={problemFromUnknown(query.error, 'legal-entities')}
+          onRetry={() => void query.refetch()}
+        />
+      )}
       {query.data && (
         <DataTable
           label={t('admin.legalEntitiesTitle')}
@@ -133,7 +184,13 @@ export function LegalEntitiesPage() {
           </>
         }
       >
-        <form id="le-form" onSubmit={submit} className="grid grid-cols-1 gap-3 sm:grid-cols-2" noValidate data-help-key="settings.legalEntities.new">
+        <form
+          id="le-form"
+          onSubmit={submit}
+          className="grid grid-cols-1 gap-3 sm:grid-cols-2"
+          noValidate
+          data-help-key="settings.legalEntities.new"
+        >
           <Field label={t('admin.displayName')} required error={errorFor('name')}>
             <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
           </Field>
@@ -141,20 +198,46 @@ export function LegalEntitiesPage() {
             <Input value={form.legalName} onChange={(e) => setForm({ ...form, legalName: e.target.value })} />
           </Field>
           <Field label={t('admin.registrationNumber')} error={errorFor('registrationNumber')}>
-            <Input value={form.registrationNumber} onChange={(e) => setForm({ ...form, registrationNumber: e.target.value })} />
+            <Input
+              value={form.registrationNumber}
+              onChange={(e) => setForm({ ...form, registrationNumber: e.target.value })}
+            />
           </Field>
           <Field label={t('admin.taxId')} error={errorFor('taxId')}>
             <Input value={form.taxId} onChange={(e) => setForm({ ...form, taxId: e.target.value })} />
           </Field>
-          <Field label={t('admin.country')} required error={errorFor('countryCode')} description="ISO 3166, e.g. MV">
-            <Input value={form.countryCode} maxLength={2} onChange={(e) => setForm({ ...form, countryCode: e.target.value })} />
+          <Field
+            label={t('admin.country')}
+            required
+            error={errorFor('countryCode')}
+            description="ISO 3166, e.g. MV"
+          >
+            <Input
+              value={form.countryCode}
+              maxLength={2}
+              onChange={(e) => setForm({ ...form, countryCode: e.target.value })}
+            />
           </Field>
-          <Field label={t('admin.baseCurrency')} required error={errorFor('baseCurrency')} description="ISO 4217, e.g. USD">
-            <Input value={form.baseCurrency} maxLength={3} onChange={(e) => setForm({ ...form, baseCurrency: e.target.value })} />
+          <Field
+            label={t('admin.baseCurrency')}
+            required
+            error={errorFor('baseCurrency')}
+            description="ISO 4217, e.g. USD"
+          >
+            <Input
+              value={form.baseCurrency}
+              maxLength={3}
+              onChange={(e) => setForm({ ...form, baseCurrency: e.target.value })}
+            />
           </Field>
           {problem && (
             <div className="sm:col-span-2">
-              <ProblemAlert problem={problem} fieldLabel={fieldLabel} onRetry={() => create.mutate(payload())} retrying={create.isPending} />
+              <ProblemAlert
+                problem={problem}
+                fieldLabel={fieldLabel}
+                onRetry={() => create.mutate(payload())}
+                retrying={create.isPending}
+              />
             </div>
           )}
         </form>

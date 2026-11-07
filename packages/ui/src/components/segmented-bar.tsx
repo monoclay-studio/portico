@@ -58,7 +58,9 @@ export function SegmentedBar({
           const share = pct(s.value);
           const name = `${s.label}: ${nf.format(s.value)} of ${nf.format(total)}${unit ? ` ${unit}` : ''} (${share}%)`;
           const inner = (
-            <span className="pt-data truncate px-1.5 normal-case font-semibold">{share >= 12 ? `${share}%` : ''}</span>
+            <span className="pt-data truncate px-1.5 normal-case font-semibold">
+              {share >= 12 ? `${share}%` : ''}
+            </span>
           );
           return (
             <Tooltip key={s.id} content={name}>
@@ -68,7 +70,10 @@ export function SegmentedBar({
                   role="listitem"
                   aria-label={name}
                   onClick={() => onSelect(s)}
-                  className={cn('flex h-full min-w-1 items-center rounded-sm hover:brightness-110', fill[s.kind])}
+                  className={cn(
+                    'flex h-full min-w-1 items-center rounded-sm hover:brightness-110',
+                    fill[s.kind],
+                  )}
                   style={{ flexGrow: s.value, flexBasis: 0 }}
                 >
                   {inner}

@@ -27,10 +27,13 @@ const OWNER_BY_CHECK: Record<ReadinessCheck['key'], string> = {
 
 export function computeReadiness(checks: readonly ReadinessCheck[]): ReadinessView {
   const ordered = [...checks].sort((a, b) => CHECK_PRIORITY.indexOf(a.key) - CHECK_PRIORITY.indexOf(b.key));
-  const blocking = ordered.find((c) => c.status === 'blocking') ?? ordered.find((c) => c.status === 'unknown');
+  const blocking =
+    ordered.find((c) => c.status === 'blocking') ?? ordered.find((c) => c.status === 'unknown');
   return {
     ready: !blocking,
     checks: ordered,
-    blockingReason: blocking ? { key: blocking.key, message: blocking.message, owner: OWNER_BY_CHECK[blocking.key] } : null,
+    blockingReason: blocking
+      ? { key: blocking.key, message: blocking.message, owner: OWNER_BY_CHECK[blocking.key] }
+      : null,
   };
 }

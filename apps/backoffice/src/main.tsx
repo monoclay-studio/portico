@@ -1,7 +1,7 @@
 import { RouterProvider } from '@tanstack/react-router';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Providers, createQueryClient } from './app/providers';
+import { createQueryClient, Providers } from './app/providers';
 import { createAppRouter } from './app/router';
 import { applyTheme } from './app/theme';
 import './styles.css';

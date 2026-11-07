@@ -1,4 +1,15 @@
-import { ChangePreview, Dialog, Field, formatTime, ProblemAlert, type ProblemDetails, ProvenanceBadge, Select, SkeletonList, useToast } from '@portico/ui';
+import {
+  ChangePreview,
+  Dialog,
+  Field,
+  formatTime,
+  ProblemAlert,
+  type ProblemDetails,
+  ProvenanceBadge,
+  Select,
+  SkeletonList,
+  useToast,
+} from '@portico/ui';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -88,12 +99,17 @@ export function ExtendStayDialog({
                 commit.reset();
                 setNights(Number(v));
               }}
-              options={[1, 2, 3].map((n) => ({ value: String(n), label: t('timeline.nightsOption', { count: n }) }))}
+              options={[1, 2, 3].map((n) => ({
+                value: String(n),
+                label: t('timeline.nightsOption', { count: n }),
+              }))}
             />
           </Field>
         </div>
         {preview.isPending && <SkeletonList rows={4} />}
-        {preview.isError && <ProblemAlert problem={toProblem(preview.error)} onRetry={() => void preview.refetch()} />}
+        {preview.isError && (
+          <ProblemAlert problem={toProblem(preview.error)} onRetry={() => void preview.refetch()} />
+        )}
         {data && (
           <ChangePreview
             title={t('timeline.previewHeading')}

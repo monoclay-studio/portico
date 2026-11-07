@@ -19,13 +19,13 @@ import { problemFromUnknown } from '../../api/errors';
 import { useApp } from '../../app/app-context';
 import { PHONE_QUERY, useMediaQuery } from '../../app/use-media-query';
 import { workspaceSource } from '../../data/sources';
+import { learning } from '../../learning/progress';
 import type { HousekeepingRow } from '../../mocks/contracts';
+import { useRecordNav } from '../../records/use-record-nav';
 import { PageHeader } from '../common/page-header';
 import { toSimProperty } from '../common/sim-property';
 import { SimulatedNote } from '../common/simulated-note';
 import { builtInView, useSavedViews } from '../common/use-saved-views';
-import { learning } from '../../learning/progress';
-import { useRecordNav } from '../../records/use-record-nav';
 
 const PRIORITY_RANK = { urgent: 0, high: 1, normal: 2, low: 3 } as const;
 
@@ -47,9 +47,24 @@ export function HousekeepingPage() {
 
   const builtIn = useMemo<SavedView[]>(
     () => [
-      builtInView('arrivals-first', t('housekeeping.viewArrivalsFirst'), { sort: { columnId: 'priority', direction: 'asc' }, filters: {}, search: '', hidden: [] }),
-      builtInView('all', t('housekeeping.viewAll'), { sort: { columnId: 'unit', direction: 'asc' }, filters: {}, search: '', hidden: [] }),
-      builtInView('failed', t('housekeeping.viewFailed'), { sort: null, filters: { condition: 'failed_inspection' }, search: '', hidden: [] }),
+      builtInView('arrivals-first', t('housekeeping.viewArrivalsFirst'), {
+        sort: { columnId: 'priority', direction: 'asc' },
+        filters: {},
+        search: '',
+        hidden: [],
+      }),
+      builtInView('all', t('housekeeping.viewAll'), {
+        sort: { columnId: 'unit', direction: 'asc' },
+        filters: {},
+        search: '',
+        hidden: [],
+      }),
+      builtInView('failed', t('housekeeping.viewFailed'), {
+        sort: null,
+        filters: { condition: 'failed_inspection' },
+        search: '',
+        hidden: [],
+      }),
     ],
     [t],
   );
@@ -78,7 +93,13 @@ export function HousekeepingPage() {
           </span>
         ),
       },
-      { id: 'section', header: t('housekeeping.section'), accessor: (r) => r.sectionName, width: '8rem', filter: 'select' },
+      {
+        id: 'section',
+        header: t('housekeeping.section'),
+        accessor: (r) => r.sectionName,
+        width: '8rem',
+        filter: 'select',
+      },
       {
         id: 'condition',
         header: t('housekeeping.condition'),
@@ -126,7 +147,15 @@ export function HousekeepingPage() {
         cell: (r) =>
           r.topPriority ? (
             <span className="flex min-w-0 flex-col leading-tight">
-              <span className={r.topPriority === 'urgent' ? 'font-semibold text-danger-fg' : r.topPriority === 'high' ? 'font-semibold text-warning-fg' : 'font-medium'}>
+              <span
+                className={
+                  r.topPriority === 'urgent'
+                    ? 'font-semibold text-danger-fg'
+                    : r.topPriority === 'high'
+                      ? 'font-semibold text-warning-fg'
+                      : 'font-medium'
+                }
+              >
                 {t(`housekeeping.priorities.${r.topPriority}`)}
               </span>
               <span className="truncate text-xs text-ink-muted">{r.priorityReasons.join(' · ')}</span>
@@ -141,7 +170,8 @@ export function HousekeepingPage() {
         accessor: (r) => r.assigneeName ?? '',
         width: '8rem',
         filter: 'select',
-        cell: (r) => r.assigneeName ?? <span className="text-ink-subtle">{t('housekeeping.unassigned')}</span>,
+        cell: (r) =>
+          r.assigneeName ?? <span className="text-ink-subtle">{t('housekeeping.unassigned')}</span>,
       },
       {
         id: 'ready',
@@ -156,7 +186,8 @@ export function HousekeepingPage() {
             </span>
           ) : r.expectedReadyAt ? (
             <span className="pt-tabular text-sm italic">
-              ≈ {formatTime(r.expectedReadyAt, tz, lng)} <span className="text-xs not-italic text-ink-muted">({t('housekeeping.estimate')})</span>
+              ≈ {formatTime(r.expectedReadyAt, tz, lng)}{' '}
+              <span className="text-xs not-italic text-ink-muted">({t('housekeeping.estimate')})</span>
             </span>
           ) : (
             <span className="text-ink-subtle">—</span>
@@ -167,7 +198,9 @@ export function HousekeepingPage() {
   );
 
   if (!property) return <EmptyState title={t('app.noProperties')} />;
-  const counts = STATUS_VALUES.condition.map((c) => [c, rows.filter((r) => r.condition === c).length] as const);
+  const counts = STATUS_VALUES.condition.map(
+    (c) => [c, rows.filter((r) => r.condition === c).length] as const,
+  );
   const notReadyArrivals = rows.filter((r) => r.arrival && r.condition !== 'inspected').length;
 
   return (
@@ -175,17 +208,29 @@ export function HousekeepingPage() {
       <PageHeader
         title={t('housekeeping.title')}
         subtitle={t('housekeeping.subtitle', { units: rows.length, arrivals: notReadyArrivals })}
-        meta={query.data && <ProvenanceBadge provenance={query.data.provenance} lastSyncedAt={query.data.generatedAt} />}
+        meta={
+          query.data && (
+            <ProvenanceBadge provenance={query.data.provenance} lastSyncedAt={query.data.generatedAt} />
+          )
+        }
         helpKey="housekeeping.board"
       />
       <SimulatedNote module="operations" />
       {query.isPending && <SkeletonList rows={8} />}
-      {query.isError && <ProblemAlert problem={problemFromUnknown(query.error, 'housekeeping')} onRetry={() => void query.refetch()} />}
+      {query.isError && (
+        <ProblemAlert
+          problem={problemFromUnknown(query.error, 'housekeeping')}
+          onRetry={() => void query.refetch()}
+        />
+      )}
       {query.data && (
         <>
           <ul className="mb-4 flex flex-wrap gap-2" aria-label={t('housekeeping.condition')}>
             {counts.map(([c, n]) => (
-              <li key={c} className="flex items-center gap-2 rounded-lg border border-line bg-surface px-3 py-2">
+              <li
+                key={c}
+                className="flex items-center gap-2 rounded-lg border border-line bg-surface px-3 py-2"
+              >
                 <StatusBadge vocabulary="condition" value={c} />
                 <span className="pt-tabular text-lg font-semibold">{n}</span>
               </li>
@@ -194,7 +239,11 @@ export function HousekeepingPage() {
           {phone ? (
             <ul className="flex flex-col gap-2">
               {[...rows]
-                .sort((a, b) => (a.topPriority ? PRIORITY_RANK[a.topPriority] : 9) - (b.topPriority ? PRIORITY_RANK[b.topPriority] : 9))
+                .sort(
+                  (a, b) =>
+                    (a.topPriority ? PRIORITY_RANK[a.topPriority] : 9) -
+                    (b.topPriority ? PRIORITY_RANK[b.topPriority] : 9),
+                )
                 .map((r) => (
                   <li key={r.unitId}>
                     <button
@@ -202,14 +251,18 @@ export function HousekeepingPage() {
                       onClick={() => nav.openFresh('unit', r.unitId)}
                       className="flex w-full flex-col gap-1.5 rounded-lg border border-line bg-surface p-3 text-start"
                     >
-                    <span className="flex items-center justify-between font-semibold">
-                      {r.unitNumber}
-                      <StatusBadge vocabulary="condition" value={r.condition} size="md" />
-                    </span>
-                    <span className="flex flex-wrap gap-2 text-sm text-ink-muted">
-                      <StatusBadge vocabulary="occupancy" value={r.occupancy} />
-                      {r.topPriority && <span>{t(`housekeeping.priorities.${r.topPriority}`)} · {r.priorityReasons.join(' · ')}</span>}
-                    </span>
+                      <span className="flex items-center justify-between font-semibold">
+                        {r.unitNumber}
+                        <StatusBadge vocabulary="condition" value={r.condition} size="md" />
+                      </span>
+                      <span className="flex flex-wrap gap-2 text-sm text-ink-muted">
+                        <StatusBadge vocabulary="occupancy" value={r.occupancy} />
+                        {r.topPriority && (
+                          <span>
+                            {t(`housekeeping.priorities.${r.topPriority}`)} · {r.priorityReasons.join(' · ')}
+                          </span>
+                        )}
+                      </span>
                     </button>
                   </li>
                 ))}

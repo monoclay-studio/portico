@@ -25,5 +25,9 @@ export const connectivity = {
 };
 
 export function useApiReachable(): boolean {
-  return useSyncExternalStore(connectivity.subscribe, () => connectivity.reachable, () => true);
+  return useSyncExternalStore(
+    connectivity.subscribe,
+    () => connectivity.reachable,
+    () => true,
+  );
 }

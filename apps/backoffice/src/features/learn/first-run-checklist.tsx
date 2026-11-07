@@ -16,14 +16,19 @@ export function FirstRunChecklist() {
   const role = me.roles.find((r) => r.key === list.roleKey)?.name ?? list.roleKey;
   const done = list.items.filter((i) => progress.events.includes(i.doneWhen)).length;
   return (
-    <section aria-labelledby="first-run" className="rounded-lg border border-accent-line bg-accent-soft/40 p-4" data-help-key="learning.checklist">
+    <section
+      aria-labelledby="first-run"
+      className="rounded-lg border border-accent-line bg-accent-soft/40 p-4"
+      data-help-key="learning.checklist"
+    >
       <div className="flex items-start justify-between gap-2">
         <div>
           <h2 id="first-run" className="text-sm font-semibold">
             {t('learn.checklistTitle', { role })}
           </h2>
           <p className="text-xs text-ink-muted">
-            {t('learn.checklistHelp')} <span className="pt-data">{t('learn.progress', { done, total: list.items.length })}</span>
+            {t('learn.checklistHelp')}{' '}
+            <span className="pt-data">{t('learn.progress', { done, total: list.items.length })}</span>
           </p>
         </div>
         <Button size="sm" variant="ghost" icon={<X />} onClick={() => learning.dismissChecklist(me.userId)}>
@@ -36,9 +41,19 @@ export function FirstRunChecklist() {
           const Icon = ok ? CircleCheck : CircleDashed;
           const label = t(i.labelKey);
           return (
-            <li key={i.id} className="flex items-center gap-2 text-sm" data-checklist-item={i.id} data-done={ok}>
-              <Icon aria-hidden className={cn('size-4 shrink-0', ok ? 'text-success-fg' : 'text-ink-muted')} />
-              <span className="pt-sr-only">{ok ? t('ui.steps.status.done') : t('ui.steps.status.pending')}: </span>
+            <li
+              key={i.id}
+              className="flex items-center gap-2 text-sm"
+              data-checklist-item={i.id}
+              data-done={ok}
+            >
+              <Icon
+                aria-hidden
+                className={cn('size-4 shrink-0', ok ? 'text-success-fg' : 'text-ink-muted')}
+              />
+              <span className="pt-sr-only">
+                {ok ? t('ui.steps.status.done') : t('ui.steps.status.pending')}:{' '}
+              </span>
               {i.to && !ok ? (
                 <Link to={i.to} className="text-accent underline underline-offset-2">
                   {label}

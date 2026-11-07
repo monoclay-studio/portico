@@ -90,7 +90,8 @@ export function DataTable<Row>({
   const s = strings.dataTable;
   const coarse = typeof window !== 'undefined' && Boolean(window.matchMedia?.('(pointer: coarse)').matches);
   const rowHeight =
-    rowHeightProp ?? (density === 'comfortable' || coarse ? (rowLines === 2 ? 60 : 48) : rowLines === 2 ? 52 : 40);
+    rowHeightProp ??
+    (density === 'comfortable' || coarse ? (rowLines === 2 ? 60 : 48) : rowLines === 2 ? 52 : 40);
   const initialView = views.find((v) => v.id === initialViewId) ?? views[0];
   const [viewId, setViewId] = useState<string | null>(initialView?.id ?? null);
   const [state, setState] = useState<TableViewState>(initialView?.state ?? EMPTY_VIEW_STATE);

@@ -10,11 +10,23 @@ import { type Workspace, workspaceOf } from '../workspaces';
 import { NAV_ICONS, WORKSPACE_ICONS } from './nav-icons';
 
 /** Icon rail of workspaces (two-level navigation, design direction). */
-export function WorkspaceRail({ workspaces, active }: { workspaces: readonly Workspace[]; active: string | null }) {
+export function WorkspaceRail({
+  workspaces,
+  active,
+}: {
+  workspaces: readonly Workspace[];
+  active: string | null;
+}) {
   const { t } = useTranslation();
   return (
-    <nav aria-label={t('nav.workspaces')} className="flex h-full w-16 flex-col items-center gap-1 border-e border-line bg-surface-muted py-3">
-      <span aria-hidden className="mb-2 inline-flex size-8 items-center justify-center rounded-md bg-accent text-sm font-bold text-on-accent">
+    <nav
+      aria-label={t('nav.workspaces')}
+      className="flex h-full w-20 flex-col items-center gap-1 border-e border-line bg-surface-muted py-3"
+    >
+      <span
+        aria-hidden
+        className="mb-2 inline-flex size-8 items-center justify-center rounded-md bg-accent text-sm font-bold text-on-accent"
+      >
         {PRODUCT_NAME.charAt(0)}
       </span>
       <ul className="flex flex-col gap-1">
@@ -29,12 +41,14 @@ export function WorkspaceRail({ workspaces, active }: { workspaces: readonly Wor
                 to={first.to}
                 aria-current={current ? 'true' : undefined}
                 className={cn(
-                  'flex w-14 flex-col items-center gap-0.5 rounded-md px-1 py-1.5 text-[0.625rem] font-medium text-ink-muted hover:bg-surface-hover hover:text-ink',
+                  'flex w-[4.5rem] flex-col items-center gap-0.5 rounded-md px-0.5 py-1.5 text-[0.625rem] font-medium text-ink-muted hover:bg-surface-hover hover:text-ink',
                   current && 'bg-surface text-accent shadow-[inset_0_0_0_1px_var(--pt-line)]',
                 )}
               >
                 <Icon aria-hidden className="size-5" />
-                <span className="w-full truncate text-center">{t(w.labelKey)}</span>
+                <span className="w-full text-center leading-tight [overflow-wrap:break-word]">
+                  {t(w.labelKey)}
+                </span>
               </Link>
             </li>
           );
@@ -58,7 +72,10 @@ export function SectionList({
   const { me } = useApp();
   const pinned = pinnedRecords.use(me.userId);
   return (
-    <nav aria-label={workspace ? t(workspace.labelKey) : t('app.mainNav')} className="flex h-full flex-col gap-4 overflow-y-auto px-3 py-4">
+    <nav
+      aria-label={workspace ? t(workspace.labelKey) : t('app.mainNav')}
+      className="flex h-full flex-col gap-4 overflow-y-auto px-3 py-4"
+    >
       {workspace && (
         <div className="flex flex-col gap-0.5">
           <h2 className="px-2 pb-1 text-sm font-semibold">{t(workspace.labelKey)}</h2>

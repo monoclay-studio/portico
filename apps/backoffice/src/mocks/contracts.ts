@@ -58,7 +58,14 @@ export const arrivalDetails = z.object({
   transferRequested: z.boolean(),
 });
 
-export const readinessCheckKey = z.enum(['unit_assigned', 'unit_condition', 'guarantee', 'documents', 'transfer', 'requests']);
+export const readinessCheckKey = z.enum([
+  'unit_assigned',
+  'unit_condition',
+  'guarantee',
+  'documents',
+  'transfer',
+  'requests',
+]);
 export const readinessCheck = z.object({
   key: readinessCheckKey,
   status: z.enum(['ok', 'blocking', 'attention', 'unknown']),
@@ -68,7 +75,9 @@ export const readinessView = z.object({
   ready: z.boolean(),
   checks: z.array(readinessCheck),
   /** The single most important thing to clear before this guest can check in. */
-  blockingReason: z.object({ key: readinessCheckKey, message: z.string(), owner: z.string().nullable() }).nullable(),
+  blockingReason: z
+    .object({ key: readinessCheckKey, message: z.string(), owner: z.string().nullable() })
+    .nullable(),
 });
 export type ReadinessView = z.infer<typeof readinessView>;
 export type ReadinessCheck = z.infer<typeof readinessCheck>;
@@ -105,7 +114,12 @@ export const arrivalRow = z.object({
   flags: z.array(z.string()),
   owner: z.string().nullable(),
   readiness: readinessView,
-  checkInRun: z.object({ status: z.enum(['not_started', 'in_progress', 'completed', 'abandoned']), steps: z.array(workflowStep) }).nullable(),
+  checkInRun: z
+    .object({
+      status: z.enum(['not_started', 'in_progress', 'completed', 'abandoned']),
+      steps: z.array(workflowStep),
+    })
+    .nullable(),
 });
 export type ArrivalRow = z.infer<typeof arrivalRow>;
 
@@ -119,7 +133,9 @@ export const housekeepingRow = z.object({
   discrepancy: z.enum(['none', 'skip', 'sleep']),
   dnd: z.boolean(),
   block: z.object({ kind: z.enum(['out_of_order', 'out_of_service']), reason: z.string() }).nullable(),
-  arrival: z.object({ stayId: uuid, eta: isoDateTime.nullable(), vip: z.boolean(), guestLabel: z.string() }).nullable(),
+  arrival: z
+    .object({ stayId: uuid, eta: isoDateTime.nullable(), vip: z.boolean(), guestLabel: z.string() })
+    .nullable(),
   departureToday: z.boolean(),
   topPriority: z.enum(['low', 'normal', 'high', 'urgent']).nullable(),
   priorityReasons: z.array(z.string()),
@@ -149,18 +165,36 @@ export const timelineItem = z.object({
   guests: z.number().int().optional(),
   nightlyRate: money.optional(),
 });
-export const timelineView = z.object({ from: localDate, days: z.number().int(), units: z.array(timelineUnit), items: z.array(timelineItem) });
+export const timelineView = z.object({
+  from: localDate,
+  days: z.number().int(),
+  units: z.array(timelineUnit),
+  items: z.array(timelineItem),
+});
 export type TimelineView = z.infer<typeof timelineView>;
 export type TimelineItemView = z.infer<typeof timelineItem>;
 
-export const changePreviewLine = z.object({ label: z.string(), before: z.string(), after: z.string(), delta: z.string().optional(), changed: z.boolean(), attention: z.enum(['warning', 'danger']).optional() });
+export const changePreviewLine = z.object({
+  label: z.string(),
+  before: z.string(),
+  after: z.string(),
+  delta: z.string().optional(),
+  changed: z.boolean(),
+  attention: z.enum(['warning', 'danger']).optional(),
+});
 export const stayChangePreview = z.object({
   token: z.string(),
   stayId: uuid,
   title: z.string(),
   summary: z.string(),
   validUntil: isoDateTime,
-  sections: z.array(z.object({ kind: z.enum(['availability', 'price', 'taxes', 'deposits', 'balance']), rows: z.array(changePreviewLine), note: z.string().optional() })),
+  sections: z.array(
+    z.object({
+      kind: z.enum(['availability', 'price', 'taxes', 'deposits', 'balance']),
+      rows: z.array(changePreviewLine),
+      note: z.string().optional(),
+    }),
+  ),
   consequences: z.array(z.string()),
 });
 export type StayChangePreview = z.infer<typeof stayChangePreview>;

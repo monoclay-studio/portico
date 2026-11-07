@@ -14,5 +14,5 @@ export const apiClient = createApiClient({
 
 export const api = endpoints(apiClient);
 
-export { ApiError, isApiError } from './errors';
 export type * from './endpoints';
+export { ApiError, isApiError } from './errors';

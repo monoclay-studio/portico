@@ -1,11 +1,23 @@
 import { IconButton } from '@portico/ui';
-import { Check, CircleHelp, GraduationCap, Languages, LogOut, Monitor, Moon, Rows3, Rows4, Sun, UserRound } from 'lucide-react';
 import { Link } from '@tanstack/react-router';
+import {
+  Check,
+  CircleHelp,
+  GraduationCap,
+  Languages,
+  LogOut,
+  Monitor,
+  Moon,
+  Rows3,
+  Rows4,
+  Sun,
+  UserRound,
+} from 'lucide-react';
 import { DropdownMenu } from 'radix-ui';
 import { useTranslation } from 'react-i18next';
 import { LOCALES, type LocaleCode, setLocale } from '../../i18n';
 import { useApp } from '../app-context';
-import { density as densityStore, type Density } from '../density';
+import { type Density, density as densityStore } from '../density';
 import { setTheme, type ThemeChoice, useTheme } from '../theme';
 
 const itemClass =
@@ -22,7 +34,11 @@ export function UserMenu({ onSignOut }: { onSignOut: () => void }) {
         <IconButton label={`${t('app.account')}: ${me.displayName}`} icon={<UserRound />} variant="ghost" />
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
-        <DropdownMenu.Content align="end" sideOffset={6} className="z-50 min-w-64 rounded-md border border-line bg-surface p-1 shadow-lg">
+        <DropdownMenu.Content
+          align="end"
+          sideOffset={6}
+          className="z-50 min-w-64 rounded-md border border-line bg-surface p-1 shadow-lg"
+        >
           <div className="px-3 py-2">
             <p className="text-sm font-semibold">{me.displayName}</p>
             <p className="text-xs text-ink-muted">{me.email}</p>
@@ -31,7 +47,9 @@ export function UserMenu({ onSignOut }: { onSignOut: () => void }) {
             </p>
           </div>
           <DropdownMenu.Separator className="my-1 h-px bg-line" />
-          <DropdownMenu.Label className="px-3 py-1 text-xs font-semibold text-ink-muted">{t('app.theme')}</DropdownMenu.Label>
+          <DropdownMenu.Label className="px-3 py-1 text-xs font-semibold text-ink-muted">
+            {t('app.theme')}
+          </DropdownMenu.Label>
           <DropdownMenu.RadioGroup value={theme} onValueChange={(v) => setTheme(v as ThemeChoice)}>
             {(
               [
@@ -50,7 +68,9 @@ export function UserMenu({ onSignOut }: { onSignOut: () => void }) {
             ))}
           </DropdownMenu.RadioGroup>
           <DropdownMenu.Separator className="my-1 h-px bg-line" />
-          <DropdownMenu.Label className="px-3 py-1 text-xs font-semibold text-ink-muted">{t('app.density')}</DropdownMenu.Label>
+          <DropdownMenu.Label className="px-3 py-1 text-xs font-semibold text-ink-muted">
+            {t('app.density')}
+          </DropdownMenu.Label>
           <DropdownMenu.RadioGroup value={density} onValueChange={(v) => densityStore.set(v as Density)}>
             {(
               [
@@ -68,10 +88,21 @@ export function UserMenu({ onSignOut }: { onSignOut: () => void }) {
             ))}
           </DropdownMenu.RadioGroup>
           <DropdownMenu.Separator className="my-1 h-px bg-line" />
-          <DropdownMenu.Label className="px-3 py-1 text-xs font-semibold text-ink-muted">{t('app.language')}</DropdownMenu.Label>
-          <DropdownMenu.RadioGroup value={i18n.resolvedLanguage ?? 'en'} onValueChange={(v) => void setLocale(v as LocaleCode)}>
+          <DropdownMenu.Label className="px-3 py-1 text-xs font-semibold text-ink-muted">
+            {t('app.language')}
+          </DropdownMenu.Label>
+          <DropdownMenu.RadioGroup
+            value={i18n.resolvedLanguage ?? 'en'}
+            onValueChange={(v) => void setLocale(v as LocaleCode)}
+          >
             {LOCALES.map((l) => (
-              <DropdownMenu.RadioItem key={l.code} value={l.code} className={itemClass} lang={l.code} dir={l.dir}>
+              <DropdownMenu.RadioItem
+                key={l.code}
+                value={l.code}
+                className={itemClass}
+                lang={l.code}
+                dir={l.dir}
+              >
                 <DropdownMenu.ItemIndicator className="absolute start-2">
                   <Check aria-hidden className="size-4 text-accent" />
                 </DropdownMenu.ItemIndicator>

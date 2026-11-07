@@ -81,7 +81,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
           </span>
         )
       )}
-      <span>{children}</span>
+      <span className="inline-flex min-w-0 items-center gap-2">{children}</span>
       {loading && <span className="pt-sr-only">{strings.common.working}</span>}
     </button>
   );

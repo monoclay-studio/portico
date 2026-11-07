@@ -26,7 +26,13 @@ import { HelpContext } from '../../learning/help-context';
 import { HelpPanel } from '../../learning/help-panel';
 import { learning } from '../../learning/progress';
 import { RecordHost } from '../../records/record-host';
-import { AppContext, type AppContextValue, rememberedPropertyId, rememberPropertyId, useApp } from '../app-context';
+import {
+  AppContext,
+  type AppContextValue,
+  rememberedPropertyId,
+  rememberPropertyId,
+  useApp,
+} from '../app-context';
 import { density } from '../density';
 import { ScreenActionsContext, type ScreenActionsRegistry } from '../screen-actions';
 import { SHORTCUTS } from '../shortcuts';
@@ -67,7 +73,10 @@ export function AppShell() {
   const organization = useQuery({ ...queries.organization(orgId), enabled: Boolean(session) });
   const properties = useQuery({ ...queries.properties(orgId), enabled: Boolean(session) });
   const [selectedId, setSelectedId] = useState<string | null>(() => rememberedPropertyId(orgId));
-  const [palette, setPalette] = useState<{ open: boolean; mode: 'search' | 'command' }>({ open: false, mode: 'command' });
+  const [palette, setPalette] = useState<{ open: boolean; mode: 'search' | 'command' }>({
+    open: false,
+    mode: 'command',
+  });
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
@@ -77,7 +86,8 @@ export function AppShell() {
   const screenActions = useRef<ScreenActionsRegistry>({ handlers: new Map() }).current;
 
   useEffect(() => {
-    if (!session) void navigate({ to: '/sign-in', search: { reason: sessionStore.endedReason ?? undefined } });
+    if (!session)
+      void navigate({ to: '/sign-in', search: { reason: sessionStore.endedReason ?? undefined } });
   }, [session, navigate]);
   useEffect(() => {
     if (me.data) {
@@ -275,7 +285,12 @@ function NavDrawer({ open, onOpenChange }: { open: boolean; onOpenChange: (o: bo
     <Drawer open={open} onOpenChange={onOpenChange} title={t('app.mainNav')}>
       <div className="flex flex-col">
         {workspaces.map((w, i) => (
-          <SectionList key={w.id} workspace={w} onNavigate={() => onOpenChange(false)} showPinned={i === workspaces.length - 1} />
+          <SectionList
+            key={w.id}
+            workspace={w}
+            onNavigate={() => onOpenChange(false)}
+            showPinned={i === workspaces.length - 1}
+          />
         ))}
       </div>
     </Drawer>

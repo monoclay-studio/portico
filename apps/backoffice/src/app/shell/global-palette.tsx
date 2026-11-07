@@ -1,7 +1,19 @@
 import { CommandPalette, type PaletteCommand, ProvenanceBadge } from '@portico/ui';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
-import { CircleHelp, Clock, GraduationCap, Hotel, Languages, LogOut, Moon, Pin, Rows3, Search, UserRound } from 'lucide-react';
+import {
+  CircleHelp,
+  Clock,
+  GraduationCap,
+  Hotel,
+  Languages,
+  LogOut,
+  Moon,
+  Pin,
+  Rows3,
+  Search,
+  UserRound,
+} from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '../../api';
@@ -85,9 +97,23 @@ export function GlobalPalette({
     const typeLabel = (type: string) => t(`records.types.${type}`, { defaultValue: type });
     if (!q) {
       for (const p of pinned)
-        list.push({ id: `pin:${p.type}:${p.id}`, group: t('nav.pinned'), label: p.title, description: typeLabel(p.type), icon: <Pin />, onSelect: () => openRecord(p.type, p.id) });
+        list.push({
+          id: `pin:${p.type}:${p.id}`,
+          group: t('nav.pinned'),
+          label: p.title,
+          description: typeLabel(p.type),
+          icon: <Pin />,
+          onSelect: () => openRecord(p.type, p.id),
+        });
       for (const r of recent.filter((r) => !pinned.some((p) => p.type === r.type && p.id === r.id)))
-        list.push({ id: `recent:${r.type}:${r.id}`, group: t('nav.recent'), label: r.title, description: typeLabel(r.type), icon: <Clock />, onSelect: () => openRecord(r.type, r.id) });
+        list.push({
+          id: `recent:${r.type}:${r.id}`,
+          group: t('nav.recent'),
+          label: r.title,
+          description: typeLabel(r.type),
+          icon: <Clock />,
+          onSelect: () => openRecord(r.type, r.id),
+        });
     }
     for (const h of server.data?.data.items ?? []) {
       list.push({
@@ -141,8 +167,20 @@ export function GlobalPalette({
         });
       }
       list.push(
-        { id: 'action:theme', group: t('commands.actions'), label: t('commands.toggleTheme'), icon: <Moon />, onSelect: () => setTheme(effectiveTheme(theme) === 'dark' ? 'light' : 'dark') },
-        { id: 'action:density', group: t('commands.actions'), label: t('commands.toggleDensity'), icon: <Rows3 />, onSelect: onDensity },
+        {
+          id: 'action:theme',
+          group: t('commands.actions'),
+          label: t('commands.toggleTheme'),
+          icon: <Moon />,
+          onSelect: () => setTheme(effectiveTheme(theme) === 'dark' ? 'light' : 'dark'),
+        },
+        {
+          id: 'action:density',
+          group: t('commands.actions'),
+          label: t('commands.toggleDensity'),
+          icon: <Rows3 />,
+          onSelect: onDensity,
+        },
         ...LOCALES.filter((l) => l.code !== i18n.resolvedLanguage).map((l) => ({
           id: `action:locale:${l.code}`,
           group: t('commands.actions'),
@@ -151,14 +189,50 @@ export function GlobalPalette({
           icon: <Languages />,
           onSelect: () => void setLocale(l.code),
         })),
-        { id: 'action:learn', group: t('commands.actions'), label: t('learn.practise'), icon: <GraduationCap />, onSelect: () => void navigate({ to: '/learn' }) },
-        { id: 'action:shortcuts', group: t('commands.actions'), label: t('commands.showShortcuts'), shortcut: '?', icon: <CircleHelp />, onSelect: onShortcuts },
-        { id: 'action:signout', group: t('commands.actions'), label: t('commands.signOut'), icon: <LogOut />, onSelect: onSignOut },
+        {
+          id: 'action:learn',
+          group: t('commands.actions'),
+          label: t('learn.practise'),
+          icon: <GraduationCap />,
+          onSelect: () => void navigate({ to: '/learn' }),
+        },
+        {
+          id: 'action:shortcuts',
+          group: t('commands.actions'),
+          label: t('commands.showShortcuts'),
+          shortcut: '?',
+          icon: <CircleHelp />,
+          onSelect: onShortcuts,
+        },
+        {
+          id: 'action:signout',
+          group: t('commands.actions'),
+          label: t('commands.signOut'),
+          icon: <LogOut />,
+          onSelect: onSignOut,
+        },
       );
     }
     return list;
     // biome-ignore lint/correctness/useExhaustiveDependencies: openRecord is stable enough per render
-  }, [q, mode, pinned, recent, server.data, sim.data, workspaces, properties, t, navigate, setPropertyId, theme, i18n.resolvedLanguage, onShortcuts, onSignOut, onDensity]);
+  }, [
+    q,
+    mode,
+    pinned,
+    recent,
+    server.data,
+    sim.data,
+    workspaces,
+    properties,
+    t,
+    navigate,
+    setPropertyId,
+    theme,
+    i18n.resolvedLanguage,
+    onShortcuts,
+    onSignOut,
+    onDensity,
+  ]);
 
   return (
     <CommandPalette

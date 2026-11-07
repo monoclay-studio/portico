@@ -2,9 +2,9 @@ import { propertyProfile } from '@portico/platform/contracts';
 import {
   Button,
   Combobox,
-  classifyConflict,
   ConflictDialog,
   type ConflictDialogRow,
+  classifyConflict,
   Field,
   formatRelative,
   Input,
@@ -89,12 +89,16 @@ export function PropertyDetailPage() {
   const accept = (p: Property, version: number) => {
     setBase({ value: pick(p), version });
     setForm(pick(p));
-    queryClient.setQueryData(queries.property(session.organization.id, propertyId).queryKey, { property: p, version });
+    queryClient.setQueryData(queries.property(session.organization.id, propertyId).queryKey, {
+      property: p,
+      version,
+    });
     void queryClient.invalidateQueries({ queryKey: ['org', session.organization.id, 'properties'] });
   };
 
   const save = useMutation({
-    mutationFn: async (v: { patch: PropertyUpdate; version: number }) => api.updateProperty(propertyId, v.patch, v.version),
+    mutationFn: async (v: { patch: PropertyUpdate; version: number }) =>
+      api.updateProperty(propertyId, v.patch, v.version),
     onSuccess: (r) => {
       setProblem(null);
       const version = r.version ?? r.data.version;
@@ -107,7 +111,12 @@ export function PropertyDetailPage() {
         const latestVersion = latest.version ?? latest.data.version;
         const history = await api.recordHistory('property', propertyId).catch(() => null);
         const lastChange = history?.data.items.filter((i) => i.action === 'platform.property.update').at(-1);
-        const rows = classifyConflict(base.value, { ...base.value, ...vars.patch } as Editable, pick(latest.data), KEYS).map((r) => ({
+        const rows = classifyConflict(
+          base.value,
+          { ...base.value, ...vars.patch } as Editable,
+          pick(latest.data),
+          KEYS,
+        ).map((r) => ({
           ...r,
           label: t(`admin.fields.${r.key}`),
           ...(r.key === 'profile' ? { format: (v: unknown) => t(`profiles.${String(v)}`) } : {}),
@@ -117,7 +126,12 @@ export function PropertyDetailPage() {
           latest: latest.data,
           latestVersion,
           expected: vars.version,
-          ...(lastChange ? { changedBy: lastChange.actor.label, changedAt: formatRelative(lastChange.at, new Date(), i18n.resolvedLanguage) } : {}),
+          ...(lastChange
+            ? {
+                changedBy: lastChange.actor.label,
+                changedAt: formatRelative(lastChange.at, new Date(), i18n.resolvedLanguage),
+              }
+            : {}),
         });
         return;
       }
@@ -126,7 +140,8 @@ export function PropertyDetailPage() {
   });
 
   const reapply = useMutation({
-    mutationFn: async (v: { patch: PropertyUpdate; version: number }) => api.updateProperty(propertyId, v.patch, v.version),
+    mutationFn: async (v: { patch: PropertyUpdate; version: number }) =>
+      api.updateProperty(propertyId, v.patch, v.version),
     onSuccess: (r) => {
       accept(r.data, r.version ?? r.data.version);
       setConflict(null);
@@ -134,10 +149,19 @@ export function PropertyDetailPage() {
     },
   });
 
-  const dirty = useMemo(() => (base && form ? Object.keys(diff(base.value, form)).length > 0 : false), [base, form]);
+  const dirty = useMemo(
+    () => (base && form ? Object.keys(diff(base.value, form)).length > 0 : false),
+    [base, form],
+  );
 
   if (query.isPending || !form || !base) return <SkeletonList rows={6} />;
-  if (query.isError) return <ProblemAlert problem={problemFromUnknown(query.error, 'property')} onRetry={() => void query.refetch()} />;
+  if (query.isError)
+    return (
+      <ProblemAlert
+        problem={problemFromUnknown(query.error, 'property')}
+        onRetry={() => void query.refetch()}
+      />
+    );
   const p = query.data.property;
 
   const submit = (e: FormEvent) => {
@@ -149,7 +173,10 @@ export function PropertyDetailPage() {
   return (
     <RecordPage
       back={
-        <Link to="/settings/properties" className="inline-flex items-center gap-1 text-sm text-accent underline-offset-2 hover:underline">
+        <Link
+          to="/settings/properties"
+          className="inline-flex items-center gap-1 text-sm text-accent underline-offset-2 hover:underline"
+        >
           <ArrowLeft aria-hidden className="size-4 rtl:rotate-180" /> {t('admin.propertiesTitle')}
         </Link>
       }
@@ -157,13 +184,26 @@ export function PropertyDetailPage() {
       <PageHeader
         title={p.name}
         subtitle={t('admin.propertySettingsHelp')}
-        meta={<span className="pt-data text-ink-muted">{t('common.version', { version: base.version })}</span>}
+        meta={
+          <span className="pt-data text-ink-muted">{t('common.version', { version: base.version })}</span>
+        }
         helpKey="settings.properties.edit"
         context={false}
       />
-      <form onSubmit={submit} className="grid max-w-3xl grid-cols-1 gap-4 sm:grid-cols-2" data-help-key="settings.properties.edit.form" noValidate>
+      <form
+        onSubmit={submit}
+        className="grid max-w-3xl grid-cols-1 gap-4 sm:grid-cols-2"
+        data-help-key="settings.properties.edit.form"
+        noValidate
+      >
         <Field label={t('admin.fields.name')} required className="sm:col-span-2">
-          <Input name="name" value={form.name} onChange={(e) => set('name', e.target.value)} required maxLength={200} />
+          <Input
+            name="name"
+            value={form.name}
+            onChange={(e) => set('name', e.target.value)}
+            required
+            maxLength={200}
+          />
         </Field>
         <Field label={t('admin.fields.profile')}>
           <Select
@@ -180,21 +220,37 @@ export function PropertyDetailPage() {
           />
         </Field>
         <Field label={t('admin.fields.checkInTime')} description={t('admin.localTime')}>
-          <Input name="checkInTime" type="time" value={form.checkInTime} onChange={(e) => set('checkInTime', e.target.value)} />
+          <Input
+            name="checkInTime"
+            type="time"
+            value={form.checkInTime}
+            onChange={(e) => set('checkInTime', e.target.value)}
+          />
         </Field>
         <Field label={t('admin.fields.checkOutTime')} description={t('admin.localTime')}>
-          <Input name="checkOutTime" type="time" value={form.checkOutTime} onChange={(e) => set('checkOutTime', e.target.value)} />
+          <Input
+            name="checkOutTime"
+            type="time"
+            value={form.checkOutTime}
+            onChange={(e) => set('checkOutTime', e.target.value)}
+          />
         </Field>
         <Field label={t('admin.fields.status')}>
           <Select
             value={form.status}
             onValueChange={(v) => set('status', v as Editable['status'])}
-            options={(['setup', 'pilot', 'active', 'inactive'] as const).map((s) => ({ value: s, label: t(`admin.statuses.${s}`) }))}
+            options={(['setup', 'pilot', 'active', 'inactive'] as const).map((s) => ({
+              value: s,
+              label: t(`admin.statuses.${s}`),
+            }))}
           />
         </Field>
         {problem && (
           <div className="sm:col-span-2">
-            <ProblemAlert problem={problem} onRetry={() => save.mutate({ patch: diff(base.value, form), version: base.version })} />
+            <ProblemAlert
+              problem={problem}
+              onRetry={() => save.mutate({ patch: diff(base.value, form), version: base.version })}
+            />
           </div>
         )}
         <div className="flex gap-2 sm:col-span-2">
@@ -231,7 +287,9 @@ export function PropertyDetailPage() {
             reapply.mutate({ patch: patch as PropertyUpdate, version: conflict.latestVersion });
           }}
         >
-          {reapply.isError && <ProblemAlert problem={problemFromUnknown(reapply.error, 'property-reapply')} />}
+          {reapply.isError && (
+            <ProblemAlert problem={problemFromUnknown(reapply.error, 'property-reapply')} />
+          )}
         </ConflictDialog>
       )}
     </RecordPage>

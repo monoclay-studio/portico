@@ -20,18 +20,30 @@ export function HelpPanel({ helpKey, onClose }: { helpKey: string | null; onClos
         {link ? (
           <div className="flex flex-col gap-2">
             {link.article && (
-              <a className="inline-flex items-center gap-2 font-medium text-accent underline" href={link.article} target="_blank" rel="noreferrer">
+              <a
+                className="inline-flex items-center gap-2 font-medium text-accent underline"
+                href={link.article}
+                target="_blank"
+                rel="noreferrer"
+              >
                 <BookOpen aria-hidden className="size-4" /> {t('help.article')}
               </a>
             )}
             {link.video && (
-              <a className="inline-flex items-center gap-2 font-medium text-accent underline" href={link.video} target="_blank" rel="noreferrer">
+              <a
+                className="inline-flex items-center gap-2 font-medium text-accent underline"
+                href={link.video}
+                target="_blank"
+                rel="noreferrer"
+              >
                 <PlayCircle aria-hidden className="size-4" /> {t('help.video')}
               </a>
             )}
           </div>
         ) : (
-          <p className="rounded-md border border-dashed border-line-strong p-3 text-ink-muted">{t('help.comingSoon')}</p>
+          <p className="rounded-md border border-dashed border-line-strong p-3 text-ink-muted">
+            {t('help.comingSoon')}
+          </p>
         )}
         <Button asChild variant="secondary" icon={<GraduationCap />}>
           <Link to="/learn" onClick={onClose}>

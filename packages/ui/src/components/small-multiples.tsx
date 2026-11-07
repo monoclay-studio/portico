@@ -78,7 +78,14 @@ export function SmallMultiples({
     <ul className="grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2 xl:grid-cols-3" aria-label={label}>
       {series.map((s) => (
         <li key={s.id}>
-          <Multiple series={s} max={max} format={format} height={height} rtl={dir === 'rtl'} valueLabel={strings.chart.value} />
+          <Multiple
+            series={s}
+            max={max}
+            format={format}
+            height={height}
+            rtl={dir === 'rtl'}
+            valueLabel={strings.chart.value}
+          />
         </li>
       ))}
     </ul>
@@ -120,7 +127,11 @@ function Multiple({
           {series.label}
         </h4>
         <span className="pt-data text-ink-muted" aria-live="polite">
-          {shown ? `${shown.xLabel} · ${format(shown.value)}${shown.detail ? ` · ${shown.detail}` : ''}` : first ? `${first.xLabel} · ${format(first.value)}` : ''}
+          {shown
+            ? `${shown.xLabel} · ${format(shown.value)}${shown.detail ? ` · ${shown.detail}` : ''}`
+            : first
+              ? `${first.xLabel} · ${format(first.value)}`
+              : ''}
         </span>
       </div>
       {/* biome-ignore lint/a11y/noNoninteractiveTabindex: focus lets keyboard users read each column (arrow keys) */}
@@ -147,7 +158,10 @@ function Multiple({
             className="flex h-full flex-1 items-end justify-center"
           >
             <span
-              className={cn('w-full max-w-6 rounded-t-[4px] bg-viz-seq', active !== null && active !== i && 'opacity-45')}
+              className={cn(
+                'w-full max-w-6 rounded-t-[4px] bg-viz-seq',
+                active !== null && active !== i && 'opacity-45',
+              )}
               style={{ height: `${Math.max(2, (Math.min(p.value, max) / max) * 100)}%` }}
             />
           </span>

@@ -83,7 +83,10 @@ export function EntityLink({
                     isVocab(family, value) ? (
                       <StatusBadge key={family} vocabulary={family} value={value as never} />
                     ) : (
-                      <span key={family} className="rounded-sm border border-neutral-line px-1.5 text-xs text-neutral-fg">
+                      <span
+                        key={family}
+                        className="rounded-sm border border-neutral-line px-1.5 text-xs text-neutral-fg"
+                      >
                         {family}: {value}
                       </span>
                     ),

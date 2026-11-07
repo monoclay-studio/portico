@@ -24,8 +24,8 @@ import {
   type SimProperty,
   type SimStayDetail,
   type SimToday,
-  SimulatedProblem,
   type SimUnitDetail,
+  SimulatedProblem,
   type SimWorkItem,
   simulateProperty,
   stayDetail,
@@ -41,7 +41,12 @@ export interface WorkspaceDataSource {
   housekeeping(p: SimProperty): Promise<Sourced<HousekeepingRow[]>>;
   timeline(p: SimProperty, from: LocalDate, days: number): Promise<Sourced<TimelineView>>;
   previewExtension(p: SimProperty, stayId: string, nights: number): Promise<Sourced<StayChangePreview>>;
-  commitExtension(p: SimProperty, previewToken: string, stayId: string, nights: number): Promise<Sourced<{ stayId: string; departure: LocalDate }>>;
+  commitExtension(
+    p: SimProperty,
+    previewToken: string,
+    stayId: string,
+    nights: number,
+  ): Promise<Sourced<{ stayId: string; departure: LocalDate }>>;
   stay(p: SimProperty, stayId: string): Promise<Sourced<SimStayDetail | null>>;
   unit(p: SimProperty, unitId: string): Promise<Sourced<SimUnitDetail | null>>;
   myWork(p: SimProperty): Promise<Sourced<SimWorkItem[]>>;
@@ -50,7 +55,9 @@ export interface WorkspaceDataSource {
 
 const SOURCE = 'Simulator — module not yet connected (wave 1)';
 
-export function createSimulatedSource(opts: { latencyMs?: number; now?: () => Date } = {}): WorkspaceDataSource {
+export function createSimulatedSource(
+  opts: { latencyMs?: number; now?: () => Date } = {},
+): WorkspaceDataSource {
   const sims = new Map<string, PropertySimulation>();
   const now = opts.now ?? (() => new Date());
   const latency = opts.latencyMs ?? 180;
@@ -72,7 +79,8 @@ export function createSimulatedSource(opts: { latencyMs?: number; now?: () => Da
     arrivals: (p) => wrap(arrivalRow.array().parse(arrivalsFor(sim(p)))),
     housekeeping: (p) => wrap(housekeepingRow.array().parse(housekeepingFor(sim(p)))),
     timeline: (p, from, days) => wrap(timelineView.parse(timelineFor(sim(p), from, days))),
-    previewExtension: (p, stayId, nights) => wrap(stayChangePreview.parse(previewExtension(sim(p), stayId, nights, now()))),
+    previewExtension: (p, stayId, nights) =>
+      wrap(stayChangePreview.parse(previewExtension(sim(p), stayId, nights, now()))),
     stay: (p, id) => wrap(stayDetail(sim(p), id)),
     unit: (p, id) => wrap(unitDetail(sim(p), id)),
     myWork: (p) => wrap(workItemsFor(sim(p))),
@@ -92,5 +100,5 @@ export function createSimulatedSource(opts: { latencyMs?: number; now?: () => Da
   };
 }
 
-export { SimulatedProblem };
 export type { SimStayDetail, SimToday, SimUnitDetail, SimWorkItem };
+export { SimulatedProblem };
