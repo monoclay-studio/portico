@@ -1,0 +1,17 @@
+# Restore-drill verify.sql mutation probe (reviewer). One planted defect per run inside a rolled-back transaction.
+# CAUGHT = verify.sql failed (good). MISSED = verify.sql passed. The baseline (no defect) is expected to pass ("MISSED").
+MISSED  baseline (no defect)
+CAUGHT  RLS disabled on guests.profiles (app can read) :: DRILL FAIL: tenant isolation weakened: guests.profiles(rls disabled but accessible to portico_app)
+CAUGHT  RLS not forced on guests.profiles :: DRILL FAIL: tenant isolation weakened: guests.profiles(rls not forced)
+MISSED  tenant policy replaced by USING (true)
+MISSED  extra permissive policy USING (true) added
+CAUGHT  app may UPDATE core.audit_log :: DRILL FAIL: portico_app can modify core.audit_log
+MISSED  worker may DELETE core.audit_log
+CAUGHT  app may INSERT into non-RLS payments.account_directory :: DRILL FAIL: tenant isolation weakened: payments.account_directory(rls disabled but accessible to portico_app)
+MISSED  worker may SELECT non-RLS payments.account_directory
+CAUGHT  app login made BYPASSRLS :: DRILL FAIL: privileged Portico roles: portico_app_blue
+CAUGHT  app group granted to a privileged role chain (app member of pg_write_all_data) :: DRILL FAIL: tenant isolation weakened: identity.user_tenants(rls disabled but accessible to portico_app) identity.dev_mailbox(rls disabled b
+CAUGHT  app may execute worker-only core.claim_job via PUBLIC :: DRILL FAIL: portico_app can execute unreviewed SECURITY DEFINER functions: core.claim_job(text,integer,integer)
+MISSED  new SECURITY DEFINER fn without search_path, granted to worker only
+MISSED  tenant table without tenant_id column readable by app (RLS on, no policy column)
+CAUGHT  audit_log RLS disabled :: DRILL FAIL: tenant isolation weakened: core.audit_log(rls disabled but accessible to portico_app)

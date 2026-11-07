@@ -125,6 +125,9 @@ contract); day-use/hourly time slices (LATER, see INV-R30).
   allowance is labelled *authorized overbooking* everywhere. Ad-hoc overbooking for one sale requires
   `overbooking: {authorizedBy, reason}` on `consume` (or an approval from identity) and increments the
   allowance for exactly that quantity.
+  *Decision (orchestrator, 2026-11-07, parity EC-INV-017):* lowering an allowance below the quantity already sold
+  inside it is **refused**, listing the affected cells and stays. Resolve those stays first (relocate, upgrade or move
+  dates), then lower. A refusal with the cells listed beats silently creating conflicts, and it is never silent.
 - **INV-R27** [MUST] An **inventory conflict** exists for (unit type, night) whenever
   `capacity − outOfOrder − sold − held < −overbookingAllowance` (oversold beyond authorization). Conflicts carry
   causes (refs that consumed last, blocks placed, channel bookings), status `open | resolving | resolved`, owner,

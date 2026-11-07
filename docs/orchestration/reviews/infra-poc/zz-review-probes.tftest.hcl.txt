@@ -1,0 +1,107 @@
+# Plan-level tests for every tier with a MOCKED AWS provider (no AWS credentials, no network, no cost):
+#   cd infra/terraform/modules/cell && terraform init -backend=false && terraform test
+# They prove the configuration plans (no dependency cycles, no count/for_each on unknown values, tier presets
+# resolve, the runtime contract the application needs is wired, guard rails fire). They do NOT prove AWS accepts the
+# resources — only a real plan/apply can (infra/README.md § Validation status).
+#
+# `random` is NOT mocked: the mocking framework does not support ephemeral resources, and the real random provider
+# runs locally with no credentials. Its values only ever reach write-only attributes, so nothing is stored.
+
+mock_provider "aws" {
+  mock_data "aws_availability_zones" {
+    defaults = { names = ["ap-south-1a", "ap-south-1b", "ap-south-1c"] }
+  }
+  mock_data "aws_region" {
+    defaults = { region = "ap-south-1", name = "ap-south-1" }
+  }
+  mock_data "aws_caller_identity" {
+    defaults = { account_id = "123456789012" }
+  }
+  mock_data "aws_partition" {
+    defaults = { partition = "aws" }
+  }
+  mock_data "aws_iam_policy_document" {
+    defaults = { json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}" }
+  }
+  mock_data "aws_ec2_managed_prefix_list" {
+    # Shape of com.amazonaws.global.cloudfront.origin-facing (a few real-looking entries; the real list is longer).
+    defaults = {
+      id = "pl-0123456789abcdef0"
+      entries = [
+        { cidr = "13.32.0.0/15", description = "" },
+        { cidr = "52.84.0.0/15", description = "" },
+        { cidr = "130.176.0.0/18", description = "" },
+      ]
+    }
+  }
+  mock_data "aws_elb_service_account" {
+    defaults = { arn = "arn:aws:iam::718504428378:root" }
+  }
+  mock_data "aws_ssm_parameter" {
+    defaults = { value = "ami-0123456789abcdef0" }
+  }
+  mock_data "aws_iam_openid_connect_provider" {
+    defaults = { arn = "arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com" }
+  }
+}
+
+variables {
+  cidr_block          = "10.20.0.0/16"
+  budget_monthly_usd  = 50
+  budget_alert_emails = ["owner@example.invalid"]
+  oncall_emails       = ["oncall@example.invalid"]
+  github_repository   = "monoclay/portico"
+  github_environments = ["test"]
+}
+
+# ── Tier shapes ───────────────────────────────────────────────────────────────────────────────────────────────
+
+# ── Reviewer probes (zz-review; scratch copy only). Each run is EXPECTED TO PASS = the guard does NOT fire. ──
+# compute/main.tf:46 maps each injected ENV name to integration_secret_arns[key], so ENV=TEST name + key=-live means
+# the container's *_TEST variable is filled from the LIVE secret.
+
+run "zz_review_live_secret_under_test_name_in_staging" {
+  command = plan
+  variables {
+    tier            = "lean"
+    deployment      = "staging"
+    domain_name     = "portico.example"
+    route53_zone_id = "Z0000000000000000000"
+    injected_integration_secrets = {
+      PAYMENTS_STRIPE_SECRET_KEY_TEST      = "payments-stripe-connect-secret-key-live"
+      PAYMENTS_STRIPE_WEBHOOK_SECRETS_TEST = "payments-stripe-connect-webhook-secrets-live"
+    }
+  }
+  assert {
+    condition     = contains(output.runtime_contract.api.secrets, "PAYMENTS_STRIPE_SECRET_KEY_TEST") && contains(output.runtime_contract.worker.secrets, "PAYMENTS_STRIPE_WEBHOOK_SECRETS_TEST")
+    error_message = "plan accepted: staging tasks get the LIVE Connect key and webhook secrets under the TEST names."
+  }
+}
+
+run "zz_review_live_secret_under_test_name_in_demo_deployment_lean_tier" {
+  command = plan
+  variables {
+    tier            = "lean"
+    deployment      = "demo"
+    domain_name     = "portico.example"
+    route53_zone_id = "Z0000000000000000000"
+    injected_integration_secrets = { PAYMENTS_STRIPE_SECRET_KEY_TEST = "payments-stripe-connect-secret-key-live" }
+  }
+}
+
+# Staging (and every managed deployment) runs NODE_ENV=production; apps/api/src/composition.ts:248/271 then disables
+# the operator console, so the operator placeholders created and injectable outside production can never work.
+run "zz_review_staging_operator_secrets_accepted_but_node_env_production" {
+  command = plan
+  variables {
+    tier            = "lean"
+    deployment      = "staging"
+    domain_name     = "portico.example"
+    route53_zone_id = "Z0000000000000000000"
+    injected_integration_secrets = { OPERATOR_TOKEN = "operator-token", PORTICO_OPERATORS = "portico-operators" }
+  }
+  assert {
+    condition     = contains(output.runtime_contract.api.environment, "NODE_ENV") && contains(output.runtime_contract.api.secrets, "PORTICO_OPERATORS")
+    error_message = "staging api: NODE_ENV (=production, compute/main.tf:26) together with the operator secrets."
+  }
+}
