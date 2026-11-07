@@ -12,6 +12,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   applied,
   bookingInput,
+  bookWithCard,
+  cardholderConfirms,
   cardOnFile,
   guestWithCard,
   hiyani,
@@ -68,16 +70,14 @@ async function departed(org: ScenarioOrg, k: K, token = 'pm_card_visa', inHouseC
   const desk = org.staff('front_desk', 'Hassan', [k.id]);
   const { reservations, finance } = s.c.services;
   const { profileId, card } = await guestWithCard(s, org, k, undefined, token);
-  const b = applied<Booking>(
-    await org.run(desk, (tx) =>
-      reservations.createBooking(
-        tx,
-        bookingInput(
-          k,
-          { arrival: '2027-03-10', departure: '2027-03-12', unit: '214', guestProfileId: profileId },
-          { guarantee: { kind: 'card', paymentMethodId: card.id } },
-        ),
-      ),
+  const b = await bookWithCard(
+    s,
+    org,
+    desk,
+    bookingInput(
+      k,
+      { arrival: '2027-03-10', departure: '2027-03-12', unit: '214', guestProfileId: profileId },
+      { guarantee: { kind: 'card', paymentMethodId: card.id } },
     ),
   );
   const stay = b.stays[0];
@@ -193,16 +193,21 @@ describe('R3-P1-1 (ii) — a deferral is never "resolved" and resumes when the i
     const org = await organization(s);
     const k = await kandu(s, org, '2027-03-10');
     const { finance, payments } = s.c.services;
-    const { folioOf, late, desk, profileId } = await departed(org, k);
+    const { b, folioOf, late, desk, profileId } = await departed(org, k);
     const posted = await late(20_000, 'Minibar (wrong room)');
     await s.drain();
     const folio = await folioOf();
     const owedBefore = folio?.balance.amountMinor as number;
-    // The guest's own card (their folio), whose provider answer never arrives (pending verification).
-    const slow = await cardOnFile(s, org, k.id, k.legalEntityId, 'sim_timeout_then_failed', {
-      type: 'guest_profile',
-      id: profileId,
-    });
+    // The guest's own card (their folio, their booking named in the agreement), whose provider answer never arrives.
+    const slow = await cardOnFile(
+      s,
+      org,
+      k.id,
+      k.legalEntityId,
+      'sim_timeout_then_failed',
+      { type: 'guest_profile', id: profileId },
+      { mandateFor: [b.id] },
+    );
     await settle(
       payments.chargeNow(desk, {
         propertyId: k.id,
@@ -275,7 +280,7 @@ describe('R3-P1-1 (iii) — a replaced request stops taking money before its rep
     expect((await folioOf())?.balance.amountMinor).toBe(0);
   });
 
-  it('one step beyond: the guest pays the old link while the provider has not confirmed — an URGENT refund item', async () => {
+  it('one step beyond: the guest pays the old link while the provider has not confirmed — the debt is collected once (R4-P2-1: no refund of money owed)', async () => {
     const org = await organization(s);
     const k = await kandu(s, org, '2027-03-10');
     const { payments } = s.c.services;
@@ -293,10 +298,18 @@ describe('R3-P1-1 (iii) — a replaced request stops taking money before its rep
       expect.objectContaining({ status: 'open', link_status: 'pending' }),
     ]);
     await org.run(org.setup, (tx) => payments.tx.setSimulatorControls(tx, account, { outage: null }));
+    const owedBefore = (await folioOf())?.balance.amountMinor as number;
     await payments.simulateRequestPayment(manager, first?.id as string);
     await payments.deliverSimulatorWebhooks(manager, account);
     await s.drain();
-    expect(await urgentRefunds(org)).toEqual([{ severity: 'urgent' }]);
+    // Re-review #4 R4-P2-1: the old link took money the guest owes — nothing over-collected, so no refund item; the
+    // replacement asks only for what is still owed.
+    expect(await urgentRefunds(org)).toEqual([]);
+    const owed = (await folioOf())?.balance.amountMinor as number;
+    expect(owed).toBe(owedBefore - (first?.amount_minor as number));
+    expect(owed).toBeGreaterThan(0);
+    const open = (await requestsOn(folio?.id as string)).filter((r) => r.status === 'open');
+    expect(open.map((r) => r.amount_minor)).toEqual([owed]);
   });
 });
 
@@ -374,6 +387,8 @@ describe('R3-P2-1 — the guard treats a booking and its folios as one family; l
         ),
       ),
     );
+    // R4-P1-1: the guest confirms their saved card for this booking (the agreement names it).
+    await cardholderConfirms(s, org, card.id, b.id);
     const { folioId } = await org.run(org.setup, (tx) =>
       financeForReservations(finance).openFolio(tx, {
         propertyId: k.id,
@@ -432,7 +447,24 @@ describe('R3-P2-1 — the guard treats a booking and its folios as one family; l
     expect(dep.ok ? 'charged' : dep.e.code).toBe('collection_owned_by_payment_request');
     const inc = await charge(desk, k, card.id, folio, 'incidentals');
     expect(inc.ok ? 'charged' : inc.e.code).toBe('collection_owned_by_payment_request');
-    // The normal flow stays free: the balance on the folio after the deposit was paid (deposits are applied to it).
+    // R4-P3-3: before the deposit is applied, a "balance" charge would collect the deposit again — the reason is asked.
+    const early = await charge(desk, k, card.id, folio, 'balance');
+    expect(early.ok ? 'charged' : early.e.code).toBe('collection_owned_by_payment_request');
+    // The normal flow stays free: the folio's charges, the deposit applied to it, then the balance still owed.
+    const { finance } = s.c.services;
+    await org.run(desk, (tx) =>
+      finance.postCharge(tx, {
+        propertyId: k.id,
+        target: { type: 'stay', id: b.stays[0]?.id as string },
+        chargeCode: 'MISC',
+        amount: { amountMinor: 60_000, currency: 'USD' },
+        description: 'Dinner and excursions',
+        serviceDate: '2027-03-10',
+        sourceRef: { type: 'pos_check', id: newId() },
+        idempotencyKey: `pos:${newId()}`,
+      }),
+    );
+    await org.run(org.setup, (tx) => finance.applyDeposits(tx, { bookingId: b.id, toFolioId: folioId }));
     expect((await charge(desk, k, card.id, folio, 'balance')).ok).toBe(true);
   });
 });

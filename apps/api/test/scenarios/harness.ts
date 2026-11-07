@@ -28,7 +28,7 @@ import {
 import { seedPaymentsDemo } from '@portico/payments';
 import { platform } from '@portico/platform';
 import { seedResortRates } from '@portico/rates';
-import type { NewBookingInput } from '@portico/reservations';
+import type { Booking, NewBookingInput } from '@portico/reservations';
 import { createTestDatabase, type TestDatabase } from '@portico/testing';
 import { expect } from 'vitest';
 import { buildApp, type Composition, compose, MANIFESTS, provisionOrganization } from '../../src';
@@ -480,7 +480,11 @@ export async function cardOnFile(
     type: 'guest_profile',
     id: newId(),
   },
-  opts: { mandate?: boolean; mandateFor?: string[] } = {},
+  opts: {
+    mandate?: boolean;
+    mandateFor?: string[];
+    purposes?: Array<'guarantee' | 'deposit' | 'balance' | 'incidentals' | 'no_show'>;
+  } = {},
 ) {
   const p = s.c.services.payments;
   return org.run(org.setup, async (tx) => {
@@ -504,7 +508,8 @@ export async function cardOnFile(
               channel: 'front_desk',
               scope: {
                 legalEntityId,
-                purposes: ['guarantee', 'deposit', 'balance', 'incidentals', 'no_show'] as const,
+                purposes:
+                  opts.purposes ?? (['guarantee', 'deposit', 'balance', 'incidentals', 'no_show'] as const),
                 ...(opts.mandateFor ? { bookingIds: opts.mandateFor } : {}),
               },
             },
@@ -534,6 +539,68 @@ export async function guestWithCard(
     id: profileId,
   });
   return { profileId, card };
+}
+
+/**
+ * The cardholder confirms, in guest self-service, that their saved card covers this booking (ADR-0015 Amendment 3,
+ * re-review #4 R4-P1-1): the card's agreement then NAMES the booking, with evidence and the booking's stays as they are
+ * now. Only the cardholder can do this — no staff context can.
+ */
+export async function cardholderConfirms(
+  s: Scenario,
+  org: ScenarioOrg,
+  methodId: string,
+  bookingId: string,
+): Promise<void> {
+  const m = (
+    await sql<{ owner_type: string; owner_id: string }>`
+      select owner_type, owner_id from payments.payment_methods where id = ${methodId}`.execute(
+      s.t.admin.kysely,
+    )
+  ).rows[0];
+  if (!m) throw new Error(`no saved card ${methodId}`);
+  const cardholder: RequestContext = {
+    tenantId: org.tenantId,
+    environment: org.environment,
+    actor:
+      m.owner_type === 'booking'
+        ? { kind: 'guest', bookingId: m.owner_id }
+        : { kind: 'guest', guestProfileId: m.owner_id },
+    authz: staticAuthorizer([]),
+    correlationId: newId(),
+  };
+  await org.run(cardholder, (tx) =>
+    s.c.services.payments.tx.confirmCardForBooking(tx, { methodId, bookingId }),
+  );
+}
+
+/**
+ * A booking secured by its guest's saved card, made the way it happens for real (R4-P1-1): the booking is created, its
+ * cardholder confirms the card for it (self-service), then `ctx` records the card as the booking's guarantee. A card a
+ * standing agreement merely belongs to the guest of never secures a booking by itself.
+ */
+export async function bookWithCard(
+  s: Scenario,
+  org: ScenarioOrg,
+  ctx: RequestContext,
+  input: NewBookingInput,
+): Promise<Booking> {
+  const { reservations } = s.c.services;
+  const guarantee = input.guarantee;
+  const created = applied<Booking>(
+    await org.run(ctx, (tx) => reservations.createBooking(tx, { ...input, guarantee: { kind: 'none' } })),
+  );
+  if (!guarantee?.paymentMethodId) return created;
+  await cardholderConfirms(s, org, guarantee.paymentMethodId, created.id);
+  return applied<Booking>(
+    await org.run(ctx, (tx) =>
+      reservations.patchBooking(tx, {
+        bookingId: created.id,
+        expectedVersion: created.version,
+        patch: { guarantee },
+      }),
+    ),
+  );
 }
 
 /** Housekeeping cleans a unit and the supervisor inspects it (operations), so check-in readiness passes. */

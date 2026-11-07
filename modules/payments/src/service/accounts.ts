@@ -30,6 +30,7 @@ import { consentProblem } from './consent';
 import { loadBreaker } from './operations';
 import {
   assertPaymentsWritable,
+  bookingConsentEvidence,
   db,
   loadAccount,
   loadProperty,
@@ -453,6 +454,57 @@ export async function createMethod(
   const storedToken = simulated
     ? `${input.providerToken}#${input.propertyId}:${input.owner.type}:${input.owner.id}`
     : input.providerToken;
+  // ADR-0015 Amendment 3: the evidence of each booking the agreement names (when, through which channel, and the
+  // booking's stays then) and of a card its cardholder entered for their booking is built here, never by the client.
+  const storedMandate: Record<string, unknown> = input.mandate ? { ...input.mandate } : {};
+  if (input.mandate && scope?.bookingIds?.length) {
+    const bookingEvidence: Record<string, { at: string; channel: string; stayIds?: string[] }> = {};
+    for (const bookingId of new Set(scope.bookingIds)) {
+      const booking = await d.references.describeReference(tx, { type: 'booking', id: bookingId });
+      const at = booking ? await loadProperty(d, tx, booking.propertyId) : null;
+      if (
+        !booking ||
+        !at ||
+        at.legalEntityId !== scope.legalEntityId ||
+        (scope.propertyIds !== undefined && !scope.propertyIds.includes(at.id))
+      ) {
+        throw new ValidationError(
+          'mandate_booking_unknown',
+          'A booking the agreement names is not a booking of this hotel company (or of the properties it covers). Name the cardholder’s bookings here, or leave the bookings out and let the guest confirm the card for their booking.',
+        );
+      }
+      bookingEvidence[bookingId] = await bookingConsentEvidence(
+        d,
+        tx,
+        bookingId,
+        input.mandate.acceptedAt,
+        input.mandate.channel,
+      );
+    }
+    storedMandate.scope = { ...scope, bookingIds: Object.keys(bookingEvidence), bookingEvidence };
+  }
+  for (const folioId of scope?.folioIds ?? []) {
+    const f = await d.ledger.describeTarget(tx, { type: 'folio', id: folioId });
+    if (
+      !f ||
+      f.legalEntityId !== scope?.legalEntityId ||
+      (scope.propertyIds !== undefined && !scope.propertyIds.includes(f.propertyId))
+    ) {
+      throw new ValidationError(
+        'mandate_folio_unknown',
+        'A folio the agreement names is not a folio of this hotel company (or of the properties it covers). Name the cardholder’s own folio here.',
+      );
+    }
+  }
+  if (tx.actor.kind === 'guest' && input.owner.type === 'booking') {
+    storedMandate.supplied = await bookingConsentEvidence(
+      d,
+      tx,
+      input.owner.id,
+      tx.now.toISOString(),
+      'hosted_entry',
+    ).then((e) => ({ bookingId: input.owner.id, ...e }));
+  }
   const id = newId(tx.now.getTime());
   // P2-2: saving the same token again for the same owner returns the existing method (no aborted transaction).
   const row = await db(tx)
@@ -473,7 +525,7 @@ export async function createMethod(
       owner_type: input.owner.type,
       owner_id: input.owner.id,
       mit_agreement: input.mitAgreement ?? false,
-      mandate: JSON.stringify(input.mandate ?? {}),
+      mandate: JSON.stringify(storedMandate),
       entry_channel: entryChannel,
       declared_entry_channel: input.entryChannel ?? null,
       token_portability:
@@ -698,7 +750,6 @@ export async function assessGuaranteeCard(
       card,
       owner,
       ...consent,
-      ...consent,
       reason: 'The cardholder entered this card for this booking.',
     };
   }
@@ -715,7 +766,6 @@ export async function assessGuaranteeCard(
         basis: 'channel_card',
         card,
         owner,
-        ...consent,
         ...consent,
         reason: "The booking's channel issued this virtual card for it.",
       };
@@ -738,7 +788,6 @@ export async function assessGuaranteeCard(
       basis: 'mandate',
       card,
       owner,
-      ...consent,
       ...consent,
       reason: "The cardholder's recorded agreement names this booking.",
     };
@@ -847,7 +896,10 @@ export async function confirmCardForBooking(
   const mandate = (m.mandate ?? {}) as {
     termsVersion?: string;
     acceptedAt?: string;
-    scope?: { bookingIds?: string[]; bookingEvidence?: Record<string, { at: string; channel: string }> };
+    scope?: {
+      bookingIds?: string[];
+      bookingEvidence?: Record<string, { at: string; channel: string; stayIds?: string[] }>;
+    };
   };
   if (!m.mit_agreement || !mandate.scope) {
     throw new ValidationError(
@@ -863,14 +915,24 @@ export async function confirmCardForBooking(
   if (bookingIds.length > 20) {
     throw new ValidationError('mandate_too_many_bookings', 'An agreement names at most 20 bookings.');
   }
+  // The booking's stays as they are now: a stay added after this consent is not covered by it.
   const evidence = {
     ...(mandate.scope.bookingEvidence ?? {}),
-    [input.bookingId]: { at: tx.now.toISOString(), channel: 'guest_self_service' },
+    [input.bookingId]: await bookingConsentEvidence(
+      d,
+      tx,
+      input.bookingId,
+      tx.now.toISOString(),
+      'guest_self_service',
+    ),
   };
   const row = await db(tx)
     .updateTable('payments.payment_methods')
     .set({
-      mandate: JSON.stringify({ ...mandate, scope: { ...mandate.scope, bookingIds, bookingEvidence: evidence } }),
+      mandate: JSON.stringify({
+        ...mandate,
+        scope: { ...mandate.scope, bookingIds, bookingEvidence: evidence },
+      }),
       version: m.version + 1,
     })
     .where('id', '=', m.id)

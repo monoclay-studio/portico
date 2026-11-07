@@ -281,7 +281,11 @@ describe('SW-PAY-3 — a card is a parameter only at the property it was saved a
         owner: { type: 'guest_profile', id: org.payerId },
         mitAgreement: true,
         mandate: mandate({
-          scope: { legalEntityId: org.legalEntityId, purposes: [...ALL_PURPOSES], bookingIds: [org.bookingId] },
+          scope: {
+            legalEntityId: org.legalEntityId,
+            purposes: [...ALL_PURPOSES],
+            bookingIds: [org.bookingId],
+          },
         }),
       }),
     );

@@ -12,6 +12,7 @@ import {
   applied,
   assertGlobalConsistency,
   bookingInput,
+  bookWithCard,
   cardOnFile,
   guestWithCard,
   hiyani,
@@ -161,16 +162,14 @@ describe('reservations → guests, payments, finance, operations (check-in and c
     const desk = org.staff('front_desk', 'Hassan', [k.id]);
     const { reservations, payments, finance, guests, operations } = s.c.services;
     const { profileId: guestId, card } = await guestWithCard(s, org, k);
-    const b = applied<Booking>(
-      await org.run(desk, (tx) =>
-        reservations.createBooking(
-          tx,
-          bookingInput(
-            k,
-            { arrival: '2027-03-10', departure: '2027-03-12', unit: '214', guestProfileId: guestId },
-            { guarantee: { kind: 'card', paymentMethodId: card.id } },
-          ),
-        ),
+    const b = await bookWithCard(
+      s,
+      org,
+      desk,
+      bookingInput(
+        k,
+        { arrival: '2027-03-10', departure: '2027-03-12', unit: '214', guestProfileId: guestId },
+        { guarantee: { kind: 'card', paymentMethodId: card.id } },
       ),
     );
     const stay = b.stays[0];
@@ -208,22 +207,20 @@ describe('reservations → guests, payments, finance, operations (check-in and c
     const chen = await guestWithCard(s, org, k, { firstName: 'Wei', lastName: 'Chen' }, 'pm_card_mastercard');
     // A second arrival without a deposit: the guarantee step authorizes the card (two-phase: `processing` inside
     // the step, settled by payments after commit, read back) — exactly once.
-    const b2 = applied<Booking>(
-      await org.run(desk, (tx) =>
-        reservations.createBooking(
-          tx,
-          bookingInput(
-            k,
-            {
-              arrival: '2027-03-10',
-              departure: '2027-03-11',
-              unit: '216',
-              guest: { firstName: 'Wei', lastName: 'Chen' },
-              guestProfileId: chen.profileId,
-            },
-            { guarantee: { kind: 'card', paymentMethodId: chen.card.id } },
-          ),
-        ),
+    const b2 = await bookWithCard(
+      s,
+      org,
+      desk,
+      bookingInput(
+        k,
+        {
+          arrival: '2027-03-10',
+          departure: '2027-03-11',
+          unit: '216',
+          guest: { firstName: 'Wei', lastName: 'Chen' },
+          guestProfileId: chen.profileId,
+        },
+        { guarantee: { kind: 'card', paymentMethodId: chen.card.id } },
       ),
     );
     const stay2 = b2.stays[0]?.id as string;

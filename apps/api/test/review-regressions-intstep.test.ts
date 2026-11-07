@@ -12,6 +12,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   applied,
   bookingInput,
+  bookWithCard,
   cardOnFile,
   guestWithCard,
   hiyani,
@@ -240,10 +241,16 @@ describe("P1-2 — check-in holds only the guest's card, for the agreed amount, 
       message: expect.stringMatching(/not a guest, booker or payer/),
     });
     // ...and an amount above the agreed stay total × the policy cap (150 %) is refused.
-    const guestCard = await cardOnFile(s, org, k.id, k.legalEntityId, 'pm_card_mastercard', {
-      type: 'guest_profile',
-      id: b.stays[0]?.occupants[0]?.profileId as string,
-    });
+    // The guest's own card, its agreement naming this booking (re-review #4 R4-P1-1).
+    const guestCard = await cardOnFile(
+      s,
+      org,
+      k.id,
+      k.legalEntityId,
+      'pm_card_mastercard',
+      { type: 'guest_profile', id: b.stays[0]?.occupants[0]?.profileId as string },
+      { mandateFor: [b.id] },
+    );
     const huge = await reservations.performWorkflow(s.t.db, desk, {
       stayId,
       kind: 'check_in',
@@ -320,16 +327,14 @@ describe('P1-3 — a late charge asks the guest for what the folio owes, never m
     const desk = org.staff('front_desk', 'Hassan', [k.id]);
     const { reservations, payments, finance } = s.c.services;
     const { profileId, card } = await guestWithCard(s, org, k);
-    const b = applied<Booking>(
-      await org.run(desk, (tx) =>
-        reservations.createBooking(
-          tx,
-          bookingInput(
-            k,
-            { arrival: '2027-03-10', departure: '2027-03-12', unit: '214', guestProfileId: profileId },
-            { guarantee: { kind: 'card', paymentMethodId: card.id } },
-          ),
-        ),
+    const b = await bookWithCard(
+      s,
+      org,
+      desk,
+      bookingInput(
+        k,
+        { arrival: '2027-03-10', departure: '2027-03-12', unit: '214', guestProfileId: profileId },
+        { guarantee: { kind: 'card', paymentMethodId: card.id } },
       ),
     );
     const stay = b.stays[0];
@@ -613,16 +618,14 @@ describe('P3-9 / R2-P2-4 — connected mode: the external system confirms, a per
       const { profileId, card } = await guestWithCard(s, org, k);
       const desk = org.staff('front_desk', 'Hassan', [k.id]);
       const { reservations } = s.c.services;
-      const b = applied<Booking>(
-        await org.run(desk, (tx) =>
-          reservations.createBooking(
-            tx,
-            bookingInput(
-              k,
-              { arrival: '2027-03-10', departure: '2027-03-12', unit: '214', guestProfileId: profileId },
-              { guarantee: { kind: 'card', paymentMethodId: card.id } },
-            ),
-          ),
+      const b = await bookWithCard(
+        s,
+        org,
+        desk,
+        bookingInput(
+          k,
+          { arrival: '2027-03-10', departure: '2027-03-12', unit: '214', guestProfileId: profileId },
+          { guarantee: { kind: 'card', paymentMethodId: card.id } },
         ),
       );
       await s.drain();

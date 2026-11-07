@@ -10,6 +10,7 @@ import {
   applied,
   assertGlobalConsistency,
   bookingInput,
+  bookWithCard,
   cardOnFile,
   kandu,
   organization,
@@ -60,22 +61,19 @@ describe('S15 — wrong merge corrected by an unmerge', () => {
       type: 'guest_profile',
       id: a,
     });
-    const third = await org.run(desk, async (tx) => {
-      const input = bookingInput(k, {
-        arrival: '2027-03-08',
-        departure: '2027-03-10',
-        guest: ahmed,
-        unit: '216',
-      });
-      const stay = input.stays[0];
-      if (!stay) throw new Error('no stay');
-      return applied<Booking>(
-        await reservations.createBooking(tx, {
-          ...input,
-          guarantee: { kind: 'card', paymentMethodId: card.id },
-          stays: [{ ...stay, occupants: [{ profileId: a, profile: ahmed, kind: 'adult', primary: true }] }],
-        }),
-      );
+    const input = bookingInput(k, {
+      arrival: '2027-03-08',
+      departure: '2027-03-10',
+      guest: ahmed,
+      unit: '216',
+    });
+    const stay = input.stays[0];
+    if (!stay) throw new Error('no stay');
+    // The booking is made, Ahmed confirms his card for it (R4-P1-1), and the desk records it as the guarantee.
+    const third = await bookWithCard(s, org, desk, {
+      ...input,
+      guarantee: { kind: 'card', paymentMethodId: card.id },
+      stays: [{ ...stay, occupants: [{ profileId: a, profile: ahmed, kind: 'adult', primary: true }] }],
     });
     const thirdStay = third.stays[0]?.id as string;
     await s.drain();

@@ -242,27 +242,52 @@ export async function referenceContext(
   d: PaymentsDeps,
   tx: TxContext,
   ref: { type: string; id: string },
-): Promise<{ bookingId: string | null; people: Set<string>; stayCreatedAt: Date | null }> {
+): Promise<{
+  bookingId: string | null;
+  people: Set<string>;
+  /** The stay the reference is (or whose folio it is); null for a booking or a booking-level folio. */
+  stayId: string | null;
+  stayCreatedAt: Date | null;
+}> {
   const people = new Set<string>();
+  let stayId: string | null = null;
   let stayCreatedAt: Date | null = null;
   const fromDirectory = async (r: { type: string; id: string }) => {
     const o = await d.references.describeReference(tx, r);
     for (const p of o?.people ?? []) people.add(p);
-    if (r.type === 'stay' && o?.stayCreatedAt) stayCreatedAt = new Date(o.stayCreatedAt);
+    if (r.type === 'stay' && o) {
+      stayId = r.id;
+      if (o.stayCreatedAt) stayCreatedAt = new Date(o.stayCreatedAt);
+    }
     return o?.bookingId ?? (r.type === 'booking' && o ? r.id : null);
   };
   if (ref.type === 'booking' || ref.type === 'stay') {
     const bookingId = await fromDirectory(ref);
-    return { bookingId, people, stayCreatedAt };
+    return { bookingId, people, stayId, stayCreatedAt };
   }
-  if (ref.type !== 'folio') return { bookingId: null, people, stayCreatedAt };
+  if (ref.type !== 'folio') return { bookingId: null, people, stayId, stayCreatedAt };
   const f = await d.ledger.describeTarget(tx, { type: 'folio', id: ref.id });
   const payer = ownerKeyOfPayer(f?.payer);
   if (payer) people.add(payer);
   const owner = f?.owner;
   const bookingId =
     owner && (owner.type === 'stay' || owner.type === 'booking') ? await fromDirectory(owner) : null;
-  return { bookingId, people, stayCreatedAt };
+  return { bookingId, people, stayId, stayCreatedAt };
+}
+
+/**
+ * The evidence of a cardholder's consent to one booking (ADR-0015 Amendment 3): when, through which channel, and the
+ * booking's stays at that moment — the consent covers those stays, never one added later. Server-built only.
+ */
+export async function bookingConsentEvidence(
+  d: PaymentsDeps,
+  tx: TxContext,
+  bookingId: string,
+  at: string,
+  channel: string,
+): Promise<{ at: string; channel: string; stayIds?: string[] }> {
+  const b = await d.references.describeReference(tx, { type: 'booking', id: bookingId });
+  return { at, channel, ...(b?.stayIds ? { stayIds: b.stayIds } : {}) };
 }
 
 /**

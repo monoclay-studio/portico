@@ -58,6 +58,13 @@ export interface LedgerControls {
   defaultBooking: Map<string, string>;
   /** Stays/folios registered under a specific booking. */
   bookingOf: Map<string, string>;
+  /**
+   * When a stay was created (Amendment 3). The fake cannot list a booking's stays, so consent evidence carries no stay
+   * list here and coverage falls back to the stay's creation time: unregistered stays are old (created in 2000).
+   */
+  stayCreatedAt: Map<string, string>;
+  /** Booking → deposits finance holds for it, not yet applied (R4-P3-3). */
+  depositsHeld: Map<string, number>;
 }
 
 /**
@@ -88,7 +95,12 @@ export function fakeReferences(controls: LedgerControls): ReferenceDirectoryPort
             bookingId: family,
             people: [...people, `booking:${ref.id}`],
           }
-        : { propertyId: owner.propertyId, people, bookingId: family };
+        : {
+            propertyId: owner.propertyId,
+            people,
+            bookingId: family,
+            stayCreatedAt: controls.stayCreatedAt.get(ref.id) ?? '2000-01-01T00:00:00.000Z',
+          };
     },
   };
 }
@@ -149,6 +161,9 @@ export function fakeLedger(controls: LedgerControls): LedgerPort {
     },
     async balanceOf(_tx, ref) {
       return controls.balances.get(ref.id) ?? null;
+    },
+    async depositsHeldFor(_tx, bookingId) {
+      return controls.depositsHeld.get(bookingId) ?? 0;
     },
     // The same predicate the fake uses when posting (review R2-P1-3): unknown → refused; other scope → refused.
     async assertTargetUsable(tx, ref, scope) {
@@ -328,6 +343,8 @@ export async function startHarness(): Promise<Harness> {
     balances: new Map(),
     defaultBooking: new Map(),
     bookingOf: new Map(),
+    stayCreatedAt: new Map(),
+    depositsHeld: new Map(),
   };
   const http = {
     calls: 0,
@@ -479,7 +496,12 @@ export function standingMandate(org: Org, at: string, extra: Record<string, unkn
     termsVersion: 'T-2026-1',
     acceptedAt: at,
     channel: 'front_desk',
-    scope: { legalEntityId: org.legalEntityId, purposes: [...ALL_PURPOSES], bookingIds: [org.bookingId], ...extra },
+    scope: {
+      legalEntityId: org.legalEntityId,
+      purposes: [...ALL_PURPOSES],
+      bookingIds: [org.bookingId],
+      ...extra,
+    },
   };
 }
 
@@ -510,7 +532,11 @@ export async function addMethod(
               termsVersion: 'T-2026-1',
               acceptedAt: h.clock.now().toISOString(),
               channel: 'booking_engine',
-              scope: { legalEntityId: org.legalEntityId, purposes: [...ALL_PURPOSES], bookingIds: [org.bookingId] },
+              scope: {
+                legalEntityId: org.legalEntityId,
+                purposes: [...ALL_PURPOSES],
+                bookingIds: [org.bookingId],
+              },
             },
           }
         : {}),

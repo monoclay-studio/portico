@@ -62,10 +62,10 @@ async function demoOrg(name = 'Demo Resort') {
     currencies: ['USD'],
   });
   expect(account.statusCode).toBe(201);
-  // The guest whose folios these tests charge, and whose card is on file (ADR-0015 Amendment 2: a standing card-on-file
-  // agreement covers its cardholder's own bills).
+  // The guest whose folios these tests charge, and whose card is on file. ADR-0015 Amendment 3 (re-review #4 R4-P1-1):
+  // the cardholder's agreement covers only the bookings and folios it names — here, the folios each test charges.
   const guestId = newId();
-  const method = (token: string) =>
+  const method = (token: string, folioIds: string[]) =>
     post('/v1/payments/methods', {
       accountId: account.json().id,
       propertyId: prop.json().id,
@@ -83,6 +83,7 @@ async function demoOrg(name = 'Demo Resort') {
         scope: {
           legalEntityId: le.json().id,
           purposes: ['guarantee', 'deposit', 'balance', 'incidentals', 'no_show'],
+          folioIds,
         },
       },
     });
@@ -111,9 +112,9 @@ async function demoOrg(name = 'Demo Resort') {
 describe('payments API', () => {
   it('s05 over HTTP: 202 pending verification, retry-safe, second charge blocked, "check now" resolves', async () => {
     const org = await demoOrg();
-    const m = await org.method('sim_timeout_then_succeeded');
-    expect(m.statusCode).toBe(201);
     const bookingId = await org.folio();
+    const m = await org.method('sim_timeout_then_succeeded', [bookingId]);
+    expect(m.statusCode).toBe(201);
     const body = {
       propertyId: org.propertyId,
       methodId: m.json().id,
@@ -176,12 +177,13 @@ describe('payments API', () => {
 
   it('declines are 402 problems that explain the recovery; nothing looks successful', async () => {
     const org = await demoOrg();
-    const m = await org.method('pm_card_visa_chargeDeclinedInsufficientFunds');
+    const declinedFolio = await org.folio();
+    const m = await org.method('pm_card_visa_chargeDeclinedInsufficientFunds', [declinedFolio]);
     const res = await org.post('/v1/payments/charges', {
       propertyId: org.propertyId,
       methodId: m.json().id,
       amount: { amountMinor: 1_000, currency: 'USD' },
-      ref: { type: 'folio', id: await org.folio() },
+      ref: { type: 'folio', id: declinedFolio },
     });
     expect(res.statusCode).toBe(402);
     expect(res.json()).toMatchObject({
@@ -193,13 +195,13 @@ describe('payments API', () => {
 
   it('folio collections post to finance; unknown and other-property folios are refused before money moves', async () => {
     const org = await demoOrg();
-    const m = await org.method('pm_card_visa');
     const folio = await org.post('/v1/finance/folios', {
       propertyId: org.propertyId,
       owner: { type: 'stay', id: newId() },
       payer: { type: 'guest', id: org.guestId, name: 'Nadia Rasheed' },
     });
     expect(folio.statusCode).toBe(201);
+    const m = await org.method('pm_card_visa', [folio.json().id]);
     const charge = (propertyId: string, folioId: string) =>
       org.post('/v1/payments/charges', {
         propertyId,
@@ -288,7 +290,8 @@ describe('payments API', () => {
 
   it('s20 over HTTP: provider outage → 503 with safe alternatives; status endpoint shows the banner', async () => {
     const org = await demoOrg();
-    const m = await org.method('pm_card_visa');
+    const outageFolio = await org.folio();
+    const m = await org.method('pm_card_visa', [outageFolio]);
     const ctl = await h.app.inject({
       method: 'PUT',
       url: `/v1/payments/accounts/${org.accountId}/simulator-controls`,
@@ -304,7 +307,6 @@ describe('payments API', () => {
       payload: { outage: 'refuse' },
     });
     expect(ok.statusCode).toBe(200);
-    const outageFolio = await org.folio();
     const charge = () =>
       org.post('/v1/payments/charges', {
         propertyId: org.propertyId,
@@ -338,12 +340,13 @@ describe('payments API', () => {
 
   it('another organization cannot see or refund a payment, even with its id', async () => {
     const victim = await demoOrg('Victim');
-    const m = await victim.method('pm_card_visa');
+    const victimFolio = await victim.folio();
+    const m = await victim.method('pm_card_visa', [victimFolio]);
     const paid = await victim.post('/v1/payments/charges', {
       propertyId: victim.propertyId,
       methodId: m.json().id,
       amount: { amountMinor: 1_000, currency: 'USD' },
-      ref: { type: 'folio', id: await victim.folio() },
+      ref: { type: 'folio', id: victimFolio },
     });
     expect(paid.statusCode).toBe(201);
     const attacker = await demoOrg('Attacker');

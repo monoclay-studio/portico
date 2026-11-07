@@ -187,13 +187,15 @@ async function assertCollectionOwnership(
     .orderBy('created_at')
     .execute();
   // R4-P3-3: a balance collected on a folio after a paid deposit link on its booking is the normal flow only up to what
-  // the folio owes now (applied deposits are netted in its balance); beyond it — e.g. before the deposit is applied —
-  // the same money could be collected twice, so the reason is required.
+  // the folio owes now, less the deposits still held for the booking (a folio's balance nets a deposit only once it is
+  // applied); beyond it — e.g. before the deposit is applied — the same money could be collected twice, so the reason
+  // is required.
   const balanceFree =
     purpose === 'balance' && ref.type === 'folio' && opts.amountMinor !== undefined
       ? await (async () => {
           const owed = await d.ledger.balanceOf(tx, ref);
-          return owed !== null && (opts.amountMinor as number) <= owed;
+          const held = bookingId ? await d.ledger.depositsHeldFor(tx, bookingId) : 0;
+          return owed !== null && (opts.amountMinor as number) <= owed - held;
         })()
       : false;
   const owner = owners.find(

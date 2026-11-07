@@ -5,12 +5,11 @@
  * arrival is ready again.
  */
 import { sql } from '@portico/db';
-import type { Booking } from '@portico/reservations';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
-  applied,
   assertGlobalConsistency,
   bookingInput,
+  bookWithCard,
   guestWithCard,
   kandu,
   organization,
@@ -32,22 +31,20 @@ describe('S07 — failed inspection at arrival', () => {
     const { reservations, operations } = s.c.services;
     const desk = org.staff('front_desk', 'Hassan', [k.id]);
     const { profileId: guestId, card } = await guestWithCard(s, org, k);
-    const b = applied<Booking>(
-      await org.run(desk, (tx) =>
-        reservations.createBooking(
-          tx,
-          bookingInput(
-            k,
-            {
-              arrival: '2027-03-10',
-              departure: '2027-03-14',
-              type: 'WV',
-              unit: '305',
-              guestProfileId: guestId,
-            },
-            { tags: ['vip'], guarantee: { kind: 'card', paymentMethodId: card.id } },
-          ),
-        ),
+    const b = await bookWithCard(
+      s,
+      org,
+      desk,
+      bookingInput(
+        k,
+        {
+          arrival: '2027-03-10',
+          departure: '2027-03-14',
+          type: 'WV',
+          unit: '305',
+          guestProfileId: guestId,
+        },
+        { tags: ['vip'], guarantee: { kind: 'card', paymentMethodId: card.id } },
       ),
     );
     const stayId = b.stays[0]?.id as string;

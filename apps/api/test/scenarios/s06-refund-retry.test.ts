@@ -5,9 +5,12 @@
  */
 import { sql } from '@portico/db';
 import { newId } from '@portico/kernel';
+import type { Booking } from '@portico/reservations';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
+  applied,
   assertGlobalConsistency,
+  bookingInput,
   cardOnFile,
   kandu,
   organization,
@@ -26,20 +29,38 @@ describe('S06 — refund retried after an interruption', () => {
   it('one refund, one refund posting, original payment unchanged; duplicate webhooks harmless', async () => {
     const org = await organization(s);
     const k = await kandu(s, org);
-    const { payments, finance } = s.c.services;
+    const { payments, finance, reservations } = s.c.services;
     const auth = await signIn(s, org);
     const post = (url: string, payload: object, key: string = newId()) =>
       s.app.inject({ method: 'POST', url, headers: { ...auth, 'idempotency-key': key }, payload });
-    // The guest's own card pays the guest's own folio (ADR-0015 Amendment 2: a standing card-on-file agreement covers
-    // its cardholder's bills).
-    const guest = newId();
-    const card = await cardOnFile(s, org, k.id, k.legalEntityId, 'pm_card_visa', {
-      type: 'guest_profile',
-      id: guest,
-    });
+    // The guest's own card pays the folio of the guest's own booking: the card's agreement names that booking
+    // (ADR-0015 Amendments 2 and 3).
+    const b = applied<Booking>(
+      await org.run(org.setup, (tx) =>
+        reservations.createBooking(
+          tx,
+          bookingInput(k, {
+            arrival: '2027-03-08',
+            departure: '2027-03-10',
+            guest: { firstName: 'Nadia', lastName: 'Rasheed' },
+          }),
+        ),
+      ),
+    );
+    await s.drain();
+    const guest = b.stays[0]?.occupants[0]?.profileId as string;
+    const card = await cardOnFile(
+      s,
+      org,
+      k.id,
+      k.legalEntityId,
+      'pm_card_visa',
+      { type: 'guest_profile', id: guest },
+      { mandateFor: [b.id] },
+    );
     const folio = await post('/v1/finance/folios', {
       propertyId: k.id,
-      owner: { type: 'stay', id: newId() },
+      owner: { type: 'stay', id: b.stays[0]?.id as string },
       payer: { type: 'guest', id: guest, name: 'Nadia Rasheed' },
     });
     const paid = await post('/v1/payments/charges', {

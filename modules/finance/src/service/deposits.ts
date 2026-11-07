@@ -949,6 +949,19 @@ async function depositOutflow(
   return done(claim.entryId, false);
 }
 
+/**
+ * Deposits held for a booking and not yet applied to a folio (minor units; 0 when none). Internal to providers (the
+ * payments ledger port, R4-P3-3): no permission check — callers have already checked theirs.
+ */
+export async function depositHeldMinor(tx: TxContext, bookingId: string): Promise<number> {
+  const acct = await db(tx)
+    .selectFrom('finance.deposit_accounts')
+    .select('balance_minor')
+    .where('booking_id', '=', bookingId)
+    .executeTakeFirst();
+  return Math.max(0, Number(acct?.balance_minor ?? 0));
+}
+
 export async function getDeposits(tx: TxContext, bookingId: string): Promise<DepositSummary | null> {
   const acct = await db(tx)
     .selectFrom('finance.deposit_accounts')

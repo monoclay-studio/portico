@@ -148,6 +148,11 @@ export const mandateScope = z
      * (`confirmCardForBooking`: self-service, link or terminal), never by staff. None = the card covers no booking yet.
      */
     bookingIds: z.array(z.uuid()).min(1).max(20).optional(),
+    /**
+     * Folios the consent names directly (e.g. a house or walk-in folio with no booking), recorded when the cardholder
+     * consented: exactly these folios — never another folio of the same payer, guest or booking.
+     */
+    folioIds: z.array(z.uuid()).min(1).max(20).optional(),
   })
   .strict();
 export type MandateScope = z.infer<typeof mandateScope>;

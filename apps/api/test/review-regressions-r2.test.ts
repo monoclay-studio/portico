@@ -12,6 +12,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   applied,
   bookingInput,
+  bookWithCard,
   cardOnFile,
   guestWithCard,
   hiyani,
@@ -62,27 +63,24 @@ const holdsOn = async (refId: string) =>
 
 /** The victim: a returning guest whose card is on file from their own earlier booking. */
 async function victimWithCard(org: ScenarioOrg, k: Awaited<ReturnType<typeof kandu>>) {
-  const { reservations } = s.c.services;
   const desk = org.staff('front_desk', 'Hassan', [k.id]);
   const { profileId: victim, card } = await guestWithCard(s, org, k, {
     firstName: 'Vera',
     lastName: 'Victim',
   });
-  const own = applied<Booking>(
-    await org.run(desk, (tx) =>
-      reservations.createBooking(
-        tx,
-        bookingInput(
-          k,
-          {
-            arrival: '2027-05-01',
-            departure: '2027-05-03',
-            guestProfileId: victim,
-            guest: { firstName: 'Vera', lastName: 'Victim' },
-          },
-          { guarantee: { kind: 'card', paymentMethodId: card.id } },
-        ),
-      ),
+  const own = await bookWithCard(
+    s,
+    org,
+    desk,
+    bookingInput(
+      k,
+      {
+        arrival: '2027-05-01',
+        departure: '2027-05-03',
+        guestProfileId: victim,
+        guest: { firstName: 'Vera', lastName: 'Victim' },
+      },
+      { guarantee: { kind: 'card', paymentMethodId: card.id } },
     ),
   );
   return { victim, card, own };
@@ -179,18 +177,39 @@ describe('R2-P1-1 — whoever links the cardholder to a booking does not choose 
     const org = await organization(s);
     const k = await kandu(s, org, '2027-03-10');
     const { reservations } = s.c.services;
-    const { profileId, card } = await guestWithCard(s, org, k);
+    const { profileId } = await guestWithCard(s, org, k);
     const desk = org.staff('front_desk', 'Hassan', [k.id]);
-    const b = applied<Booking>(
+    const created = applied<Booking>(
       await org.run(desk, (tx) =>
         reservations.createBooking(
           tx,
-          bookingInput(
-            k,
-            { arrival: '2027-03-10', departure: '2027-03-12', unit: '214', guestProfileId: profileId },
-            { guarantee: { kind: 'card', paymentMethodId: card.id } },
-          ),
+          bookingInput(k, {
+            arrival: '2027-03-10',
+            departure: '2027-03-12',
+            unit: '214',
+            guestProfileId: profileId,
+          }),
         ),
+      ),
+    );
+    // The guest's card, its agreement naming this booking for incidentals and the balance — not as a guarantee — so
+    // only a payment user's choice (`designated`) makes it the booking's guarantee card.
+    const card = await cardOnFile(
+      s,
+      org,
+      k.id,
+      k.legalEntityId,
+      'pm_card_mastercard',
+      { type: 'guest_profile', id: profileId },
+      { mandateFor: [created.id], purposes: ['incidentals', 'balance'] },
+    );
+    const b = applied<Booking>(
+      await org.run(desk, (tx) =>
+        reservations.patchBooking(tx, {
+          bookingId: created.id,
+          expectedVersion: created.version,
+          patch: { guarantee: { kind: 'card', paymentMethodId: card.id } },
+        }),
       ),
     );
     expect(b.guarantee.basis).toBe('designated');
@@ -301,16 +320,14 @@ describe('R2-P3-1 — the guarantee cap fails closed', () => {
       }),
     );
     const { profileId, card } = await guestWithCard(s, org, k);
-    const b = applied<Booking>(
-      await org.run(desk, (tx) =>
-        reservations.createBooking(
-          tx,
-          bookingInput(
-            k,
-            { arrival: '2027-03-10', departure: '2027-03-11', unit: '214', guestProfileId: profileId },
-            { guarantee: { kind: 'card', paymentMethodId: card.id } },
-          ),
-        ),
+    const b = await bookWithCard(
+      s,
+      org,
+      desk,
+      bookingInput(
+        k,
+        { arrival: '2027-03-10', departure: '2027-03-11', unit: '214', guestProfileId: profileId },
+        { guarantee: { kind: 'card', paymentMethodId: card.id } },
       ),
     );
     const stayId = b.stays[0]?.id as string;
@@ -337,26 +354,25 @@ describe('R2-P2-1 — card ownership is per cardholder', () => {
   it('PoC flipped: a second guest saving the shared test token gets their own card and can secure their booking', async () => {
     const org = await organization(s);
     const k = await kandu(s, org, '2027-03-10');
-    const { reservations } = s.c.services;
     const desk = org.staff('front_desk', 'Hassan', [k.id]);
     const a = await guestWithCard(s, org, k, { firstName: 'Ana', lastName: 'First' });
     const ben = await guestWithCard(s, org, k, { firstName: 'Ben', lastName: 'Second' });
     expect(ben.card.id).not.toBe(a.card.id);
     expect(ben.card.owner.id).toBe(ben.profileId);
     const r = await settle(
-      org.run(desk, (tx) =>
-        reservations.createBooking(
-          tx,
-          bookingInput(
-            k,
-            {
-              arrival: '2027-03-10',
-              departure: '2027-03-12',
-              guestProfileId: ben.profileId,
-              guest: { firstName: 'Ben', lastName: 'Second' },
-            },
-            { guarantee: { kind: 'card', paymentMethodId: ben.card.id } },
-          ),
+      bookWithCard(
+        s,
+        org,
+        desk,
+        bookingInput(
+          k,
+          {
+            arrival: '2027-03-10',
+            departure: '2027-03-12',
+            guestProfileId: ben.profileId,
+            guest: { firstName: 'Ben', lastName: 'Second' },
+          },
+          { guarantee: { kind: 'card', paymentMethodId: ben.card.id } },
         ),
       ),
     );
@@ -369,16 +385,14 @@ async function departedInCredit(org: ScenarioOrg, k: Awaited<ReturnType<typeof k
   const desk = org.staff('front_desk', 'Hassan', [k.id]);
   const { reservations, payments, finance } = s.c.services;
   const { profileId, card } = await guestWithCard(s, org, k);
-  const b = applied<Booking>(
-    await org.run(desk, (tx) =>
-      reservations.createBooking(
-        tx,
-        bookingInput(
-          k,
-          { arrival: '2027-03-10', departure: '2027-03-12', unit: '214', guestProfileId: profileId },
-          { guarantee: { kind: 'card', paymentMethodId: card.id } },
-        ),
-      ),
+  const b = await bookWithCard(
+    s,
+    org,
+    desk,
+    bookingInput(
+      k,
+      { arrival: '2027-03-10', departure: '2027-03-12', unit: '214', guestProfileId: profileId },
+      { guarantee: { kind: 'card', paymentMethodId: card.id } },
     ),
   );
   const stay = b.stays[0];
@@ -617,16 +631,14 @@ describe('R2-P2-2 — payment state only for roles that handle money', () => {
     const { reservations } = s.c.services;
     const desk = org.staff('front_desk', 'Hassan', [k.id]);
     const { profileId, card } = await guestWithCard(s, org, k);
-    const b = applied<Booking>(
-      await org.run(desk, (tx) =>
-        reservations.createBooking(
-          tx,
-          bookingInput(
-            k,
-            { arrival: '2027-03-10', departure: '2027-03-12', unit: '214', guestProfileId: profileId },
-            { guarantee: { kind: 'card', paymentMethodId: card.id } },
-          ),
-        ),
+    const b = await bookWithCard(
+      s,
+      org,
+      desk,
+      bookingInput(
+        k,
+        { arrival: '2027-03-10', departure: '2027-03-12', unit: '214', guestProfileId: profileId },
+        { guarantee: { kind: 'card', paymentMethodId: card.id } },
       ),
     );
     const stayId = b.stays[0]?.id as string;

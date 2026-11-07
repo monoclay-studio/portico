@@ -86,6 +86,7 @@ export function createFinance(ports: FinancePorts) {
     refundDeposit: bind(deps, deposits.refundDeposit),
     forfeitDeposit: bind(deps, deposits.forfeitDeposit),
     getDeposits: deposits.getDeposits,
+    depositHeldMinor: deposits.depositHeldMinor,
     importOpeningDeposits: bind(deps, deposits.importOpeningDeposits),
     grantAllowance: bind(deps, allowances.grantAllowance),
     closeAllowances: bind(deps, allowances.closeAllowances),
@@ -299,6 +300,8 @@ export function financeLedgerForPayments(service: FinanceService) {
       const exists = await service.describeTarget(d(tx, null), ref);
       return exists ? service.folioBalanceMinor(d(tx, exists.propertyId), ref.id) : null;
     },
+    /** R4-P3-3: deposits held for the booking, not applied to a folio yet. */
+    depositsHeldFor: (tx: TxContext, bookingId: string) => service.depositHeldMinor(tx, bookingId),
     /** Review R2-P1-3: the posting predicate itself, asked before any card is charged (new money). */
     assertTargetUsable: (tx: TxContext, ref: { type: 'folio' | 'booking'; id: string }, s: LedgerScope) =>
       service.assertTargetInScope(d(tx, s.propertyId), ref, scope(s), 'inflow'),

@@ -9,9 +9,10 @@
  *  - the hotel company (legal entity) and properties it names;
  *  - the purpose (`guarantee` for holds and their captures; `deposit`, `balance`, `incidentals`, `no_show` for charges;
  *    a `custom` charge is never covered);
- *  - the bookings it NAMES, as recorded with evidence when the cardholder consented (Amendment 3). Nothing staff can
- *    write — booker, occupants, payer, company, an added stay, a profile merge — extends it. A stay added to a named
- *    booking AFTER the consent is not covered either. A future-stays / payer-account scope does not exist (Q160);
+ *  - the bookings (and folios) it NAMES, as recorded with evidence when the cardholder consented (Amendment 3). Nothing
+ *    staff can write — booker, occupants, payer, company, an added stay, a profile merge — extends it. A booking's
+ *    consent covers the stays it had then (the evidence lists them); a stay added later is not covered. A future-stays /
+ *    payer-account scope does not exist (Q160);
  *  - its amount: `maxAmount` is the most the hotel may have taken or held on the card under the agreement at any time:
  *    every merchant-initiated charge and capture so far, plus every hold still open, plus this use. The running total
  *    is read under a lock on the card row (R4-P1-2), so parallel uses cannot each see the old total.
@@ -48,9 +49,16 @@ interface StoredMandate {
     purposes?: string[];
     maxAmount?: { amountMinor: number; currency: string };
     bookingIds?: string[];
-    /** When each named booking was consented to (cardholder-confirmed later), with its evidence. */
-    bookingEvidence?: Record<string, { at: string; channel: string }>;
+    /** Folios named directly (no booking): exactly these. */
+    folioIds?: string[];
+    /**
+     * Server-built, per named booking: when and through which channel the cardholder consented to it, and the stays
+     * the booking had then — the consent covers those stays only.
+     */
+    bookingEvidence?: Record<string, { at: string; channel: string; stayIds?: string[] }>;
   };
+  /** A card its cardholder entered for a booking (hosted entry): the booking's stays at that moment (server-built). */
+  supplied?: { bookingId: string; at: string; stayIds?: string[] };
 }
 
 const NEW_CONSENT =
@@ -108,14 +116,26 @@ export async function consentProblem(
   // guarantee and its charges — at the moment the card was entered (Amendment 2: "the card supplied for this booking").
   const suppliedForBooking =
     method.owner_type === 'booking' && method.entry_channel === 'hosted_entry' && !method.mit_agreement;
+  const suppliedAt = new Date(method.created_at).toISOString();
   const mandate: StoredMandate = suppliedForBooking
     ? {
         termsVersion: 'supplied-for-booking',
-        acceptedAt: new Date(method.created_at).toISOString(),
+        acceptedAt: suppliedAt,
         scope: {
           legalEntityId: property.legalEntityId,
           purposes: ['guarantee', 'deposit', 'balance', 'no_show'],
           bookingIds: [method.owner_id],
+          ...(stored.supplied?.bookingId === method.owner_id
+            ? {
+                bookingEvidence: {
+                  [method.owner_id]: {
+                    at: suppliedAt,
+                    channel: 'hosted_entry',
+                    ...(stored.supplied.stayIds ? { stayIds: stored.supplied.stayIds } : {}),
+                  },
+                },
+              }
+            : {}),
         },
       }
     : stored;
@@ -157,14 +177,19 @@ export async function consentProblem(
   // Amendment 3 / R4-P1-1: only the bookings the agreement NAMES, as consented — never the people staff link.
   const ctx = await referenceContext(d, tx, use.ref);
   const named = scope.bookingIds ?? [];
-  const consentedAt = (bookingId: string) =>
-    new Date(scope.bookingEvidence?.[bookingId]?.at ?? (mandate.acceptedAt as string));
   const inNamedBooking = ctx.bookingId !== null && named.includes(ctx.bookingId);
-  const covered =
-    inNamedBooking &&
-    // A stay added to the booking after the cardholder's consent is not part of what they agreed to.
-    (ctx.stayCreatedAt === null ||
-      ctx.stayCreatedAt.getTime() <= consentedAt(ctx.bookingId as string).getTime());
+  // A stay added to the booking after the cardholder's consent is not part of what they agreed to: the consent covers
+  // the stays its evidence lists (the booking's stays when they consented). Evidence without that list (a directory
+  // that cannot list a booking's stays) falls back to the stay's creation time: strictly before the consent.
+  const stayCovered = (bookingId: string): boolean => {
+    if (ctx.stayId === null) return true;
+    const evidence = scope.bookingEvidence?.[bookingId];
+    if (evidence?.stayIds) return evidence.stayIds.includes(ctx.stayId);
+    const consentedAt = new Date(evidence?.at ?? (mandate.acceptedAt as string));
+    return ctx.stayCreatedAt !== null && ctx.stayCreatedAt.getTime() < consentedAt.getTime();
+  };
+  const namedFolio = use.ref.type === 'folio' && (scope.folioIds ?? []).includes(use.ref.id);
+  const covered = namedFolio || (inNamedBooking && stayCovered(ctx.bookingId as string));
   if (!covered) {
     return {
       code: 'mandate_reference_not_covered',

@@ -5,12 +5,11 @@
  * Exactly one provider operation; an authorization never posts to the ledger.
  */
 import { sql } from '@portico/db';
-import type { Booking } from '@portico/reservations';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
-  applied,
   assertGlobalConsistency,
   bookingInput,
+  bookWithCard,
   cardOnFile,
   guestWithCard,
   kandu,
@@ -40,22 +39,20 @@ describe('S05 — payment timeout at check-in', () => {
       undefined,
       'sim_timeout_then_succeeded',
     );
-    const b = applied<Booking>(
-      await org.run(desk, (tx) =>
-        reservations.createBooking(
-          tx,
-          bookingInput(
-            k,
-            {
-              arrival: '2027-03-10',
-              departure: '2027-03-12',
-              unit: '305',
-              type: 'WV',
-              guestProfileId: guestId,
-            },
-            { guarantee: { kind: 'card', paymentMethodId: card.id } },
-          ),
-        ),
+    const b = await bookWithCard(
+      s,
+      org,
+      desk,
+      bookingInput(
+        k,
+        {
+          arrival: '2027-03-10',
+          departure: '2027-03-12',
+          unit: '305',
+          type: 'WV',
+          guestProfileId: guestId,
+        },
+        { guarantee: { kind: 'card', paymentMethodId: card.id } },
       ),
     );
     const stayId = b.stays[0]?.id as string;
@@ -129,22 +126,20 @@ describe('S05 — payment timeout at check-in', () => {
       undefined,
       'sim_timeout_then_failed',
     );
-    const b = applied<Booking>(
-      await org.run(desk, (tx) =>
-        reservations.createBooking(
-          tx,
-          bookingInput(
-            k,
-            {
-              arrival: '2027-03-10',
-              departure: '2027-03-11',
-              unit: '307',
-              type: 'WV',
-              guestProfileId: guestId,
-            },
-            { guarantee: { kind: 'card', paymentMethodId: bad.id } },
-          ),
-        ),
+    const b = await bookWithCard(
+      s,
+      org,
+      desk,
+      bookingInput(
+        k,
+        {
+          arrival: '2027-03-10',
+          departure: '2027-03-11',
+          unit: '307',
+          type: 'WV',
+          guestProfileId: guestId,
+        },
+        { guarantee: { kind: 'card', paymentMethodId: bad.id } },
       ),
     );
     const stayId = b.stays[0]?.id as string;
@@ -162,10 +157,16 @@ describe('S05 — payment timeout at check-in', () => {
     const failed = await reservations.performWorkflow(s.t.db, desk, { stayId, kind: 'check_in' });
     expect(failed.run?.steps.find((x) => x.key === 'guarantee')?.status).toBe('failed');
     // The guest's other card (review P1-2: only a card of the booking's guest, booker or payer secures the stay).
-    const good = await cardOnFile(s, org, k.id, k.legalEntityId, 'pm_card_visa', {
-      type: 'guest_profile',
-      id: guestId,
-    });
+    // Its agreement names this booking (re-review #4 R4-P1-1).
+    const good = await cardOnFile(
+      s,
+      org,
+      k.id,
+      k.legalEntityId,
+      'pm_card_visa',
+      { type: 'guest_profile', id: guestId },
+      { mandateFor: [b.id] },
+    );
     const retried = await reservations.performWorkflow(s.t.db, desk, {
       stayId,
       kind: 'check_in',

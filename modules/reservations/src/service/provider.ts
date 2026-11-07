@@ -62,6 +62,7 @@ export async function describeReference(
       bookingId: string;
       people: string[];
       stayCreatedAt?: string;
+      stayIds?: string[];
     }
   | null
   | undefined
@@ -87,6 +88,19 @@ export async function describeReference(
     .where('id', '=', bookingId)
     .executeTakeFirst();
   if (!b) return null;
+  // ADR-0015 Amendment 3: the stays a booking has NOW — a cardholder consenting to the booking consents to these; a
+  // stay added later is not covered.
+  const stayIds =
+    ref.type === 'booking'
+      ? (
+          await db(tx)
+            .selectFrom('reservations.stays')
+            .select('id')
+            .where('booking_id', '=', bookingId)
+            .orderBy('id')
+            .execute()
+        ).map((r) => r.id)
+      : undefined;
   return {
     propertyId: b.property_id,
     source: b.source,
@@ -95,6 +109,7 @@ export async function describeReference(
     people: [...(await bookingPeople(tx, bookingId))],
     // ADR-0015 Amendment 3: a stay added after a cardholder consented to the booking is not covered by that consent.
     ...(stay ? { stayCreatedAt: stay.created_at.toISOString() } : {}),
+    ...(stayIds ? { stayIds } : {}),
   };
 }
 
