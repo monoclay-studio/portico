@@ -1,7 +1,8 @@
 # Gaps: front cluster (inventory, rates, reservations, groups, distribution, platform)
 
-Status: v1 · 2026-11-07 · Source matrices: `inventory.md`, `rates.md`, `reservations.md`, `groups.md`,
-`distribution.md`, `platform.md` in this folder. This file lists every `missing` **P0/P1** capability row
+Status: v1 · 2026-11-07, with a **v2 evidence re-run for inventory and reservations** (§ "v2 evidence re-run" at the
+end; the inventory and reservations rows of the Summary are v2, the rest v1) · Source matrices: `inventory.md`,
+`rates.md`, `reservations.md`, `groups.md`, `distribution.md`, `platform.md` in this folder. This file lists every `missing` **P0/P1** capability row
 (`PAR-…`) and edge case (`EC-…`) as **spec change requests**: what to add, to which spec section. It contains no
 matrix tables, so `tools/parity-report.mjs` reports it with zero rows.
 
@@ -9,9 +10,9 @@ matrix tables, so `tools/parity-report.mjs` reports it with zero rows.
 
 | Module | Capabilities (P0 / P1 / P2) | Missing capabilities (P0 / P1) | Edge cases | Missing edge cases (P0 / P1) | Tested on `main` |
 |---|---|---|---|---|---|
-| inventory | 69 (36 / 27 / 6) | 19 (1 / 13) | 34 | 8 (2 / 6) | none (no module) |
+| inventory (v2) | 69 (36 / 27 / 6) | 17 (0 / 12) | 55 | 6 (0 / 6) | 28 capabilities, 17 edge cases (§ v2 evidence re-run) |
 | rates | 87 (48 / 28 / 11) | 20 (0 / 14) | 35 | 10 (2 / 6) | none (no module) |
-| reservations | 123 (64 / 38 / 21) | 44 (1 / 23) | 52 | 14 (6 / 7) | none (no module) |
+| reservations (v2) | 123 (64 / 38 / 21) | 44 (1 / 23) | 80 | 14 (4 / 9) | 10 capabilities, 11 edge cases (§ v2 evidence re-run) |
 | groups | 80 (4 / 53 / 23) | 32 (1 / 12) | 32 | 13 (1 / 11) | none (no module) |
 | distribution | 70 (34 / 23 / 13) | 21 (1 / 14) | 34 | 12 (2 / 8) | none (no module) |
 | platform | 64 (35 / 21 / 8) | 5 (0 / 1) | 35 | 4 (0 / 2) | 16 capabilities, 11 edge cases |
@@ -198,3 +199,132 @@ booking-engine content.
 
 Q120 (guest self-service scope), Q121 (tour-operator contract forms), Q122 (offline continuity promise),
 Q123 (GDS distribution), Q124 (taxes collected by OTAs). See `docs/OPEN_QUESTIONS.md`.
+
+## v2 evidence re-run: inventory and reservations
+
+Date 2026-11-07 · playbook `docs/quality/playbooks/parity-researcher.md` **v2** (PR2-1, PR2-2) · escape E-060 · code
+compared: `main` @ `2b1d1a6` only; the unmerged `feat/integration-step` @ `db6ae8c` is cited only as
+`built (feat/integration-step@db6ae8c)`. Both matrices were written before their modules merged, so every row had
+stopped at `specified`. The rules for `tested`, `built` and `building` are in each matrix's header.
+
+### Status at a glance
+
+| Module | Capabilities (P0/P1/P2) | Tested: before → after | Edge cases | Tested: before → after | Open P0: before → after | P1 missing: before → after | Gate |
+|---|---|---|---|---|---|---|---|
+| inventory | 69 (36/27/6) | 0 → 28 (1 % → 42 % with the `different` row) | 34 → 55 (+21 sweep) | 0 → 17 (0 % → 31 %) | 53 → 22 | 19 → 18 | exit 1 |
+| reservations | 123 (64/38/21) | 0 → 10 (1 % → 9 %) | 52 → 80 (+28 sweep) | 0 → 11 (0 % → 14 %) | 100 → 100 | 30 → 32 | exit 1 |
+
+Reservations' open P0 count is unchanged by coincidence: 19 P0 rows became `tested` and the sweep added 19 open P0
+edge cases. Reservations stays low because, on `main`, rates, guests, finance, payments and operations are fakes in the
+module tests and 503 stubs in the composition (`apps/api/test/reservations.test.ts:79-83`): rows whose claimed outcome
+those modules decide are `built` (pattern AP-51), not `tested`.
+
+**What closes the open P0 rows** (from the Test column):
+
+| | inventory | reservations |
+|---|---|---|
+| `built`, the cross-module part proven on `feat/integration-step` (re-verify at merge; some still name an unasserted part) | 3: EC-INV-006, 035, 053 | 16: PAR-RES-001, 046, 057, 060, 101; EC-RES-017, 023, 025, 052, 053, 055, 058, 060, 064, 066, 079 |
+| `built`, one missing assertion on `main` | 11: PAR-INV-003, 005, 041, 054, 057, 058, 065; EC-INV-016, 025, 039, 041 | 26: PAR-RES-005, 006, 009, 028, 065, 069, 075, 076, 082, 089, 095, 096, 112, 116, 120; EC-RES-006, 012, 013, 028, 037, 051, 056, 059, 061, 062, 063 |
+| `built`, outcome decided by a fake, no branch proof | 1: EC-INV-005 | 4: PAR-RES-035, 045, 102; EC-RES-030 |
+| `building`, `specified` or `missing` (work to build) | 7 | 54 |
+
+### Playbook v2 self-check
+
+**Tested rows with an assertion quote: inventory 45 / 45 (28 + 17), reservations 21 / 21 (10 + 11).** A script
+resolved every `file:line` quoted by a `tested` row on `main`: every file exists, every line is in range, and every
+span contains an assertion, except 10 deliberate supporting references (the `retired`/`inactive` guard
+`modules/inventory/src/service/catalog.ts:737`, the `waitFor` that proves a transaction waited on a lock, and the
+`afterAll` INV-I02 assertion). Concurrency rows cite tests that prove the wait (`pg_stat_activity`) or race N
+transactions.
+
+**Rows downgraded.** No matrix row was above its evidence (v1 had no row above `specified`). The over-claims were in the
+inventory README's "Competitive parity status" list (E-060's source); 13 of the rows it calls tested are not `tested`:
+
+| Row | README | This pass | Reason |
+|---|---|---|---|
+| PAR-INV-005 | tested ("ranking only") | built | Ranking keeps accessible units back; nothing asserts protection when an agent assigns by hand |
+| PAR-INV-032 | tested | building | 731-night day grid tested; week and month roll-ups not built |
+| PAR-INV-038 | tested | built | Extend and release permissions tested; their audit is not asserted |
+| PAR-INV-041 | tested | built | Only the composite refusal of `unassignUnit` is asserted |
+| PAR-INV-054 | tested | built | Preview asserted without stays; affected stays and oversold nights in a preview are not |
+| PAR-INV-057 | tested | built | Causes and resolution tested; owner not (conflicts open without one) |
+| PAR-INV-065 | tested | built | Block history tested; configuration and allowance audit not asserted |
+| EC-INV-005 | tested | built | The relocation case is proven only against reservations' fake inventory (AP-51) |
+| EC-INV-006 | tested | built | Relocation through the real chain only on the branch; the housekeeping clause is not asserted |
+| EC-INV-016 | tested | built | The conflict opens without an owner |
+| EC-INV-018 | tested | building | The conflict keeps no link to the cancellation that resolved it |
+| EC-INV-025 | tested | built | The lock-override audit is not asserted |
+| EC-INV-028 | tested | building | Forward mode refuses instead of forwarding (README: forwarding not available) |
+
+The reservations README claims no parity rows; it calls capabilities "Built" (R3 against fakes). Rows held at `built`
+(or `building`) because a fake decides the outcome on `main`: PAR-RES-001, 035, 045, 046, 057, 060, 065, 101, 102; EC-RES-017 (the
+claim AP-51 names), 019, 023, 025, 030, 049, 052, 062–064.
+
+**Notable upgrades (v1 → v2).** Inventory: the last-unit race with the lock wait observed (PAR-INV-059, EC-INV-001/002),
+connected mode (PAR-INV-067), house totals and non-negative sellable (PAR-INV-021, EC-INV-020), the consistency job
+(PAR-INV-062, EC-INV-029, `missing` in v1), a hold expiring as the guest books (EC-INV-008, `missing` in v1), composites
+(PAR-INV-008/047). Reservations: change preview (PAR-RES-040), optimistic concurrency (041), segments and split stays
+(042, 043, EC-RES-047), extension alternatives against the real inventory (044, EC-RES-027), assignment and upgrade
+(064), channel revision mechanics (113), the stale last-unit preview (EC-RES-014). Built on `main` though `missing` in
+v1: PAR-INV-041 (unassign), PAR-INV-024 (building), EC-RES-012 (walk-in business date), EC-RES-039 (building), EC-RES-040.
+
+**Corrected rows.** EC-INV-022 said "> 400 nights"; the horizon is now 731 nights, so the situation reads "beyond the
+supported horizon (731 nights)".
+
+### Findings raised by this pass (for the orchestrator and steward)
+
+1. **AP-43 drift** (EC-INV-049). Reservations' waitlist consumer reads `payload.cells`
+   (`modules/reservations/src/service/subscriptions.ts:71-77`); inventory emits one unit type and a `range` (decided
+   shape INV-14). The type filter is dead, so every availability change re-checks every waitlisted stay of the
+   property: the outcome is correct, the work is wasted. Its test feeds a hand-made `cells` payload
+   (`modules/reservations/test/front-desk-handover.test.ts:332-336`). Same on the branch.
+2. **AP-45** (EC-INV-051, P0). Inventory's release route still bypasses operations' return-to-service guard (known:
+   `review-fix-sweep.md`, refusal tracked in `pending-fixes.md`).
+3. **AP-32** (EC-INV-046). One conflicting mirrored assignment rejects the whole `applyExternalAvailability` batch
+   (`modules/inventory/src/service/external.ts:106-118`).
+4. **AP-04** (EC-INV-038). Direct callers can name any `authorizedBy` for ad-hoc overbooking (reservations passes the
+   acting user).
+5. **AP-17** (EC-RES-057). Reservations has no erasure path: occupant names, request texts, raw channel payloads and
+   booking-version diffs stay after a guest's erasure.
+6. **AP-31** (EC-RES-068). Reservations ignores `inventory.unit.unblocked`, so a relocation case can outlive its block.
+7. **AP-26** (EC-INV-043). `delayed` provenance is in the enum but never set.
+8. **AP-55** (PAR-RES-009). `front-desk-handover.test.ts:437` is titled "… channel id …" but never searches a channel id.
+9. On `main` the running API cannot create a booking (rates is a 503 stub); every reservations `tested` row is a
+   module-level proof. The integration step binds the ports (branch S01/S03–S08, S13–S17 pass).
+
+### Decisions needed: implementation and matrix disagree
+
+| Row | Implementation on `main` | Matrix expectation | Recommendation |
+|---|---|---|---|
+| EC-INV-017 | Lowering an allowance below what is sold into it is **refused**, listing the cells (`modules/inventory/test/availability.test.ts:542`) | A preview showing the cells that become conflicts; commit records them | Keep the refusal (never silent; the manager moves or cancels sales first) and write it into INV §3.3; the row then becomes `different` |
+
+### Spec change requests from the v2 pass
+
+Already built on `main`, only the spec text is missing: `unassignUnit` (PAR-INV-041, README contract change 6); the
+"hold expired as you booked" rule (EC-INV-008); the consistency job that reports and never corrects (EC-INV-029);
+non-negative per-type `sellable` (EC-INV-020); the `record_conflict` sale of a composite with none free (README
+contract change 15).
+
+New from the sweep (rows `missing` or `building` that no spec covers):
+- **inventory.md §14 Connected mode:** per-operation discrepancies in `applyExternalAvailability`, never a whole-batch
+  refusal (EC-INV-046); `delayed` provenance when the last sync is older than the SLA (EC-INV-043).
+- **inventory.md §3.4 Holds:** a short default expiry and a cap per source or session for guest-facing holds
+  (EC-INV-052).
+- **inventory.md §3.3 / §8:** the authorizer of ad-hoc overbooking is the acting user or an identity approval
+  (EC-INV-038); a block created by another module is released only through that module (EC-INV-051).
+- **inventory.md §7 Events:** `aggregateVersion` on block and unit events (EC-INV-045).
+- **reservations.md §7 Events consumed:** the guests erasure protocol — which stay, channel-revision and version fields
+  are erased or pseudonymized (EC-RES-057); `inventory.unit.unblocked` closes or flags relocation cases (EC-RES-068);
+  parse inventory's exported `availability.changed` schema (EC-INV-049).
+- **reservations.md §3.2 Lifecycle:** an option-date cap by policy for tentative bookings (EC-RES-077).
+
+### Failure-class sweep record (PR2-2)
+
+Classes from `docs/quality/patterns.md` groups A–D (AP-01 … AP-48, plus AP-53, AP-56, AP-57, AP-58, which are filed in
+those groups). **Applied** = new edge-case rows, class in brackets in the row. **Covered** = an earlier row already
+states the behaviour. **N/A** = the class does not apply, with the reason about the class.
+
+| Module | Applied (new rows) | Covered by earlier rows | N/A (reason) |
+|---|---|---|---|
+| inventory | AP-01 EC-INV-035 · AP-02 036 · AP-03 037 · AP-04 038 · AP-05/06 039 · AP-20 040 · AP-21 041 · AP-25 042 · AP-26 043 · AP-29 044 · AP-31 045 · AP-32 046 · AP-36 047 · AP-39 048 · AP-43 049 · AP-44 050 · AP-45 051 · AP-47 052 · AP-53 053 · AP-56 054 · AP-58 055 | AP-29 EC-INV-009, 016, 032 · AP-38 EC-INV-028, PAR-INV-067 · AP-46 EC-INV-003, PAR-INV-060 · AP-48 PAR-INV-011 (inventory dates bound capacity: a villa counts only from its opening night) | AP-07–13 identity-owned credential, approval and step-up classes (inventory's ⚑ permissions are enforced centrally) · AP-14 no outbound calls · AP-15 stores no secrets · AP-16 no client of its own · AP-17 holds refs (type, id), not guest data; block reasons are staff notes · AP-18 no sharing-scoped data (sold refs are ids) · AP-19 no simulator and no external effect · AP-22–24, 27, 28 no money · AP-30 consumes no events · AP-33 no offline or batch writes; versioned updates refuse stale (`test/isolation-permissions.test.ts:254`) · AP-34 sends no outbound commands (forwarding not built) · AP-35 closed Zod enums at the boundary; the write mode is decided by platform's `assertWritable` (`src/service/context.ts:101`); `allowCompositeConflict` is reachable from no route or other module · AP-37 no external effects · AP-40–42 code-structure probes (reservations' adapter is compile-checked against inventory's types; provenance copies are E-054) · AP-57 the facts the composite guard trusts are written only by inventory |
+| reservations | AP-01 EC-RES-053 · AP-02 054 · AP-04 055 · AP-05 056 · AP-17 057 · AP-18 058 · AP-19 059 · AP-53 060 · AP-20 061 · AP-22 062 · AP-23 063 · AP-24 064 · AP-25 065 · AP-28 066 · AP-30 067 · AP-31 068 · AP-35 069 · AP-37 070 · AP-38 071 · AP-39 072 · AP-40/41 073 · AP-44 074 · AP-45 075 · AP-46 076 · AP-47 077 · AP-56 078 · AP-57 079 · AP-58 080 | AP-06 catalogue test (EC-RES-056) · AP-21 EC-RES-015 (+ concurrent channel duplicates `test/scenario-s02-channel-ingestion.test.ts:77-78`) · AP-26 EC-RES-017, 018 · AP-29 EC-RES-001, 011, 012, 037 (+ cancellation tier in Malé time `test/change-preview.test.ts:129-140`; DST `src/domain/time.test.ts:16-23`) · AP-31 (channel revisions) PAR-RES-113 · AP-32 EC-RES-039, 040 · AP-33 EC-RES-013, 046 · AP-34 EC-RES-017, 024 · AP-36 EC-RES-014 · AP-43 EC-INV-049 (+ booking event schema `test/bookings.test.ts:93-106`) | AP-03 inbound routing of channel ids to a tenant is integration's (EC-INT-046); revisions are keyed per connection inside one tenant · AP-07–09, 11–13 identity · AP-10 no approval flows (⚑ actions are single-actor by spec) · AP-14 no outbound calls · AP-15 stores no credentials (a guarantee names a payment method id) · AP-16 no client of its own · AP-27 no settlement · AP-42 code-structure probe (reservations' provenance copy lacks `sandbox`, E-054) · AP-48 holds no effective-dated rule packs; agreed terms are snapshots (AP-22) |

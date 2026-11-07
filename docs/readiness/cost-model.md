@@ -123,7 +123,7 @@ protect that hotel, not by usage:
 |---|---|---|
 | T0 — local | develop and demo on a laptop / this cloud dev environment | **$0** |
 | T1 — hosted demo | one small instance (app + Postgres), demo environment only, auto-stop off-hours, no WAF/NAT | **$10–30**, and covered by AWS Free Tier credits while they last (see below) |
-| T2 — lean pilot (small guesthouse) | single-AZ managed Postgres with automated backups + restore-tested, 1 API task + 1 worker, no NAT (VPC endpoints), staging started only for releases, basic WAF | **≈ $90–160** + Channex if activated |
+| T2 — lean pilot (small guesthouse) | single-AZ managed Postgres with automated backups + restore-tested, 1 API task + 1 worker, outbound via public task IPs (inbound ALB-only) or a NAT gateway (+≈ $45; Q158), staging started only for releases, basic WAF | **≈ $121** (infra cost tables, ap-south-1 prices 2026-11-07; + ≈ $45 with NAT) + Channex if activated |
 | T3 — resilient pilot (resort) | the full table in §5 (Multi-AZ, always-on staging) | ≈ $300–500 |
 
 Trade-off of T2: a database-zone failure means minutes-to-hours of downtime (restore from backup) instead of an

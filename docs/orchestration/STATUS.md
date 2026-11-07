@@ -127,6 +127,24 @@
   free staging account and API key from the owner, requested via `request_credential` for the Channex staging host.
   Channex certification (R5–R6) is an external step. Production activation needs owner authorization (platform fee).
 
+- **2026-11-07 19:29 UTC — window closing (5-hour 85%, no agents running, everything pushed).** NEXT WINDOW
+  (resume scheduled 21:13 UTC), launch in this order, each from its latest playbook:
+  1. **Distribution module + Channex adapter** (owner direction; `docs/specs/distribution.md` §3.2–3.3 with the Channex
+     note): an event-driven ARI engine with coalescing, an outbox with a 20/min token bucket per connection, a
+     booking-revision webhook with a durable log and a recovery pull, ack after commit, mappings, last-acked state,
+     health. Simulator first (R3); Channex staging needs the owner's staging key (`request_credential`).
+  2. **Integration-step focused re-review #3** (steward v2.1, re-review variant) of `feat/integration-step` @ db6ae8c,
+     then merge if clean.
+  3. **Infra security review** (steward v2.1) of `feat/infra-aws`, then merge.
+  4. **UX round 2a** (focused; blackbox-tester playbook): the 8 "Done" refinements, the sign-in code step, C8/C11.
+     Update the UX lab with the demo authenticator first.
+  5. **Parity evidence re-run** for inventory and reservations.
+  6. **Quality steward round 3** after items 2–4 report.
+  7. **Module round 2 from the `docs/strategy/` briefs**, gap-plan order: backoffice wired to the real APIs plus
+     reservations front-desk flows; payments collection plans plus finance receipts; day-close.
+  8. **Partner platform and open API (owner D14: yes)**, gap-plan M15, right after the Channex build. The gap
+     strategist re-scans for further additions after each wave (capability scouting, vision-fit test).
+
 ## 1. Owner, product and how to work with the owner
 
 - Owner: founder of **Monoclay LLC** (Delaware, Stripe Atlas), based in the Maldives. Product: **Portico** (final name).
@@ -183,8 +201,8 @@ direction, experience architecture, parity framework, this orchestration folder.
 | `feat/integration-core` | wt/integration | connector framework, setup, health, webhooks | **MERGED** to main (4d90c6a) — P0 SSRF fixed (`safeFetch`), F2–F9 fixed | bind platform transitions after identity-plus merges (FR-2) |
 | `feat/backoffice-core` | wt/backoffice | packages/ui + apps/backoffice | **MERGED** to main (40a832c) — P0 cache leak + all P1 fixed; Playwright 11/11 incl. axe (WCAG 2.2 AA, light+dark); UX round-1 decisions recorded | next round: wire to real APIs (after integration-step merges) + UX shell items (NAV-01/02/09, phone bottom bar) |
 | `feat/identity-platform-enterprise` | wt/identity-plus | MFA, SSO, SCIM, custom roles, break-glass, trials, activation | **MERGED** to main (18:36 UTC, e5d07c6) after 3 reviews + 4 fix rounds + spot-check | follow-ups: users page offers 'Initial password' (refused now); no in-app step-up/security settings page; SSO callback route in staff app; UX lab needs demo authenticator secret |
-| `feat/infra-aws` | wt/infra | Terraform, Dockerfiles, runbooks | **paused** — resume when 5-hour usage < 60% (owner: checks use the 5-hour window only) | `TRUSTED_PROXY_CIDRS`, `PORTICO_TERMS_SEAL_KEY`, worker DB role |
-| `feat/integration-step` | wt/integration-step | bind every port for real; ADR-0015 delegation; S01–S20 scenarios | **done** (pushed): all ports bound; 12/20 scenarios pass; 5 contract bugs fixed | **steward review running** → merge → tell identity-plus/backoffice to merge main |
+| `feat/infra-aws` | wt/infra | Terraform, Dockerfiles, CI deploy, runbooks, DB roles | **done, NOTHING deployed** (pushed): 17/17 terraform tests, 38/38 role checks, 27/27 deploy-script tests; costs lean ≈ $121, resilient ≈ $407–538, demo ≈ $15–20 | **steward security review queued (next window)** → merge; owner choices Q158 |
+| `feat/integration-step` | wt/integration-step | bind every port for real; ADR-0015; S01–S20 | fix round 2 **done** (db6ae8c, pushed): invariants (a)–(f) closed with pre-fix-failing tests; (e) on payments' own routes open (payer directory) | **focused re-review #3 queued for next window** → merge |
 | `docs/parity-ops` | wt/parity-ops | parity: 10 ops-cluster modules | **MERGED** to main (03ec772) — all matrices done; every `tested` row quotes its asserting test; no module passes the gate yet (open P0 rows) | decisions recorded (Q157, pending-fixes); foundation P0 items queued |
 | journey, back-of-house, parity-front, parity-finance, readiness, product, adoption docs | — | docs | **MERGED** to main | spec change requests folded in at integration step |
 | market deep dive → gap strategist | wt/market, wt/strategy | research + 10x briefs | **MERGED** (`docs/research/05-*`, `docs/strategy/`: gap plan + 32 module briefs; Q140–Q145, Q150–Q155) | module round 2 from briefs |

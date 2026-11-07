@@ -568,3 +568,45 @@ billing is not activated for live customers until this is answered.
 **If the answer differs:** a policy switch in the guests module's merge rules; no data loss either way, because every original statement is kept in the consent history.
 **Blocks:** nothing in development; live guest marketing.
 **Raised by / date:** parity research (operations cluster), 2026-11-07
+
+### Q158 — Infrastructure choices for the first hosted pilot                Status: open
+**Context:** The AWS infrastructure is written and tested offline (`feat/infra-aws`, `infra/README.md` D1–D16). Nothing
+is deployed. Before the first hosted pilot (for example 10 guesthouses), a few choices change cost or risk. Estimates
+use ap-south-1 list prices as of 2026-11-07: lean ≈ $121/month, resilient ≈ $407–538/month, demo ≈ $15–20/month.
+**Question:** Approve these defaults, or choose otherwise:
+- (a) **Production tier:** lean (single-AZ database with backups and restore drills; minutes to hours of downtime if
+  the database zone fails) or resilient (Multi-AZ, ≈ 4× the cost).
+- (b) **Outbound network:** private tasks behind a NAT gateway (≈ +$45/month, the stricter posture) or public task IPs
+  with inbound from the load balancer only (cheaper; flagged by AWS Security Hub ECS.2).
+- (c) **Disaster-recovery region:** ap-south-2 (Hyderabad).
+- (d) **Restore drills:** monthly.
+- (e) **Staging:** started only for releases.
+- (f) **Operator access:** through IAM Identity Center before production.
+
+These come on top of the account and spend authorization (Q4/Q22), the domain and email sender, Stripe (Q2) and
+Channex (Q23).
+**Default we are proceeding with:**
+- lean for a guesthouse pilot;
+- **NAT gateway** (private tasks) for the stricter security posture;
+- DR region ap-south-2;
+- monthly drills;
+- staging on demand;
+- IAM Identity Center required before production.
+
+Nothing is deployed until you authorize spend.
+**If the answer differs:** a variable change in `infra/terraform/envs/*`; no rework.
+**Blocks:** the hosted pilot only.
+**Raised by / date:** infrastructure workstream, 2026-11-07
+
+### Q159 — May Portico implement a compatible interface for legacy hotel devices?      Status: open
+**Context:** Many door locks, phone systems (PBX), minibars, in-room TVs and POS terminals connect to hotel PMSs
+through a long-established vendor interface protocol (gap-plan M16). A compatible interface would connect them without
+one integration each. The protocol's ownership, licensing and any partner-programme requirements are unconfirmed.
+**Question:** Will you have counsel review whether Portico may implement a compatible interface (and under which
+terms), together with the patent review (Q145/Q150)?
+**Default we are proceeding with:** no work on the legacy protocol. Open standards (HTNG/OpenTravel-aligned APIs) and
+direct vendor APIs only.
+**If the answer differs:** M16 becomes a build item (an interface gateway in the integration module).
+**Blocks:** M16 only.
+**Raised by / date:** orchestrator (owner D14 follow-up), 2026-11-07
+

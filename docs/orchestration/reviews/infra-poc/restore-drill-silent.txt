@@ -1,0 +1,18 @@
+# Code-read chain: as written, the monthly restore drill never runs and nobody is told.
+# Reviewer, infra @ 0facbba (merged with main 2b1d1a6).
+
+1. Image: the drill task definition uses "<repo>/restore-drill:${var.image_tag}" (modules/restore-drill/main.tf:148)
+   with image_tag default "latest-drill" (modules/restore-drill/variables.tf:80-83); the cell never overrides it
+   (modules/cell/main.tf:233-256). No pipeline builds or pushes infra/restore-drill/Dockerfile: deploy.yml.example:95
+   builds api+worker only; deploy-cell.sh:95 pushes api+worker only. ECR tags are IMMUTABLE (modules/registry/main.tf:8),
+   so even a manual "latest-drill" push can never be updated with the release's verify.sql (check 7's allow-list must
+   change whenever a module adds a reviewed SECURITY DEFINER function).
+2. First scheduled run: ECS cannot pull the image -> the task stops with stopCode TaskFailedToStart /
+   CannotPullContainerError and NO container exit code.
+3. The "dies before it can publish a metric (bad image, no capacity) still pages someone" rule
+   (modules/restore-drill/main.tf:258-271) matches only events whose containers carry exitCode anything-but 0;
+   EventBridge content filters do not match events that lack the field -> no page.
+4. The RestoreDrillFailure alarm (main.tf:244-256) has treat_missing_data = "notBreaching" and the script never ran,
+   so no metric -> alarm stays OK. There is no alarm on a missing RestoreDrillSuccess (e.g. none in 35 days).
+Result: backups are reported as drill-covered (README tier table, backup-restore-verification.md) while no drill has
+ever run, and the on-call topic stays quiet.
