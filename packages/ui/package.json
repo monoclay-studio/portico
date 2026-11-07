@@ -10,7 +10,9 @@
     "./styles.css": "./src/styles/index.css",
     "./tokens.css": "./src/styles/tokens.css"
   },
-  "sideEffects": ["**/*.css"],
+  "sideEffects": [
+    "**/*.css"
+  ],
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run --passWithNoTests"

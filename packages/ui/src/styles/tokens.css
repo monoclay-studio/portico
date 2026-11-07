@@ -18,8 +18,8 @@
 
   /* Typography — system fonts only: fast, offline-safe, and covers Arabic/Thaana scripts for RTL locales. */
   --pt-font-sans:
-    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", "Noto Sans Arabic", "Noto Sans Thaana",
-    "Helvetica Neue", Arial, sans-serif;
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", "Noto Sans Arabic",
+    "Noto Sans Thaana", "Helvetica Neue", Arial, sans-serif;
   --pt-font-mono: ui-monospace, "SFMono-Regular", "Cascadia Code", "Roboto Mono", Menlo, Consolas, monospace;
 
   /* Density. Desk layouts are compact; touch layouts get >= 44px targets (see the media query below). */
