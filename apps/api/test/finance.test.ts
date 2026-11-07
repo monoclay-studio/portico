@@ -100,7 +100,7 @@ describe('finance HTTP API', () => {
     });
     expect(taxed.statusCode).toBe(503);
     expect(taxed.headers['content-type']).toContain('application/problem+json');
-    expect(taxed.json()).toMatchObject({ code: 'module_unavailable', retryable: true });
+    expect(taxed.json()).toMatchObject({ code: 'module_not_available', retryable: true });
 
     const read = await h.app.inject({
       method: 'GET',

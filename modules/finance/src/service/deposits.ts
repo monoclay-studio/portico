@@ -142,7 +142,7 @@ async function prepaymentTaxes(
     }
     return { taxes, unavailable: false };
   } catch (err) {
-    if (err instanceof DomainError && err.code === 'module_unavailable')
+    if (err instanceof DomainError && err.code === 'module_not_available')
       return { taxes: [], unavailable: true };
     throw err;
   }

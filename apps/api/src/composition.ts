@@ -145,7 +145,14 @@ export function compose(database: PorticoDatabase): Composition {
 
   return {
     authenticator: identityAuthenticator(database, identityPorts),
-    httpModules: [platformModule, identityModule, inventoryModule, guestsModule, financeModule, recordsModule],
+    httpModules: [
+      platformModule,
+      identityModule,
+      inventoryModule,
+      guestsModule,
+      financeModule,
+      recordsModule,
+    ],
     subscriptions: [...financeSubscriptions(finance, financePorts)],
     searchProviders,
     jobs: [...CORE_JOBS, ...createInventoryJobs(inventoryService), ...guestsJobs(guestsService)],

@@ -64,6 +64,7 @@ async function checkedOutStay(org: Awaited<ReturnType<typeof setupOrg>>, invoice
       tenantId: org.tenantId,
       propertyId: org.propertyId,
       aggregate: { type: 'stay', id: s.stayId },
+      aggregateVersion: null,
       occurredAt: new Date().toISOString(),
       actor: { kind: 'system', process: 'test' },
       correlationId: newId(),

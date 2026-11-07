@@ -21,7 +21,7 @@ import type { ChargeGroup, PaymentMethodKind, RuleCap, RuleSelector } from '../d
 import type { TaxLine } from '../ports';
 import type { AllowanceInstancesTable, ChargeCodesTable } from '../tables';
 import { assertSameProperty, defaultFolio, prepareDestination, reopenInPlace } from './folios';
-import { chargeCodeByCode } from './setup';
+import { chargeCodeByCode, chargeGroupMap } from './setup';
 import {
   accountId,
   claimEntry,
@@ -341,7 +341,9 @@ export async function postCharge(
   const gross = amounts.reduce((s, a) => s + a, 0);
 
   // Route (lock capped rules so concurrent charges cannot both use the same remaining limit).
-  const groupOf = (c: string) => (c === code.code ? (code.charge_group as ChargeGroup) : undefined);
+  // Rules are compared against every charge code's group (ADR-0016 §1), not only the posted code's.
+  const groupMap = rules.length ? await chargeGroupMap(tx, input.propertyId) : new Map<string, ChargeGroup>();
+  const groupOf = (c: string) => groupMap.get(c);
   const capped = rules.filter((r) => r.cap && r.cap.kind !== 'percent').map((r) => r.id);
   if (capped.length) {
     await db(tx)
@@ -916,6 +918,11 @@ export async function recordRefund(
   }
   await deps.ports.platform.assertWritable(tx, f0.property_id, 'charges');
   const original = await findOriginalPayment(tx, input.originalPaymentRef);
+  const raced = await findEntryByKey(tx, idempotencyKey, hash);
+  if (raced) {
+    const r = await entryResult(tx, raced, true);
+    return { ...r, postingId: r.postingIds[0] as string };
+  }
   if (input.amount.currency !== original.tenderCurrency) {
     throw new ValidationError(
       'refund_currency_mismatch',
@@ -1059,6 +1066,10 @@ export async function findOriginalPayment(
     p.original_currency
       ? { amount: Math.abs(Number(p.original_amount_minor)), currency: p.original_currency }
       : { amount: Math.abs(Number(p.amount_minor)), currency: p.currency };
+  // Serialize everything that reduces one payment (refunds, corrections) before measuring what is left.
+  await sql`select pg_advisory_xact_lock(hashtext(${`finance.payment:${ref.type}:${ref.id}`}))`.execute(
+    tx.db,
+  );
   const posting = await db(tx)
     .selectFrom('finance.postings')
     .selectAll()
@@ -1072,16 +1083,23 @@ export async function findOriginalPayment(
       .selectFrom('finance.postings')
       .selectAll()
       .where('corrects_posting_id', '=', posting.id)
-      .where('kind', '=', 'refund')
+      .where('kind', 'in', ['refund', 'adjustment'])
       .execute();
     const t = tender(posting);
+    // Refunds reduce what can still be refunded; payment corrections (adjustments) move it either way:
+    // a correction posting of +X on the folio means the recorded payment was reduced by X.
+    const signedTender = (r: (typeof refunds)[number]) =>
+      Math.sign(Number(r.amount_minor)) * tender(r).amount;
     return {
       postingId: posting.id,
       bookingId: null,
       paymentMethod: posting.payment_method,
       tenderMinor: t.amount,
       tenderCurrency: t.currency,
-      refundedMinor: refunds.reduce((s, r) => s + tender(r).amount, 0),
+      refundedMinor: refunds.reduce(
+        (s, r) => s + (r.kind === 'refund' ? tender(r).amount : signedTender(r)),
+        0,
+      ),
     };
   }
   const deposit = await db(tx)
@@ -1104,7 +1122,7 @@ export async function findOriginalPayment(
       .innerJoin('finance.deposit_movements as m', 'm.entry_id', 'e.id')
       .select('m.amount_minor')
       .where('e.reason_code', '=', `refund_of:${ref.type}:${ref.id}`)
-      .where('m.kind', '=', 'refunded')
+      .where('m.kind', 'in', ['refunded', 'adjusted'])
       .execute();
     return {
       postingId: null,
@@ -1407,6 +1425,11 @@ export async function adjustPosting(
       );
     }
   }
+  // Lock the folio BEFORE measuring what is left to correct: concurrent corrections (different keys) serialize
+  // here and each sees the previous one's effect, so the total corrected can never exceed the original.
+  const locked = (await lockFolios(tx, [p.folio_id])).get(p.folio_id) as FolioRow;
+  const raced = await findEntryByKey(tx, idempotencyKey, hash);
+  if (raced) return entryResult(tx, raced, true);
   const family = [
     p,
     ...(await db(tx)
@@ -1470,7 +1493,6 @@ export async function adjustPosting(
     description: `Correction of "${p.description}": ${input.note}`,
   });
   if (!claim.claimed) return entryResult(tx, claim.entryId, true);
-  const locked = (await lockFolios(tx, [p.folio_id])).get(p.folio_id) as FolioRow;
   if (locked.status === 'closed' && !allowInvoiced) {
     throw new BusinessRuleError(
       'folio_not_open',
@@ -1650,6 +1672,18 @@ export async function reverseEntry(
   const prior = await findEntryByKey(tx, idempotencyKey, hash);
   if (prior) return entryResult(tx, prior, true);
   await deps.ports.platform.assertWritable(tx, entry.property_id, 'charges');
+  // Lock every folio of the entry BEFORE checking that nothing was corrected or moved meanwhile.
+  const entryFolios = await db(tx)
+    .selectFrom('finance.postings')
+    .select('folio_id')
+    .where('entry_id', '=', entry.id)
+    .execute();
+  const locked = await lockFolios(
+    tx,
+    entryFolios.map((f) => f.folio_id),
+  );
+  const raced = await findEntryByKey(tx, idempotencyKey, hash);
+  if (raced) return entryResult(tx, raced, true);
   const already = await db(tx)
     .selectFrom('finance.journal_entries')
     .select('id')
@@ -1712,10 +1746,6 @@ export async function reverseEntry(
     throw err;
   }
   if (!claim.claimed) return entryResult(tx, claim.entryId, true);
-  const locked = await lockFolios(
-    tx,
-    postings.map((p) => p.folio_id),
-  );
   for (const f of locked.values()) {
     if (f.status === 'closed') {
       throw new BusinessRuleError(

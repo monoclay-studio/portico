@@ -1,5 +1,5 @@
 import type { TxContext } from '@portico/db';
-import { DomainError, newId } from '@portico/kernel';
+import { ModuleUnavailableError, newId } from '@portico/kernel';
 import type { PaymentsPort, TaxPort } from './ports';
 import { seedDefaultChargeCodes } from './service/setup';
 import { db, ensureChart } from './service/support';
@@ -10,16 +10,10 @@ import { db, ensureChart } from './service/support';
  * taxes); collection requests report 'unavailable' so a late charge still posts and is listed as an exception.
  */
 export function unavailableFinancePorts(): { tax: TaxPort; payments: PaymentsPort } {
-  const unavailable = (module: string) =>
-    new DomainError(
-      'module_unavailable',
-      `The ${module} module is not connected in this deployment yet, so this action cannot complete. Nothing was posted.`,
-      { status: 503, retryable: true, details: { module } },
-    );
   return {
     tax: {
       async computeTaxes() {
-        throw unavailable('rates (tax engine)');
+        throw new ModuleUnavailableError('rates (tax engine)', 'computeTaxes');
       },
       async getRulePackStatus() {
         return { verified: false, note: 'The tax engine (rates module) is not connected.' };

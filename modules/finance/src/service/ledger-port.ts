@@ -150,6 +150,9 @@ export async function recordPaymentAdjustment(
         correctsPostingId: original.postingId,
         source: input.paymentRef,
         fxRateId: bridge.fxRateId,
+        ...(input.amount.currency !== folio.currency
+          ? { originalAmountMinor: -input.amount.amountMinor, originalCurrency: input.amount.currency }
+          : {}),
       },
     ],
     bridge.lines,

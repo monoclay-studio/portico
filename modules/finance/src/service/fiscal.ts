@@ -684,6 +684,9 @@ export async function issueCreditNote(
   requirePermission(tx, 'finance.creditNote.issue', { propertyId: inv.property_id });
   const { idempotencyKey, ...rest } = input;
   const hash = requestHash({ op: 'credit-note', ...rest });
+  // Lock the invoice's folio BEFORE checking how much is already credited: concurrent credit notes serialize
+  // here, so an invoice can never be credited beyond its total.
+  await loadFolio(tx, inv.folio_id, { forUpdate: true });
   const existing = await db(tx)
     .selectFrom('finance.fiscal_documents')
     .selectAll()

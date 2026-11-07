@@ -1,4 +1,4 @@
-import { type Selectable, sql, type TxContext, typed } from '@portico/db';
+import { pgCode, type Selectable, sql, type TxContext, typed } from '@portico/db';
 import {
   type Authorizer,
   actorId,
@@ -36,7 +36,7 @@ export function requestHash(input: unknown): string {
 }
 
 export function isUniqueViolation(err: unknown): boolean {
-  return typeof err === 'object' && err !== null && (err as { code?: string }).code === '23505';
+  return pgCode(err) === '23505';
 }
 
 /** A TxContext whose authorizer additionally grants the given finance permissions (provider delegation). */
