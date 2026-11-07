@@ -403,3 +403,87 @@ export async function previewRouting(tx: TxContext, input: PreviewInput): Promis
     })),
   };
 }
+
+/**
+ * Replace the whole rule set of an owner in one step (reservations applies company/rate-plan/group defaults at
+ * booking or check-in). The new set is validated as a whole — ties and partial overlaps are refused — before any
+ * existing rule is deactivated.
+ */
+export async function replaceBillingRules(
+  tx: TxContext,
+  deps: Deps,
+  input: {
+    owner: { type: 'stay' | 'booking' | 'group'; id: string };
+    rules: Array<{
+      destinationFolioId: string;
+      label: string;
+      selector: RuleSelector;
+      cap: RuleCap | null;
+      source: 'manual' | 'company_default' | 'rate_plan' | 'group' | 'package';
+    }>;
+  },
+): Promise<{ ruleIds: string[] }> {
+  const base = await defaultFolio(tx, input.owner);
+  requirePermission(tx, 'finance.billingRule.manage', { propertyId: base.property_id });
+  await deps.ports.platform.assertWritable(tx, base.property_id, 'charges');
+  await lockOwner(tx, input.owner);
+  const groups = await chargeGroupMap(tx, base.property_id);
+  const candidates: RoutingRule[] = input.rules.map((r) => ({
+    id: newId(tx.now.getTime()),
+    label: r.label,
+    destinationFolioId: r.destinationFolioId,
+    selector: r.selector,
+    cap: r.cap,
+  }));
+  for (const r of input.rules) {
+    await validateRule(tx, {
+      propertyId: base.property_id,
+      owner: input.owner,
+      destinationFolioId: r.destinationFolioId,
+      selector: r.selector,
+      cap: r.cap,
+    });
+  }
+  assertRuleSetConsistent(candidates, (c) => groups.get(c));
+  const existing = await db(tx)
+    .updateTable('finance.billing_rules')
+    .set({ active: false, version: sql`version + 1` })
+    .where('owner_type', '=', input.owner.type)
+    .where('owner_id', '=', input.owner.id)
+    .where('active', '=', true)
+    .returning('id')
+    .execute();
+  for (let i = 0; i < candidates.length; i++) {
+    const c = candidates[i] as RoutingRule;
+    const r = input.rules[i] as (typeof input.rules)[number];
+    await db(tx)
+      .insertInto('finance.billing_rules')
+      .values({
+        id: c.id,
+        tenant_id: tx.tenantId,
+        property_id: base.property_id,
+        owner_type: input.owner.type,
+        owner_id: input.owner.id,
+        destination_folio_id: r.destinationFolioId,
+        label: r.label,
+        selector: JSON.stringify(r.selector),
+        cap: r.cap ? JSON.stringify(r.cap) : null,
+        source: r.source,
+      })
+      .execute();
+  }
+  await tx.audit({
+    action: 'finance.billingRule.replaceSet',
+    target: { type: 'folio', id: base.id },
+    propertyId: base.property_id,
+    before: { deactivated: existing.map((e) => e.id) },
+    after: { rules: input.rules },
+  });
+  await tx.emit({
+    type: 'finance.billingRule.changed',
+    propertyId: base.property_id,
+    aggregate: { type: input.owner.type, id: input.owner.id },
+    payload: { owner: input.owner, change: 'replaced', ruleIds: candidates.map((c) => c.id) },
+  });
+  return { ruleIds: candidates.map((c) => c.id) };
+}

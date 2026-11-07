@@ -104,7 +104,15 @@ export async function startHarness(): Promise<Harness> {
   const t = await createTestDatabase(sourcesFromManifests([platformManifest, financeManifest]));
   // Teardown race in the shared harness: pool.end() resolves before clients finish closing, then the forced
   // DROP DATABASE terminates them and the orphaned client emits an unhandled 'error' (FOUNDATION_REQUESTS.md).
-  for (const pool of [t.db.pool, t.admin.pool]) pool.on('connect', (client) => client.on('error', () => {}));
+  // Give the sockets time to close before the drop, and swallow connection errors raised during teardown.
+  for (const d of [t.db, t.admin]) {
+    d.pool.on('connect', (client) => client.on('error', () => {}));
+    const close = d.close.bind(d);
+    d.close = async () => {
+      await close();
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    };
+  }
   const collections: CollectionRequest[] = [];
   const tax = new FakeTax();
   const asSystem = (tx: TxContext): TxContext => ({ ...tx, authz: systemAuthorizer });

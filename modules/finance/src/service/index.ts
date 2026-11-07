@@ -7,6 +7,7 @@ import {
   type Money,
   ValidationError,
 } from '@portico/kernel';
+import type { ChargeGroup } from '../domain/types';
 import type { FinancePorts } from '../ports';
 import * as allowances from './allowances';
 import * as billingRules from './billing-rules';
@@ -67,6 +68,7 @@ export function createFinance(ports: FinancePorts) {
     updateBillingRule: bind(deps, billingRules.updateBillingRule),
     deactivateBillingRule: bind(deps, billingRules.deactivateBillingRule),
     listBillingRules: billingRules.listBillingRules,
+    replaceBillingRules: bind(deps, billingRules.replaceBillingRules),
     previewRouting: billingRules.previewRouting,
     // ── deposits & allowances ──
     refundDeposit: bind(deps, deposits.refundDeposit),
@@ -313,6 +315,130 @@ export function financeLedgerForPayments(service: FinanceService) {
     ): Promise<{ journalEntryId: string }> {
       return { journalEntryId: (await service.recordDisputeMovement(d(tx), input)).journalEntryId };
     },
+  };
+}
+
+/**
+ * The `FinancePort` the reservations module declares (modules/reservations/src/ports.ts), for direct binding:
+ * `finance: financeForReservations(finance)`. Payer names: reservations passes payer refs without names, so the
+ * folio label (or a neutral default) is used until the guest/company name is supplied.
+ */
+export function financeForReservations(service: FinanceService) {
+  const d = (tx: TxContext) => delegated(tx, PROVIDER_DELEGATION.reservations ?? []);
+  const payerType = (t: string): 'guest' | 'company' | 'agency' | 'house' =>
+    t === 'company' || t === 'agency' || t === 'house' ? t : 'guest';
+  const ruleOwner = (o: EntityRef) => {
+    if (o.type !== 'stay' && o.type !== 'booking' && o.type !== 'group') {
+      throw new ValidationError('invalid_rule_owner', 'Billing rules belong to a stay, booking or group.');
+    }
+    return { type: o.type, id: o.id } as { type: 'stay' | 'booking' | 'group'; id: string };
+  };
+  const folioOwner = (o: EntityRef) => {
+    if (!['stay', 'booking', 'group', 'company', 'house'].includes(o.type)) {
+      throw new ValidationError(
+        'invalid_folio_owner',
+        'A folio belongs to a stay, booking, group, company or house account.',
+      );
+    }
+    return o as { type: 'stay' | 'booking' | 'group' | 'company' | 'house'; id: string };
+  };
+  return {
+    async openFolio(
+      tx: TxContext,
+      input: {
+        propertyId: string;
+        owner: EntityRef;
+        payer: { type: string; id: string; name?: string };
+        label?: string;
+      },
+    ) {
+      const type = payerType(input.payer.type);
+      const name =
+        input.payer.name ??
+        input.label ??
+        (type === 'guest' ? 'Guest' : type === 'house' ? 'House account' : 'Company account');
+      return service.openFolio(d(tx), {
+        propertyId: input.propertyId,
+        owner: folioOwner(input.owner),
+        payer: { type, ...(type === 'house' ? {} : { id: input.payer.id }), name },
+        ...(input.label ? { label: input.label } : {}),
+      });
+    },
+    async postCharge(tx: TxContext, input: Parameters<FinanceService['postCharge']>[1]) {
+      return service.postCharge(d(tx), input);
+    },
+    async recordDeposit(
+      tx: TxContext,
+      input: {
+        bookingId: string;
+        amount: Money;
+        paymentRef: EntityRef;
+        idempotencyKey: string;
+        propertyId?: string;
+      },
+    ): Promise<void> {
+      await service.recordDeposit(d(tx), input);
+    },
+    async applyDeposits(tx: TxContext, input: { bookingId: string; toFolioId: string }) {
+      const r = await service.applyDeposits(d(tx), input);
+      return r.entryId ? { applied: r.applied } : undefined;
+    },
+    async getFolioBalance(tx: TxContext, folioId: string) {
+      const f = await service.getFolio(d(tx), folioId);
+      return { folioId, balance: f.balance, status: f.status.folio };
+    },
+    async listFolios(tx: TxContext, input: { owner: EntityRef }) {
+      const folios = await service.listFolios(d(tx), { owner: folioOwner(input.owner) });
+      return folios.map((f) => ({
+        folioId: f.id,
+        owner: f.attachedTo,
+        payer: { type: f.payer.type === 'guest' ? 'profile' : f.payer.type, id: f.payer.id ?? '' },
+        ...(f.label ? { label: f.label } : {}),
+        isDefault: f.isDefault,
+        status: f.status.folio === 'open' ? ('open' as const) : ('settled' as const),
+        balance: f.balance,
+      }));
+    },
+    async setBillingRules(
+      tx: TxContext,
+      input: {
+        owner: EntityRef;
+        rules: Array<{
+          destinationFolioId: string;
+          chargeCodeGroups: string[];
+          serviceDates?: { from: LocalDate; to: LocalDate };
+          cap?: { kind: 'per_night' | 'per_stay'; amount: Money };
+          source: 'manual' | 'company_default' | 'rate_plan' | 'group' | 'package';
+        }>;
+      },
+    ) {
+      return service.replaceBillingRules(d(tx), {
+        owner: ruleOwner(input.owner),
+        rules: input.rules.map((r) => ({
+          destinationFolioId: r.destinationFolioId,
+          label: `${r.source.replace('_', ' ')}: ${r.chargeCodeGroups.join(', ') || 'all charges'}`,
+          selector: {
+            chargeGroups: r.chargeCodeGroups as ChargeGroup[],
+            ...(r.serviceDates
+              ? { serviceDateFrom: r.serviceDates.from, serviceDateTo: r.serviceDates.to }
+              : {}),
+          },
+          cap: r.cap
+            ? { kind: r.cap.kind, amountMinor: r.cap.amount.amountMinor, currency: r.cap.amount.currency }
+            : null,
+          source: r.source,
+        })),
+      });
+    },
+    async getDepositBalance(tx: TxContext, input: { bookingId: string }): Promise<Money | null> {
+      return (await service.getDeposits(d(tx), input.bookingId))?.balance ?? null;
+    },
+    markOwnerDeparted: (tx: TxContext, input: Parameters<FinanceService['markOwnerDeparted']>[1]) =>
+      service.markOwnerDeparted(d(tx), input),
+    grantAllowance: (tx: TxContext, input: Parameters<FinanceService['grantAllowance']>[1]) =>
+      service.grantAllowance(d(tx), input),
+    closeAllowances: (tx: TxContext, input: Parameters<FinanceService['closeAllowances']>[1]) =>
+      service.closeAllowances(d(tx), input),
   };
 }
 

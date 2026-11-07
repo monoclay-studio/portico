@@ -2,13 +2,14 @@
 
 ## Checkpoint
 
-- **Done:** everything listed under *Capabilities* below with status R3, including tests (domain, integration,
-  scenarios S04/S09/S10/S18/S19, API end-to-end) and composition wiring.
+- **Done:** everything listed under *Capabilities* below with status R3, tests (domain, integration, scenarios
+  S04/S09/S10/S18/S19, API end-to-end), composition wiring, and direct-binding adapters for the payments
+  `LedgerPort` and the reservations `FinancePort`.
 - **In progress:** nothing.
-- **Next steps (after merge):** bind `rates` (TaxPort) and `payments` (PaymentsPort) in `apps/api/src/composition.ts`;
-  give reservations/payments/day-close their provider via `financeProvider(finance, '<caller>')`; register
-  `financeDemoSeed` in `DEMO_SEED_STEPS`.
-- **Known failing tests:** none (`pnpm --filter @portico/finance test`: 60 tests; `@portico/api`: finance e2e green).
+- **Next steps (orchestrator, at merge):** in `apps/api/src/composition.ts` bind `rates` → `TaxPort`,
+  `payments` → `PaymentsPort.requestCollection`; give payments `ledger: financeLedgerForPayments(finance)` and
+  reservations `finance: financeForReservations(finance)`; register `financeDemoSeed` in `DEMO_SEED_STEPS`.
+- **Known failing tests:** none (`@portico/finance`: 15 files / 64 tests; `@portico/api`: 13 tests incl. finance e2e).
 
 ## Purpose
 
@@ -71,7 +72,7 @@ real `rates` rule pack.
 | R43 | Period close / restatement register | **Not built** (domain map now places GL period close in the wave-3 `accounting` module); restatements are flagged per entry | — |
 | R44–R45 | `getUnbalancedItems` (Day Close) + integrity report (TB balanced, guest ledger = folios, deposits = bookings, city ledger = accounts, allowance clearing = open allowances) | R3 | every scenario test calls `assertLedgerIntegrity` |
 | — | Opening-balance import of deposits with reconciliation report (S18 groundwork) | R3 | S18 |
-| — | Payouts (never revenue), refunds linked to the original payment, idempotent LedgerPort functions | R3 | payments test |
+| — | Payouts (never revenue), refunds linked to the original payment, idempotent LedgerPort functions, recorded-payment corrections, dispute movements, verification state | R3 | `receivables-cashier-fx.test.ts`, `payments-ledger-port.test.ts` |
 | — | Retention (`retain_until` = tax-year end + 5 years; legal holds) | R3 — nothing is ever purged in this wave | legal-hold test |
 
 ## Maldives rules applied (docs/readiness/maldives-tax-rules.md — not legal advice, Q20)
@@ -188,6 +189,26 @@ stay's allowance periods). Payload read defensively: `stayId`, `propertyId`, `bu
 | `TaxPort` (`rates.computeTaxes`, rule-pack status) | taxes for charges and prepayments | **stub** (`unavailableFinancePorts`): taxable postings fail with 503 `module_unavailable`; rule pack reported unverified (live invoices blocked). Bind to rates at merge. |
 | `PaymentsPort.requestCollection` | late-charge collection follow-up (DB only) | **stub**: returns `unavailable`; the exception tells staff to collect manually. Bind to payments at merge. |
 
+**Providers for other modules (bind directly):**
+
+- `financeLedgerForPayments(finance)` implements payments' `LedgerPort` exactly
+  (`modules/payments/src/ports.ts`): `recordPayment` (method incl. `payment_link`/`external_terminal`,
+  `verification` stored and shown as "awaiting verification"), `recordDeposit`, `recordRefund` (folio, held
+  deposit, or the folio that received an applied deposit), `recordPayout` → `{ journalEntryId }`,
+  `recordPaymentAdjustment` (signed, linked correction on folio or deposit), `recordDisputeMovement` (card
+  clearing ↔ disputed funds; the bill is untouched). Cash recorded by payments without an open cashier session is
+  posted and raised as a `cash_without_session` exception instead of being refused. Deposits have no folio posting:
+  their `postingId` carries the journal entry id. Proven in `test/payments-ledger-port.test.ts`.
+  **Binding note:** payments' `recordDeposit` does not pass `propertyId`; finance resolves it from an existing
+  deposit account or a booking-owned folio and otherwise refuses with `property_required`. Recommended one-line
+  change in payments: pass `propertyId: p.property_id` (the adapter accepts it).
+- `financeForReservations(finance)` implements reservations' `FinancePort` (`openFolio` with payer refs,
+  `postCharge`, `recordDeposit`, `applyDeposits`, `getFolioBalance`, `listFolios`, `setBillingRules` (whole set
+  replaced and validated), `getDepositBalance`) plus `markOwnerDeparted`, `grantAllowance`, `closeAllowances`.
+  Reservations passes payer refs without names; folios are labelled with the given name/label or a neutral default
+  until a name is supplied. Proven in `test/reservations-port.test.ts`.
+- `financeProvider(finance, caller)` — generic delegated surface for day-close and resort.
+
 ## Contract changes (vs `docs/architecture/domain-map.md` § finance)
 
 1. `postCharge` input adds `priceMode`, `revenueDate`, `reason`, `occupancy`; returns
@@ -205,6 +226,12 @@ stay's allowance periods). Payload read defensively: `stayId`, `propertyId`, `bu
    where each tax has `kind` (`tax|fee|service_charge`), `accountKey`, `ruleVersionId`, optional `units`,
    `exemptUnits`, `rateCategory`. Prepayments use `chargeGroup: 'deposit'`.
 7. Dependency arrow `finance ─► rates` (tax engine) — spec proposal 1.
+8. Payments alignment (payments README § Contract changes): `recordPayment`/`recordDeposit` accept `method`
+   (adds `payment_link`, `external_terminal`) and `verification`; `recordRefund` accepts `folioId: null` +
+   `bookingId`; new `recordPaymentAdjustment` and `recordDisputeMovement`; `recordPayout` returns
+   `{ journalEntryId }` through the adapter.
+9. Reservations alignment: `setBillingRules(owner, rules)` replaces an owner's rule set atomically
+   (`replaceBillingRules`); `getDepositBalance(bookingId)`.
 
 ## Adoption modes and data authority
 

@@ -9,8 +9,9 @@ sockets are closed. The forced drop then terminates connections that are still c
 unhandled error. It shows up intermittently in suites that run many concurrent transactions (finance S09, the
 billing-rule limit concurrency test).
 
-**Workaround (local, finance tests only).** `modules/finance/test/helpers.ts` attaches a no-op `error` listener to
-every client on `connect` for the test pools.
+**Workaround (local, finance tests only).** `modules/finance/test/helpers.ts` wraps `close()` of both test pools to
+wait 300 ms after `pool.end()` before the drop, and attaches a no-op `error` listener to every client. (The listener
+alone was not enough; the delay removed the error in repeated full runs.)
 
 **Proposed diff** (`packages/testing/src/database.ts`):
 
