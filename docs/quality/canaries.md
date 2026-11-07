@@ -155,7 +155,7 @@ Combine them into **sets** so that each run covers one theme:
 | C-L4-10 | UX-06 focus | A dialog that does not take focus | …reports it in the keyboard pass |
 | C-L4-11 | Refiner evidence check (E-034) | In the findings handed to the refiner, one cited screenshot is swapped for one showing a different state | The refiner flags the evidence as invalid (UR2-1) |
 | C-L4-12 | Disposition check (E-105), added in round 3; **scripted** | In a copy of a round's findings file, add one planted finding ID that no pending-fix line, refinement or acceptance check names | The disposition script (O4-2) lists it as "no disposition". Round 3's real run listed 39 of 49 |
-| C-L4-13 | Named reproduction (E-106), added in round 3 | In the lab build, break the validation of the exact form and field a past finding named (E-025: the property's empty Name) | The tester reports it, and the backoffice gate fails, because the reproduction is a regression test (BS5-8). Today only the tester would catch it |
+| C-L4-13 | Named reproduction (E-106), added in round 3 | In the lab build, break the validation of the exact form and field a past finding named (E-025: the property's empty Name) | The tester reports it, and the backoffice gate fails, because the reproduction is a regression test (BS6-2). Today only the tester would catch it |
 
 ### 3.4 L3 and L5 (scripted or cheap)
 

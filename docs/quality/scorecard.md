@@ -212,7 +212,7 @@ loop's own measurement.
 | **R1:** environment-coupled gate | 1 | E-053: backoffice e2e passes only on port 5180; Playwright outside `turbo test` | Retro edit 1c |
 | **R1:** gate checks that held under canary | 6 of 8 conditions | C-L1-01, 02a, 02b (through one copy only), 03a, 03b, 03d | `canaries.md` § 6 |
 | **R3:** latent gate gaps | 2 | E-094 (`pnpm lint` exits 0 on warnings); E-095 (infra checks run by hand, in no CI job) | Retro edit 6; canary C-L1-07 |
-| **R3:** fix-round guard with no failing test (mutation) | 1 of 6 | E-114 (the collection lock) | Canary `r3-l1`; builder v5 BS5-8 |
+| **R3:** fix-round guard with no failing test (mutation) | 1 of 6 | E-114 (the collection lock) | Canary `r3-l1`; builder v5 BS5-7 |
 
 ## 8. Canary runs
 

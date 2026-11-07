@@ -158,10 +158,10 @@ E-110, E-111; E-104 and E-105 are the orchestrator's records). RC-15 below.
 | **RC-12.** The orchestrator passed things on or recorded them inexactly: paraphrased claims, broad commits, estimated times, generated files not refreshed | E-043 (contributing), E-055, E-057, E-060 | Orchestrator v2 (O2-1…O2-4) |
 | **RC-13 (round 2).** A fix guards the reported *path*, not the *invariant*. The writers of the facts it trusts (premises), the inverse and repeated operations, the other record parameters, the other stores and the fix's own records are never enumerated | E-063, E-066, E-067 (stores), E-070, E-073, E-074, E-075, E-076, E-077 | Builder self-check **v4** (invariant closure); patterns AP-57 and AP-58 |
 | **RC-14 (round 3).** Closure is enumerated from memory, inside Portico's code. Writer and reader lists are recalled, not derived; the record's other states and exits, the external systems holding a copy of it, the enforcement points of a stored control fact, the key fields that select it, and concurrency per writer are outside the frame | E-086, E-087, E-088, E-089, E-090, E-092 | Builder self-check **v5** (BS5-1 … BS5-6); patterns AP-59 and AP-60 |
-| **RC-15 (round 3).** A prose claim about behaviour (a runbook capability, a recorded default, a "Done" refinement, a parity row, a self-check "yes") is written without a test or code check, and no gate reads prose | E-087, E-096 … E-102, E-104, E-106, E-107, E-109, E-110, E-111 | Builder **v5** BS5-7 (claim ledger); orchestrator **v4** O4-1; pattern AP-62 |
+| **RC-15 (round 3).** A prose claim about behaviour (a runbook capability, a recorded default, a "Done" refinement, a parity row, a self-check "yes") is written without a test or code check, and no gate reads prose | E-087, E-096 … E-102, E-104, E-106, E-107, E-109, E-110, E-111 | Builder **v6** BS6-1 (claim ledger); orchestrator **v4** O4-1; pattern AP-62 |
 | **RC-16 (round 3).** A loop step is skipped for cost and its function is not reassigned: the refiner's triage, disposition and confirm/refute of "Done" claims | E-105 (E-107 left unrouted as a result) | Orchestrator **v4** O4-2; refiner **v2.1** triage-only variant |
 | **RC-12 recurred (round 3).** Generated records not refreshed (agent briefs and reports, E-117), and a measuring tool whose unit was never checked against one known record (E-116, with L8) | E-116, E-117 | Orchestrator **v4** O4-4; retro edit 7 |
-| **RC-10 recurred (round 3).** A test cannot fail: values unasserted (E-099), a title that claims more than the body (E-113), a "concurrent" test whose race is set up sequentially (E-114) | E-099, E-113, E-114 | Builder **v5** BS5-8 (one mutant per guard) |
+| **RC-10 recurred (round 3).** A test cannot fail: values unasserted (E-099), a title that claims more than the body (E-113), a "concurrent" test whose race is set up sequentially (E-114) | E-099, E-113, E-114 | Builder **v5** BS5-7 (one mutant per guard) |
 
 ---
 
@@ -1347,7 +1347,7 @@ findings whose class was not in the builder's checklist, so they are **not** cou
 - **Should have been caught by.** L1-BSC. `docs/runbooks/deploy.md:20-21` makes a capability claim that no test
   checks (item 31 answered yes). Privilege equivalence (AP-09) and trust keyed on a claimable name (AP-03) were in the
   pattern library.
-- **Checks added.** Patterns AP-09 and AP-03, extended; builder **v5** BS5-7 (claim ledger).
+- **Checks added.** Patterns AP-09 and AP-03, extended; builder **v6** BS6-1 (claim ledger).
 
 #### E-097 · P1 · D · The monthly restore drill can never run, and nothing alarms (infra P1-3)
 - **Found.** L2 infra review (`infra-poc/restore-drill-silent.txt`).
@@ -1358,7 +1358,7 @@ findings whose class was not in the builder's checklist, so they are **not** cou
   `backup-restore-verification.md` present the drill as running and paging.
 - **Why it was missed.** A monitor that alarms on a **failure signal** is silent when the job never runs. Only the
   absence of a **success signal** within its period catches that.
-- **Checks added.** New pattern **AP-61** (dead-man's switch); builder **v5** BS5-7.
+- **Checks added.** New pattern **AP-61** (dead-man's switch); builder **v6** BS6-1.
 
 #### E-098 · P2 · D · The "LIVE keys only in production" guard checks only the variable name (infra P2-1)
 - **Found.** L2 infra review (`infra-poc/live-key-guard-bypass.txt`). Staging accepts the live Stripe Connect key under
@@ -1371,31 +1371,31 @@ findings whose class was not in the builder's checklist, so they are **not** cou
 - **Found.** L2 infra review (third `terraform test` run in `live-key-guard-bypass.txt`).
 - **Should have been caught by.** L1-BSC (item 25; item 31). The `runtime_contract` test asserts names, not values
   (AP-55).
-- **Checks added.** Builder **v5** BS5-7.
+- **Checks added.** Builder **v6** BS6-1.
 
 #### E-100 · P2 · C · "Failed backup and copy jobs page on-call" is false: the topic refuses AWS Backup and SES (infra P2-10)
 - **Found.** L2 infra review (code-read of topic and KMS policies).
 - **Should have been caught by.** L1-BSC (item 31).
-- **Checks added.** Builder **v5** BS5-7; pattern AP-61 (a page that cannot be delivered is a silent monitor).
+- **Checks added.** Builder **v6** BS6-1; pattern AP-61 (a page that cannot be delivered is a silent monitor).
 
 #### E-101 · P2 · C · Governance-mode locks are described as stopping a compromised administrator (infra P2-11)
 - **Found.** L2 infra review. Governance mode can be bypassed by an administrator; no trail or detective control
   exists, while `incident-response.md:59` relies on CloudTrail.
 - **Should have been caught by.** L1-BSC (item 31).
-- **Checks added.** Builder **v5** BS5-7.
+- **Checks added.** Builder **v6** BS6-1.
 
 #### E-102 · P2 · C · The drill's isolation checks miss likely defects, and the "earlier negative tests" it cites do not exist (infra P2-4)
 - **Found.** L2 infra review (`infra-poc/drill-mutations.txt`: 8 planted defects caught, 6 missed).
 - **Should have been caught by.** L1-BSC (item 31; AP-55). The reviewer's mutation run is the evidence that the
   builder's own claim needed.
-- **Checks added.** Builder **v5** BS5-8 (mutation proof for guards and checks).
+- **Checks added.** Builder **v5** BS5-7 (mutation proof for guards and checks).
 
 #### E-103 · P2 · D · Guest PII reaches Postgres logs; the self-check marked PII "N/A" for infra (infra P2-5)
 - **Found.** L2 infra review (`infra-poc/pii-in-postgres-logs.txt`): bind values of slow queries and key values in
   error DETAIL.
 - **Should have been caught by.** L1-BSC. Infra owns the database's logging parameters, so "erasure and PII are not
   infra's" was a wrong N/A. CLAUDE.md § 6 ("PII is never logged") is in every brief.
-- **Checks added.** Patterns AP-15 and AP-17, extended (database server logs); builder **v5** (an N/A needs a reason
+- **Checks added.** Patterns AP-15 and AP-17, extended (database server logs); builder **v6** BS6-3 (an N/A needs a reason
   about the item, checked against what the module configures).
 
 ### L-orch — the orchestrator's process
@@ -1439,7 +1439,7 @@ findings whose class was not in the builder's checklist, so they are **not** cou
   conflict dialog but not the empty-name save, so nothing protected the case that raised the refinement.
 - **Should have been caught by.** L1-BSC (backoffice fix round): the named reproduction had no regression test
   (RC-4 at its narrowest).
-- **Checks added.** Builder **v5** BS5-8 (every finding's own reproduction is a test that fails without the fix);
+- **Checks added.** Builder **v6** BS6-2 (every finding's own reproduction is a test that fails without the fix);
   canary C-L4-13.
 
 #### E-107 · P2 · D · NAV-07 is marked "Done", but three Today tiles open lists that cannot be checked against their number (R2a-X-F01)
@@ -1448,7 +1448,7 @@ findings whose class was not in the builder's checklist, so they are **not** cou
 - **Should have been caught by.** L1-BSC. The claim covers all tiles; the e2e asserts the Arrivals tile only (AP-45:
   one instance tested, the claim generalized).
 - **Routing.** Not in `pending-fixes.md` (tagged SIM; the cause is navigation, not data). See E-105.
-- **Checks added.** Pattern UX-02, extended (every tile, not one); builder **v5** BS5-7.
+- **Checks added.** Pattern UX-02, extended (every tile, not one); builder **v6** BS6-1.
 
 #### E-108 · P2 · D · The `g s` switcher starts on the first property, ignores typing, and Enter silently switches to the wrong hotel (R2a-P7-F02)
 - **Found.** L4 tester v2 (`screens/p7-08-gs-switcher-focus.jpg`, `p7-09-wrong-property-after-enter.jpg`).
@@ -1481,7 +1481,7 @@ findings whose class was not in the builder's checklist, so they are **not** cou
 - **Should have been caught by.** L1-BSC (v1 item 31). The README's list is a claim per row, and 13 rows had no
   assertion of the claimed outcome.
 - **L8 correction.** E-060 (round 1) read "their READMEs prove dozens of rows" from the README; 36 of 49 do.
-- **Checks added.** Builder **v5** BS5-7 (a parity claim quotes its assertion, like parity v2 PR2-1).
+- **Checks added.** Builder **v6** BS6-1 (a parity claim quotes its assertion, like parity v2 PR2-1).
 
 #### E-112 · P3 · D · Reservations' waitlist consumer reads `payload.cells`, which inventory never emits; its test feeds a hand-made payload (EC-INV-049)
 - **Found.** L5 parity re-run. Every availability change re-checks every waitlisted stay: the outcome is correct, the
@@ -1507,7 +1507,7 @@ findings whose class was not in the builder's checklist, so they are **not** cou
   passed before the fix", which was the signal.
 - **Should have been caught by.** L1-BSC. A pre-fix-commit run shows that a test fails; it cannot show which guard
   each test protects.
-- **Checks added.** Builder **v5** BS5-8 (one mutant per guard element for P0/P1 fixes). Pending-fixes line (retro
+- **Checks added.** Builder **v5** BS5-7 (one mutant per guard element for P0/P1 fixes). Pending-fixes line (retro
   edit 4): race link creation and link payment against a desk charge, and show the test fails without the lock.
 
 ### L8 — the meta loop itself
