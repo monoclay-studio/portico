@@ -87,3 +87,12 @@ the history endpoint, or reasons stored by reference in a redactable table).
 **Mitigation in guests (SW-GUE-1).** Every staff-typed reason guests writes is scrubbed of the subject's own names
 (all scripts), contact values and date of birth before it is stored (`scrubReason`). Misspellings and other
 people's names remain the residual; other modules' reasons are not covered.
+
+## 9. Runtime provenance vocabulary for contracts (`packages/kernel`)
+
+**Problem.** `Provenance` is a type only. Contracts (web-importable, Zod) need a runtime list, so modules copy
+literals (self-check BS3-1).
+**Proposal.** Export `PROVENANCES = [...] as const` from a web-safe kernel entry (no `node:` imports), and derive
+`Provenance` from it.
+**Workaround.** Guests declares its subset with `as const satisfies readonly Provenance[]` (type-only import), so
+drift fails the build.
