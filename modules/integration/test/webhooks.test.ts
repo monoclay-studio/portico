@@ -94,14 +94,14 @@ describe('partner webhooks', () => {
     expect(await integration.deliverDueWebhooks(h.t.db, h.deps, org.ctx)).toMatchObject({ failed: 1 });
     // Not due again until the backoff elapses.
     expect(await integration.deliverDueWebhooks(h.t.db, h.deps, org.ctx)).toMatchObject({ attempted: 0 });
-    for (const wait of [60, 300, 900, 3600, 10_800, 21_600, 43_200]) {
+    for (const wait of [60, 300, 900, 1800, 3600, 7200, 14_400, 28_800, 36_000]) {
       h.clock.advance(wait * 1000);
       await integration.deliverDueWebhooks(h.t.db, h.deps, org.ctx);
     }
     let [d] = await tx(h, org.ctx, (t) => integration.listDeliveries(t, sub.id));
     expect(d).toMatchObject({
       status: 'dead',
-      attempts: 8,
+      attempts: 10,
       lastResponseStatus: 500,
       eventId: first === d?.eventId ? first : d?.eventId,
     });
@@ -110,14 +110,14 @@ describe('partner webhooks', () => {
     }>`select count(*)::int as n from integration.webhook_attempts where delivery_id = ${d?.id}::uuid`.execute(
       h.t.admin.kysely,
     );
-    expect(attempts.rows[0]?.n).toBe(8);
-    // Two more failing deliveries reach 10 consecutive failures → disabled.
+    expect(attempts.rows[0]?.n).toBe(10);
+    // Two more failing deliveries reach 12 consecutive failures → disabled.
     await emit(org, 'reservations.booking.modified', org.propertyId);
     await emit(org, 'reservations.booking.cancelled', org.propertyId);
     await drain('live');
     await integration.deliverDueWebhooks(h.t.db, h.deps, org.ctx);
     let s = await tx(h, org.ctx, (t) => integration.getSubscription(t, sub.id));
-    expect(s).toMatchObject({ status: 'disabled', consecutiveFailures: 10 });
+    expect(s).toMatchObject({ status: 'disabled', consecutiveFailures: 12 });
     expect(s.disabledReason).toMatch(/re-enable it, then replay/);
     await expect(
       tx(h, org.ctx, (t) => integration.replayDelivery(t, d?.id ?? '', 'retry')),

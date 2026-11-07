@@ -2,13 +2,16 @@ import { describe, expect, it } from 'vitest';
 import { classifyWorkflow, computeHealth, type HealthInput, type WorkflowHealthInput } from './health';
 import {
   checkEndpointUrl,
+  DISABLE_AFTER_CONSECUTIVE_FAILURES,
   invalidPatterns,
   MAX_DELIVERY_ATTEMPTS,
+  maskUrlForAudit,
   matchesEventType,
   nextRetryDelay,
   signatureHeader,
   signPayload,
   verifySignature,
+  WEBHOOK_RETRY_SCHEDULE_SECONDS,
 } from './webhooks';
 
 const NOW = new Date('2026-11-07T12:00:00Z');
@@ -227,8 +230,18 @@ describe('webhook signatures and retries', () => {
   });
   it('retries on the schedule, then dead', () => {
     expect(nextRetryDelay(1)).toBe(60);
-    expect(nextRetryDelay(7)).toBe(43_200);
+    expect(nextRetryDelay(9)).toBe(36_000);
     expect(nextRetryDelay(MAX_DELIVERY_ATTEMPTS)).toBeNull();
+    // INT-R26: the retry window covers at least 24 hours.
+    expect(WEBHOOK_RETRY_SCHEDULE_SECONDS.reduce((a, b) => a + b, 0)).toBeGreaterThanOrEqual(86_400);
+    expect(DISABLE_AFTER_CONSECUTIVE_FAILURES).toBeGreaterThan(MAX_DELIVERY_ATTEMPTS);
+  });
+  it('masks tokens in webhook URLs written to audit (F23)', () => {
+    expect(maskUrlForAudit('https://user:pw@hooks.example.com:8443/in?token=abc#x')).toBe(
+      'https://hooks.example.com:8443/in?[masked]#[masked]',
+    );
+    expect(maskUrlForAudit('https://hooks.example.com/in')).toBe('https://hooks.example.com/in');
+    expect(maskUrlForAudit('nope')).toBe('[invalid URL]');
   });
   it('event patterns and the public catalogue', () => {
     expect(matchesEventType('reservations.*', 'reservations.booking.confirmed')).toBe(true);

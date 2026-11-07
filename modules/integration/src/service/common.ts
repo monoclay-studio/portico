@@ -107,6 +107,35 @@ export function requireOnConnection(
   }
 }
 
+/**
+ * Which of a connection's rows a reader may see (F12): everything when they hold the permission for every property
+ * of the connection, otherwise only rows of the properties they hold it for — never rows without a property.
+ */
+/** Never a property id: keeps an `in (...)` list non-empty when a reader holds no property. */
+export const NO_PROPERTY = '00000000-0000-0000-0000-000000000000';
+
+export function readableProperties(
+  ctx: Pick<RequestContext, 'authz'>,
+  conn: { property_ids: string[] },
+  permission: string,
+): { all: true } | { all: false; propertyIds: string[] } {
+  if (ctx.authz.propertyScope(permission) === 'all') return { all: true };
+  const ids = conn.property_ids.filter((p) => ctx.authz.can(permission, { propertyId: p }));
+  if (conn.property_ids.length > 0 && ids.length === conn.property_ids.length) return { all: true };
+  return { all: false, propertyIds: ids };
+}
+
+/** Whether one row of a connection (with its property, or none) is readable (F12). */
+export function canReadRow(
+  ctx: Pick<RequestContext, 'authz'>,
+  conn: { property_ids: string[] },
+  permission: string,
+  rowPropertyId: string | null,
+): boolean {
+  const scope = readableProperties(ctx, conn, permission);
+  return scope.all || (rowPropertyId !== null && scope.propertyIds.includes(rowPropertyId));
+}
+
 export function canOnConnection(
   ctx: Pick<RequestContext, 'authz'>,
   conn: { property_ids: string[] },

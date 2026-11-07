@@ -9,7 +9,7 @@ import { BusinessRuleError, type EntityRef, NotFoundError, newId, sha256Hex } fr
 import type { IntegrationException, ResponsibleParty, Severity } from '../contracts';
 import { P } from '../manifest';
 import type { ExceptionsTable } from '../tables';
-import { actorKey, canOnConnection, db, loadConnection, requireOnConnection } from './common';
+import { actorKey, canOnConnection, canReadRow, db, loadConnection, requireOnConnection } from './common';
 import { exceptionView } from './views';
 
 export interface RaiseExceptionInput {
@@ -232,6 +232,8 @@ export async function getException(tx: TxContext, id: string): Promise<Integrati
   const ex = await loadException(tx, id);
   const conn = await loadConnection(tx, ex.connection_id);
   requireOnConnection(tx, conn, P.connectionRead, 'any');
+  if (!canReadRow(tx, conn, P.connectionRead, ex.property_id))
+    throw new NotFoundError('integration_exception', id);
   return toView(ex, conn, tx);
 }
 
@@ -262,6 +264,7 @@ export async function listExceptions(
   for (const r of rows) {
     const conn = { property_ids: r.conn_property_ids };
     if (!canOnConnection(tx, conn, P.connectionRead)) continue;
+    if (!canReadRow(tx, conn, P.connectionRead, r.property_id)) continue;
     if (q.propertyId && !tx.authz.can(P.connectionRead, { propertyId: q.propertyId })) continue;
     out.push(toView(r, conn, tx));
   }

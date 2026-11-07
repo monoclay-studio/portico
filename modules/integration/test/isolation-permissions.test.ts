@@ -107,6 +107,72 @@ describe('permissions and property scope', () => {
     ).rejects.toMatchObject({ code: 'forbidden' });
   });
 
+  it('on a connection shared by two properties, a reader of one sees only its rows (F12)', async () => {
+    const org = await setupOrg(h, {
+      properties: [
+        { code: 'LGN', name: 'Lagoon' },
+        { code: 'REF', name: 'Reef' },
+      ],
+    });
+    const [p1, p2] = org.propertyIds as [string, string];
+    const conn = await tx(h, org.ctx, (t) =>
+      integration.createConnection(t, h.deps, {
+        connectorKey: 'file.csv',
+        name: 'Group files',
+        propertyIds: [p1, p2],
+      }),
+    );
+    const exceptionIds = new Map<string, string>();
+    await tx(h, org.ctx, async (t) => {
+      for (const [label, propertyId] of [
+        ['lagoon', p1],
+        ['reef', p2],
+        ['none', null],
+      ] as const) {
+        await integration.recordExchange(t, {
+          connectionId: conn.id,
+          workflow: 'reservations',
+          direction: 'inbound',
+          outcome: 'succeeded',
+          summary: `${label} reservation`,
+          propertyId,
+          provenance: 'file',
+        });
+        const r = await integration.raiseException(t, {
+          connectionId: conn.id,
+          workflow: 'reservations',
+          severity: 'routine',
+          problem: `${label} problem`,
+          businessImpact: 'x',
+          responsibleParty: 'hotel',
+          nextStep: 'x',
+          propertyId,
+        });
+        exceptionIds.set(label, r.exceptionId);
+      }
+    });
+    const reef = userCtx(org, [{ permission: 'integration.connection.read', propertyIds: [p2] }]);
+    const both = userCtx(org, [{ permission: 'integration.connection.read', propertyIds: [p1, p2] }]);
+    const log = await tx(h, reef, (t) => integration.listExchanges(t, conn.id, { limit: 50 }));
+    expect(log.map((e) => e.summary)).toEqual(['reef reservation']);
+    const ex = await tx(h, reef, (t) =>
+      integration.listExceptions(t, { connectionId: conn.id, status: 'unresolved' }),
+    );
+    expect(ex.map((e) => e.problem)).toEqual(['reef problem']);
+    await expect(
+      tx(h, reef, (t) => integration.getException(t, exceptionIds.get('lagoon') as string)),
+    ).rejects.toMatchObject({ code: 'integration_exception_not_found' });
+    await expect(
+      tx(h, reef, (t) => integration.getException(t, exceptionIds.get('none') as string)),
+    ).rejects.toMatchObject({ code: 'integration_exception_not_found' });
+    expect(await tx(h, both, (t) => integration.listExchanges(t, conn.id, { limit: 50 }))).toHaveLength(3);
+    expect(
+      await tx(h, both, (t) =>
+        integration.listExceptions(t, { connectionId: conn.id, status: 'unresolved' }),
+      ),
+    ).toHaveLength(3);
+  });
+
   it('shows technical detail only with integration.technical.read; staff see plain English', async () => {
     const org = await setupOrg(h);
     const { conn, account } = await activeSimulatorConnection(h, org);

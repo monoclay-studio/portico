@@ -70,8 +70,10 @@ import {
   type IntegrationDeps,
   iso,
   loadConnection,
+  NO_PROPERTY,
   parseScope,
   provenanceOf,
+  readableProperties,
   readsWorkflow,
   recordStep,
   registered,
@@ -195,6 +197,7 @@ export async function listExchanges(
   const conn = await loadConnection(tx, connectionId);
   requireOnConnection(tx, conn, P.connectionRead, 'any');
   const technical = canOnConnection(tx, conn, P.technicalRead);
+  const scope = readableProperties(tx, conn, P.connectionRead);
   let query = db(tx)
     .selectFrom('integration.exchange_log')
     .selectAll()
@@ -202,6 +205,7 @@ export async function listExchanges(
     .orderBy('seq', 'desc')
     .limit(q.limit);
   if (q.workflow) query = query.where('workflow', '=', q.workflow);
+  if (!scope.all) query = query.where('property_id', 'in', [...scope.propertyIds, NO_PROPERTY]);
   const rows = await query.execute();
   return rows.map((r) => ({
     id: r.id,
@@ -2465,6 +2469,7 @@ export async function listOutbound(
 ): Promise<OutboundCommand[]> {
   const conn = await loadConnection(tx, connectionId);
   requireOnConnection(tx, conn, P.connectionRead, 'any');
+  const scope = readableProperties(tx, conn, P.connectionRead);
   let q = db(tx)
     .selectFrom('integration.outbound_commands')
     .selectAll()
@@ -2472,6 +2477,7 @@ export async function listOutbound(
     .orderBy('enqueued_at', 'desc')
     .limit(500);
   if (status) q = q.where('status', '=', status);
+  if (!scope.all) q = q.where('property_id', 'in', [...scope.propertyIds, NO_PROPERTY]);
   return (await q.execute()).map(toCommand);
 }
 

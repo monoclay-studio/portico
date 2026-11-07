@@ -47,6 +47,7 @@ import {
   type IntegrationDeps,
   loadConnection,
   parseScope,
+  readableProperties,
   readsWorkflow,
   recordStep,
   registered,
@@ -131,12 +132,27 @@ export function summarize(rows: readonly MappingRow[]): MappingSet['summary'] {
 export async function getMappingSet(tx: TxContext, connectionId: string): Promise<MappingSet> {
   const conn = await loadConnection(tx, connectionId);
   requireOnConnection(tx, conn, P.connectionRead, 'any');
-  const rows = await mappingRows(tx, connectionId);
+  const rows = (await mappingRows(tx, connectionId)).filter((r) => mappingReadable(tx, conn, r));
   return {
     items: rows.map((r) => mappingView(r, { tx, conn })),
     issues: issuesFor(rows),
     summary: summarize(rows),
   };
+}
+
+/**
+ * F12: a reader scoped to some of a connection's properties sees those properties' mappings and the shared status
+ * code lists, not other properties' rows.
+ */
+function mappingReadable(
+  tx: TxContext,
+  conn: { property_ids: string[] },
+  r: { kind: string; property_id: string | null; internal_id: string | null },
+): boolean {
+  const scope = readableProperties(tx, conn, P.connectionRead);
+  if (scope.all || r.kind === 'status') return true;
+  if (r.kind === 'property') return r.internal_id !== null && scope.propertyIds.includes(r.internal_id);
+  return r.property_id !== null && scope.propertyIds.includes(r.property_id);
 }
 
 /** Fingerprint of the current mapping decisions: activation refuses a preview made with other mappings. */
@@ -599,12 +615,13 @@ export async function reviewMapping(
 export async function mappingHistory(tx: TxContext, mappingId: string) {
   const row = await db(tx)
     .selectFrom('integration.mappings')
-    .select(['connection_id'])
+    .select(['connection_id', 'kind', 'property_id', 'internal_id'])
     .where('id', '=', mappingId)
     .executeTakeFirst();
   if (!row) throw new NotFoundError('mapping', mappingId);
   const conn = await loadConnection(tx, row.connection_id);
   requireOnConnection(tx, conn, P.connectionRead, 'any');
+  if (!mappingReadable(tx, conn, row)) throw new NotFoundError('mapping', mappingId);
   const rows = await db(tx)
     .selectFrom('integration.mapping_versions')
     .selectAll()

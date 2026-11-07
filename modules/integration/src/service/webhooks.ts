@@ -33,6 +33,7 @@ import {
   invalidPatterns,
   isPublicEventType,
   isSuccessStatus,
+  maskUrlForAudit,
   matchesEventType,
   nextRetryDelay,
   PUBLIC_WEBHOOK_EVENTS,
@@ -49,6 +50,8 @@ type SubRow = Selectable<WebhookSubscriptionsTable>;
 type DeliveryRow = Selectable<WebhookDeliveriesTable>;
 
 const REPLAY_WINDOW_DAYS = 7;
+/** Lease per queued delivery in a batch: one bounded send (DNS, connect, answer) plus bookkeeping. */
+const PER_DELIVERY_LEASE_MS = DELIVERY_TIMEOUT_MS + 5_000;
 
 function toSubscription(r: SubRow): WebhookSubscription {
   return {
@@ -174,7 +177,7 @@ export async function createSubscription(
     target: { type: 'integration_webhook_subscription', id },
     after: {
       name: input.name,
-      url: input.url,
+      url: maskUrlForAudit(input.url),
       eventTypes: input.eventTypes,
       propertyIds: input.propertyIds,
       signingSecret: '[stored encrypted; shown once]',
@@ -244,8 +247,8 @@ export async function updateSubscription(
   await tx.audit({
     action: 'integration.webhook.update',
     target: { type: 'integration_webhook_subscription', id },
-    before: { url: before.url, eventTypes: before.event_types, status: before.status },
-    after: { url: row.url, eventTypes: row.event_types, status: row.status },
+    before: { url: maskUrlForAudit(before.url), eventTypes: before.event_types, status: before.status },
+    after: { url: maskUrlForAudit(row.url), eventTypes: row.event_types, status: row.status },
   });
   return toSubscription(row);
 }
@@ -528,11 +531,12 @@ export async function deliverDueWebhooks(
       .skipLocked()
       .execute();
     const items = [];
-    for (const d of due) {
+    for (const [i, d] of due.entries()) {
+      // F19: deliveries are sent one after another, so each lease covers every send before it plus its own.
       await db(tx)
         .updateTable('integration.webhook_deliveries')
         .set({
-          lease_until: new Date(tx.now.getTime() + 60_000),
+          lease_until: new Date(tx.now.getTime() + (i + 1) * PER_DELIVERY_LEASE_MS),
           attempts: sql`attempts + 1`,
           version: sql`version + 1`,
         })
@@ -550,6 +554,7 @@ export async function deliverDueWebhooks(
     }
     return items;
   });
+  const claimedAtWall = Date.now();
 
   for (const d of claimed) {
     out.attempted++;
@@ -571,7 +576,9 @@ export async function deliverDueWebhooks(
       result = { outcome: 'simulated', status: null, error: null, durationMs: 0 };
     } else {
       const body = JSON.stringify(d.payload);
-      const t = Math.floor(d.now.getTime() / 1000);
+      // F19: the signature time is taken just before sending, not at claim time, so a delivery late in a slow batch
+      // is still inside the partner's tolerance window.
+      const t = Math.floor((d.now.getTime() + (Date.now() - claimedAtWall)) / 1000);
       const header = signatureHeader(d.secrets, t, body);
       try {
         const res = await deps.transport.post({
@@ -606,6 +613,14 @@ export async function deliverDueWebhooks(
       }
     }
     await withTenantTx(database, ctx, async (tx) => {
+      // Another worker took the delivery over after the lease expired: it records its own attempt.
+      const cur = await db(tx)
+        .selectFrom('integration.webhook_deliveries')
+        .select(['attempts'])
+        .where('id', '=', d.id)
+        .forUpdate()
+        .executeTakeFirst();
+      if (!cur || cur.attempts !== d.attempts) return;
       await db(tx)
         .insertInto('integration.webhook_attempts')
         .values({

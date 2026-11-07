@@ -10,12 +10,30 @@ import { checkOutboundUrl, type OutboundUrlPolicy } from '../net/address-policy'
 export const SIGNATURE_HEADER = 'portico-signature';
 export const SIGNATURE_TOLERANCE_SECONDS = 300;
 
-/** Delays before attempts 2…8 (≈ 21 hours in total, comparable to a 24-hour retry window). */
-export const WEBHOOK_RETRY_SCHEDULE_SECONDS: readonly number[] = [60, 300, 900, 3600, 10_800, 21_600, 43_200];
+/** Delays before attempts 2…10: about 25.9 hours in total, so retries cover at least 24 hours (INT-R26). */
+export const WEBHOOK_RETRY_SCHEDULE_SECONDS: readonly number[] = [
+  60, 300, 900, 1800, 3600, 7200, 14_400, 28_800, 36_000,
+];
 export const MAX_DELIVERY_ATTEMPTS = WEBHOOK_RETRY_SCHEDULE_SECONDS.length + 1;
-/** An endpoint failing this many attempts in a row (across deliveries) is disabled until an admin re-enables it. */
-export const DISABLE_AFTER_CONSECUTIVE_FAILURES = 10;
+/**
+ * An endpoint failing this many attempts in a row (across deliveries) is disabled until an admin re-enables it.
+ * Higher than one delivery's attempts, so a single dead delivery never disables an endpoint on its own.
+ */
+export const DISABLE_AFTER_CONSECUTIVE_FAILURES = 12;
 export const DELIVERY_TIMEOUT_MS = 10_000;
+
+/**
+ * A webhook URL as written to audit and record history (F23): partners sometimes put tokens in the query string or
+ * userinfo, so both are masked; scheme, host, port and path stay readable.
+ */
+export function maskUrlForAudit(raw: string): string {
+  try {
+    const u = new URL(raw);
+    return `${u.protocol}//${u.host}${u.pathname}${u.search ? '?[masked]' : ''}${u.hash ? '#[masked]' : ''}`;
+  } catch {
+    return '[invalid URL]';
+  }
+}
 
 /** `t=<unix seconds>,v1=<hex HMAC-SHA256 of "<t>.<body>">` (timestamp binding defeats replay of old bodies). */
 export function signPayload(secret: string, timestampSeconds: number, body: string): string {
