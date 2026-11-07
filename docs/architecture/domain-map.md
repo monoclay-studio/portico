@@ -126,20 +126,33 @@ Events: `inventory.availability.changed` (coalescible, for distribution), `inven
 
 ## rates (provider)
 
+**Canonical shapes: `modules/rates/README.md` § Provider contract** (merged 2026-11-07; reservations and finance adapt).
+
 ```ts
-quote(tx, { propertyId, nights: DateRange, occupancy: Occupancy, unitTypeIds?, ratePlanIds?,
-            channelId?, companyId?, promoCode?, bookingDate?: LocalDate }): Promise<Offer[]>
-   // Offer = { unitTypeId, ratePlanId, nightly: NightPrice[], inclusions, taxesAndFees: TaxLine[],
-   //           totals: { net, taxes, fees, gross }, policies: { cancellation, guarantee, deposit },
-   //           restrictionViolations: Violation[], terms: TermsSnapshot }
-priceChange(tx, { terms: TermsSnapshot, change: StayChangeRequest }): Promise<RepricingResult>
-   // used by change previews: keeps agreed nights at agreed prices, prices new nights by policy
-computeTaxes(tx, { propertyId, lines: ChargeLine[], occupancy?, stayContext? }): Promise<TaxLine[]>
-   // used by finance for non-room charges too (single tax engine for everything)
-getRatePlan / listRatePlans
+quote / quoteDetailed(tx, QuoteRequest): Promise<Offer[]> / { quoteId, configVector, offers }
+   // channel is derived from the principal; bookingDate = today unless rates.quote.backdate;
+   // companyId is staff-only and verified; non-staff never see unbookable offers.
+   // Offer.taxesAndFees: TaxLine[] (TaxLine.basis, nature, base|null, quantity, fixedAmount, fx, taxPointDate, estimated)
+priceChange(tx, { terms, change }): Promise<{ nightly, penalties, before, after, difference, violations, terms }>
+   // verifies the seal first; supports ratePlanId / typeChange / asOf; returns new sealed terms
+overridePrice / complimentaryTerms(tx, …): Promise<TermsSnapshot>   // rates.price.override, audited; Green Tax kept on comps
+evaluateCancellationPenalty(terms, at, { event?, nights? })          // pure; basis = price + hotel fees, never levies
+instantiatePaymentSchedule(terms); postingPlan / postingChargeLines(terms, stayId)  // lines carry agreedRuleVersionIds
+levyDays(checkInAt, checkOutAt, 12) / levyTrueUp(terms, { checkInAt, checkOutAt })  // Green Tax 12-hour rule
+computeTaxes / computeTaxesDetailed(tx, { lines: ChargeLine[], fullPaymentDate?, expectedInvoiceDate?,
+                                        ruleVersionIds?, fxRates? })  // single tax engine for every charge
+getRulePackStatus(tx, propertyId)                                     // finance live gate (adviser-confirmed rules)
+recordPlanSale / releasePlanSale; getRatePlan / listRatePlans
 ```
-`TermsSnapshot` is a self-contained JSON document (versioned schema) persisted by reservations; it must be
+`TermsSnapshot` v1 is a self-contained JSON document persisted by reservations, sealed with HMAC-SHA256
+(`seal`, `supersedesSeal`; key `PORTICO_TERMS_SEAL_KEY`, required in production); `verifyTerms(terms)`. It is
 sufficient to post every night's charges without reading current rate configuration.
+**Breaking renames for consumers:** `TaxLine.kind` → `basis`; `paymentDate` → `fullPaymentDate` +
+`ChargeLine.taxPointSplits`; `nights`/`candidateTerms` → `nightly`/`terms`; plain hash → `seal`; finance
+`taxGroup`/`priceMode` → `taxCategory`/`taxInclusion`.
+**Ports rates needs:** `listUnitTypes` (inventory, bound), `companyExists` (guests, bound), `channelForApiClient`
+(distribution, wave 2; until then API clients sell as `api_client:<id>`), `affectedAgreements` (reservations/finance,
+for the tax change report).
 Events: `rates.prices.changed`, `rates.restrictions.changed` (for distribution).
 
 ## guests (provider)
@@ -187,18 +200,26 @@ Events: `finance.posting.created`, `finance.folio.settled`, `finance.invoice.iss
 
 ## payments (provider)
 
+**Canonical shapes: `modules/payments/README.md` § Provider contract** (merged 2026-11-07). Every call runs in the
+caller's transaction, takes an `idempotencyKey`, and calls the provider after commit.
+
 ```ts
-createPaymentRequest(tx, { legalEntityId, payer, amount, purpose, ref, expiresAt }): Promise<PaymentRequest>
-authorize(tx, { methodId, amount, ref, idempotencyKey }): Promise<PaymentAttempt>   // status may be 'pending_verification'
-capture(tx, { authorizationId, amount?, idempotencyKey }): Promise<PaymentAttempt>
-charge(tx, { methodId, amount, ref, idempotencyKey, initiator: 'customer'|'merchant' })
-refund(tx, { paymentId, amount, reason, idempotencyKey }): Promise<Refund>
-getPaymentStatus(tx, ref)                                    // authoritative status incl. 'pending_verification'
-listUnresolved(tx, { propertyId })                           // Day Close + dashboards
+createPaymentRequest(tx, { propertyId, legalEntityId?, payer, amount, purpose, ref: LedgerRef, expiresAt, idempotencyKey })
+authorize(tx, { propertyId, methodId, amount, ref, idempotencyKey })   // returns 'processing'; settles after commit
+                                                                       // (payments.authorization.authorized|failed)
+capture / charge / refund(tx, …)
+getPaymentStatus(tx, ref)   // read FIRST; never charge again while pending_verification
+listUnresolved(tx, { propertyId })
 ```
-Payments calls finance through its `LedgerPort` (record payment/refund/deposit/payout) **only after the
-provider confirms**. Provider calls happen outside the DB transaction with persisted idempotency keys
-(`payments.provider_operations` table) — see ADR-0007.
+`LedgerRef = { type: 'folio' | 'booking'; id }` (booking = deposit). Refusal codes: `ledger_target_unknown`,
+`ledger_target_other_property`, `wrong_merchant_of_record`, `payment_pending_verification`,
+`collection_owned_by_payment_request`, `duplicate_reference`, `mit_not_agreed`, `card_payments_unavailable` (503),
+`payment_declined` (402).
+**Port payments needs from finance — `LedgerPort`** (`modules/payments/src/ports.ts`, bound in composition via
+`financeLedgerForPayments`): `describeTarget(tx, ref) → { propertyId, legalEntityId } | null` (checked before any
+money moves), postings carrying property + legal entity + clearing account per provider, `markPaymentVerified`,
+`recordSettlementFees`. Until finance merges, folio collections are refused (503) and deposits are flagged
+"not yet on the bill".
 
 ## operations (provider)
 

@@ -37,6 +37,11 @@ export interface ServerOptions {
   openApi?: { title: string; version: string } | false;
   /** Extra readiness check (e.g. database ping). */
   readiness?: () => Promise<void>;
+  /**
+   * Addresses/CIDRs of the reverse proxies in front of the API (behind the AWS ALB: the VPC CIDR). Only a
+   * connection from one of these may set the client IP via X-Forwarded-For. Omit/empty locally.
+   */
+  trustedProxies?: readonly string[];
 }
 
 /** Fields that must never appear in logs. */
@@ -49,6 +54,10 @@ export const LOG_REDACT = [
   '*.cvc',
   '*.documentNumber',
   '*.token',
+  '*.providerToken',
+  '*.vaultToken',
+  '*.providerCustomerRef',
+  'req.headers["stripe-signature"]',
 ];
 
 export async function createServer(opts: ServerOptions): Promise<PorticoApp> {
@@ -72,7 +81,10 @@ export async function createServer(opts: ServerOptions): Promise<PorticoApp> {
       const incoming = req.headers['x-request-id'];
       return typeof incoming === 'string' && /^[\w.-]{8,100}$/.test(incoming) ? incoming : randomUUID();
     },
-    trustProxy: true,
+    // Only trust X-Forwarded-For from the known proxy addresses (e.g. the ALB's VPC range). Trusting any proxy
+    // lets clients spoof their IP and bypass per-IP limits (identity-plus review P1-8). Default: trust none.
+    // (Fastify ignores hop counts on purpose: a count cannot tell a real proxy from a client posing as one.)
+    trustProxy: opts.trustedProxies?.length ? [...opts.trustedProxies] : false,
     bodyLimit: 5 * 1024 * 1024,
   }).withTypeProvider<ZodTypeProvider>();
 

