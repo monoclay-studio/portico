@@ -50,7 +50,7 @@ regression test made from the reviewer's attack.
 - **Build caches can lie.** Turbo served a cached typecheck that hid a real type error twice; it was caught both times.
   Since then, verification runs `--force`. Root cause, found by the second identity review: `turbo.json` gave `typecheck`
   and `test` no dependency on other workspace packages, so a change in `kernel` did not invalidate `api`'s cached
-  result. The `^transit` pattern failed on a `db` ↔ `testing` dependency cycle. The fix (2026-11-07 17:00) makes both
+  result. The `^transit` pattern failed on a `db` ↔ `testing` dependency cycle. The fix (2026-11-07 16:44) makes both
   tasks hash every package's sources (`$TURBO_ROOT$` inputs). It was verified: a kernel edit turns `api`'s cache hit
   into a miss.
 - **Pipe output hides failures.** One commit went in while lint was failing because the output was piped through
@@ -66,3 +66,10 @@ regression test made from the reviewer's attack.
   template as a reference to the `operations` schema. It was fixed centrally.
 - **Do not circumvent bot checks.** MIRA's site blocks automated fetches. Research used official pages through
   restricted web search instead.
+
+## Corrections
+
+- 2026-11-07 17:25: several timeline entries written between 16:45 and 17:22 carried estimated times that were 10–60
+  minutes late, including some ahead of the actual clock. They were corrected from commit timestamps and the session
+  log. Lesson: chronicle times come from `date -u`, commit times or the transcript, never from estimates.
+

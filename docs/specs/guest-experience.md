@@ -104,7 +104,7 @@ passwords (LATER — magic links first).
   the stay; the desk checklist (RES-R24) imports completed steps (`registration`, `documents`, `guarantee`) as `done
   (guest, pending staff review)`; staff with `guestExperience.checkin.review` accept or return items with a reason
   shown to the guest. Policy decides whether staff review is mandatory before keys are released.
-- **GXP-R15** [SHOULD] **Self check-in** (guesthouses, apartments, late arrivals; `access` ACC-R15): when the release
+- **GXP-R15** [SHOULD] **Self check-in** (guesthouses, apartments, late arrivals; `access` ACS-R15): when the release
   conditions pass, the portal shows unit number, directions, PIN or mobile key and emergency contact; otherwise it
   says exactly what is missing.
 

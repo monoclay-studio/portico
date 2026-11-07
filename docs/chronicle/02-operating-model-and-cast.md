@@ -13,6 +13,7 @@
 | **Black-box tester ("mystery user")** | UX agent with **no build context** | Uses only the running product, as 9 personas, and records friction | `docs/ux/README.md` |
 | **Refining agent** | UX agent with full context | Turns findings into per-module refinements, each with a power check | `docs/ux/README.md` |
 | **Gap strategist** | Strategy agent (queued) | Market + parity + code → `docs/strategy/` 10x briefs per module | `docs/orchestration/operating-model.md` |
+| **Quality steward** (meta loop, from 2026-11-07 16:52) | Agent on `docs/quality` | Oversees every checking agent. Measures precision, recall and cost; traces escapes; versions their playbooks; plants canaries; keeps the attack and UX-trap pattern library. Resumed after every checking round | `docs/quality/README.md` |
 | **Integration engineer** | Agent on `feat/integration-step` | Binds module ports for real and proves the 20 scenarios | `docs/orchestration/pending-fixes.md` |
 
 ## How work flows

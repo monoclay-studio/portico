@@ -481,7 +481,55 @@ billing is not activated for live customers until this is answered.
 **Blocks:** ML-based room assignment only.
 **Raised by / date:** market deep dive, 2026-11-07
 
-### Q146 — Charging a departed guest's card for late charges automatically            Status: open
+### Q150 — Counsel review of the remaining patent watch list (extends Q40, Q145)    Status: open
+**Context:** Market research found granted patents near features Portico plans beyond room assignment (Q145) and billing rules (Q40): guests choosing housekeeping time windows (US 12,586,008; US 12,265,929), machine-learned upgrade pricing (US 10,387,795; Nor1 PRiME), phone-to-kiosk key printing and encoder multiplexing (US 10,735,201; US 12,113,911; US 11,257,315), QR-activated key cards (US 9,342,939), passport-photo face matching at check-in (US 12,056,779), an AI hotel demand model (US 12,014,310) and price-parity enforcement (US 8,458,010). Status, scope and validity are unconfirmed (`docs/research/05-market-deep-dive/04-patents.md`). This is not legal advice.
+**Question:** Will you include these items in the counsel review already planned for Q40/Q145, before Portico ships guest self-service windows, upsell offers, kiosks, mobile keys or identity checks?
+**Default we are proceeding with:** design-arounds that stay safe without a legal opinion: service preferences are entered by staff (no guest-chosen cleaning windows); upsell is rule-based with published prices and live inventory (no machine-learned pricing); keys only through lock vendors' certified SDKs; no biometric matching; parity is monitored and reported, never enforced; no machine-learned demand model in pricing assistance.
+**If the answer differs:** cleared items can be built as specified; a "design around" answer changes the affected guest-experience, operations, access or rates increments.
+**Blocks:** guest-chosen service windows, machine-learned upsell pricing, kiosk key printing and biometric check-in. Nothing else.
+**Raised by / date:** gap strategist, 2026-11-07
+
+### Q151 — Publishing comparisons with named competitors                  Status: open
+**Context:** The owner's mandate is that each module be measurably 3x–10x better than the market. We will measure task steps, time and errors against competitors' documented flows and, where possible, their demo or trial accounts. Publishing "Nx faster than <competitor>" carries comparative-advertising and trademark risk, and needs reproducible evidence (`docs/product/competitive-synthesis.md` §3).
+**Question:** May measured comparisons with named competitors be used outside Monoclay (website, sales decks, pilot proposals), and under what review?
+**Default we are proceeding with:** comparisons stay internal (strategy and module briefs, readiness evidence). External material says "measured with hotel staff" without naming competitors, and only after the sessions exist.
+**If the answer differs:** we prepare a publishable evidence pack per claim (protocol, participants, dates, raw results) for counsel review.
+**Blocks:** public comparative claims only.
+**Raised by / date:** gap strategist, 2026-11-07
+
+### Q152 — Usability sessions with Maldivian hotel staff (recruiting and incentives)    Status: open
+**Context:** Every "friendly" and "seamless" target is a target until real staff validate it (`docs/product/ux-principles.md` §19: at least 5 users per role per round, including Maldivian resort and guesthouse staff and non-native English speakers). Today only an internal black-box tester has used Portico (`docs/ux/round-1/blackbox-findings.md`). Q64 covers discovery interviews about systems; this question covers moderated task sessions on Portico itself.
+**Question:** May we recruit hotel staff for moderated sessions (remote or on-site), and is there a budget for participant incentives or travel?
+**Default we are proceeding with:** no recruiting and no spend. Black-box rounds continue; every target stays labelled "target"; the session protocol, task scripts and consent form are prepared so sessions can start as soon as you approve.
+**If the answer differs:** sessions start with the guesthouse owner, front desk and housekeeping roles; results are recorded in `docs/readiness/` separately from automated tests.
+**Blocks:** the Ease gate (vision), any claim that a target was met, and pilot readiness item P-12 in `docs/strategy/gap-plan.md` §5.
+**Raised by / date:** gap strategist, 2026-11-07
+
+### Q153 — Is assistive AI included in every edition?                     Status: open
+**Context:** Oracle gives its OPERA Cloud assistant to customers at no extra cost and Lighthouse ships a revenue agent at no extra cost (`docs/research/05-digest.md` #15, #33). `docs/product/editions.md` currently models the AI assistant as a metered add-on. How AI is packaged changes what the `ai` module optimizes for (included retention value versus a paid feature) and how usage caps work (Q45).
+**Question:** Should assistive AI (cited answers, summaries, drafts, explanations) be included in every edition, with only expensive generative usage metered and capped?
+**Default we are proceeding with:** design for "included, with visible caps": usage is metered per organization with a hard cap and a cost preview, and nothing about AI pricing is published (Q3).
+**If the answer differs:** the entitlement `ai.assistant` gates the features by plan; no rework beyond configuration.
+**Blocks:** pricing pages only. Q25/Q84 (guest-data processing and guest-facing AI) still apply.
+**Raised by / date:** gap strategist, 2026-11-07
+
+### Q154 — Approaching Maldivian banks about gateways and Favara / national QR    Status: open
+**Context:** Stripe cannot serve Maldivian hotel entities (D10). Hotels use bank terminals and gateways (e.g. BML, MIB) and bank transfers; card payments carry a fee of about 2.5%, and a national QR scheme over the Favara instant-payment rail is announced for 2026 (`docs/research/05-market-deep-dive/09-regional-maldives-indian-ocean.md` §6). Integrating any of these needs a bank's sandbox, documentation and possibly an agreement.
+**Question:** May Monoclay contact Maldivian banks (and, if useful, the MMA) to request gateway API documentation and sandboxes and to ask how QR/Favara payments can be confirmed to a hotel's software?
+**Default we are proceeding with:** no contact. Card, bank-transfer and QR payments are recorded by staff (Route D) and verified by matching bank or terminal statements; adapters are designed as ports so a bank integration can be added later.
+**If the answer differs:** a gateway or QR adapter moves from R1 toward R4 once a sandbox exists; the payments brief's increment order changes.
+**Blocks:** integrated card or QR acceptance for Maldivian pilots. Nothing in development.
+**Raised by / date:** gap strategist, 2026-11-07
+
+### Q155 — Staff-language translations (Dhivehi and expatriate staff languages)    Status: open
+**Context:** Maldivian resort and guesthouse staff often prefer Dhivehi (Thaana script, right-to-left), and many housekeeping and F&B staff are expatriates whose first language may be Bengali, Nepali, Sinhala, Tamil or Hindi (draft parity row PAR-OPS-043 on `docs/parity-ops`). The staff web app is translation-ready but ships only English and an unreviewed Arabic right-to-left stub (`apps/backoffice/README.md` on `feat/backoffice-core`, open question 1). Machine translation of operational wording without review risks errors.
+**Question:** Will you commission reviewed translations (Dhivehi first for the desk, then the staff mobile app's languages) before or during the first pilot?
+**Default we are proceeding with:** English user interface with every string externalized and short; no paid translation; the staff app's housekeeping vocabulary is kept small and icon-supported so translation is cheap later.
+**If the answer differs:** translation files are added per language with a native reviewer; right-to-left layout is tested with Dhivehi.
+**Blocks:** friendliness targets for staff who do not read English comfortably. Nothing else.
+**Raised by / date:** gap strategist, 2026-11-07 (consolidates the backoffice branch's open question 1)
+
+### Q156 — Charging a departed guest's card for late charges automatically            Status: open
 **Context:** When a restaurant or minibar charge reaches the bill after the guest has left (scenario S10), the hotel can either send the guest a payment link or charge the card kept on file as a merchant-initiated transaction. Charging automatically needs the guest's prior consent in the agreed terms and a stored card mandate; card schemes and guests react badly to surprise charges.
 **Question:** Should Portico charge the card on file automatically for late charges when the booking terms allowed it, or always ask (payment link) unless staff decide to charge?
 **Default we are proceeding with:** always a payment request (link) created by payments as intent only; staff may charge the card on file manually where a mandate exists. Nothing is charged automatically.

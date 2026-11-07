@@ -92,7 +92,7 @@ records (the clinic's own system); activities, spa, transfers and itineraries (`
   `safety`, `security`, `environmental`, `other`), time and place, persons involved (guests, staff, visitors) with
   roles, witnesses, narrative (append-only entries), photos/files, actions taken, external references (police report
   number, insurer claim, Ministry notification where required — Q86), confidentiality level (restricted by default;
-  `guestServices.incident.read` ⚑), links to cases, work orders, door audit trail (ACC-R21) and charges.
+  `guestServices.incident.read` ⚑), links to cases, work orders, door audit trail (access ACS-R21) and charges.
 - **GSV-R11** [MUST] **Evidence-backed charges** for damage, smoking, missing items, lost keys: charge through
   `finance.postCharge` (key `damage:{incidentId}:{n}`) only from an incident or inspection with evidence attached;
   the guest message and the dispute evidence pack (PAY-R18) reference the evidence.

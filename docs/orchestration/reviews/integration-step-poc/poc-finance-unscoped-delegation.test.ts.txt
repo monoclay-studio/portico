@@ -1,0 +1,41 @@
+/**
+ * PoC (steward review, integration step) — finance's reservations port surface still delegates ORGANIZATION-WIDE
+ * when the caller omits the property. `financeForReservations` declares `propertyId?` on recordDeposit,
+ * applyDeposits, getFolioBalance, listFolios, setBillingRules and getDepositBalance, and finance's `delegated(tx,
+ * perms, undefined)` grants finance.folio.manage / folio.read / posting.create / billingRule.manage at EVERY property.
+ * Reservations happens to pass a property today (its own port type requires it), but `satisfies FinancePort` accepts
+ * the optional parameter, so the next caller that forgets it reopens finance P0-1.
+ */
+import { financeForReservations } from '@portico/finance';
+import { newId } from '@portico/kernel';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { hiyani, kandu, organization, type Scenario, startScenario } from './scenarios/harness';
+
+let s: Scenario;
+beforeAll(async () => {
+  s = await startScenario();
+});
+afterAll(async () => s?.close());
+
+describe('PoC: finance port delegation without a property is organization-wide', () => {
+  it("a Kandu-only agent reads Hiyani's folios when the scope is omitted", async () => {
+    const org = await organization(s);
+    const k = await kandu(s, org);
+    const h = await hiyani(s, org);
+    const port = financeForReservations(s.c.services.finance);
+    const hStay = { type: 'stay', id: newId() };
+    const { folioId } = await org.run(org.setup, (tx) =>
+      port.openFolio(tx, { propertyId: h.id, owner: hStay, payer: { type: 'house', id: newId() } }),
+    );
+    const kAgent = org.staff('reservations_agent', 'Aishath', [k.id]);
+    // Scoped to the agent's property: refused (correct).
+    await expect(
+      org.run(kAgent, (tx) => port.getFolioBalance(tx, folioId, { propertyId: k.id })),
+    ).rejects.toMatchObject({ status: 403 });
+    // Scope omitted: BUG — delegated at every property, Hiyani's folio is readable / listable.
+    const bal = await org.run(kAgent, (tx) => port.getFolioBalance(tx, folioId));
+    expect(bal.folioId).toBe(folioId);
+    const listed = await org.run(kAgent, (tx) => port.listFolios(tx, { owner: hStay }));
+    expect(listed.map((f) => f.folioId)).toContain(folioId);
+  });
+});

@@ -66,6 +66,17 @@
   **Still queued:** gap strategist → `docs/strategy/`; infra + parity-ops resume. UX lab not restarted (only the
   tester needs it). Seven-day pacing rule added to `usage-guardrail.md`.
 
+- **2026-11-07 17:10 UTC — next-wave plan.** The 10x briefs are on main (`docs/strategy/`). After
+  integration-step and identity-plus merge, start module round 2 from each module's brief, in gap-plan order:
+  1. "make it real": backoffice wired to real APIs + reservations front-desk flows (FD-01/FD-09/FD-06);
+  2. payments collection plans + finance receipts (MIRA 3-day rule);
+  3. day-close (new module);
+  4. the remaining modules' first increments (including their parity-file corrections).
+
+  Max 3–4 module agents at once while seven-day usage is ≥ 60%.
+  **Q-number collision to resolve at merge:** identity-plus adds Q146–Q149, and integration-step also adds a Q146
+  (late-charge auto card). Renumber integration-step's question to the next free number (≥ Q156) when merging.
+
 ## 1. Owner, product and how to work with the owner
 
 - Owner: founder of **Monoclay LLC** (Delaware, Stripe Atlas), based in the Maldives. Product: **Portico** (final name).
@@ -120,12 +131,13 @@ direction, experience architecture, parity framework, this orchestration folder.
 | `feat/payments-core` | wt/payments | payments (simulator, Stripe Connect, Route D) | **MERGED** to main (872e45b) — 3 P0 + P1s fixed; folio collections refused until finance binds `LedgerPort`; parity gate open (28 P0 rows, mostly unbuilt: collection plans, hosted card entry, PCI proxy, forwarding) | finance binds LedgerPort at its merge |
 | `feat/operations-core` | wt/operations | housekeeping, maintenance, tasks, offline sync | **MERGED** to main (9296305) — both P0 + most P1 fixed; P1-5/6/8 deferred with reasons (README) | — |
 | `feat/integration-core` | wt/integration | connector framework, setup, health, webhooks | **MERGED** to main (4d90c6a) — P0 SSRF fixed (`safeFetch`), F2–F9 fixed | bind platform transitions after identity-plus merges (FR-2) |
-| `feat/backoffice-core` | wt/backoffice | packages/ui + apps/backoffice | steward review: **merge after fixes** (P0 cached data leaks to next user on shared tab; 6 P1) — `reviews/review-backoffice.md` | **fix round queued for after usage reset** → verify → merge |
+| `feat/backoffice-core` | wt/backoffice | packages/ui + apps/backoffice | **MERGED** to main (40a832c) — P0 cache leak + all P1 fixed; Playwright 11/11 incl. axe (WCAG 2.2 AA, light+dark); UX round-1 decisions recorded | next round: wire to real APIs (after integration-step merges) + UX shell items (NAV-01/02/09, phone bottom bar) |
 | `feat/identity-platform-enterprise` | wt/identity-plus | MFA, SSO, SCIM, custom roles, break-glass, trials, activation | 2nd review: **do not merge** (R2-P0-1 pre-hijacking + 3 P1) → ADR-0017 Amendment 1 → **fix round 3 running** | short 3rd review → merge |
-| `feat/infra-aws` | wt/infra | Terraform, Dockerfiles, runbooks | **paused** (usage) | resume when usage < 80%; set `TRUSTED_PROXY_CIDRS` (pending-fixes) |
-| `docs/parity-ops` | wt/parity-ops | parity: operations, guests, comms, resort, access, guest-experience, crm, identity, integration, ai | **paused** (usage) | resume when usage < 80% |
+| `feat/infra-aws` | wt/infra | Terraform, Dockerfiles, runbooks | **paused** — nothing consumes it until the owner authorizes AWS work; resume when seven-day usage < 60% | `TRUSTED_PROXY_CIDRS`, `PORTICO_TERMS_SEAL_KEY`, worker DB role |
+| `feat/integration-step` | wt/integration-step | bind every port for real; ADR-0015 delegation; S01–S20 scenarios | **done** (pushed): all ports bound; 12/20 scenarios pass; 5 contract bugs fixed | **steward review running** → merge → tell identity-plus/backoffice to merge main |
+| `docs/parity-ops` | wt/parity-ops | parity: operations, guests, comms, resort, access, guest-experience, crm, identity, integration, ai | **running** (new agent from the original brief; first agent's log lost in the 11:11 container restart) — operations/guests done, statuses updated to real code | merge → feed gap strategist and module rounds |
 | journey, back-of-house, parity-front, parity-finance, readiness, product, adoption docs | — | docs | **MERGED** to main | spec change requests folded in at integration step |
-| market deep dive | wt/market | owner's research prompt + one-button migration | **MERGED** to main (`docs/research/05-*`; Q140–Q145) | **gap strategist queued for after usage reset** |
+| market deep dive → gap strategist | wt/market, wt/strategy | research + 10x briefs | **MERGED** (`docs/research/05-*`, `docs/strategy/`: gap plan + 32 module briefs; Q140–Q145, Q150–Q155) | module round 2 from briefs |
 | UX loop round 1 | wt/ux-round-1 | tester → refiner | **refinements MERGED** (`docs/ux/round-1/`: 83 refinements, C1–C12) → backoffice (22 shell items, next round), integration step (API surface for 44 wiring items), module owners record decisions | round 2 after modules are bound to the UI |
 
 Branch briefs: `docs/orchestration/module-agent-playbook.md` (shared module rules), `workstream-briefs.md`
@@ -152,6 +164,8 @@ Pending cross-module fixes awaiting the next round for each author: `docs/orches
 5. Run full checks on main (`pnpm lint && pnpm turbo run typecheck --force && pnpm test`), push.
 6. Chronicle: append the merge to `docs/chronicle/01-timeline.md`; refresh with `tools/chronicle/extract.py` +
    `snapshot.py` (pass the test log); commit `docs(chronicle): …`.
+7. Quality meta loop: after every steward review / fix round / scenario run / UX round, resume the quality steward
+   (retro, scorecard, escapes, playbook versions); launch future checkers from `docs/quality/playbooks/` (latest).
 **Merge order:** guests, inventory, rates (independent) → operations, integration, finance → payments (needs
 finance ledger port) → reservations (needs all) → identity-platform-enterprise → backoffice → infra → docs branches
 any time (OPEN_QUESTIONS.md always conflicts at the end: keep both sides, sort by number).
