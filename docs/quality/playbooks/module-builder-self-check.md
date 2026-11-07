@@ -7,7 +7,7 @@
 | **Theme of v6** | **Claims you can point to.** Every capability statement you write (README, runbook, "Done", parity list, self-check "yes" or "N/A") is in a claim ledger with the test or code line that makes it true. The case that raised a finding is itself a regression test |
 | **Still in force** | v4 (invariant closure, exemption list, a test that fails without the fix: § 5 now extends it), v3 (contract integrity, § 4), v2 (re-attack table § 3, gate block § 1), v1 (§ 2 checklist) |
 | **Previous** | `archive/module-builder-self-check-v4.md` (v4); `…-v3.md`; `…-v2.md`; `…-v1.md` |
-| **Launch** | Builders run it before saying "done" and in every fix round. The final reply includes the § 3 and § 5 tables, the mutation table (§ 5.4) and the claim ledger (§ 6). The orchestrator links this file from every build and fix-round brief, **including resumed agents** (orchestrator v4 O4-5) |
+| **Launch** | Builders run it before saying "done" and in every fix round. The final reply includes the § 3 and § 5 tables, the mutation table (§ 5.4) and the claim ledger (§ 6). The orchestrator links this file from every build and fix-round brief, including resumed agents |
 | **Measured by** | v5: defects fix rounds leave behind, found by re-reviews (round 3: 10 in the integration-step fix round 2); guard elements with no failing test, by mutation canary (round 3: 1 of 6). v6: prose claims contradicted later (round 3: 13) |
 
 ## Change log

@@ -160,7 +160,7 @@ E-110, E-111; E-104 and E-105 are the orchestrator's records). RC-15 below.
 | **RC-14 (round 3).** Closure is enumerated from memory, inside Portico's code. Writer and reader lists are recalled, not derived; the record's other states and exits, the external systems holding a copy of it, the enforcement points of a stored control fact, the key fields that select it, and concurrency per writer are outside the frame | E-086, E-087, E-088, E-089, E-090, E-092 | Builder self-check **v5** (BS5-1 … BS5-6); patterns AP-59 and AP-60 |
 | **RC-15 (round 3).** A prose claim about behaviour (a runbook capability, a recorded default, a "Done" refinement, a parity row, a self-check "yes") is written without a test or code check, and no gate reads prose | E-087, E-096 … E-102, E-104, E-106, E-107, E-109, E-110, E-111 | Builder **v6** BS6-1 (claim ledger); orchestrator **v4** O4-1; pattern AP-62 |
 | **RC-16 (round 3).** A loop step is skipped for cost and its function is not reassigned: the refiner's triage, disposition and confirm/refute of "Done" claims | E-105 (E-107 left unrouted as a result) | Orchestrator **v4** O4-2; refiner **v2.1** triage-only variant |
-| **RC-12 recurred (round 3).** Generated records not refreshed (agent briefs and reports, E-117), and a measuring tool whose unit was never checked against one known record (E-116, with L8) | E-116, E-117 | Orchestrator **v4** O4-4; retro edit 7 |
+| **RC-12 recurred (round 3).** Generated records not refreshed (agent briefs and reports, E-117), and a measuring tool whose unit was never checked against one known record (E-116, with L8) | E-116, E-117 | Orchestrator **v4** O4-3; retro edit 7 |
 | **RC-10 recurred (round 3).** A test cannot fail: values unasserted (E-099), a title that claims more than the body (E-113), a "concurrent" test whose race is set up sequentially (E-114) | E-099, E-113, E-114 | Builder **v5** BS5-7 (one mutant per guard) |
 
 ---
@@ -1455,7 +1455,8 @@ findings whose class was not in the builder's checklist, so they are **not** cou
 - **Should have been caught by.** L1-BSC. The go-to map, `g s` included, was built in the backoffice fix round (C2,
   "exactly as proposed"); the only switcher e2e is mouse-driven (`smoke.spec.ts` "switches property from the top
   bar"). L-orch contributed: a fix round's new UI surface was merged without a UI review.
-- **Checks added.** New UX pattern **UX-18** (a context switch by keyboard); orchestrator **v4** O4-3.
+- **Checks added.** New UX pattern **UX-18** (a context switch by keyboard); orchestrator v5 (queued: a fix round's new
+  UI surface gets a UI review before merge); retro edit 4 (the `g s` path into the next UX round's scope).
 
 #### E-109 · P2 · C · The simulator's claimed consistency is false: arrivals are "Ready / Inspected" in villas whose departing guests are in house (R2a-P1-F01, P4-F01, P4-F02)
 - **Found.** L4 tester v2. Villas 135, 145 and 160; the housekeeping board calls them Vacant and misses four baby-cot
@@ -1562,7 +1563,7 @@ findings whose class was not in the builder's checklist, so they are **not** cou
 - **Found.** L8, this round (`git log -- docs/chronicle/agents`).
 - **Should have been caught by.** L-orch, the merge step ("update it after every merge"). Timeline entries were
   written; the extraction was not run.
-- **Checks added.** Orchestrator **v4** O4-4 (run the extractor in the same commit as every timeline entry that
+- **Checks added.** Orchestrator **v4** O4-3 (run the extractor in the same commit as every timeline entry that
   records an agent's report).
 
 ### Not counted as escapes this round (recorded for completeness)
