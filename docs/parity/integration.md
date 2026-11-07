@@ -164,7 +164,7 @@ full-service/resort/group expectation, P2 differentiator or rare.
 | PAR-INT-080 | Cutover plan with per-domain authority switch times, final capture, rollback with post-cutover export | R05 digest #7 (OXI initial cutover resync order) | P0 | specified | integration.md INT-R33 | — |
 | PAR-INT-081 | Duplicate profiles scored and reviewed before import ("archive, don't import" stale profiles) | R05 digest §2 (guests row) | P1 | specified | integration.md INT-R30; guests.md GUE-R10 | — |
 | PAR-INT-082 | Complete organization data export (exit) in documented formats, per-profile export for privacy | R05 digest #23 (Little Hotelier 365-day export limit) · R03 §3.5 (access ends at deactivation) | P1 | specified | integration.md INT-R34 | — |
-| PAR-INT-083 | Migration and history archive included (not a paid add-on); usage costs of source APIs shown before incurred | R05 digest #22, §2 billing row (Cloudbeds import paid; Oracle archive sold separately) | P2 | missing | — (commercial: billing/editions) | — |
+| PAR-INT-083 | Migration and history archive included (not a paid add-on); usage costs of source APIs shown before incurred | R05 digest #22, §2 billing row (Cloudbeds import paid; Oracle archive sold separately) | P2 | missing | — (commercial: owner question Q143) | — |
 
 ### 12. Permissions, privacy and search
 
