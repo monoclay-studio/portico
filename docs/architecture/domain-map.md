@@ -320,6 +320,27 @@ Types live in `@portico/kernel` (`records.ts`). Each module also:
 - **rates:** `ratesProvider(service)` port surface (rates.quote.read granted at the property; overrides stay explicit);
   `ChargeLine.valueOnly` and `levyOnly` are mutually exclusive. The reservations adapter verifies the seal before use.
 
+### Integration-step fix round 2 (focused re-review, ADR-0015 Amendment 1, fix sweep SW-PAY-1…4)
+
+Breaking changes (no consumer outside the composition root, all bound in the same commit):
+- **payments (provider):** `describeMethod` is replaced by `assessGuaranteeCard(tx, { propertyId, methodId, bookingId,
+  amount? }) → { usable, basis: 'cardholder_supplied' | 'channel_card' | 'mandate' | null, card, owner, reason }`
+  (Amendment 1); `syncBalanceRequest(tx, { propertyId, folioId, outstanding, payer, reason }) → { status, requestId,
+  openMinor, detail }` keeps a departed folio's ONE open balance request equal to its debt; `capture` and
+  `getPaymentStatus` require the property scope (BS3-3).
+- **payments ports:** `ReferenceDirectoryPort` is required (standalone: `standaloneReferenceDirectory`) and returns a
+  booking's `source` and `channelConnectionId`; `LedgerPort.assertTargetUsable(tx, ref, scope)` is finance's posting
+  predicate, asked before any card is charged.
+- **payments contracts:** `mandate.scope { legalEntityId, propertyIds?, purposes, maxAmount?, bookingIds? }`;
+  `entryChannel` on a method input is information only (the server derives `entryChannel` on the view: `hosted_entry`
+  only for a guest saving their own card); `authorize` and `capture` accept `separateCollection`.
+- **finance:** `PaymentsPort.requestCollection` is replaced by `syncBalanceRequest` (called after every balance change of a
+  departed folio); `assertTargetInScope(…, direction)` is THE ledger-target predicate (deposit accounts held elsewhere →
+  `deposit_account_conflict`); opening-deposit rows take `legacyNotMigrated` and the report `legacyCount`.
+- **reservations:** `PaymentsPort.assessGuaranteeCard` (replaces `describeMethod`); booking `guarantee` view gains
+  `basis` and `cardOnFile` (the card id only for payment roles); check-in input `guarantee.externalReference` (attestation
+  in connected mode); workflow money steps are redacted for roles without money permissions.
+
 ## Rules for changing a contract
 
 1. Update this file in the same commit as the provider change.
