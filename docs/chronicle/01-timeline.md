@@ -295,4 +295,11 @@ Each agent's brief and report are in `agents/`.
   is in its most powerful form". Yes to the partner platform and open API after Channex (gap-plan M15), and keep adding
   capabilities that aren't overkill. Standing capability scouting with a vision-fit test was added. M16 (legacy device
   interface) is gated on counsel (Q159).
+- **21:16 — Resumed after the reset** <!-- t: now @ 2026-11-07T21:16:35Z --> (5-hour 1%; Postgres restarted after a machine restart). Launched together:
+  - the **distribution module + Channex adapter** (owner direction);
+  - the integration-step focused re-review #3;
+  - the infra security review;
+  - the parity evidence re-run for inventory and reservations;
+  - **UX round 2a**, a focused black-box run from tester playbook v2 with stable finding IDs, on a lab rebuilt from
+    main. A demo authenticator command (`tools/demo-authenticator.mjs`) stands in for the tester's phone app.
 
