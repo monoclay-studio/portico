@@ -106,3 +106,15 @@ Template:
 **If the answer differs:** policy defaults change; possibly per-legal-entity partitions (medium).
 **Blocks:** nothing in development; privacy documentation for multi-property pilots.
 **Raised by / date:** product strategy, 2026-11-07
+
+### Q47 — Tax treatment of Monoclay's SaaS invoices                Status: open
+**Context:** `billing` issues Monoclay's own invoices to hotel organizations (Delaware company invoicing Maldivian and
+other legal entities). Whether Maldivian GST or other taxes apply to imported digital services, and Monoclay's own US
+tax position, need professional advice; we must not hard-code an assumption.
+**Question:** What tax (if any) must appear on Monoclay's SaaS invoices to Maldivian customers (and other target
+markets), and who is responsible for remitting it?
+**Default we are proceeding with:** SaaS invoice tax rules are configuration marked `unverified`; no tax lines are added;
+billing is not activated for live customers until this is answered.
+**If the answer differs:** configuration of SaaS tax rules; possible registration obligations for Monoclay.
+**Blocks:** live SaaS billing. Nothing in development.
+**Raised by / date:** product strategy, 2026-11-07
