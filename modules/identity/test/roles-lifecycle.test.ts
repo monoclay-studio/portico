@@ -1,7 +1,7 @@
 import { newId } from '@portico/kernel';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { identity } from '../src';
-import { authenticate, type Harness, harness, org, PASSWORD, signIn } from './harness';
+import { authenticate, type Harness, harness, org, PASSWORD, signIn, signInWithMfa } from './harness';
 
 let h: Harness;
 beforeAll(async () => {
@@ -121,7 +121,8 @@ describe('custom roles from the permission catalog', () => {
     expect(role.key).toBe('hr_assistant');
     const hr = await o.member([{ roleKey: 'hr_assistant', scopeType: 'organization' }]);
     const target = await o.member([]);
-    const s = await signIn(h, hr.email);
+    // identity.role.assign is sensitive (⚑): effective only with MFA.
+    const s = await signInWithMfa(h, hr.email);
     await expect(
       o.tx(
         (tx) =>
@@ -164,20 +165,25 @@ describe('staff lifecycle', () => {
         roles: [{ roleKey: 'front_desk', scopeType: 'property', scopeId: p.id }],
       }),
     );
-    expect(invite.delivery.mode).toBe('simulate');
-    const link = invite.delivery.simulated?.link as string;
-    expect(link).toMatch(/^https:\/\/app\.portico\.test\/accept-invitation\?token=inv\./);
+    // ADR-0017 §3: the response says how it was handled, never the link; the link went to the person only.
+    expect(invite.delivery).toEqual({ mode: 'simulated' });
+    expect(JSON.stringify(invite)).not.toContain('inv.');
     expect(h.sent.length).toBe(before + 1);
+    const link = h.sent.at(-1)?.link as string;
+    expect(h.sent.at(-1)?.to).toBe(email);
+    expect(link).toMatch(/^https:\/\/app\.portico\.test\/accept-invitation\?token=inv\./);
     // Invited members cannot sign in yet.
     await expect(identity.login(h.t.db, { email, password: PASSWORD })).rejects.toMatchObject({
       code: 'unauthenticated',
     });
     const token = decodeURIComponent(link.split('token=')[1] as string);
-    await expect(identity.acceptInvitation(h.t.db, { token })).rejects.toMatchObject({
+    await expect(identity.acceptInvitation(h.t.db, h.ports, { token })).rejects.toMatchObject({
       code: 'password_required',
     });
-    await identity.acceptInvitation(h.t.db, { token, password: PASSWORD });
-    await expect(identity.acceptInvitation(h.t.db, { token, password: PASSWORD })).rejects.toMatchObject({
+    await identity.acceptInvitation(h.t.db, h.ports, { token, password: PASSWORD });
+    await expect(
+      identity.acceptInvitation(h.t.db, h.ports, { token, password: PASSWORD }),
+    ).rejects.toMatchObject({
       code: 'unauthenticated',
     });
     const s = await signIn(h, email);
@@ -288,7 +294,9 @@ describe('staff lifecycle', () => {
   it('removal revokes sessions, roles and the API keys the person issued; audit is kept', async () => {
     const o = await org(h);
     const admin = await o.member([{ roleKey: 'org_admin', scopeType: 'organization' }]);
-    const s = await signIn(h, admin.email);
+    // ADR-0017 §6: another administrator remains, so removing this one is allowed.
+    await o.member([{ roleKey: 'org_admin', scopeType: 'organization' }]);
+    const s = await signInWithMfa(h, admin.email);
     const { token } = await o.tx(
       (tx) => identity.createApiClient(tx, { name: 'POS bridge', permissions: ['platform.property.read'] }),
       s.ctx,
@@ -320,6 +328,8 @@ describe('staff lifecycle', () => {
     const m = await a.member([]);
     await b.tx((tx) => identity.createUser(tx, { email: m.email, displayName: 'M', roles: [] }));
     const sa = await signIn(h, m.email, a.tenantId);
+    // B's membership is an invitation until the person accepts it, signed in as themselves (ADR-0017 §2).
+    await identity.acceptMembershipAsSelf(h.t.db, sa.ctx.actor, b.tenantId);
     const sb = await signIn(h, m.email, b.tenantId);
     await identity.requestPasswordReset(h.t.db, h.ports, { email: `nobody-${newId()}@lagoon.mv` });
     const before = h.sent.length;

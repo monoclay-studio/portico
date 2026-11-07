@@ -103,7 +103,19 @@ describe('sign-in and sessions', () => {
         roles: [{ roleKey: 'org_admin', scopeType: 'organization' }],
       }),
     );
-    await withTenantTx(t.db, b.ctx, (tx) => identity.createUser(tx, { email, displayName: 'M', roles: [] }));
+    // ADR-0017 §2: B can only INVITE an existing person; they accept while signed in as themselves.
+    const added = await withTenantTx(t.db, b.ctx, (tx) =>
+      identity.createUser(tx, { email, displayName: 'M', roles: [] }),
+    );
+    expect(added.status).toBe('invited');
+    const onlyA = await identity.login(t.db, { email, password: 'a-very-long-password' });
+    if (onlyA.status !== 'signed_in') throw new Error('expected sign-in to the only active organization');
+    const self = await identity.authenticateToken(t.db, onlyA.token, ports);
+    if (!self) throw new Error('expected principal');
+    expect((await identity.listMyInvitations(t.db, self.actor)).map((i) => i.organizationId)).toEqual([
+      b.ctx.tenantId,
+    ]);
+    await identity.acceptMembershipAsSelf(t.db, self.actor, b.ctx.tenantId);
     const choice = await identity.login(t.db, { email, password: 'a-very-long-password' });
     expect(choice.status).toBe('select_organization');
     const inB = await identity.login(t.db, {

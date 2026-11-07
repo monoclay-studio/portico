@@ -301,6 +301,7 @@ export async function enrolTotp(
       last_used_step: null,
       confirmed_at: null,
       disabled_at: null,
+      created_at: tx.now,
     })
     .execute();
   await tx.audit({ action: 'identity.mfa.enrolStart', target: { type: 'user', id: userId } });

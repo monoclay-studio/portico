@@ -2,7 +2,16 @@ import { createHash } from 'node:crypto';
 import { newId, randomToken } from '@portico/kernel';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { IDENTITY_JOBS, identity, operatorDirectoryFromConfig } from '../src';
-import { authenticate, type Harness, harness, org, PASSWORD, signIn } from './harness';
+import {
+  authenticate,
+  type Harness,
+  harness,
+  nextTotp,
+  org,
+  PASSWORD,
+  signIn,
+  signInWithMfa,
+} from './harness';
 
 let h: Harness;
 const operatorId = newId();
@@ -196,7 +205,9 @@ describe('break-glass emergency access', () => {
     const other = await signIn(h, desk.email);
     expect(other.ctx.authz.can('platform.property.update', { propertyId: p.id })).toBe(false);
     // Review cannot happen while active, nor by the elevated person.
-    const reviewerCtx = (await signIn(h, reviewer.email)).ctx;
+    // Reviewing is sensitive (⚑): the reviewer uses two-step verification.
+    const rv = await signInWithMfa(h, reviewer.email);
+    let reviewerCtx = rv.ctx;
     await expect(
       o.tx((tx) => identity.reviewElevation(tx, e.elevationId, 'Checked the lock reset; fine.'), reviewerCtx),
     ).rejects.toMatchObject({ code: 'elevation_active' });
@@ -206,6 +217,8 @@ describe('break-glass emergency access', () => {
     await expect(
       o.tx((tx) => identity.reviewElevation(tx, e.elevationId, 'Self review is not allowed.'), s.ctx),
     ).rejects.toMatchObject({ code: 'forbidden' });
+    await o.tx((tx) => identity.stepUp(tx, h.ports, { code: nextTotp(h, rv.secret) }), reviewerCtx);
+    reviewerCtx = (await authenticate(h, rv.token)) ?? reviewerCtx;
     await o.tx(
       (tx) => identity.reviewElevation(tx, e.elevationId, 'Checked the lock reset; fine.'),
       reviewerCtx,

@@ -10,6 +10,7 @@ import {
 import { platform, platformManifest } from '@portico/platform';
 import { createTestDatabase, type TestDatabase, testContext } from '@portico/testing';
 import { fieldEncryptedSecretStore, identity, identityManifest } from '../src';
+import { base32Decode, totp } from '../src/domain/totp';
 import type { IdentityPorts, Notifier, StaffMessage } from '../src/ports';
 
 export const PASSWORD = 'correct horse battery staple';
@@ -31,7 +32,7 @@ export async function harness(extra: Partial<IdentityPorts> = {}): Promise<Harne
   const notifier: Notifier = {
     async send(tx, message) {
       sent.push(message);
-      return tx.environment === 'live' ? { mode: 'live' } : { mode: 'simulate', simulated: message };
+      return { mode: tx.environment === 'live' ? 'queued' : 'simulated' };
     },
   };
   const catalog = [...platformManifest.permissions, ...identityManifest.permissions];
@@ -118,6 +119,31 @@ export async function signIn(h: Harness, email: string, organizationId?: string)
   const principal = await identity.authenticateToken(h.t.db, res.token, h.ports);
   if (!principal) throw new Error('token did not authenticate');
   return { token: res.token, principal, ctx: principalContext(principal) };
+}
+
+/**
+ * Sign in and enrol an authenticator (proving the password, ADR-0017 §4), so sensitive (⚑) permissions are
+ * effective for the returned context. Returns the TOTP secret for later step-ups.
+ */
+export async function signInWithMfa(h: Harness, email: string, organizationId?: string) {
+  const s = await signIn(h, email, organizationId);
+  const started = await withTenantTx(h.t.db, s.ctx, (tx) =>
+    identity.enrolTotp(tx, h.ports, { currentPassword: PASSWORD }),
+  );
+  if (!started.ok) throw started.error;
+  const secret = base32Decode(started.value.secret);
+  const { recoveryCodes } = await withTenantTx(h.t.db, s.ctx, (tx) =>
+    identity.confirmTotp(tx, h.ports, { code: totp(secret, h.clock.now()) }),
+  );
+  const ctx = await authenticate(h, s.token);
+  if (!ctx) throw new Error('session lost after enrolment');
+  return { token: s.token, ctx, secret, recoveryCodes, principal: s.principal };
+}
+
+/** A fresh TOTP code (advances the clock one time step: codes are single-use). */
+export function nextTotp(h: Harness, secret: Buffer): string {
+  h.clock.advance(30_000);
+  return totp(secret, h.clock.now());
 }
 
 export function principalContext(

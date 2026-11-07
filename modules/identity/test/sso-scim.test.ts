@@ -4,7 +4,7 @@ import { exportJWK, generateKeyPair, type JWK, SignJWT } from 'jose';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { identity } from '../src';
 import type { OidcHttpClient } from '../src/ports';
-import { authenticate, type Harness, harness, org, PASSWORD, signIn } from './harness';
+import { authenticate, type Harness, harness, org, PASSWORD, signIn, signInWithMfa } from './harness';
 
 /**
  * In-process fake OpenID provider: discovery, JWKS, and a token endpoint that checks client authentication and
@@ -49,7 +49,7 @@ async function fakeIdp(issuer: string, clientId: string, clientSecret: string) {
         .setProtectedHeader({ alg: 'RS256', kid: 'k1' })
         .setIssuer(issuer)
         .setAudience(clientId)
-        .setSubject(String(entry.claims.email))
+        .setSubject(String(entry.claims.sub ?? entry.claims.email))
         .setIssuedAt()
         .setExpirationTime('5m')
         .sign(entry.rogue ? rogue.privateKey : privateKey);
@@ -105,10 +105,19 @@ async function ssoOrg() {
       { group: 'PMS-Finance', roleKey: 'finance', scopeType: 'organization' },
     ]),
   );
-  const ssoLogin = async (claims: Record<string, unknown>, opts: { rogue?: boolean } = {}) => {
+  /** Claims default to a verified email; tests override `email_verified` and `sub` where they matter. */
+  const ssoLogin = async (
+    claims: Record<string, unknown>,
+    opts: { rogue?: boolean; browserBinding?: string } = {},
+  ) => {
     const start = await identity.startSsoLogin(h.t.db, h.ports, { organizationId: o.tenantId });
-    const { code, state } = idp.authorize(start.authorizationUrl, claims, opts);
-    return { state, result: () => identity.completeSsoLogin(h.t.db, h.ports, { state, code }) };
+    const { code, state } = idp.authorize(start.authorizationUrl, { email_verified: true, ...claims }, opts);
+    const browserBinding = opts.browserBinding ?? start.browserBinding;
+    return {
+      state,
+      browserBinding: start.browserBinding,
+      result: () => identity.completeSsoLogin(h.t.db, h.ports, { state, code, browserBinding }),
+    };
   };
   return { o, p, ssoLogin };
 }
@@ -186,10 +195,23 @@ describe('OIDC single sign-on (fake identity provider)', () => {
     ).rejects.toMatchObject({
       code: 'unauthenticated',
     });
+    // P2-3: a (state, code) pair lifted from another browser (Referer, logs) is useless without its binding.
+    await expect(
+      (
+        await ssoLogin(
+          { email: `b-${newId()}@lagoon.mv`, groups: ['PMS-Finance'] },
+          { browserBinding: 'someone-elses-browser' },
+        )
+      ).result(),
+    ).rejects.toMatchObject({ code: 'unauthenticated' });
     const ok = await ssoLogin({ email: `ok-${newId()}@lagoon.mv`, groups: ['PMS-Finance'] });
     await ok.result();
     await expect(
-      identity.completeSsoLogin(h.t.db, h.ports, { state: ok.state, code: 'replayed' }),
+      identity.completeSsoLogin(h.t.db, h.ports, {
+        state: ok.state,
+        code: 'replayed',
+        browserBinding: ok.browserBinding,
+      }),
     ).rejects.toMatchObject({
       code: 'unauthenticated',
     });
@@ -204,8 +226,17 @@ describe('OIDC single sign-on (fake identity provider)', () => {
       'no_mapped_group',
       'id_token_invalid',
       'email_not_verified',
+      'browser_binding_mismatch',
       'invalid_or_expired_state',
     ]);
+    // P3-5: refusals never store a non-member's email address in this organization's audit log.
+    const details = await h.t.admin.kysely
+      .selectFrom('core.audit_log')
+      .select('metadata')
+      .where('tenant_id', '=', o.tenantId)
+      .where('action', '=', 'identity.sso.loginFailed')
+      .execute();
+    expect(JSON.stringify(details)).not.toMatch(/@(lagoon|evil)\.mv/);
   });
 
   it('SSO required: enabling needs an SSO session; password sign-in then stops for non-exempt members', async () => {
@@ -214,19 +245,30 @@ describe('OIDC single sign-on (fake identity provider)', () => {
       [{ roleKey: 'org_admin', scopeType: 'organization' }],
       `pw-${newId()}@lagoon.mv`,
     );
-    const pw = await signIn(h, pwAdmin.email);
+    const pw = await signInWithMfa(h, pwAdmin.email);
+    const breakGlass = await o.member([], `exempt-${newId()}@lagoon.mv`);
+    // P2-4: at least one account keeps password sign-in while SSO is required.
     await expect(
       o.tx((tx) => identity.setSsoEnforcement(tx, { ssoRequired: true, exemptUserIds: [] }), pw.ctx),
+    ).rejects.toMatchObject({
+      code: 'emergency_account_required',
+    });
+    await expect(
+      o.tx(
+        (tx) => identity.setSsoEnforcement(tx, { ssoRequired: true, exemptUserIds: [breakGlass.userId] }),
+        pw.ctx,
+      ),
     ).rejects.toMatchObject({
       code: 'sign_in_with_sso_first',
     });
     const ssoAdminEmail = `admin-${newId()}@lagoon.mv`;
-    const viaSso = await (await ssoLogin({ email: ssoAdminEmail, groups: ['PMS-Finance'] })).result();
+    const viaSso = await (
+      await ssoLogin({ email: ssoAdminEmail, groups: ['PMS-Finance'], amr: ['pwd', 'mfa'] })
+    ).result();
     await o.tx((tx) =>
       identity.assignRole(tx, { userId: viaSso.userId, roleKey: 'org_admin', scopeType: 'organization' }),
     );
     const ssoCtx = await authenticate(h, viaSso.token);
-    const breakGlass = await o.member([], `exempt-${newId()}@lagoon.mv`);
     const res = await o.tx(
       (tx) => identity.setSsoEnforcement(tx, { ssoRequired: true, exemptUserIds: [breakGlass.userId] }),
       ssoCtx ?? undefined,
