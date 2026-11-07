@@ -280,6 +280,27 @@ Types live in `@portico/kernel` (`records.ts`). Each module also:
 - never writes secrets or sensitive identity values into audit `before`/`after` (mask them) — history is shown to
   anyone with read permission on the record.
 
+## Integration step (2026-11-07): contract changes applied when every port was bound
+
+- **Port calls carry the authorized property (ADR-0015).** Providers called through a port receive the caller's
+  `propertyId`, grant their own keys at that property only (kernel `delegateAtProperty`) and refuse records of another
+  property with `scope_mismatch`. Inventory exposes this as `inventoryProvider(service)` (`release`, `changeConsumption`,
+  `convertHold`, `assignUnit`, `unassignUnit`, `releaseBlock` take `propertyId`; `getUnit(tx, id, { propertyId })`);
+  payments' provider (`getPaymentStatus(tx, ref, { propertyId })`, `capture({ …, propertyId? })`); refunds,
+  overbooking authorization, house-use blocks and lock overrides stay explicit.
+- **reservations → finance:** `recordDeposit`, `applyDeposits`, `listFolios`, `setBillingRules`, `getDepositBalance`
+  carry `propertyId`; `getFolioBalance(tx, folioId, { propertyId })`.
+- **reservations → rates:** reservations stores rates' sealed `TermsSnapshot` v1 verbatim (`providerDocument` inside its
+  view) and passes it back unchanged; new port function `instantiatePaymentSchedule(terms)` for deposits. Quotes and
+  price changes are evaluated "now" (reservations' business date is not a backdated quote).
+- **rates `ChargeLine.valueOnly`** (opposite of `levyOnly`): only value-based rules — finance taxes deposits at receipt
+  with it (per-guest levies need occupancy and fall due per guest-day).
+- **finance `CollectionRequest.payerName`**; payments implements finance's `requestCollection` with
+  `paymentsCollectionsForFinance` (a payment request, intent only).
+- **operations:** `InventoryPort.blockUnit` / `releaseBlock` carry `propertyId`; `createTask` (provider) does not
+  re-check `operations.task.manage`; `operationsForReservations(service)` adapts views to reservations' port.
+- **Payer types:** glossary § Payer (`guest | company | agency | house | other`).
+
 ## Rules for changing a contract
 
 1. Update this file in the same commit as the provider change.
