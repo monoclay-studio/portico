@@ -3,6 +3,7 @@ export { sql } from 'kysely';
 export * from './concurrency';
 export * from './database';
 export * from './idempotency';
+export * from './jobs';
 export * from './migrate';
 export * from './outbox';
 export * from './search';

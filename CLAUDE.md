@@ -159,6 +159,10 @@ A feature is **not** done because a screen exists. Done means: working behavior,
 permissions, error handling, audit trail, tests (unit + integration), and evidence from the relevant
 operational scenarios in `docs/scenarios/`.
 
+A **module** is not complete until its competitive parity matrix and edge-case catalogue pass the gate
+(`docs/parity/README.md`, `node tools/parity-report.mjs --gate <module>`): every P0 capability and P0 edge case
+`tested`, every P1 row at least `specified` or explicitly `deferred`/`different` with a visible reason.
+
 Every capability and integration's readiness is tracked in `docs/readiness/readiness-register.md` on the
 owner's scale (operational-readiness brief §2):
 
