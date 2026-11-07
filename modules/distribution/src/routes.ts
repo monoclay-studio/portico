@@ -498,8 +498,8 @@ export function distributionHttp(input: { database: PorticoDatabase; deps: Distr
         '/distribution/connections/:id/simulator/bookings',
         { schema: { tags, params: idParams, body: simulatorBookingInput } },
         async (req) => {
-          requireIdempotencyKey(req);
-          return sim.simulateBooking(database, deps, req.ctx, req.params.id, req.body);
+          const idempotencyKey = requireIdempotencyKey(req);
+          return sim.simulateBooking(database, deps, req.ctx, req.params.id, { ...req.body, idempotencyKey });
         },
       );
       app.post(

@@ -163,6 +163,27 @@ describe('distribution API (composition root)', () => {
       },
     });
     expect(book.statusCode, book.body).toBe(200);
+    // Idempotent simulator control: the same key names the same simulated revision.
+    const again = await h.app.inject({
+      method: 'POST',
+      url: `/v1/distribution/connections/${conn.id}/simulator/bookings`,
+      headers: { ...auth, 'idempotency-key': book.request.headers['idempotency-key'] as string },
+      payload: {
+        status: 'new',
+        rooms: [
+          {
+            roomTypeId: room.roomTypeId,
+            ratePlanId: room.id,
+            checkin: '2026-12-10',
+            checkout: '2026-12-12',
+            adults: 2,
+            nightly,
+          },
+        ],
+        deliver: { webhook: false },
+      },
+    });
+    expect(again.json().revisionId).toBe(book.json().revisionId);
     const state = (
       await sql<{
         state: never;

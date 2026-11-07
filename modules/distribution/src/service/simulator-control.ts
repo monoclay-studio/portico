@@ -6,7 +6,7 @@
  */
 import type { PorticoDatabase, TxContext } from '@portico/db';
 import { withTenantTx } from '@portico/db';
-import { BusinessRuleError, type RequestContext, requirePermission } from '@portico/kernel';
+import { BusinessRuleError, type RequestContext, requirePermission, sha256Hex } from '@portico/kernel';
 import type { SimBookingInput, SimEndpoint, SimFaultKind, SimState } from '../adapters/channex/simulator';
 import { P } from '../manifest';
 import { type DistributionDeps, loadConnection } from './common';
@@ -50,6 +50,7 @@ export async function simulateBooking(
   connectionId: string,
   input: SimBookingInput & {
     deliver?: { webhook?: boolean; duplicate?: number; notificationOnly?: boolean; reverse?: boolean };
+    idempotencyKey?: string;
   },
 ): Promise<{
   revisionId: string;
@@ -57,8 +58,15 @@ export async function simulateBooking(
   deliveries: Array<{ revisionId: string; status: number }>;
 }> {
   const conn = await withTenantTx(database, ctx, (tx) => simConnection(tx, connectionId));
-  const { deliver, ...booking } = input;
-  const rev = await deps.simulator.addRevision(ctx.tenantId, conn.external_property_id, booking);
+  const { deliver, idempotencyKey, ...booking } = input;
+  // Idempotent: the same key always names the same simulated revision (a retry re-delivers, never re-creates).
+  const revisionId = idempotencyKey
+    ? `sim-${sha256Hex(`${connectionId}:${idempotencyKey}`).slice(0, 32)}`
+    : undefined;
+  const rev = await deps.simulator.addRevision(ctx.tenantId, conn.external_property_id, {
+    ...booking,
+    ...(revisionId ? { revisionId } : {}),
+  });
   const deliveries =
     deliver?.webhook === false
       ? []

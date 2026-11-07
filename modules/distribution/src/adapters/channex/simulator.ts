@@ -409,6 +409,8 @@ function applyRestriction(state: SimState, raw: unknown): string | null {
 // ───────────────────────────── control (the "OTA side" of the simulator) ─────────────────────────────
 
 export interface SimBookingInput {
+  /** Deterministic revision id (idempotent creation: an existing revision with this id is returned as is). */
+  revisionId?: string;
   bookingId?: string;
   status: 'new' | 'modified' | 'cancelled';
   currency?: string;
@@ -431,8 +433,10 @@ export interface SimBookingInput {
 
 /** Record a booking revision at the hub (as if an OTA delivered it). Revisions get strictly increasing times. */
 export function addRevision(state: SimState, input: SimBookingInput, now: Date): SimRevision {
+  const existing = input.revisionId ? state.revisions.find((r) => r.id === input.revisionId) : undefined;
+  if (existing) return existing;
   state.seq += 1;
-  const id = randomUUID();
+  const id = input.revisionId ?? randomUUID();
   const bookingId = input.bookingId ?? randomUUID();
   const insertedAt = new Date(now.getTime() + state.seq).toISOString();
   const rev: SimRevision = {
