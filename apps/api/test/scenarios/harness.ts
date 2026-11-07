@@ -339,11 +339,9 @@ export async function makeExternal(
 ): Promise<void> {
   // Identity-plus / platform enterprise (G-02): moving a domain's system of record is an authority transition —
   // planned by one person, approved by another, frozen, then made effective. Scenarios use the real flow.
-  const planner = { ...org.setup, actor: { kind: 'user' as const, userId: newId(), displayName: 'Planner' } };
-  const approver = {
-    ...org.setup,
-    actor: { kind: 'user' as const, userId: newId(), displayName: 'Approver' },
-  };
+  // Re-review #3 R3-P3-4: real people with real roles, and the composition's platform ports (its transition guard).
+  const planner = org.staff('org_admin', 'Planner', [propertyId]);
+  const approver = org.staff('org_admin', 'Approver', [propertyId]);
   const plan = await org.run(planner, (tx) =>
     platform.planAuthorityTransition(tx, propertyId, {
       changes: [
@@ -357,7 +355,7 @@ export async function makeExternal(
     await org.run(approver, (tx) => platform.approveAuthorityTransition(tx, plan.id, 'scenario setup'));
   }
   await org.run(planner, (tx) => platform.freezeAuthorityTransition(tx, plan.id));
-  await org.run(planner, (tx) => platform.completeAuthorityTransition(tx, {}, plan.id));
+  await org.run(planner, (tx) => platform.completeAuthorityTransition(tx, _s.c.platformPorts, plan.id));
 }
 
 const sessions = new Map<string, Record<string, string>>();

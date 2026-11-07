@@ -341,6 +341,21 @@ Breaking changes (no consumer outside the composition root, all bound in the sam
   `basis` and `cardOnFile` (the card id only for payment roles); check-in input `guarantee.externalReference` (attestation
   in connected mode); workflow money steps are redacted for roles without money permissions.
 
+### Integration-step fix round 3 (re-review #3, ADR-0015 Amendment 2)
+
+- **Lock order across modules:** collection lock (payments, one key per booking family) → folio row (finance) → payment
+  request row (payments). Finance takes the collection lock through `PaymentsPort.lockCollections(tx, { folioIds })`
+  before it locks a folio whose balance changes; every payments collection path takes it first.
+- **payments ports:** `LedgerPort.describeTarget` returns a folio's `owner` and `payer`; `ReferenceDirectoryPort` returns a
+  stay's or booking's `bookingId` and the booking's `people` (owner keys) — the booking family and consent coverage.
+- **payments provider:** `lockCollections(tx, refs)`; `syncBalanceRequest` returns `reissued` (never amends in place) and
+  `retiredRequestId`; `assessGuaranteeCard` returns `withinConsent` / `consentReason`. Provider interface
+  `deactivatePaymentLink` (simulator and Stripe). Payment requests store `family_booking_id`; `link_status` adds
+  `deactivating` / `deactivated` (migration 0003).
+- **payments contracts:** a mandate must record its `scope`; `maxAmount` is the total the hotel may take on the card.
+- **finance:** `PaymentsPort.lockCollections`; consumer `finance.departed-folio-payment-ended` (payments payment
+  succeeded/failed) re-syncs a deferred balance request; `transferToReceivables` and `recordPaymentAdjustment` sync.
+
 ## Rules for changing a contract
 
 1. Update this file in the same commit as the provider change.
