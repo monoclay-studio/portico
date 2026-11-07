@@ -292,4 +292,93 @@ describe('transfers and corrections', () => {
     const noPerm = { ...org.ctx, authz: testContext({ grants: [] }).authz };
     expect(await org.run((tx) => financeSearch.search(tx, 'Searchable', { limit: 5 }), noPerm)).toEqual([]);
   });
+
+  it('reverses a whole charge entry exactly once, restoring allowance usage', async () => {
+    const org = await setupOrg(h);
+    const s = await openStay(h, org);
+    await org.run((tx) =>
+      h.finance.grantAllowance(tx, {
+        propertyId: org.propertyId,
+        stayId: s.stayId,
+        folioId: s.guestFolioId,
+        definitionRef: 'credit',
+        label: 'Dining credit',
+        period: { night: '2026-11-07' },
+        amount: usd(5000),
+        chargeCode: 'ALLOW',
+        eligibleTags: ['dining'],
+        unusedPolicy: 'forfeit',
+        idempotencyKey: `g:${s.stayId}`,
+      }),
+    );
+    const res = await org.run((tx) =>
+      h.finance.postCharge(tx, {
+        propertyId: org.propertyId,
+        target: { type: 'stay', id: s.stayId },
+        chargeCode: 'FOOD',
+        amount: usd(10000),
+        serviceDate: '2026-11-07',
+        description: 'Dinner on the wrong villa',
+        sourceRef: { type: 't', id: 'w' },
+        idempotencyKey: `w:${s.stayId}`,
+        allowanceRef: 'auto',
+      }),
+    );
+    expect(res.allowanceUsage).toEqual(usd(5000));
+    const rev = await org.run((tx) =>
+      h.finance.reverseEntry(tx, {
+        entryId: res.entryId,
+        reasonCode: 'wrong_stay',
+        note: 'Posted to the wrong villa',
+        idempotencyKey: `rv:${s.stayId}`,
+      }),
+    );
+    expect(rev.postingIds).toHaveLength(res.postingIds.length);
+    await expect(
+      org.run((tx) =>
+        h.finance.reverseEntry(tx, {
+          entryId: res.entryId,
+          reasonCode: 'again',
+          note: 'again',
+          idempotencyKey: `rv2:${s.stayId}`,
+        }),
+      ),
+    ).rejects.toThrow(/already reversed/);
+    const folio = await org.run((tx) => h.finance.getFolio(tx, s.guestFolioId));
+    expect(folio.balance).toEqual(usd(5000)); // only the granted allowance remains
+    const [allowance] = await org.run((tx) => h.finance.listAllowances(tx, s.stayId));
+    expect(allowance?.remaining).toEqual(usd(5000));
+    await assertLedgerIntegrity(h, org);
+  });
+
+  it('places legal holds that stop any purge before retention ends', async () => {
+    const org = await setupOrg(h);
+    const s = await openStay(h, org);
+    await charge(org, s.guestFolioId, `lh:${s.stayId}`);
+    await org.run((tx) =>
+      h.finance.issueInvoice(tx, { folioId: s.guestFolioId, idempotencyKey: `lh:${s.stayId}` }),
+    );
+    const late = await org.run((tx) =>
+      h.finance.retentionStatus(tx, { legalEntityId: org.legalEntityId, asOf: '2032-01-01' }),
+    );
+    expect(late).toEqual({ activeHolds: 0, earliestRetainUntil: '2031-12-31', purgeableDocuments: 1 });
+    const hold = await org.run((tx) =>
+      h.finance.placeLegalHold(tx, { legalEntityId: org.legalEntityId, reason: 'MIRA audit 2031' }),
+    );
+    expect(
+      (
+        await org.run((tx) =>
+          h.finance.retentionStatus(tx, { legalEntityId: org.legalEntityId, asOf: '2032-01-01' }),
+        )
+      ).purgeableDocuments,
+    ).toBe(0);
+    await org.run((tx) => h.finance.releaseLegalHold(tx, { holdId: hold.id, reason: 'Audit closed' }));
+    expect(
+      (
+        await org.run((tx) =>
+          h.finance.retentionStatus(tx, { legalEntityId: org.legalEntityId, asOf: '2026-12-01' }),
+        )
+      ).purgeableDocuments,
+    ).toBe(0);
+  });
 });

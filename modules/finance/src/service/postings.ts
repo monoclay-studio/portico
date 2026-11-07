@@ -1558,7 +1558,8 @@ export async function reverseEntry(
     .selectAll()
     .where('id', '=', input.entryId)
     .executeTakeFirst();
-  if (!entry || !entry.property_id) throw new ValidationError('entry_not_found', 'The journal entry was not found.');
+  if (!entry || !entry.property_id)
+    throw new ValidationError('entry_not_found', 'The journal entry was not found.');
   requirePermission(tx, 'finance.posting.correct', { propertyId: entry.property_id });
   if (entry.entry_type !== 'charge') {
     throw new BusinessRuleError(
@@ -1576,7 +1577,10 @@ export async function reverseEntry(
     .select('id')
     .where('reverses_entry_id', '=', entry.id)
     .executeTakeFirst();
-  if (already) throw new ConflictError('entry_already_reversed', 'This entry was already reversed.', { reversalEntryId: already.id });
+  if (already)
+    throw new ConflictError('entry_already_reversed', 'This entry was already reversed.', {
+      reversalEntryId: already.id,
+    });
   const postings = await db(tx)
     .selectFrom('finance.postings as p')
     .leftJoin('finance.posting_document_locks as l', 'l.posting_id', 'p.id')
@@ -1587,7 +1591,10 @@ export async function reverseEntry(
     .orderBy('p.id')
     .execute();
   if (postings.some((p) => p.document_id)) {
-    throw new BusinessRuleError('posting_invoiced', 'Part of this entry is on an issued invoice. Issue a credit note instead.');
+    throw new BusinessRuleError(
+      'posting_invoiced',
+      'Part of this entry is on an issued invoice. Issue a credit note instead.',
+    );
   }
   const touched = await db(tx)
     .selectFrom('finance.postings')
@@ -1622,7 +1629,8 @@ export async function reverseEntry(
       description: `Reversal of "${entry.description}": ${input.note}`,
     });
   } catch (err) {
-    if (isUniqueViolation(err)) throw new ConflictError('entry_already_reversed', 'This entry was already reversed.');
+    if (isUniqueViolation(err))
+      throw new ConflictError('entry_already_reversed', 'This entry was already reversed.');
     throw err;
   }
   if (!claim.claimed) return entryResult(tx, claim.entryId, true);
@@ -1632,7 +1640,10 @@ export async function reverseEntry(
   );
   for (const f of locked.values()) {
     if (f.status === 'closed') {
-      throw new BusinessRuleError('folio_not_open', 'A folio of this entry is closed. Corrections go through a credit note.');
+      throw new BusinessRuleError(
+        'folio_not_open',
+        'A folio of this entry is closed. Corrections go through a credit note.',
+      );
     }
     await reopenInPlace(tx, f, 'correction');
   }
@@ -1644,11 +1655,18 @@ export async function reverseEntry(
       .forUpdate()
       .executeTakeFirstOrThrow();
     if (inst.status === 'closed' || inst.status === 'cancelled') {
-      throw new BusinessRuleError('allowance_period_closed', `The allowance "${inst.label}" used by this charge is already closed.`);
+      throw new BusinessRuleError(
+        'allowance_period_closed',
+        `The allowance "${inst.label}" used by this charge is already closed.`,
+      );
     }
     await db(tx)
       .updateTable('finance.allowance_instances')
-      .set({ used_minor: Number(inst.used_minor) + Number(p.amount_minor), status: 'active', version: sql`version + 1` })
+      .set({
+        used_minor: Number(inst.used_minor) + Number(p.amount_minor),
+        status: 'active',
+        version: sql`version + 1`,
+      })
       .where('id', '=', inst.id)
       .execute();
   }
@@ -1691,7 +1709,9 @@ export async function reverseEntry(
     currency: l.currency,
     functionalAmountMinor: -Number(l.functional_amount_minor),
     fxRateId: l.fx_rate_id,
-    subLedger: l.sub_ledger_type ? { type: l.sub_ledger_type as SubLedgerType, id: l.sub_ledger_id as string } : null,
+    subLedger: l.sub_ledger_type
+      ? { type: l.sub_ledger_type as SubLedgerType, id: l.sub_ledger_id as string }
+      : null,
     ...(l.posting_id && index.has(l.posting_id) ? { postingIndex: index.get(l.posting_id) as number } : {}),
     chargeCode: l.charge_code,
     serviceDate: l.service_date,
@@ -1702,7 +1722,12 @@ export async function reverseEntry(
     tx,
     deps,
     claim.entryId,
-    { legalEntityId: entry.legal_entity_id, propertyId: entry.property_id, businessDate, description: 'Reversal' },
+    {
+      legalEntityId: entry.legal_entity_id,
+      propertyId: entry.property_id,
+      businessDate,
+      description: 'Reversal',
+    },
     drafts,
     lines,
   );
@@ -1719,7 +1744,12 @@ export async function reverseEntry(
     type: 'finance.posting.adjusted',
     propertyId: entry.property_id,
     aggregate: { type: 'journal_entry', id: claim.entryId },
-    payload: { entryId: claim.entryId, reversesEntryId: entry.id, reasonCode: input.reasonCode, relatesToBusinessDate: entry.business_date },
+    payload: {
+      entryId: claim.entryId,
+      reversesEntryId: entry.id,
+      reasonCode: input.reasonCode,
+      relatesToBusinessDate: entry.business_date,
+    },
   });
   return { entryId: claim.entryId, postingIds, replayed: false };
 }

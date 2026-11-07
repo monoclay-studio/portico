@@ -49,6 +49,7 @@ export function createFinance(ports: FinancePorts) {
     clearOwnerDeparture: folios.clearOwnerDeparture,
     // ── postings ──
     adjustPosting: bind(deps, postings.adjustPosting),
+    reverseEntry: bind(deps, postings.reverseEntry),
     transferPostings: bind(deps, postings.transferPostings),
     collectPayment: bind(deps, postings.collectPayment),
     // ── billing rules ──

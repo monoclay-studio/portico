@@ -359,6 +359,67 @@ export function financeHttp(deps: { database: PorticoDatabase; finance: FinanceS
           ),
       );
       app.post(
+        '/finance/journal-entries/:id/reversal',
+        {
+          schema: {
+            tags: tags('Postings'),
+            params: idParams,
+            body: adjustmentInput.omit({ amountMinor: true }),
+            response: { 201: entryResult },
+          },
+        },
+        (req, reply) =>
+          command(req, reply, 'POST /finance/journal-entries/:id/reversal', (tx, key) =>
+            svc.reverseEntry(tx, { entryId: req.params.id, ...req.body, idempotencyKey: key }),
+          ),
+      );
+      app.post(
+        '/finance/legal-holds',
+        {
+          schema: {
+            tags: tags('Finance reports'),
+            body: z.object({ legalEntityId: uuid, reason: z.string().min(1).max(1000) }),
+            response: { 201: z.object({ id: uuid }) },
+          },
+        },
+        (req, reply) =>
+          command(req, reply, 'POST /finance/legal-holds', (tx) => svc.placeLegalHold(tx, req.body)),
+      );
+      app.post(
+        '/finance/legal-holds/:id/release',
+        {
+          schema: {
+            tags: tags('Finance reports'),
+            params: idParams,
+            body: z.object({ reason: z.string().min(1).max(1000) }),
+            response: { 204: z.null() },
+          },
+        },
+        async (req, reply) => {
+          await read(req, (tx) =>
+            svc.releaseLegalHold(tx, { holdId: req.params.id, reason: req.body.reason }),
+          );
+          return reply.status(204).send(null);
+        },
+      );
+      app.get(
+        '/finance/retention',
+        {
+          schema: {
+            tags: tags('Finance reports'),
+            querystring: z.object({ legalEntityId: uuid, asOf: date }),
+            response: {
+              200: z.object({
+                activeHolds: z.number().int(),
+                earliestRetainUntil: z.string().nullable(),
+                purgeableDocuments: z.number().int(),
+              }),
+            },
+          },
+        },
+        async (req) => read(req, (tx) => svc.retentionStatus(tx, req.query)),
+      );
+      app.post(
         '/finance/transfers',
         { schema: { tags: tags('Postings'), body: transferInput, response: { 201: entryResult } } },
         (req, reply) =>
