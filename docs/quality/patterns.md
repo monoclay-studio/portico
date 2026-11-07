@@ -324,6 +324,12 @@ proves useless is marked *retired* with a date, never deleted.
   net. Fees are booked as an expense, never as a guest adjustment.
 - **Applies to:** payments, finance, accounting.
 
+### AP-28 · The same money is collected twice through two channels
+- **Seen in:** payments P1-2: a paid deposit link plus a desk charge.
+- **Probe:** open a payment link for a purpose, then collect the same purpose at the desk, and by automation. The second
+  collection must be blocked or warned, with a reference to the first.
+- **Applies to:** payments, reservations (check-in guarantee), POS.
+
 ### AP-29 · Time semantics and deadlines: the wrong clock, or a deadline that nothing enforces
 - **Seen in:**
   - operations P1-7: escalation was anchored on `created_at`, so tomorrow's day plan escalated 15 minutes after it was
@@ -344,12 +350,6 @@ proves useless is marked *retired* with a date, never deleted.
      It must not wait for the next command.
 - **Applies to:** operations, inventory, reservations, finance (business date vs service date), rates, identity
   (expiries), day-close.
-
-### AP-28 · The same money is collected twice through two channels
-- **Seen in:** payments P1-2: a paid deposit link plus a desk charge.
-- **Probe:** open a payment link for a purpose, then collect the same purpose at the desk, and by automation. The second
-  collection must be blocked or warned, with a reference to the first.
-- **Applies to:** payments, reservations (check-in guarantee), POS.
 
 ---
 
