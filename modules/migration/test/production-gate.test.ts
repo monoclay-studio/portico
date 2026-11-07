@@ -20,7 +20,7 @@ afterAll(async () => h?.close());
 describe('production gate', () => {
   it('without a valid authorization the cutover does not start, nothing changes, and the refusal is audited', async () => {
     const f = await productionInSync(h);
-    expect((await f.live.run((tx) => migration.loadJob(tx, f.jobId))).state).toBe('in_sync');
+    expect((await f.live.run((tx) => migration.getJob(tx, f.jobId))).state).toBe('in_sync');
     await f.live.run(
       (tx) => migration.revokeAuthorization(tx, f.jobId, 'Owner wants to re-check the plan'),
       f.gm,
@@ -33,7 +33,7 @@ describe('production gate', () => {
         detail: expect.stringMatching(/Cutover not started — nothing changed in Portico.*authorization/),
       },
     ]);
-    const job = await f.live.run((tx) => migration.loadJob(tx, f.jobId));
+    const job = await f.live.run((tx) => migration.getJob(tx, f.jobId));
     expect(job.state).toBe('in_sync');
     expect(job.frozenAt).toBeNull();
     expect(await f.live.run((tx) => h.reservations.count(tx, f.live.propertyId))).toBe(0);
@@ -120,7 +120,7 @@ describe('production gate', () => {
     const f = await productionInSync(h);
     const r = await migration.runPipeline(h.t.db, h.deps, f.lead, f.jobId);
     expect(r.executed).toEqual([]);
-    expect((await f.live.run((tx) => migration.loadJob(tx, f.jobId))).frozenAt).toBeNull();
+    expect((await f.live.run((tx) => migration.getJob(tx, f.jobId))).frozenAt).toBeNull();
   });
 
   it('a person without cutover rights cannot plan, start or roll back; the approver must be a different person', async () => {

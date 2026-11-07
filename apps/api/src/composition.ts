@@ -87,6 +87,7 @@ import {
   migrationHttp,
   migrationJobs,
   migrationManifest,
+  migrationPersonalData,
   migrationSearch,
   migrationSubscriptions,
   ProviderUnavailableError,
@@ -313,6 +314,8 @@ export function compose(database: PorticoDatabase, options: CompositionOptions =
     },
     // Field encryption + blind index from the shared kernel helper (KMS in production; refuses dev keys there).
     crypto: fieldCryptoFromEnv(),
+    // A guest's data export includes what a migration still holds about them (source rows before the purge).
+    personalDataContributors: [migrationPersonalData],
   });
   const guestsModule = guestsHttp({ database, service: guestsService });
 
@@ -736,7 +739,7 @@ export function compose(database: PorticoDatabase, options: CompositionOptions =
               profileId: s.profileId,
               score: s.score,
               band: s.band,
-              reasons: s.reasons.map((x) => x.detail),
+              reasons: s.reasons.map((x) => x.code),
             })),
           };
         },

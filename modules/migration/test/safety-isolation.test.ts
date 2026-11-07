@@ -202,3 +202,70 @@ describe('S17: tenant isolation and deny-by-default', () => {
     expect(JSON.stringify(rows)).not.toMatch(/Rasheed|Lindqvist|example\.test|\+960/);
   });
 });
+
+describe('personal data held by a migration', () => {
+  it('a guest’s data export includes it; after the retention period it is purged (reports and keys stay)', async () => {
+    const { migrationHousekeeping, migrationPersonalData } = await import('../src');
+    const org = await setupOrg(h, { environment: 'trial' });
+    const lead = org.user('Lead', ALL_MIGRATION);
+    const job = await org.run(
+      (tx) =>
+        migration.createJob(tx, h.deps, {
+          propertyId: org.propertyId,
+          sourceAdapter: 'portico.pack.v1',
+          sourceSystem: 'Sheets',
+        }),
+      lead,
+    );
+    await migration.uploadFiles(h.t.db, h.deps, lead, job.id, {
+      files: sampleGuesthouseFiles(org.businessDate),
+    });
+    await migration.runPipeline(h.t.db, h.deps, lead, job.id);
+    await org.run(
+      (tx) =>
+        migration.reviewMapping(tx, h.deps, job.id, {
+          taxAccounts: [{ sourceCode: 'TGST', accountKey: 'tgst' }],
+        }),
+      lead,
+    );
+    await migration.runPipeline(h.t.db, h.deps, lead, job.id);
+    const profileId = await org.run(
+      async (tx) =>
+        (await migration.loadLedger(tx, await migration.getJob(tx, job.id))).get('guest:G001')
+          ?.targetId as string,
+    );
+    const before = (await org.run((tx) => migrationPersonalData.collect(tx, profileId))) as {
+      migrations: Array<{
+        profile: { familyName: string } | null;
+        reservations: Array<{ sourceKey: string }>;
+      }>;
+    };
+    expect(before.migrations[0]?.profile?.familyName).toBe('Rasheed');
+    expect(before.migrations[0]?.reservations.map((r) => r.sourceKey).sort()).toEqual(['CN1001', 'CN1005']);
+    await org.run((tx) => migration.cancelJob(tx, h.deps, job.id, 'Evaluation finished'), lead);
+    // Not yet: the retention period runs from the end of the migration.
+    expect((await migrationHousekeeping(h.t.db)).purged).toBe(0);
+    await sql`update migration.jobs set updated_at = now() - interval '31 days' where id = ${job.id}`.execute(
+      h.t.admin.kysely,
+    );
+    expect((await migrationHousekeeping(h.t.db)).purged).toBeGreaterThanOrEqual(1);
+    const after = (await org.run((tx) => migrationPersonalData.collect(tx, profileId))) as typeof before;
+    expect(after.migrations[0]?.profile).toBeNull();
+    const left = await sql<{ n: number }>`
+      select (select count(*) from migration.extract_payloads where job_id = ${job.id})::int
+           + (select count(*) from migration.source_records where job_id = ${job.id} and (payload is not null or raw is not null))::int as n`.execute(
+      h.t.admin.kysely,
+    );
+    expect(left.rows[0]?.n).toBe(0);
+    const scan = await sql<{ t: string }>`
+      select coalesce(string_agg(x::text, ' '), '') as t from (
+        select to_jsonb(s) as x from migration.source_records s where job_id = ${job.id}
+        union all select to_jsonb(e) from migration.exceptions e where job_id = ${job.id}
+        union all select to_jsonb(l) from migration.import_ledger l where last_job_id = ${job.id}
+        union all select to_jsonb(r) from migration.reports r where job_id = ${job.id}) q`.execute(
+      h.t.admin.kysely,
+    );
+    expect(scan.rows[0]?.t).not.toMatch(/Rasheed|Lindqvist|Tanaka|example\.test|\+960 777/);
+    expect(await org.run((tx) => migration.latestReports(tx, job.id, 2))).toHaveLength(2);
+  });
+});

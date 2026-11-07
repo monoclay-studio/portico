@@ -46,7 +46,7 @@ const finance = () =>
   ]);
 const gm = () => live.user('Aisha (general manager)', [...ALL_MIGRATION]);
 const view = (ctx = lead()) =>
-  live.run(async (tx) => migration.jobView(tx, await migration.loadJob(tx, jobId)), ctx);
+  live.run(async (tx) => migration.jobView(tx, await migration.getJob(tx, jobId)), ctx);
 const authority = (domain: 'reservations' | 'accounting' | 'availability') =>
   live.run((tx) => platform.getDataAuthority(asSystem(tx), live.propertyId, domain));
 
@@ -258,7 +258,7 @@ describe('a guesthouse moved to Portico the same day', () => {
     expect(await authority('accounting')).toMatchObject({ authority: 'portico' });
     await live.run(async (tx) => {
       expect(await h.reservations.count(tx, live.propertyId)).toBe(8);
-      const ledger = await migration.loadLedger(tx, await migration.loadJob(tx, jobId));
+      const ledger = await migration.loadLedger(tx, await migration.getJob(tx, jobId));
       const b8 = ledger.get('reservation:CN1008')?.targetId as string;
       expect((await h.finance.getDeposits(asSystem(tx), b8))?.balance.amountMinor).toBe(20000);
       const cards = await db(tx)
@@ -282,7 +282,7 @@ describe('a guesthouse moved to Portico the same day', () => {
 
   it('7. rollback inside the window keeps every post-cutover booking and payment and returns a worklist', async () => {
     // Staff work in Portico after the switch (events journaled by the consumer).
-    const job = await live.run((tx) => migration.loadJob(tx, jobId));
+    const job = await live.run((tx) => migration.getJob(tx, jobId));
     const post: DomainEvent[] = [
       'reservations.booking.confirmed',
       'reservations.booking.modified',

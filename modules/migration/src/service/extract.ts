@@ -112,17 +112,27 @@ export function materialize(
   });
 }
 
+/** Extracts with their content (purged extracts — after the retention period — are skipped). */
 export async function loadExtracts(tx: TxContext, jobId: string): Promise<StoredExtract[]> {
   const rows = await db(tx)
-    .selectFrom('migration.extracts')
-    .select(['seq', 'kind', 'files'])
-    .where('job_id', '=', jobId)
-    .orderBy('seq')
+    .selectFrom('migration.extracts as e')
+    .innerJoin('migration.extract_payloads as p', (j) =>
+      j.onRef('p.job_id', '=', 'e.job_id').onRef('p.seq', '=', 'e.seq'),
+    )
+    .select(['e.seq', 'e.kind', 'p.content'])
+    .where('e.job_id', '=', jobId)
+    .orderBy('e.seq')
     .execute();
   return rows.map((r) => {
-    const source = r.files as StoredSource;
+    const source = r.content as StoredSource;
     return { seq: r.seq, kind: r.kind, source, classes: classesOf(source) };
   });
+}
+
+function fileSummary(source: StoredSource) {
+  return source.type === 'tables'
+    ? source.tables.map((t) => ({ name: t.name, kind: t.kind, rows: t.rows.length, checksum: t.checksum }))
+    : [{ name: source.name, kind: 'records', rows: source.records.length, checksum: '' }];
 }
 
 function keyOf(r: { dataClass: string; key: string }) {
@@ -241,7 +251,7 @@ export async function storeExtract(
       job_id: job.id,
       seq,
       kind: input.kind,
-      files: JSON.stringify(input.source),
+      files: JSON.stringify(fileSummary(input.source)),
       counts: JSON.stringify(counts),
       control_totals: JSON.stringify(m.controlTotals),
       delta: JSON.stringify({
@@ -253,6 +263,10 @@ export async function storeExtract(
       taken_by: actorKey(tx),
       taken_at: tx.now,
     })
+    .execute();
+  await db(tx)
+    .insertInto('migration.extract_payloads')
+    .values({ tenant_id: tx.tenantId, job_id: job.id, seq, content: JSON.stringify(input.source) })
     .execute();
   let next = job;
   if (input.kind === 'initial' || input.kind === 'delta') {

@@ -6,14 +6,16 @@ import { type PorticoDatabase, type ScheduledJob, sql, withTenantTx } from '@por
 import { newId, systemContext, type TenantEnvironment } from '@portico/kernel';
 import { remindOverdue } from './service/checklist';
 import { db, saveJob, toJob } from './service/context';
+import { purgeSourceData, RETENTION_DAYS_AFTER_END } from './service/privacy';
 
 export async function migrationHousekeeping(
   database: PorticoDatabase,
-): Promise<{ reminders: number; completed: number }> {
+): Promise<{ reminders: number; completed: number; purged: number }> {
   const { rows } = await sql<{ tenant_id: string; environment: string }>`
     select tenant_id, environment from migration.tenants_with_open_jobs(500)`.execute(database.kysely);
   let reminders = 0;
   let completed = 0;
+  let purged = 0;
   for (const t of rows) {
     const ctx = systemContext(
       t.tenant_id,
@@ -55,9 +57,21 @@ export async function migrationHousekeeping(
           completed++;
         }
       }
+      // Personal data of ended migrations is purged after the retention period (keys, hashes and reports stay).
+      const ended = await db(tx)
+        .selectFrom('migration.jobs')
+        .selectAll()
+        .where('state', 'in', ['completed', 'rolled_back', 'cancelled'])
+        .where('purged_at', 'is', null)
+        .where('updated_at', '<', new Date(tx.now.getTime() - RETENTION_DAYS_AFTER_END * 86_400_000))
+        .execute();
+      for (const row of ended) {
+        await purgeSourceData(tx, toJob(row));
+        purged++;
+      }
     });
   }
-  return { reminders, completed };
+  return { reminders, completed, purged };
 }
 
 export function migrationJobs(): ScheduledJob[] {

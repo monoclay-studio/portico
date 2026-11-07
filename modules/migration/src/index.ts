@@ -14,6 +14,7 @@ export { migrationHttp } from './routes';
 export { migrationSearch } from './search';
 export { createMigrationDemoSeed } from './seed';
 export type { MigrationDeps } from './service/context';
+export { migrationPersonalData, RETENTION_DAYS_AFTER_END } from './service/privacy';
 export * as migration from './services';
 export { SOURCE_ADAPTERS, sourceAdapter } from './sources/adapters';
 export {

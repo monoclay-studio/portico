@@ -33,6 +33,7 @@ export interface JobsTable {
   freeze_minutes: ColumnType<string | null, number | null, number | null>;
   rollback_window_ends_at: TsNullable;
   rolled_back_at: TsNullable;
+  purged_at: TsNullable;
   running_until: TsNullable;
   running_by: string | null;
   run_correlations: ColumnType<string[], string[] | undefined, string[]>;
@@ -56,6 +57,13 @@ export interface ExtractsTable {
   fingerprint: string;
   taken_by: string;
   taken_at: Ts;
+}
+
+export interface ExtractPayloadsTable {
+  tenant_id: string;
+  job_id: string;
+  seq: number;
+  content: Json;
 }
 
 export interface SourceRecordsTable {
@@ -213,6 +221,7 @@ export interface CardRecollectionsTable {
 export interface MigrationDB {
   'migration.jobs': JobsTable;
   'migration.extracts': ExtractsTable;
+  'migration.extract_payloads': ExtractPayloadsTable;
   'migration.source_records': SourceRecordsTable;
   'migration.import_ledger': ImportLedgerTable;
   'migration.exceptions': ExceptionsTable;

@@ -197,6 +197,13 @@ describe('reconciliation (M4): exact, or every difference listed', () => {
     expect(unavailable.exact).toBe(false);
     expect(unavailable.differences[0]?.measure).toBe('read_back');
   });
+  it('a record imported earlier but no longer in the source is a difference (never silently kept)', () => {
+    const r = reconcile(input({ records: [dep('R1', 5000)] }));
+    expect(r.exact).toBe(false);
+    expect(r.differences).toContainEqual(
+      expect.objectContaining({ dataClass: 'reservation', key: 'R1', measure: 'missing_in_source' }),
+    );
+  });
   it('the fingerprint is stable for identical results and changes with any difference', () => {
     expect(reconcile(input()).fingerprint).toBe(reconcile(input()).fingerprint);
     expect(reconcile(input()).fingerprint).not.toBe(

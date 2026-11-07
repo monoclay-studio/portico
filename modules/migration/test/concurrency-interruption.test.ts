@@ -65,7 +65,7 @@ describe('resume after a crash', () => {
       /simulated process crash/,
     );
     h.reservations.crashOnCall = null;
-    const after = await org.run((tx) => migration.loadJob(tx, jobId));
+    const after = await org.run((tx) => migration.getJob(tx, jobId));
     expect(after.steps.rehearse).toBe('failed');
     expect(after.stepDetail.rehearse?.detail).toMatch(/simulated process crash/);
     expect(after.runningUntil).toBeNull(); // the lease is released even when the step throws
@@ -144,7 +144,7 @@ describe('concurrency', () => {
     );
     expect(sold).toBe(2); // CN1001 + CN1008, once each
     const deposits = await withTenantTx(h.t.db, org.admin, async (tx) => {
-      const ledger = await migration.loadLedger(tx, await migration.loadJob(tx, jobId));
+      const ledger = await migration.loadLedger(tx, await migration.getJob(tx, jobId));
       return h.finance.getDeposits(asSystem(tx), ledger.get('reservation:CN1001')?.targetId as string);
     });
     expect(deposits?.balance.amountMinor).toBe(10000); // posted once, not five times

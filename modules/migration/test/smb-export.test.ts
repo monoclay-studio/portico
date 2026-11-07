@@ -56,10 +56,10 @@ describe('Little Hotelier export (assumed layout) → trial', () => {
       'signoff:succeeded',
       'delta_sync:waiting',
     ]);
-    const v = await org.run(async (tx) => migration.jobView(tx, await migration.loadJob(tx, job.id)));
+    const v = await org.run(async (tx) => migration.jobView(tx, await migration.getJob(tx, job.id)));
     expect(v.source.verification).toBe('unverified');
     expect(v.issues.map((i) => i.code)).toContain('source_format_unverified');
-    const plan = (await org.run((tx) => migration.loadJob(tx, job.id))).plan;
+    const plan = (await org.run((tx) => migration.getJob(tx, job.id))).plan;
     expect(plan.unitTypes.map((u) => [u.sourceCode, u.action, u.targetCode])).toEqual([
       ['GARDEN VIEW', 'create', 'GARDEN-VIEW'],
       ['SEA VIEW', 'create', 'SEA-VIEW'],

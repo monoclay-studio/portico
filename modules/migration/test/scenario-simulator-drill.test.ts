@@ -64,7 +64,7 @@ beforeAll(async () => {
 });
 afterAll(async () => h?.close());
 
-const view = () => org.run(async (tx) => migration.jobView(tx, await migration.loadJob(tx, jobId)));
+const view = () => org.run(async (tx) => migration.jobView(tx, await migration.getJob(tx, jobId)));
 const sold = (unitTypeCode: string, date: string) =>
   org.run(async (tx) => {
     const types = await h.inventory.listUnitTypes(asSystem(tx), org.propertyId);

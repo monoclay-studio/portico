@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { sampleGuesthousePack, sampleSmbExport, TEMPLATE_HEADERS } from '../sources/templates';
 import { kindFromName, mapColumns, type TableKind } from './columns';
 import { parseCsv, toCsv } from './csv';
-import { buildPack, type PackTable } from './pack';
+import { buildPack, derivedGuestKey, type PackTable } from './pack';
 import { checkQuality, recordId } from './quality';
 import type { DepositRecord, GuestRecord, ReservationRecord, SourceRecord } from './records';
 
@@ -289,17 +289,18 @@ describe('SMB export (assumed Little Hotelier layout): guests derived from reser
       .filter((r) => r.dataClass === 'guest')
       .map((g) => g.key)
       .sort();
-    expect(guests).toEqual([
-      'email:hana.i@example.test',
-      'email:lena.v@example.test',
-      'email:omar.s@example.test',
-      'email:paolo.r@example.test',
-    ]);
+    expect(guests).toEqual(
+      ['hana.i@example.test', 'lena.v@example.test', 'omar.s@example.test', 'paolo.r@example.test']
+        .map((e) => derivedGuestKey(`email:${e}`))
+        .sort(),
+    );
+    // keys are not personal data (they appear in exceptions and the ledger)
+    expect(guests.join(' ')).not.toMatch(/@|hana|lena/);
     const p = byKey(out.records, 'reservation', 'LH-2002')?.payload as ReservationRecord;
     expect(p).toMatchObject({
       status: 'in_house',
       arrival: '2026-11-30',
-      guestKey: 'email:paolo.r@example.test',
+      guestKey: derivedGuestKey('email:paolo.r@example.test'),
     });
     expect(p.taxes).toEqual([{ code: 'TAX', name: 'Taxes (as stated by the source)', amountMinor: 8840 }]);
   });

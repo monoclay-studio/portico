@@ -2,6 +2,8 @@
  * The PMS simulator as a migration source: a snapshot of the simulated system (read through the integration
  * module's simulator via a port) converted to canonical records. Simulated data only — refused in live.
  */
+
+import { derivedGuestKey } from '../domain/pack';
 import type { BookingStatus, ReservationRecord, SourceRecord } from '../domain/records';
 import { unitKey } from '../domain/records';
 import type { SimulatorSnapshot } from '../ports';
@@ -50,7 +52,7 @@ export function recordsFromSimulator(s: SimulatorSnapshot): SourceRecord[] {
   const guests = new Map<string, string>();
   for (const r of s.reservations) {
     const name = r.guestName.trim();
-    const guestKey = `sim-guest:${name.toLowerCase()}`;
+    const guestKey = derivedGuestKey(`sim:${name}`);
     guests.set(guestKey, name);
     const status = SIM_STATUS[r.status];
     const payload: ReservationRecord | null = status

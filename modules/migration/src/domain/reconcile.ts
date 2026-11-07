@@ -177,6 +177,22 @@ export function reconcile(input: ReconcileInput): ReconciliationResult {
       });
   }
 
+  // Imported records the source no longer shows (deleted there after the import): never silently kept as truth.
+  const present = new Set(records.map((r) => `${r.dataClass}:${r.key}`));
+  for (const l of input.ledger) {
+    if (!inScope(l.dataClass) || (l.state !== 'imported' && l.state !== 'merged')) continue;
+    if (present.has(`${l.dataClass}:${l.key}`)) continue;
+    differences.push({
+      dataClass: l.dataClass,
+      key: l.key,
+      measure: 'missing_in_source',
+      source: 'absent',
+      portico: l.targetId ?? 'imported',
+      message: `${l.dataClass.replace(/_/g, ' ')} ${l.key} is in Portico but no longer in the source. Was it deleted there? Cancel it in Portico or explain it.`,
+      explained: false,
+    });
+  }
+
   const unavailable = input.portico.unavailable.filter(inScope);
   for (const c of unavailable)
     differences.push({

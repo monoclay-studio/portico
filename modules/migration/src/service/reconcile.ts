@@ -4,7 +4,7 @@
  * owner. Differences are never "corrected" here.
  */
 import type { TxContext } from '@portico/db';
-import { addDays, DomainError, newId } from '@portico/kernel';
+import { addDays, DomainError, newId, requirePermission } from '@portico/kernel';
 import { type PorticoReadBack, type ReconciliationResult, reconcile } from '../domain/reconcile';
 import { type DataClass, FINANCIAL_CLASSES } from '../domain/records';
 import { ProviderUnavailableError } from '../ports';
@@ -184,6 +184,12 @@ export async function buildReport(
 }
 
 export async function latestReports(tx: TxContext, jobId: string, n = 2) {
+  const job = await db(tx)
+    .selectFrom('migration.jobs')
+    .select('property_id')
+    .where('id', '=', jobId)
+    .executeTakeFirst();
+  requirePermission(tx, 'migration.job.read', { propertyId: job?.property_id ?? null });
   return db(tx)
     .selectFrom('migration.reports')
     .select(['id', 'seq', 'context', 'exact', 'fingerprint', 'extract_seq', 'generated_at'])

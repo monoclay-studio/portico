@@ -57,7 +57,7 @@ describe('guesthouse spreadsheet → trial organization (rehearsal)', () => {
     expect(r.executed[0]?.detail).toMatch(
       /Found 3 unit types, 6 units, 2 rate plans, 6 guest profiles, 8 reservations \(4 future, 1 in house, 3 history\)/,
     );
-    const view = await org.run(async (tx) => migration.jobView(tx, await migration.loadJob(tx, jobId)), lead);
+    const view = await org.run(async (tx) => migration.jobView(tx, await migration.getJob(tx, jobId)), lead);
     expect(view.pendingReview).toEqual([
       expect.objectContaining({ kind: 'taxAccount', ref: 'TGST', financial: true }),
     ]);
@@ -101,7 +101,7 @@ describe('guesthouse spreadsheet → trial organization (rehearsal)', () => {
       'signoff:succeeded',
       'delta_sync:waiting',
     ]);
-    const view = await org.run(async (tx) => migration.jobView(tx, await migration.loadJob(tx, jobId)), lead);
+    const view = await org.run(async (tx) => migration.jobView(tx, await migration.getJob(tx, jobId)), lead);
     expect(view.state).toBe('rehearsed');
     expect(view.status.rehearsal).toBe('certified');
     expect(view.headline).toMatch(/Rehearsed twice with zero differences/);
@@ -129,7 +129,7 @@ describe('guesthouse spreadsheet → trial organization (rehearsal)', () => {
       expect(sold('2026-12-11')).toBe(1); // CN1002
       expect(sold('2026-12-21')).toBe(1); // CN1003 (tentative holds a room)
       expect(sold('2026-12-06')).toBe(1); // CN1006 cancelled: never consumed
-      const ledger = await migration.loadLedger(tx, await migration.loadJob(tx, jobId));
+      const ledger = await migration.loadLedger(tx, await migration.getJob(tx, jobId));
       const b1 = ledger.get('reservation:CN1001')?.targetId as string;
       const dep = await h.finance.getDeposits(asSystem(tx), b1);
       expect(dep?.balance).toEqual({ amountMinor: 10000, currency: 'USD' });

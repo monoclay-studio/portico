@@ -2,7 +2,7 @@
  * Build canonical source records from the tables of a file pack (CSV files or XLSX sheets). Pure.
  * Each row becomes exactly one record (or one problem row): nothing is silently dropped (INT-R31, MG-08).
  */
-import { addDays, diffDays } from '@portico/kernel';
+import { addDays, diffDays, sha256Hex } from '@portico/kernel';
 import { type ColumnMatch, FIELD_DICTIONARY, type TableKind } from './columns';
 import type { Table } from './csv';
 import {
@@ -33,6 +33,11 @@ import {
   unitKey,
 } from './records';
 import { isMasked } from './sensitive';
+
+/** Stable, non-personal key for a guest derived from reservation rows (hash of the email or name+phone). */
+export function derivedGuestKey(identity: string): string {
+  return `guest-${sha256Hex(identity.trim().toLowerCase()).slice(0, 16)}`;
+}
 
 export interface PackTable {
   /** File or sheet name. */
@@ -314,7 +319,7 @@ export function buildPack(tables: readonly PackTable[], opts: PackOptions): Pack
               problem(
                 'contact_invalid',
                 'warning',
-                `Email "${emailRaw}" is not valid; not imported.`,
+                'The email address is not valid; it is not imported.',
                 'email',
               ),
             );
@@ -420,7 +425,10 @@ export function buildPack(tables: readonly PackTable[], opts: PackOptions): Pack
             const email = normalizeEmail(g(row, 'guest_email'));
             const phone = cleanText(g(row, 'guest_phone'), 40);
             const split = familyCol ? { given: givenCol, family: familyCol } : splitName(guestName);
-            guestKey = email ? `email:${email}` : `name:${guestName.toLowerCase()}|${phone ?? ''}`;
+            // The key identifies the person without being personal data itself (keys appear in exceptions and logs).
+            guestKey = derivedGuestKey(
+              email ? `email:${email}` : `name:${guestName.toLowerCase()}|${phone ?? ''}`,
+            );
             if (!derivedGuests.has(guestKey))
               derivedGuests.set(guestKey, {
                 origin,

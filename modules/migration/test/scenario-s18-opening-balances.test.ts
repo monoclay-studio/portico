@@ -110,7 +110,7 @@ describe('S18: opening balances against the previous system’s closing balances
     const { jobId } = await rehearse(org, {});
     const bookingId = await org.run(
       async (tx) =>
-        (await migration.loadLedger(tx, await migration.loadJob(tx, jobId))).get('reservation:CN1001')
+        (await migration.loadLedger(tx, await migration.getJob(tx, jobId))).get('reservation:CN1001')
           ?.targetId as string,
     );
     const rows = await sql<{
@@ -261,7 +261,7 @@ describe('S18: opening balances against the previous system’s closing balances
     expect(decided).toMatchObject({ state: 'excluded' });
     await migration.runPipeline(h.t.db, h.deps, org.user('Lead', ALL_MIGRATION), jobId);
     const l = await org.run(async (tx) =>
-      (await migration.loadLedger(tx, await migration.loadJob(tx, jobId))).get('deposit:CN9999'),
+      (await migration.loadLedger(tx, await migration.getJob(tx, jobId))).get('deposit:CN9999'),
     );
     expect(l?.state).toBe('excluded');
   });
@@ -282,7 +282,7 @@ describe('S18: opening balances against the previous system’s closing balances
     expect(ex.map((e) => `${e.code}:${e.source_key}`)).toContain('opening_balance_changed:CN1001');
     const bookingId = await org.run(
       async (tx) =>
-        (await migration.loadLedger(tx, await migration.loadJob(tx, jobId))).get('reservation:CN1001')
+        (await migration.loadLedger(tx, await migration.getJob(tx, jobId))).get('reservation:CN1001')
           ?.targetId as string,
     );
     expect((await org.run((tx) => h.finance.getDeposits(asSystem(tx), bookingId)))?.balance.amountMinor).toBe(

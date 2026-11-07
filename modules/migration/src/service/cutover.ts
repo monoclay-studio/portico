@@ -15,6 +15,7 @@ import {
   type DomainEvent,
   newId,
   type RequestContext,
+  requirePermission,
   ValidationError,
 } from '@portico/kernel';
 import {
@@ -701,6 +702,9 @@ export const JOURNALED_EVENTS = [
 ];
 
 export async function journalEvent(tx: TxContext, event: DomainEvent): Promise<boolean> {
+  // The outbox consumer runs as the system; anyone else needs cutover rights at the event's property.
+  if (tx.actor.kind !== 'system')
+    requirePermission(tx, P.cutoverExecute, { propertyId: event.propertyId ?? null });
   const propertyId =
     event.propertyId ??
     (typeof (event.payload as { propertyId?: unknown }).propertyId === 'string'

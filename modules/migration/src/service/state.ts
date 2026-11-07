@@ -2,7 +2,7 @@
  * Current source state, the import ledger and exceptions — shared by the pipeline steps.
  */
 import type { TxContext } from '@portico/db';
-import { newId } from '@portico/kernel';
+import { newId, requirePermission } from '@portico/kernel';
 import type { LedgerEntry } from '../domain/reconcile';
 import { type DataClass, FINANCIAL_CLASSES, type Problem, type SourceRecord } from '../domain/records';
 import type { RecordState } from '../vocabulary';
@@ -76,6 +76,7 @@ export interface LedgerRow extends LedgerEntry {
 }
 
 export async function loadLedger(tx: TxContext, job: Job): Promise<Map<string, LedgerRow>> {
+  requirePermission(tx, 'migration.job.read', { propertyId: job.propertyId });
   const rows = await db(tx)
     .selectFrom('migration.import_ledger')
     .select(['data_class', 'source_key', 'state', 'target_id', 'imported_hash', 'reason'])

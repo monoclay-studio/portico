@@ -563,7 +563,7 @@ export function migrationPorts(h: {
             profileId: s.profileId,
             score: s.score,
             band: s.band,
-            reasons: s.reasons.map((x) => x.detail),
+            reasons: s.reasons.map((x) => x.code),
           })),
         };
       },

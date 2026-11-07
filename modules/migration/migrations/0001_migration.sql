@@ -43,6 +43,8 @@ create table migration.jobs (
   freeze_minutes           numeric(10, 2),
   rollback_window_ends_at  timestamptz,
   rolled_back_at           timestamptz,
+  -- Personal data of the source (extract content, record payloads) purged after the retention period.
+  purged_at                timestamptz,
   -- Lease for a running pipeline (crash-safe: an expired lease may be taken over by a resume).
   running_until            timestamptz,
   running_by               text,
@@ -82,6 +84,15 @@ create table migration.extracts (
   unique (job_id, seq)
 );
 select core.enable_tenant_isolation('migration.extracts');
+
+create table migration.extract_payloads (
+  tenant_id  uuid not null,
+  job_id     uuid not null references migration.jobs(id),
+  seq        int not null,
+  content    jsonb not null,
+  primary key (job_id, seq)
+);
+select core.enable_tenant_isolation('migration.extract_payloads');
 
 ---------------------------------------------------------------------------------------------------------
 -- Source records: the current state of every record the source has shown (normalized; never card data).
@@ -297,14 +308,15 @@ create table migration.card_recollections (
 select core.enable_tenant_isolation('migration.card_recollections');
 
 ---------------------------------------------------------------------------------------------------------
--- Routing metadata for the scheduler (reminders, rollback-window closing): tenant ids with open jobs only.
+-- Routing metadata for the scheduler (reminders, rollback-window closing, retention purge): tenant ids only.
 ---------------------------------------------------------------------------------------------------------
 create or replace function migration.tenants_with_open_jobs(p_limit int)
   returns table (tenant_id uuid, environment text)
   language sql stable security definer set search_path = migration, pg_temp as $$
     select t.tenant_id, e.env
       from (select distinct j.tenant_id from migration.jobs j
-             where j.state not in ('completed', 'rolled_back', 'cancelled', 'failed')) t
+             where j.state not in ('completed', 'rolled_back', 'cancelled', 'failed')
+                or j.purged_at is null) t
       cross join lateral (select platform.tenant_environment(t.tenant_id) as env) e
      where e.env is not null
      limit p_limit

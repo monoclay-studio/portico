@@ -165,6 +165,11 @@ export async function linkRehearsal(
   return next;
 }
 
+/** A job, for a caller who may read it at its property (404 otherwise). */
+export async function getJob(tx: TxContext, id: string): Promise<Job> {
+  return loadJobFor(tx, id, P.read);
+}
+
 export async function listJobs(tx: TxContext, filter: { propertyId?: string | undefined }) {
   const scope = tx.authz.propertyScope(P.read);
   if (scope !== 'all' && scope.length === 0) return [];

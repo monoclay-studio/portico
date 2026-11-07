@@ -22,7 +22,7 @@ import {
   type UnitTypeRecord,
 } from '../domain/records';
 import { ProviderUnavailableError } from '../ports';
-import { db, type Job, loadJob, type MigrationDeps } from './context';
+import { db, type Job, loadJob, loadJobFor, type MigrationDeps } from './context';
 import { loadExtracts, materialize } from './extract';
 import {
   exceptionDecisions,
@@ -184,7 +184,7 @@ export async function importAll(
 ): Promise<ImportSummary> {
   const summary = emptySummary();
   const { records, job } = await withTenantTx(database, ctx, async (tx) => {
-    const j = await loadJob(tx, jobId);
+    const j = await loadJobFor(tx, jobId, 'migration.job.manage');
     const recs = await loadSourceRecords(tx, jobId);
     return { job: j, records: [...recs, ...impliedUnitTypes(recs)] };
   });
