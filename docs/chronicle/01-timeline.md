@@ -274,4 +274,11 @@ Each agent's brief and report are in `agents/`.
 - **19:09 — Guests erasure fix merged** <!-- t: commit:096a038 @ 2026-11-07T19:09:03Z -->. Exact-identifier redaction; every writer of a guest's data locks the
   profile first. The builder proved its tests with 14 mutations: each fix removed one at a time turns its test red.
   This is the first full use of invariant closure (self-check v4 § 5).
+- **19:22 — Infrastructure-as-code done, nothing deployed** <!-- t: agent-a5fe5dfcc8ccf4f59 @ 2026-11-07T19:22:32.044Z (Infra-as-code (resume)) -->.
+  - Results: 17/17 terraform tests with a mocked AWS provider; 38/38 database-role checks on SCRAM Postgres in the
+    production runtime layout; 27/27 deploy-script tests against fake AWS.
+  - Bugs caught before any deployment: an RDS master-user name that would have broken bootstrap; lean-tier egress that
+    would have blocked Stripe, identity providers and webhooks; trusted proxies that needed CloudFront's ranges.
+  - Costs from AWS list prices: lean ≈ $121/month, resilient ≈ $407–538/month.
+  - Owner choices are recorded as Q158. A steward security review is queued before merge.
 
