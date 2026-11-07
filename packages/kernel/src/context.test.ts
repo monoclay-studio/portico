@@ -75,3 +75,14 @@ describe('field crypto from env', () => {
     expect(prod.cipher.decrypt(prod.cipher.encrypt('secret', 'aad'), 'aad')).toBe('secret');
   });
 });
+
+describe('event ordering helper', () => {
+  it('ignores stale or duplicate versions and accepts unversioned events', async () => {
+    const { isNewerThan } = await import('./events');
+    expect(isNewerThan({ aggregateVersion: 5 }, 4)).toBe(true);
+    expect(isNewerThan({ aggregateVersion: 4 }, 4)).toBe(false);
+    expect(isNewerThan({ aggregateVersion: 3 }, 4)).toBe(false);
+    expect(isNewerThan({ aggregateVersion: null }, 9)).toBe(true);
+    expect(isNewerThan({ aggregateVersion: 1 }, null)).toBe(true);
+  });
+});
