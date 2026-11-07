@@ -777,3 +777,55 @@ export const relocationCase = z.object({
   version: z.number().int(),
 });
 export type KeyStepInput = z.infer<typeof keyStepInput>;
+
+// ───────────────────────────── event payload schemas (producer-owned, review R-12) ─────────────────────────────
+
+/**
+ * Per-stay facts carried by booking and stay events (payload version 2). Consumers parse with these schemas.
+ * Ids, dates, counts and flags only — never names, contacts or request texts.
+ */
+export const stayEventInfo = z.object({
+  stayId: uuid,
+  bookingId: uuid,
+  propertyId: uuid,
+  status: stayStatus,
+  commercialType,
+  unitTypeId: uuid.nullable(),
+  unitId: uuid.nullable(),
+  arrival: localDate,
+  departure: localDate,
+  /** Expected arrival as an instant (property local time converted), and the local HH:MM as entered. */
+  eta: z.iso.datetime({ offset: true }).nullable(),
+  etaLocal: localTime.nullable(),
+  etdLocal: localTime.nullable(),
+  earlyCheckIn: z.boolean(),
+  earlyCheckInTime: localTime.nullable(),
+  lateCheckOut: z.boolean(),
+  lateCheckOutTime: localTime.nullable(),
+  vip: z.boolean(),
+  vipLevel: z.string().nullable(),
+  occupants: z.object({
+    adults: z.number().int(),
+    children: z.number().int(),
+    childrenAges: z.array(z.number().int()),
+  }),
+  requests: z.object({
+    open: z.number().int(),
+    total: z.number().int(),
+    bookingSpecialRequests: z.number().int(),
+  }),
+});
+export type StayEventInfo = z.infer<typeof stayEventInfo>;
+
+/** reservations.booking.created|statusChanged|confirmed|modified|cancelled (version 2). */
+export const bookingEventPayload = z.looseObject({ bookingId: uuid, stays: z.array(stayEventInfo) });
+/** reservations.stay.* (version 2). */
+export const stayEventPayload = z.looseObject({ stayId: uuid, stays: z.array(stayEventInfo) });
+/** reservations.stay.moved: `effectiveDate` = first night in the new unit (future-dated moves are not today). */
+export const stayMovedPayload = stayEventPayload.extend({
+  fromUnitId: uuid.nullable(),
+  toUnitId: uuid,
+  fromDate: localDate,
+  effectiveDate: localDate,
+  reason: z.string(),
+});

@@ -27,6 +27,7 @@ export interface BookingsTable {
   special_requests: unknown;
   tags: string[];
   currency: string;
+  property_timezone: string;
   cancellation: unknown;
   created_by: string;
   created_by_name: string;

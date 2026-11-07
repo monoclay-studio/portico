@@ -1,34 +1,10 @@
 import type { TxContext } from '@portico/db';
-import type { DomainEvent, EmitEventInput } from '@portico/kernel';
+import { type DomainEvent, type EmitEventInput, zonedTimeToInstant } from '@portico/kernel';
+import type { StayEventInfo } from '../contracts';
 import { RESERVATIONS_EVENTS as E } from '../events';
 import { db, parseNights } from './context';
 
-/**
- * Per-stay facts carried by booking and stay events (payload version 2) so consumers — housekeeping priorities,
- * arrival readiness, comms, analytics — need no synchronous call back into reservations. Ids, dates, counts and
- * flags only: no names, contact details or request texts (events are copied into every consumer).
- */
-export interface StayEventInfo extends Record<string, unknown> {
-  stayId: string;
-  bookingId: string;
-  propertyId: string;
-  status: string;
-  commercialType: string;
-  unitTypeId: string | null;
-  /** Unit for the arrival night (or the current night for in-house stays), if assigned. */
-  unitId: string | null;
-  arrival: string;
-  departure: string;
-  /** Expected arrival time (property local, HH:MM) and ETD, when known. */
-  eta: string | null;
-  etd: string | null;
-  earlyCheckIn: { time: string } | null;
-  lateCheckOut: { time: string } | null;
-  /** Recognition from the booking's tags (`vip`, `vip:<level>`); guests owns the full recognition summary. */
-  vipLevel: string | null;
-  occupants: { adults: number; children: number; childrenAges: number[] };
-  requests: { open: number; total: number; bookingSpecialRequests: number };
-}
+export type { StayEventInfo } from '../contracts';
 
 const BOOKING_EVENTS: ReadonlySet<string> = new Set([
   E.bookingCreated,
@@ -60,14 +36,14 @@ function vipLevel(tags: readonly string[]): string | null {
 export async function staysForEvent(
   tx: TxContext,
   scope: { bookingId: string } | { stayId: string },
-): Promise<StayEventInfo[]> {
+): Promise<{ stays: StayEventInfo[]; bookingVersion: number | null; stayVersion: number | null }> {
   let q = db(tx).selectFrom('reservations.stays').selectAll().orderBy('position');
   q = 'bookingId' in scope ? q.where('booking_id', '=', scope.bookingId) : q.where('id', '=', scope.stayId);
   const stays = await q.execute();
-  if (stays.length === 0) return [];
+  if (stays.length === 0) return { stays: [], bookingVersion: null, stayVersion: null };
   const booking = await db(tx)
     .selectFrom('reservations.bookings')
-    .select(['tags', 'special_requests'])
+    .select(['tags', 'special_requests', 'property_timezone', 'version'])
     .where('id', '=', (stays[0] as { booking_id: string }).booking_id)
     .executeTakeFirstOrThrow();
   const segments = await db(tx)
@@ -79,7 +55,8 @@ export async function staysForEvent(
       stays.map((s) => s.id),
     )
     .execute();
-  return stays.map((s) => {
+  const level = vipLevel(booking.tags);
+  const out = stays.map((s) => {
     const segs = segments
       .filter((g) => g.stay_id === s.id)
       .map((g) => ({ ...g, ...parseNights(g.nights) }))
@@ -92,17 +69,21 @@ export async function staysForEvent(
       stayId: s.id,
       bookingId: s.booking_id,
       propertyId: s.property_id,
-      status: s.status,
-      commercialType: s.commercial_type,
+      status: s.status as StayEventInfo['status'],
+      commercialType: s.commercial_type as StayEventInfo['commercialType'],
       unitTypeId: first?.unit_type_id ?? null,
       unitId: first?.unit_id ?? null,
       arrival: s.arrival,
       departure: s.departure,
-      eta: s.eta,
-      etd: s.etd,
-      earlyCheckIn: early?.time ? { time: early.time } : null,
-      lateCheckOut: late?.time ? { time: late.time } : null,
-      vipLevel: vipLevel(booking.tags),
+      eta: s.eta ? zonedTimeToInstant(s.arrival, s.eta, booking.property_timezone).toISOString() : null,
+      etaLocal: s.eta,
+      etdLocal: s.etd,
+      earlyCheckIn: Boolean(early?.time),
+      earlyCheckInTime: early?.time ?? null,
+      lateCheckOut: Boolean(late?.time),
+      lateCheckOutTime: late?.time ?? null,
+      vip: level !== null,
+      vipLevel: level,
       occupants: {
         adults: first?.adults ?? 0,
         children: first?.children_ages.length ?? 0,
@@ -115,6 +96,11 @@ export async function staysForEvent(
       },
     };
   });
+  return {
+    stays: out,
+    bookingVersion: booking.version,
+    stayVersion: 'stayId' in scope ? (stays[0]?.version ?? null) : null,
+  };
 }
 
 /**
@@ -126,12 +112,19 @@ export async function emitReservationEvent<T extends Record<string, unknown>>(
   input: EmitEventInput<T>,
 ): Promise<DomainEvent<T & { stays?: StayEventInfo[] }>> {
   const p = input.payload as Record<string, unknown>;
-  let stays: StayEventInfo[] | null = null;
+  let facts: Awaited<ReturnType<typeof staysForEvent>> | null = null;
   if (BOOKING_EVENTS.has(input.type) && typeof p.bookingId === 'string') {
-    stays = await staysForEvent(tx, { bookingId: p.bookingId });
+    facts = await staysForEvent(tx, { bookingId: p.bookingId });
   } else if (STAY_EVENTS.has(input.type) && typeof p.stayId === 'string') {
-    stays = await staysForEvent(tx, { stayId: p.stayId });
+    facts = await staysForEvent(tx, { stayId: p.stayId });
   }
-  if (!stays) return tx.emit(input) as Promise<DomainEvent<T & { stays?: StayEventInfo[] }>>;
-  return tx.emit({ ...input, version: 2, payload: { ...input.payload, stays } });
+  if (!facts) return tx.emit(input) as Promise<DomainEvent<T & { stays?: StayEventInfo[] }>>;
+  // aggregateVersion lets state-deriving consumers ignore late events (kernel isNewerThan).
+  const aggregateVersion = BOOKING_EVENTS.has(input.type) ? facts.bookingVersion : facts.stayVersion;
+  return tx.emit({
+    ...input,
+    version: 2,
+    ...(aggregateVersion !== null ? { aggregateVersion } : {}),
+    payload: { ...input.payload, stays: facts.stays },
+  });
 }

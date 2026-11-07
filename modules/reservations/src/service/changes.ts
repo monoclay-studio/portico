@@ -1621,7 +1621,12 @@ async function applyPlan(
           .execute();
         events.push({
           type: E.stayMoved,
-          payload: { stayId: sp.stay.row.id, bookingId: booking.row.id, ...sp.roomMove },
+          payload: {
+            stayId: sp.stay.row.id,
+            bookingId: booking.row.id,
+            ...sp.roomMove,
+            effectiveDate: sp.roomMove.fromDate,
+          },
         });
       } else {
         const fromUnit = sp.stay.segments.find((s) => s.unitId)?.unitId ?? null;
@@ -1636,6 +1641,7 @@ async function applyPlan(
               fromUnitId: fromUnit,
               toUnitId: toUnit,
               fromDate,
+              effectiveDate: fromDate,
               reason: request.kind,
             },
           });

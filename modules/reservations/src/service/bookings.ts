@@ -289,6 +289,7 @@ export async function createBookingInternal(
       special_requests: json(input.specialRequests ?? []),
       tags: input.tags ?? [],
       currency,
+      property_timezone: property.timezone,
       cancellation: null,
       created_by: actorKey(tx),
       created_by_name: actorName(tx),

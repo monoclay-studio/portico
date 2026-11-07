@@ -36,6 +36,7 @@ create table reservations.bookings (
   special_requests       jsonb not null default '[]',
   tags                   text[] not null default '{}',
   currency               char(3) not null,
+  property_timezone      text not null,      -- copied from platform at creation: event instants (ETA) without a lookup
   cancellation           jsonb,
   created_by             text not null,
   created_by_name        text not null,

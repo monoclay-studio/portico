@@ -1,7 +1,8 @@
 import { sql, withTenantTx } from '@portico/db';
 import type { TestDatabase } from '@portico/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { Booking } from '../src/contracts';
+import { z } from 'zod';
+import { type Booking, bookingEventPayload } from '../src/contracts';
 import { reservationsJobs } from '../src/jobs';
 import { BUSINESS_DATE, created, setupOrg, startDb } from './helpers';
 
@@ -62,11 +63,11 @@ describe('booking lifecycle', () => {
       sql<{
         type: string;
         version: number;
+        aggregateVersion: number | null;
         payload: { bookingId: string; code: string; stays: Array<Record<string, unknown>> };
       }>`
-        select type, version, payload from core.outbox where type = 'reservations.booking.confirmed'`.execute(
-        tx.db,
-      ),
+        select type, version, aggregate_version as "aggregateVersion", payload from core.outbox
+         where type = 'reservations.booking.confirmed'`.execute(tx.db),
     );
     expect(rows[0]?.version).toBe(2);
     expect(rows[0]?.payload).toMatchObject({ bookingId: b.id, code: b.code });
@@ -78,13 +79,32 @@ describe('booking lifecycle', () => {
         unitId: org.units.V101,
         arrival: BUSINESS_DATE,
         departure: '2026-12-13',
-        eta: '15:40',
-        earlyCheckIn: null,
+        eta: '2026-12-10T10:40:00.000Z', // 15:40 Malé time
+        etaLocal: '15:40',
+        earlyCheckIn: false,
+        vip: true,
         vipLevel: 'gold',
         occupants: { adults: 2, children: 1, childrenAges: [6] },
         requests: { open: 1, total: 1, bookingSpecialRequests: 1 },
       }),
     ]);
+    // Producer-owned schemas (exported from contracts) validate the payload; so does the consumer's view in
+    // operations (copied here as the contract test the steward asked for, R-12).
+    expect(bookingEventPayload.safeParse(rows[0]?.payload).success).toBe(true);
+    const operationsStay = z.looseObject({
+      stayId: z.uuid(),
+      unitId: z.uuid().nullish(),
+      arrival: z.iso.date(),
+      departure: z.iso.date(),
+      vip: z.boolean().optional(),
+      earlyCheckIn: z.boolean().optional(),
+      eta: z.iso.datetime({ offset: true }).nullish(),
+    });
+    expect(
+      z.looseObject({ bookingId: z.uuid(), stays: z.array(operationsStay) }).safeParse(rows[0]?.payload)
+        .success,
+    ).toBe(true);
+    expect(rows[0]?.aggregateVersion).toBe(1);
     // No personal data in event payloads.
     expect(JSON.stringify(rows[0]?.payload)).not.toMatch(/Hoffmann|Baby cot|Honeymoon/);
   });
