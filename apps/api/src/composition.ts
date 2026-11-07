@@ -13,6 +13,7 @@ import {
 import {
   createFinance,
   type FinancePorts,
+  type FinanceService,
   financeDemoSeed,
   financeForReservations,
   financeHttp,
@@ -109,6 +110,7 @@ import {
   type OperationsPort,
   type PaymentsPort,
   type PlatformPort,
+  type ReservationsService,
   ratesPortFrom,
   reservationsHttp,
   reservationsJobs,
@@ -173,6 +175,8 @@ export interface Composition {
     operations: OperationsService;
     rates: RatesService;
     payments: PaymentsService;
+    finance: FinanceService;
+    reservations: ReservationsService;
   };
   /** Demo data contributed by each module, run in order inside each demo organization (apps/api/src/seed). */
   demoSeedSteps: DemoSeedStep[];
@@ -544,6 +548,8 @@ export function compose(database: PorticoDatabase): Composition {
       operations: operationsService,
       rates,
       payments: payments.service,
+      finance,
+      reservations,
     },
     demoSeedSteps: [
       { name: 'inventory', run: inventoryDemoSeed },
