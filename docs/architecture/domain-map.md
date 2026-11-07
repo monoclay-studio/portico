@@ -27,7 +27,7 @@ All functions are async. Dates are `LocalDate` strings (`YYYY-MM-DD`). Night ran
 | `comms` | `comms` | Conversations, messages (original + translations), channels (email/SMS/WhatsApp), templates, automations (trigger/condition/action + run history) | 2 |
 | `resort` | `resort` | Outlet charge intake (POS), meal-plan entitlement consumption, transfers & manifests, activities/spa sessions, resources, waivers, itineraries, weather disruptions | 3 |
 | `analytics` | `analytics` | Metric definitions, daily facts, report catalog, drill-down, data-quality checks | 2 |
-| `integration` | `integration` | Public API clients/scopes, webhook subscriptions & deliveries, connector framework (POS, CRM e.g. Salesforce, accounting, door locks), import/migration jobs & reconciliation, data export | 2 |
+| `integration` | `integration` | **Connector framework** (catalogue of connectors with workflow-level capabilities, connection lifecycle with the 9-step setup journey, encrypted credentials, mappings with suggestions + review, exchange log, sync runs, health, exceptions), webhook subscriptions & deliveries, partner apps; later: import/migration jobs & reconciliation, data export | 1 (framework) / 2 (migration) |
 | `ai` | `ai` | Assistant sessions, permission-aware retrieval, cited answers, action proposals requiring approval | 3 |
 | `billing` | `billing` | Monoclay's own SaaS subscriptions & invoices to organizations (Stripe Billing on the platform account) — never mixed with hotel money | 3 |
 
@@ -72,9 +72,13 @@ getBusinessDate(tx, propertyId): Promise<LocalDate>
 advanceBusinessDate(tx, propertyId, expected: LocalDate): Promise<LocalDate>  // only Day Close; optimistic (expected must match)
 getLegalEntity(tx, legalEntityId): Promise<LegalEntity> // id, name, taxId, countryCode, baseCurrency
 hasEntitlement(tx, feature: string): Promise<boolean>
+// Data authority (system of record) — ADR-0014. Domains: reservations, availability, rates, guestProfiles,
+// charges, payments, roomStatus, maintenance, accounting.
+getDataAuthority(tx, propertyId, domain): Promise<DataAuthority>   // { authority: 'portico'|'external', connectionId, writeMode }
+assertWritable(tx, propertyId, domain): Promise<'portico' | 'forward'>  // throws external_system_of_record when read_only
 resolvePolicy<T>(tx, propertyId, key: string): Promise<{ value: T; source: 'default'|'organization'|'brand'|'region'|'property' }>
 ```
-Events: `platform.property.businessDateAdvanced`, `platform.policy.changed`.
+Events: `platform.property.businessDateAdvanced`, `platform.policy.changed`, `platform.dataAuthority.changed`.
 
 ## identity (provider)
 
@@ -196,6 +200,32 @@ createTask(tx, { propertyId, departmentId, kind, title, ref?, dueAt?, priority }
 Consumes: `reservations.stay.checkedOut` (→ unit dirty + departure clean task), `reservations.stay.moved`,
 `inventory.unit.blocked`. Emits: `operations.unit.conditionChanged`, `operations.inspection.failed`,
 `operations.workOrder.created|completed`, `operations.task.escalated`.
+
+## integration (provider)
+
+```ts
+// Connector SDK — every connector (simulator PMS, channel hub, POS, accounting, door lock, CSV import…) is a
+// ConnectorDefinition registered in code. Capabilities are declared per WORKFLOW, never per vendor:
+interface WorkflowCapability {
+  workflow: string;                       // e.g. 'reservations', 'roomStatus', 'posCharges', 'journals'
+  operations: Array<'read' | 'create' | 'update' | 'receive'>;
+  sync: 'realtime' | 'periodic' | 'manual' | 'file';   // a file export is never shown as a live connection
+  status: 'supported' | 'limited' | 'unsupported' | 'unverified';
+  limitations: string[];
+}
+getConnection(tx, connectionId) / listConnections(tx, { propertyId? })
+getMapping(tx, { connectionId, kind, externalId }): Promise<{ internalId; reviewed: boolean } | null>
+   // kinds: property, unitType, unit, ratePlan, outlet, chargeCode, taxRule, ledgerAccount, status
+recordExchange(tx, { connectionId, workflow, direction: 'inbound'|'outbound', externalRef, outcome, detail })
+raiseException(tx, { connectionId, workflow, severity: 'urgent'|'routine', problem, businessImpact,
+                     responsibleParty: 'hotel'|'monoclay'|'vendor', nextStep, ref? }): Promise<{ exceptionId }>
+resolveException(tx, { exceptionId, resolution })
+markHealthy(tx, connectionId, at) / markDegraded(tx, connectionId, reason)
+```
+Every outbound call is gated by `assertExternalEffectAllowed(ctx, 'integration.read' | 'integration.write' |
+'channel.publish' …)`. Reconnecting never replays queued actions that move money or reopen inventory without
+re-validation. Events: `integration.connection.statusChanged`, `integration.exception.raised|resolved`,
+`integration.mapping.changed`.
 
 ---
 

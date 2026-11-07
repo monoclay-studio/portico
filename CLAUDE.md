@@ -5,7 +5,9 @@ built by **Monoclay LLC**. It must support everything from a 6-room guesthouse t
 multi-brand hotel groups, with the operational depth of OPERA Cloud and the clarity of the best modern systems.
 First market: **Maldives / Indian Ocean**. No hotel has agreed to a pilot yet.
 
-Read this file fully before changing anything. The two owner briefs are the top-level requirements:
+Read this file fully before changing anything. Then read **`docs/product/vision.md`** — the single picture of the
+outcome (truthful operations, depth without weight, adoption as a ramp, honest readiness). When a decision is
+unclear, choose the option that best serves the vision. The owner briefs are the top-level requirements:
 
 - `docs/product/brief.md` — product, behavior and UX standard (incl. the 20 operational proof scenarios).
 - `docs/product/operational-readiness-brief.md` — external dependencies, approvals, payments responsibility,
