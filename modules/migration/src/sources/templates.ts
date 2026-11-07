@@ -85,7 +85,7 @@ export function templateWorkbook(): string {
 }
 
 /** The fictional "Coral Nest" guesthouse pack, dated around the property's business date. */
-export function sampleGuesthousePack(bd: LocalDate): Record<string, string[][]> {
+export function sampleGuesthousePack(bd: LocalDate) {
   const d = (n: number) => addDays(bd, n);
   return {
     unit_types: [

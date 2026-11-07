@@ -196,7 +196,9 @@ export async function runValidateStep(
   deps: MigrationDeps,
   job: Job,
 ): Promise<{ blocking: number; warnings: number }> {
-  const records = await loadParsedRecords(tx, job.id);
+  const parsed = await loadParsedRecords(tx, job.id);
+  // Unit types derived from reservation codes carry their own warning (listed so a person reviews them).
+  const records = [...parsed, ...impliedUnitTypes(parsed)];
   const property = await deps.ports.platform.getProperty(tx, job.propertyId);
   const knownUnitTypes = new Set(job.plan.unitTypes.map((u) => u.sourceCode));
   const unitsPerType = new Map<string, number>();
