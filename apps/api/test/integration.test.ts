@@ -1,8 +1,8 @@
 /**
  * Integration module over HTTP (composition root wiring): catalogue, simulated PMS, connection setup with
- * Idempotency-Key / If-Match / ETag, unit types and units from inventory, honest "module not connected" mapping
- * issues while rates/finance are not bound, problem+json explanations, health, search, record history, webhooks,
- * simulators refused in live organizations, and tenant isolation.
+ * Idempotency-Key / If-Match / ETag, unit types and units from inventory and rate plans from rates (unmapped codes
+ * shown, never guessed), problem+json explanations, health, search, record history, webhooks, simulators refused in
+ * live organizations, and tenant isolation.
  */
 import { newId } from '@portico/kernel';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -193,13 +193,13 @@ describe('integration API', () => {
       internalId: propertyId,
       autoConfirmed: true,
     });
-    // Unit types come from inventory; rates and finance are not connected in this deployment yet: said plainly,
-    // never guessed.
-    const unavailable = set.issues.filter((i: { code: string }) => i.code === 'provider_unavailable');
-    expect(unavailable.length).toBeGreaterThan(0);
-    const messages = unavailable.map((i: { message: string }) => i.message).join(' ');
-    expect(messages).toMatch(/(rates|finance) module is not connected/);
-    expect(messages).not.toMatch(/inventory module is not connected/);
+    // Unit types come from inventory and rate plans from rates (both empty for this new property): the external
+    // codes are shown as unmapped and blocking, never guessed.
+    const issues = set.issues as Array<{ code: string; kind: string }>;
+    expect(issues.filter((i) => i.code === 'provider_unavailable')).toEqual([]);
+    expect(new Set(issues.filter((i) => i.code === 'unmapped').map((i) => i.kind))).toEqual(
+      new Set(['unitType', 'ratePlan']),
+    );
 
     const resolve = await h.app.inject({
       method: 'POST',

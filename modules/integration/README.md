@@ -205,7 +205,7 @@ Consumed: the public event types by the webhook fan-out consumer `integration.we
 | Port | Bound to | Status |
 |---|---|---|
 | `platform` (getProperty, get/setDataAuthority) | real `@portico/platform` | bound |
-| `catalog` | unit types and units → `@portico/inventory` (system context scoped to the authorized property, ADR-0015); rate plans, tax rules → rates; charge codes, ledger accounts → finance; outlets → platform: `unavailableCatalog` (clear `module_unavailable` on the mapping rows) | partly bound |
+| `catalog` | unit types and units → `@portico/inventory`, rate plans → `@portico/rates` (system context scoped to the authorized property, ADR-0015); tax rules → rates, charge codes and ledger accounts → finance, outlets → platform: `unavailableCatalog` (clear `module_unavailable` on the mapping rows) | partly bound |
 | `inbound` (per workflow `applyInbound(tx, record)`; F6) | `{}` — owning modules register handlers (operations → roomStatus, reservations → reservations, finance → charges) | **owning modules bind**; until then records are stored in order as `accepted` and applied when bound |
 | `activationScope` (G-04): platform `assertEffectInScope(tx, propertyId, effect, { connectionId, workflow })` | `unavailableActivationScope` (refuses live effects of real connectors) | **bind with identity-plus** |
 | `transitions` (G-02): `activeTransition` ← platform `openTransitionFor` (status → state); `plan` ← `planAuthorityTransition(tx, propertyId, { changes, reason, freezeMinutes })` | `noAuthorityTransitions` | **bind with identity-plus** |
@@ -270,8 +270,8 @@ Deduplicate on `Portico-Event-Id`; payloads are thin — fetch details with your
 - Real vendor connectors (OPERA/OHIP, Channex, POS, accounting, locks) are R1; nothing is sandbox-tested (R4).
 - No owning module binds an inbound handler yet: received records are stored in order as `accepted` (never shown
   as applied) and applied when a handler is bound.
-- In the API the rate-plan / tax-rule / charge-code / ledger-account / outlet catalogs are stubs until rates and
-  finance merge, so the HTTP journey stops at mapping review in this deployment (module tests use fakes).
+- In the API the tax-rule / charge-code / ledger-account / outlet catalogs are stubs until those providers are
+  bound, so a scope with charges stops at mapping review in this deployment (module tests use fakes).
 - Spec items not met (F15, tracked): INT-R07 scope change on an active connection; INT-R09 shadow comparison on
   replace; INT-R17 vendor cursors and nightly full-window reconciliation; INT-R05 XLSX import, inbound HTTP receiver,
   guests/units/balances import; CL-05 an unknown-entity modification is applied with a gap flag instead of held and

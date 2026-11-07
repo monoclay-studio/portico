@@ -28,3 +28,8 @@ invariant or the shared experience).
 Research flow: deep dive (`docs/orchestration/research-prompt.md`, exhaustive report + bibliography) → digest
 (summarised, de-duplicated, mapped to modules and process) → gap strategist (reviews research + actual
 implementation of every module and the whole platform) → 10x briefs and a platform gap plan → module agents.
+
+## UX refinement loop
+
+Black-box tester (no build context) → refining agent (knows how it's built and the best outcome) → module agents
+decide & implement → orchestrator oversees and re-measures. Details: `docs/ux/README.md`.

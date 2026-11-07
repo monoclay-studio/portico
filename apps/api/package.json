@@ -24,7 +24,9 @@
     "@portico/integration": "workspace:*",
     "@portico/inventory": "workspace:*",
     "@portico/kernel": "workspace:*",
+    "@portico/operations": "workspace:*",
     "@portico/platform": "workspace:*",
+    "@portico/rates": "workspace:*",
     "pg": "catalog:",
     "zod": "catalog:"
   },
