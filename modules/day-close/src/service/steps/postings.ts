@@ -13,7 +13,7 @@ import type { TxContext } from '@portico/db';
 import { BusinessRuleError, type LocalDate, newId } from '@portico/kernel';
 import type { StepKey } from '../../contracts';
 import { toFailure } from '../../domain/errors';
-import type { PostingLine, StayNight } from '../../ports';
+import type { AllowanceEntitlement, PostingLine, StayNight } from '../../ports';
 import { db, json } from '../context';
 import { catchUpNights } from '../readiness';
 import { closeIssue, loadItems, recordItem, upsertIssue } from '../repo';
@@ -96,7 +96,6 @@ export async function postStayNight(
     skippedLines: [],
     amounts: {},
   };
-  let folioId: string | null = null;
   const allowances = ports.rates.allowances(stay.terms);
   for (const line of plan) {
     if (!Number.isSafeInteger(line.amount.amountMinor) || line.amount.amountMinor < 0) {
@@ -136,32 +135,7 @@ export async function postStayNight(
         out.skippedLines.push({ key: line.idempotencyKey, reason: 'quantity_allowance_not_postable' });
         continue;
       }
-      folioId ??= (await ports.finance.defaultFolio(tx, { propertyId }, stay.stayId))?.folioId ?? null;
-      if (!folioId) {
-        throw new BusinessRuleError(
-          'stay_folio_missing',
-          'This stay has no folio yet, so its allowance cannot be granted. Open the stay folio (check-in does this), then resume.',
-          { stayId: stay.stayId },
-        );
-      }
-      const g = await ports.finance.grantAllowance(
-        tx,
-        { propertyId },
-        {
-          propertyId,
-          stayId: stay.stayId,
-          folioId,
-          definitionRef: ent.inclusionId,
-          label: ent.name,
-          period: { night: stay.night },
-          amount: line.amount,
-          chargeCode: line.chargeCode,
-          ...(ent.eligibleChargeCodes.length ? { eligibleChargeCodes: ent.eligibleChargeCodes } : {}),
-          coversTaxes: true,
-          unusedPolicy: ent.remainderPolicy === 'forfeit' ? 'forfeit' : 'carry_forward',
-          idempotencyKey: line.idempotencyKey,
-        },
-      );
+      const g = await grantAllowanceLine(s, tx, stay, line, ent);
       out.postingKeys.push(line.idempotencyKey);
       out.entryIds.push(g.entryId);
     } else {
@@ -217,6 +191,77 @@ export async function postStayNight(
     })
     .execute();
   return out;
+}
+
+/** Grant one night's allowance from the plan line (key = the plan's key, so a pre-grant and the posting step agree). */
+async function grantAllowanceLine(
+  s: Pick<StepContext, 'deps' | 'property'>,
+  tx: TxContext,
+  stay: StayNight,
+  line: PostingLine,
+  ent: AllowanceEntitlement,
+): Promise<{ entryId: string; replayed: boolean }> {
+  const propertyId = s.property.id;
+  const folioId = (await s.deps.ports.finance.defaultFolio(tx, { propertyId }, stay.stayId))?.folioId ?? null;
+  if (!folioId) {
+    throw new BusinessRuleError(
+      'stay_folio_missing',
+      'This stay has no folio yet, so its allowance cannot be granted. Open the stay folio (check-in does this), then resume.',
+      { stayId: stay.stayId },
+    );
+  }
+  const g = await s.deps.ports.finance.grantAllowance(
+    tx,
+    { propertyId },
+    {
+      propertyId,
+      stayId: stay.stayId,
+      folioId,
+      definitionRef: ent.inclusionId,
+      label: ent.name,
+      period: { night: line.nightDate },
+      amount: line.amount,
+      chargeCode: line.chargeCode,
+      ...(ent.eligibleChargeCodes.length ? { eligibleChargeCodes: ent.eligibleChargeCodes } : {}),
+      coversTaxes: true,
+      unusedPolicy: ent.remainderPolicy === 'forfeit' ? 'forfeit' : 'carry_forward',
+      idempotencyKey: line.idempotencyKey,
+    },
+  );
+  return { entryId: g.entryId, replayed: g.replayed };
+}
+
+/**
+ * After the advance to N: grant tonight's (N) allowances of stays continuing into N, so guests can use them during
+ * the day; the posting step of N replays the same keys (never granted twice). Failures never undo the close: the
+ * posting step of N grants whatever is missing.
+ */
+export async function pregrantAllowances(s: StepContext, night: LocalDate): Promise<Record<string, unknown>> {
+  const propertyId = s.property.id;
+  const stays = await s.inTx((tx) =>
+    s.deps.ports.reservations.listInHouseStaysForNight(tx, { propertyId, date: night }),
+  );
+  let granted = 0;
+  const failed: Array<{ stayId: string; code: string }> = [];
+  for (const stay of stays) {
+    const ents = s.deps.ports.rates.allowances(stay.terms).filter((a) => a.kind === 'monetary');
+    if (!ents.length || !s.deps.ports.rates.verifyTerms(stay.terms)) continue;
+    const lines = s.deps.ports.rates
+      .postingPlan(stay.terms, stay.stayId)
+      .filter((l) => l.kind === 'allowance' && l.nightDate === night && l.amount.amountMinor > 0);
+    for (const line of lines) {
+      const ent = ents.find((a) => a.inclusionId === line.inclusionId);
+      if (!ent) continue;
+      try {
+        await s.inTx((tx) => grantAllowanceLine(s, tx, stay, line, ent));
+        granted++;
+      } catch (err) {
+        if (isFatal(err)) throw err;
+        failed.push({ stayId: stay.stayId, code: toFailure(err).code });
+      }
+    }
+  }
+  return { night, granted, failed };
 }
 
 interface WorkItem {

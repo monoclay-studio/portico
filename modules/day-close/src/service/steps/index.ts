@@ -14,7 +14,7 @@ import type { DueStay } from '../../ports';
 import { db, json } from '../context';
 import { collectReadiness } from '../readiness';
 import { closeIssue, emitRunEvent, loadItems, setStep, upsertIssue } from '../repo';
-import { processItems, roomAndPackagePostings, sweepNight } from './postings';
+import { pregrantAllowances, processItems, roomAndPackagePostings, sweepNight } from './postings';
 import type { StepContext, StepFn, StepOutcome } from './shared';
 
 const notConnected = (err: unknown): boolean =>
@@ -446,7 +446,7 @@ async function postAdvance(s: StepContext): Promise<StepOutcome> {
   const { ports } = s.deps;
   const propertyId = s.property.id;
   const D = s.run.business_date;
-  return s.inTx(async (tx) => {
+  const result = await s.inTx(async (tx) => {
     const exists = await db(tx)
       .selectFrom('day_close.day_reports')
       .select('generated_at')
@@ -561,13 +561,17 @@ async function postAdvance(s: StepContext): Promise<StepOutcome> {
         });
       }
     }
-    const next = addDays(D, 1);
-    await emitRunEvent(tx, { ...s.run, version: s.run.version }, DAY_CLOSE_EVENTS.dayClosed, {
-      newBusinessDate: next,
-      factsRef: { type: 'day_facts', propertyId, businessDate: D },
-    });
-    return { status: 'completed', detail: { report: 'stored', export: exportStatus } };
+    if (!exists) {
+      // Emitted once, in the transaction that stores the report (a resumed post-advance never re-announces the day).
+      await emitRunEvent(tx, { ...s.run, version: s.run.version }, DAY_CLOSE_EVENTS.dayClosed, {
+        newBusinessDate: addDays(D, 1),
+        factsRef: { type: 'day_facts', propertyId, businessDate: D },
+      });
+    }
+    return { report: 'stored', export: exportStatus };
   });
+  const allowances = await pregrantAllowances(s, addDays(D, 1));
+  return { status: 'completed', detail: { ...result, allowances } };
 }
 
 export const STEP_FUNCTIONS: Record<StepKey, StepFn> = {
