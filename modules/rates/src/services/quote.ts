@@ -47,7 +47,7 @@ import type { LoadedTaxRule } from '../domain/tax-engine';
 import { reprice, verifyTerms } from '../domain/terms';
 import type { RatesPorts, RatesPropertyInfo } from '../ports';
 import { restrictionValues, rowParams } from './calendar';
-import { inclusionsForPackages, toPromotionCandidate } from './catalog';
+import { assertPackagesAtProperty, inclusionsForPackages, toPromotionCandidate } from './catalog';
 import { derivationSteps, effectivePackageIds, restrictionChain } from './plan-chain';
 import { asNodes, effectivePolicyId, loadPlansForProperty } from './rate-plans';
 import { actorKey, db, parseInput, type Row } from './shared';
@@ -89,6 +89,7 @@ async function loadQuoteConfig(
     departure: LocalDate;
     planIds: (plans: Array<RatePlanDto & { parentId: string | null }>) => string[];
     unitTypeIds?: readonly string[] | undefined;
+    addOnPackageIds?: readonly string[] | undefined;
   },
 ): Promise<QuoteConfig & { candidateIds: string[] }> {
   const property = await ports.getProperty(tx, input.propertyId);
@@ -128,13 +129,21 @@ async function loadQuoteConfig(
     .execute();
   const policyIds = new Set<string>();
   const inclusionsByPlan = new Map<string, InclusionSnapshot[]>();
+  const addOnIds = [...new Set(input.addOnPackageIds ?? [])];
+  if (addOnIds.length > 0) await assertPackagesAtProperty(tx, input.propertyId, addOnIds);
+  const addOns = await inclusionsForPackages(tx, addOnIds);
   for (const id of candidateIds) {
     const chain = ancestry(plans, id);
     for (const k of ['cancellationPolicy', 'guaranteePolicy', 'depositPolicy'] as const) {
       const pid = effectivePolicyId(chain, k);
       if (pid) policyIds.add(pid);
     }
-    inclusionsByPlan.set(id, await inclusionsForPackages(tx, effectivePackageIds(chain)));
+    const own = await inclusionsForPackages(tx, effectivePackageIds(chain));
+    // Add-on packages are charged on top of the plan price (never allocated out of it).
+    const extra = addOns
+      .filter((a) => !own.some((i) => i.id === a.id))
+      .map((a) => ({ ...a, priceMode: 'added' as const }));
+    inclusionsByPlan.set(id, [...own, ...extra]);
   }
   const policyRows =
     policyIds.size > 0
@@ -314,6 +323,7 @@ export async function quoteDetailed(ports: RatesPorts, tx: TxContext, raw: unkno
     arrival,
     departure,
     unitTypeIds: req.unitTypeIds,
+    addOnPackageIds: req.addOnPackageIds,
     planIds: (plans) =>
       plans
         .filter((p) =>

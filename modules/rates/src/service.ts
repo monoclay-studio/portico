@@ -5,7 +5,7 @@
  */
 import type { TxContext } from '@portico/db';
 import type { ComputeTaxesInput, TermsSnapshot } from './contracts';
-import { postingPlan, verifyTerms } from './domain/terms';
+import { instantiatePaymentSchedule, postingPlan, verifyTerms } from './domain/terms';
 import type { RatesPorts } from './ports';
 import * as calendar from './services/calendar';
 import * as catalog from './services/catalog';
@@ -30,6 +30,9 @@ export function ratesService(ports: RatesPorts) {
     /** Pure: charge lines to post for agreed terms (no configuration read). */
     postingPlan: (terms: TermsSnapshot, stayId: string) => postingPlan(terms, stayId),
     verifyTerms: (terms: TermsSnapshot) => verifyTerms(terms),
+    /** Pure: payment schedule (deposit / balance items) for agreed terms. */
+    instantiatePaymentSchedule: (terms: TermsSnapshot, opts?: { bookingDate?: string }) =>
+      instantiatePaymentSchedule(terms, opts),
 
     // ── Universal record views (status per family, next actions, issues, links) ──
     ratePlanRecord: (tx: TxContext, plan: Parameters<typeof records.ratePlanRecord>[2]) =>
@@ -58,6 +61,7 @@ export function ratesService(ports: RatesPorts) {
     applyRestrictionUpdate: (tx: TxContext, input: unknown) =>
       calendar.applyRestrictionUpdate(ports, tx, input),
     getRestrictions: calendar.getRestrictions,
+    getEffectiveRestrictions: calendar.getEffectiveRestrictions,
 
     // ── Catalog ──
     createPolicy: (tx: TxContext, input: unknown) => catalog.createPolicy(ports, tx, input),

@@ -22,9 +22,10 @@ import {
 } from '../contracts';
 import { coalesceDates, expandDates } from '../domain/calendar';
 import { adjustParams, ancestry, descendants, resolveDerivedParams } from '../domain/pricing';
+import { effectiveRestrictions } from '../domain/restrictions';
 import { RATES_EVENTS } from '../events';
 import type { RatesPorts } from '../ports';
-import { derivationSteps } from './plan-chain';
+import { derivationSteps, restrictionChain } from './plan-chain';
 import { asNodes, loadPlansForProperty, toRatePlan } from './rate-plans';
 import { actorKey, db, guardConfigWrite, json, parseInput, type Row, requireRead } from './shared';
 
@@ -691,4 +692,62 @@ export async function getRestrictions(
     values: restrictionValues(r),
     version: r.version,
   }));
+}
+
+/**
+ * Effective restrictions of a plan × unit type per night, with where each value comes from (own row, an
+ * all-plans row, or inherited from a parent plan) — the "inherited from BAR" badge of RAT-R04.
+ */
+export async function getEffectiveRestrictions(
+  tx: TxContext,
+  input: { ratePlanId: string; unitTypeId: string; from: LocalDate; to: LocalDate },
+) {
+  const row = await db(tx)
+    .selectFrom('rates.rate_plans')
+    .select(['property_id'])
+    .where('id', '=', input.ratePlanId)
+    .executeTakeFirst();
+  if (!row) throw new NotFoundError('rate_plan', input.ratePlanId);
+  requireRead(tx, row.property_id);
+  if (input.to <= input.from)
+    throw new ValidationError('invalid_date_range', 'The end date must be after the start date.');
+  const plans = asNodes(await loadPlansForProperty(tx, row.property_id));
+  const chain = ancestry(plans, input.ratePlanId);
+  const codeOf = new Map(plans.map((p) => [p.id, p.code]));
+  const rows = await db(tx)
+    .selectFrom('rates.restrictions')
+    .selectAll()
+    .where('property_id', '=', row.property_id)
+    .where('stay_date', '>=', input.from)
+    .where('stay_date', '<', input.to)
+    .execute();
+  const effective = effectiveRestrictions(
+    rows.map((r) => ({
+      ratePlanId: r.rate_plan_id,
+      unitTypeId: r.unit_type_id,
+      date: r.stay_date,
+      values: restrictionValues(r),
+    })),
+    restrictionChain(chain),
+    input.unitTypeId,
+  );
+  return [...effective.entries()]
+    .filter(([, v]) => Object.keys(v).length > 0)
+    .sort(([a], [b]) => (a < b ? -1 : 1))
+    .map(([date, v]) => ({
+      date,
+      values: Object.fromEntries(
+        Object.entries(v).map(([kind, e]) => [
+          kind,
+          {
+            value: e.value,
+            scope: e.source.ratePlanId === null ? 'all_plans' : 'plan',
+            ratePlanId: e.source.ratePlanId,
+            ratePlanCode: e.source.ratePlanId ? (codeOf.get(e.source.ratePlanId) ?? null) : null,
+            inherited: e.source.ratePlanId !== null && e.source.ratePlanId !== input.ratePlanId,
+            unitTypeSpecific: e.source.unitTypeId !== null,
+          },
+        ]),
+      ),
+    }));
 }

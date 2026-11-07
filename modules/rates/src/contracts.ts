@@ -974,6 +974,8 @@ export const quoteRequest = z.object({
   bookingDate: localDate.optional(),
   /** Staff only (rates.restriction.override): quote through restriction violations with a reason. */
   restrictionOverride: z.object({ reason: z.string().min(3).max(500) }).optional(),
+  /** Packages added to the stay on top of the plan (RAT-R16), e.g. a honeymoon or diving package. */
+  addOnPackageIds: z.array(uuid).max(10).optional(),
 });
 export type QuoteRequest = z.input<typeof quoteRequest>;
 

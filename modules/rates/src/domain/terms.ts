@@ -15,7 +15,7 @@ import type {
   Violation,
 } from '../contracts';
 import { assemble, type NightDraft, type PlanPolicies, type PropertyContext } from './offer';
-import { penaltyAmount, tierInForce, zonedInstant } from './policies';
+import { instantiateSchedule, penaltyAmount, tierInForce, zonedInstant } from './policies';
 import { priceForOccupancy } from './pricing';
 import { reapplyEffects } from './promotions';
 import type { LoadedTaxRule } from './tax-engine';
@@ -89,6 +89,23 @@ export function postingPlan(terms: TermsSnapshot, stayId: string): PostingLine[]
     });
   }
   return out;
+}
+
+/**
+ * Payment schedule for agreed terms (spec proposed contract `instantiatePaymentSchedule`): from the snapshot's
+ * deposit policy and agreed totals only. `bookingDate` defaults to the agreement's booking date.
+ */
+export function instantiatePaymentSchedule(terms: TermsSnapshot, opts: { bookingDate?: LocalDate } = {}) {
+  const deposit = terms.policies.deposit;
+  if (!deposit) return [];
+  return instantiateSchedule(deposit.structure, {
+    bookingDate: opts.bookingDate ?? terms.bookingDate,
+    arrival: terms.stay.arrival,
+    departure: terms.stay.departure,
+    nightsGrossMinor: terms.nights.map((n) => n.gross.amountMinor),
+    totalGrossMinor: terms.totals.gross.amountMinor,
+    currency: terms.currency,
+  });
 }
 
 // ───────────────────────────── Repricing ─────────────────────────────

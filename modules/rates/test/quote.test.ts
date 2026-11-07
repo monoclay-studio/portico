@@ -181,6 +181,25 @@ describe('quote engine — Maldives resort', () => {
     expect(free[0]?.taxes.find((x) => x.ruleCode === 'MV-GREEN-12')?.amount.amountMinor).toBe(2_400);
   });
 
+  it('adds packages to a stay on top of the plan price and derives the payment schedule from the agreement', async () => {
+    const { o, uts, seeded } = await resort();
+    const beach = uts[0]?.id as string;
+    const res = await q(o, {
+      nights: { from: '2027-02-10', to: '2027-02-13' },
+      addOnPackageIds: [seeded.packages.HONEYMOON],
+    });
+    const bar = find(res.offers, 'BAR', beach);
+    expect(bar.inclusions.added.map((a) => [a.code, a.serviceDate, a.amount.amountMinor])).toEqual([
+      ['SUNSET_CRUISE', '2027-02-11', 18_000],
+    ]);
+    expect(bar.nightly.map((n) => n.amount.amountMinor)).toEqual([90_000, 90_000, 90_000]);
+    expect(bar.totals.net.amountMinor).toBe(270_000 + 18_000);
+    expect(o.rates.instantiatePaymentSchedule(bar.terms)).toEqual(bar.policies.deposit?.schedule);
+    await expect(
+      q(o, { nights: { from: '2027-02-10', to: '2027-02-13' }, addOnPackageIds: [newId()] }),
+    ).rejects.toThrow(/do not exist/);
+  });
+
   it('honours eligibility: occupancy limits, channels and negotiated company plans', async () => {
     const { o, uts } = await resort();
     const beach = uts[0]?.id as string;

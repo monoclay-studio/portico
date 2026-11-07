@@ -175,6 +175,22 @@ export function ratesHttp(deps: { database: PorticoDatabase; rates: RatesService
         }),
       );
 
+      app.get(
+        '/rate-plans/:id/effective-restrictions',
+        {
+          schema: {
+            tags: tags.calendar,
+            params: idParams,
+            querystring: z.object({ unitTypeId: z.uuid(), from: z.iso.date(), to: z.iso.date() }),
+          },
+        },
+        async (req) => ({
+          items: await tx(req, (t) =>
+            rates.getEffectiveRestrictions(t, { ratePlanId: req.params.id, ...req.query }),
+          ),
+        }),
+      );
+
       // ───────────── Price calendar (bulk, with preview) ─────────────
       app.post(
         '/rate-calendar/prices/preview',

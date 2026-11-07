@@ -316,6 +316,29 @@ describe('restrictions', () => {
       t.admin.kysely,
     );
     expect(hist.rows[0]?.n).toBe(14);
+    // Effective view for the derived plan: `closed` is inherited from BAR (NR inherits only that kind).
+    await o.run((tx, r) => r.applyRestrictionUpdate(tx, { ...update, set: { closed: true } }));
+    const eff = await o.run((tx, r) =>
+      r.getEffectiveRestrictions(tx, {
+        ratePlanId: nr.id,
+        unitTypeId: newId(),
+        from: '2026-12-20',
+        to: '2026-12-21',
+      }),
+    );
+    expect(eff).toEqual([
+      {
+        date: '2026-12-20',
+        values: {
+          closed: expect.objectContaining({
+            value: true,
+            ratePlanCode: 'BAR',
+            inherited: true,
+            scope: 'plan',
+          }),
+        },
+      },
+    ]);
   });
 });
 
