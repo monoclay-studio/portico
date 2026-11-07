@@ -51,18 +51,17 @@ entries whose earliest point was an orchestrator step now count under **L-orch**
 
 Before reclassification, round 0 read L1-gate 9 / L1-BSC 7 / L2 11 / L3 0 / L4 5 / L5 6.
 
-| Loop | Round 0 (reclassified) | Round 1 | Cumulative | Round-1 entries |
-|---|---|---|---|---|
-| L1-gate | 8 | **2** | 10 | E-052, E-059 |
-| L1-BSC (builder self-check, incl. fix rounds) | 7 | **13** | 20 | E-039, E-040, E-041, E-043, E-044, E-045, E-046, E-047, E-049, E-053, E-054, E-058, E-062 |
-| L2 steward review | 10 | **3** | 13 | E-048, E-050, E-051 (all from review 2's own fix recommendations) |
-| L3 scenario proof | 0 | **1** | 1 | E-042 (the first L3 escape) |
-| L4 UX loop | 3 | **0** | 3 | No L4 round ran |
-| L5 market, parity and research | 5 | **1** | 6 | E-061 |
-| L-orch (orchestrator process) | 5 | **3** | 8 | E-055, E-057, E-060 |
-| L8 meta loop | 0 | **1** | 1 | E-056 |
-| L6 / L7 | 0 | 0 | 0 | — |
-| **Total** | **38** | **24** | **62** | |
+| Loop | Round 0 (reclassified) | Round 1 | Round 2 | Cumulative | Round-2 entries |
+|---|---|---|---|---|---|
+| L1-gate | 8 | 2 | **1** | 11 | E-079 |
+| L1-BSC (builder self-check, incl. fix rounds) | 7 | 13 | **12** | 32 | E-063, E-064, E-066, E-068, E-069, E-070, E-071, E-072 (residuals of round-0 fixes); E-075, E-076, E-077, E-078 (integration-step fix round) |
+| L2 steward review | 10 | 3 | **4** | 17 | E-065, E-067 (recall misses of round-0 reviews); E-073, E-074 (recommendation defects of a v1-era review) |
+| L3 scenario proof | 0 | 1 | **0** | 1 | — |
+| L4 UX loop | 3 | 0 | **0** | 3 | No L4 round ran |
+| L5 market, parity and research | 5 | 1 | **0** | 6 | — |
+| L-orch (orchestrator process) | 5 | 3 | **2** | 10 | E-080, E-081 |
+| L8 meta loop | 0 | 1 | **0** | 1 | — |
+| **Total** | **38** | **24** | **19** | **81** | |
 
 ### By where they were found
 
@@ -81,6 +80,12 @@ Before reclassification, round 0 read L1-gate 9 / L1-BSC 7 / L2 11 / L3 0 / L4 5
 | The orchestrator about its own process | — | 2 | E-055, E-057 |
 | The checker itself (self-reported) | 1 | 0 | — |
 
+**Round 2 by where found:**
+- the L2 fix sweep: 10 (E-063 … E-072);
+- the L2 integration-step re-review: 6 (E-073 … E-078);
+- the orchestrator's merge verification: 1 (E-079);
+- the orchestrator about its own process: 2 (E-080, E-081).
+
 ### By severity and kind
 
 | | D (R0 / R1) | G | C | Ev | Pr | Total R0 | Total R1 |
@@ -96,6 +101,16 @@ recommended fix caused. There are **12 of 24**:
 - incomplete or residual fixes: E-039, E-044, E-045, E-046, E-049, E-053, E-054, E-062;
 - introduced by the fix: E-047;
 - caused by the recommendation: E-048, E-050, E-051.
+
+**Round 2 by severity:** P0 0, P1 7, P2 8, P3 4. **By kind:** D 15, G 2, Pr 2.
+
+**Round 2, fix-related: 14 of 19 (74 %).**
+- Residuals of round-0 fixes: 8 (sweep).
+- Introduced or missed by the integration-step fix round: 4.
+- Recommendation-induced: 2.
+
+The trend is 7 of 38 → 12 of 24 → 14 of 19. As P0/P1 classes close, the remaining defects come increasingly from
+fixes.
 
 ### Root causes shared by several escapes
 
@@ -114,6 +129,7 @@ recommended fix caused. There are **12 of 24**:
 | **RC-10.** A test exercises the path but asserts neither the outcome nor the claim | E-041, E-042, E-043, E-044 | Pattern AP-55; scenario tests v2 ST2-2; builder self-check v1 items 31–32 |
 | **RC-11.** The test environment is not the production environment: superuser migrations, a single e2e port, Playwright outside the gate | E-052, E-053 | Retro edits 3c and 1c; orchestrator v4 queued |
 | **RC-12.** The orchestrator passed things on or recorded them inexactly: paraphrased claims, broad commits, estimated times, generated files not refreshed | E-043 (contributing), E-055, E-057, E-060 | Orchestrator v2 (O2-1…O2-4) |
+| **RC-13 (round 2).** A fix guards the reported *path*, not the *invariant*. The writers of the facts it trusts (premises), the inverse and repeated operations, the other record parameters, the other stores and the fix's own records are never enumerated | E-063, E-066, E-067 (stores), E-070, E-073, E-074, E-075, E-076, E-077 | Builder self-check **v4** (invariant closure); patterns AP-57 and AP-58 |
 
 ---
 
@@ -907,4 +923,207 @@ v2 existed. So **no v2 playbook was used in round 1**, and the v2 effect is stil
 
 ---
 
-<!-- Round 2 entries go below this line: "## Round 2 — <date>" -->
+## Round 2 — 2026-11-07, 17:58–18:44 UTC (the fix re-attack sweep, the integration-step re-review, the identity merge, parity-ops, the orchestrator's process)
+
+Sources:
+- `docs/orchestration/reviews/review-fix-sweep.md` and `fix-sweep-poc/`;
+- `review-integration-step-2.md` and `integration-step-poc/r2-*`;
+- the integration-step and identity builder reports (`docs/chronicle/agents/20261107T1616-*`, `…T0738-*`, fix-round
+  reports at 18:07 and 18:29);
+- `docs/chronicle/01-timeline.md` (17:38 onward) and `04-…lessons.md` ("Checkpoint WIP commits must not be
+  rewritten");
+- the time-correction commits `9d08ee7`, `5e486f1`, `c6a34eb` and `f62ddf0`;
+- `docs/parity/gaps-ops.md` § 5;
+- scripted canary `r2-l3` (`canaries.md` § 6).
+
+**Playbook versions in force (the first measured round):**
+- Both reviews ran on **steward v2.1**.
+- Three fix rounds produced the **self-check § 3 re-attack table**: integration step, identity round 4 and guests.
+- Identity round 4 also ran **§ 4 (v3)**.
+- The integration-step fix round ran **scenario tests v2**.
+- Parity-ops ran **parity v2**.
+
+The guests erasure re-review was still running at 18:44, and is folded into the next round.
+
+### L1-BSC — residuals of round-0 fixes, found by the sweep
+
+#### E-063 · P1 · D · The link-versus-desk ownership guard is bypassed by authorize → capture (SW-PAY-1)
+- **Found.** L2 fix sweep (PoC `SW-PAY-1`). A deposit paid by link, then a desk authorize and capture on the same
+  booking, produces 2 deposit postings.
+- **Should have been caught by.** L1-BSC, the round-0 payments fix round for P1-2. The guard was put on `chargeNow`
+  only, and the regression test encodes the reviewer's exact path.
+- **Why it was missed.** RC-4. The fix guarded one *path* instead of the *invariant* "one collection per ref and
+  purpose" (RC-13, below).
+- **Checks added.** Builder self-check **v4** BS4-1 (invariant closure); pattern AP-28, extended.
+
+#### E-064 · P2 · D · The `custom` purpose skips the ownership guard with no reason and no audit (SW-PAY-2)
+- **Found.** Fix sweep.
+- **Should have been caught by.** L1-BSC, the same fix. An exemption was keyed on a label the client chooses.
+- **Checks added.** Pattern AP-35, extended (an exemption keyed on a client-chosen value).
+
+#### E-066 · P1 · D · The P1-8 fix trusts `entry_channel`, a field the client declares (SW-PAY-4)
+- **Found.** Fix sweep (PoC `SW-PAY-4`). Two charges of USD 900 each were recorded as customer-initiated on a token
+  with no mandate.
+- **Should have been caught by.** L1-BSC, the round-0 payments fix round. The fix moved the trust from `initiator` to
+  `entry_channel`, which the client writes and which defaults to `hosted_entry`.
+- **Why it was missed.** No step asks "who writes the fact my fix now trusts?" (RC-13; AP-54 at fix time).
+- **Checks added.** Builder **v4** BS4-1(a), premise writers; new pattern **AP-57**.
+
+#### E-068 · P2 · G · The backoffice P0-1 regression test cannot fail (SW-BO-1)
+- **Defect.** `page.goto` reloads the page, which clears the cache whether or not the fix is present.
+- **Found.** Fix sweep.
+- **Should have been caught by.** L1-BSC, the backoffice fix round (AP-55).
+- **Checks added.** Builder **v4** BS4-3 (mutate the fix: the test must fail without it); pattern AP-55, extended.
+
+#### E-069 · P2 · D · R-01 recurs for fees the hotel adds, because `nature` defaults to `statutory` (SW-RAT-1)
+- **Found.** Fix sweep.
+- **Should have been caught by.** L1-BSC, the rates fix round. The principle "what the hotel sets is agreed" was
+  implemented as a flag whose default is unsafe.
+- **Checks added.** Pattern AP-35, extended.
+
+#### E-070 · P2 · D · The F-04 cap lineage resets when the selector or destination folio changes (SW-FIN-1)
+- **Found.** Fix sweep (code-read).
+- **Should have been caught by.** L1-BSC, the finance fix round.
+- **Checks added.** Builder **v4** BS4-1(b) (inverse and repeated operations).
+
+#### E-071 · P3 · D · A release racing an add-nights change leaves orphan consumption (SW-INV-1)
+- **Found.** Fix sweep (code-read).
+- **Should have been caught by.** L1-BSC, the inventory INV-02 fix. The lock covers only the cells read before
+  locking.
+- **Checks added.** AP-36 is already in the library. INV-10 should flag consumption for a cancelled ref.
+
+#### E-072 · P3 · D · The SSRF address policy does not decode the RFC 2765 `::ffff:0:0:0/96` form (SW-INT-1)
+- **Found.** Fix sweep. It is defence in depth only.
+- **Should have been caught by.** L1-BSC, the integration F1 fix.
+- **Checks added.** Pattern AP-14, extended.
+
+### L2 — recall misses of round-0 reviews
+
+#### E-065 · P1 · D · A card saved at property B is charged by a user scoped to property A (SW-PAY-3)
+- **Found.** Fix sweep (PoC `SW-PAY-3`).
+- **Should have been caught by.** The **L2 round-0 payments review**. The defect existed then: `loadActiveMethod`
+  checks neither property nor owner. That review probed AP-01 on the ledger target (P0-1) but not on the **card**,
+  which is another record parameter of the same command.
+- **Why it was missed.** AP-01 was applied to one record parameter of a command, not to all of them.
+- **Effect on the scorecard.** This is a measured recall miss: the payments review's P0+P1 recall is now ≈ 15/16.
+- **Checks added.** Pattern AP-01, extended (every record-valued parameter: card, authorization, request, account).
+
+#### E-067 · P1 · D · Erasure leaves the guest's name and date of birth in `core.idempotency_keys`, and a replay returns them (SW-GUE-1)
+- **Found.** Fix sweep (PoC `SW-GUE-1`).
+- **Should have been caught by.** The **L2 round-0 guests review**. In the same report it endorsed foundation request
+  FR-1 ("idempotency records hold PII") and raised G-P0-1 (erasure leftovers), but never connected the two. The
+  builder contributed: its erasure scan listed `guests.*`, the outbox and the audit log, but not `core` jsonb stores.
+- **Why it was missed.** "Detected but not connected". AP-17's probe has listed idempotency records since round 0,
+  but the guests fix predates the pattern library.
+- **Effect on the scorecard.** The guests review's P0+P1 recall is now ≈ 8/9.
+- **Checks added.** Pattern AP-17, extended (replay after erasure). Guests erasure fix in progress.
+
+### L2 — recommendation defects of a v1-era review (integration-step review 1, 17:04)
+
+#### E-073 · P1 · D · Whoever links the cardholder to a booking chooses the card held at check-in (R2-P1-1)
+- **Found.** L2 integration-step re-review, on v2.1 (PoC R2-A). A role with no payments key held USD 7,117.80 on a
+  stranger's card.
+- **Should have been caught by.** L2 integration-step review 1. Its fix for P1-2 recommended "verify that the
+  method's owner is the booker, an occupant or the billing payer". The guarded role writes those links. The builder
+  implemented the recommendation exactly, and its § 3 reverse-order probe attacked the *input* (another card), not
+  the *premise* (who sets the owner links).
+- **Why it was missed.** RC-9 (review 1 ran on v1, before "attack the fix" existed) and RC-13.
+- **Checks added.**
+  - ADR-0015 Amendment 1 (applied at 18:29).
+  - Builder **v4** BS4-1(a).
+  - New pattern **AP-57**; pattern AP-53, extended.
+
+#### E-074 · P1 · D · The late-charge collection is kept in step for one charge only; the fix froze the severity, and a reversal leaves the request open (R2-P1-2)
+- **Found.** L2 integration-step re-review (R2-D, run concurrently and sequentially; R2-E).
+- **Should have been caught by.** L2 integration-step review 1. Its P1-3 recommendation was framed on a single
+  charge ("request `min(share, …)`; when 0 … raise a routine exception"). The builder's § 3 probes used one charge,
+  with no repetition and no reversal.
+- **Note.** The fix introduced a regression: an urgent exception is now stored as routine.
+- **Why it was missed.** RC-9 and RC-13: no repetition, no inverse operation, and the fix's own records were not
+  re-checked.
+- **Checks added.** Builder **v4** BS4-1(b) and (c); new pattern **AP-58**.
+
+### L1-BSC — the integration-step fix round (under self-check v2 § 3)
+
+#### E-075 · P1 · D · The P1-1 fix trusts `deposit_accounts`, whose import writer skips the ownership check; a real deposit is charged but not posted (R2-P1-3)
+- **Found.** L2 integration-step re-review (R2-F).
+- **Should have been caught by.** L1-BSC. The builder designed the fallback ("finance falls back to `deposit_accounts`
+  for imported bookings") but did not attack the writers of that table.
+- **Checks added.** Builder **v4** BS4-1(a); pattern AP-57. Scripted canary C-L3-03 confirmed that the new global
+  consistency check catches this plant (§ 6).
+
+#### E-076 · P2 · D · FD-15 money hiding still misses workflow runs and stay issues (R2-P2-2)
+- **Found.** L2 re-review (R2-G).
+- **Should have been caught by.** L1-BSC. This is the **second** sibling miss on FD-15 (E-044 was the first). The
+  P2-1 fix enumerated the routes it knew, not every field derived from payment state.
+- **Checks added.** Builder **v4** BS4-1 (every reader of the protected quantity); pattern AP-18, extended.
+
+#### E-077 · P2 · D · The payments reference check fails open for unknown types, and when the directory is unbound (R2-P2-3)
+- **Found.** L2 re-review (R2-H).
+- **Should have been caught by.** L1-BSC. The fix itself added two early `return`s. Exemptions are now audited by
+  reviewers (round-1 edit 1a), but not by builders.
+- **Checks added.** Builder **v4** BS4-2 (exemption list in the fix-round reply); pattern AP-35, extended.
+
+#### E-078 · P2 · D · The replacement for P3-9 marks an external money step done with no attestation, and its regression test asserts "done" (R2-P2-4)
+- **Found.** L2 re-review.
+- **Should have been caught by.** L1-BSC. The builder deviated from the recommendation ("mark the step external with
+  an attestation") (AP-26, AP-55).
+- **Checks added.** Builder **v4** BS4-3; patterns AP-26 and AP-55, extended.
+
+### L1-gate
+
+#### E-079 · P3 · G · A flaky end-to-end test (409 toast) on non-default ports passed only on re-run
+- **Found.** The orchestrator's identity merge verification. Playwright went 11/12 on non-default ports, which is
+  round-1 edit 1c doing its job.
+- **Should have been caught by.** L1-gate. There is no flaky-test register or quarantine rule; it is logged only "for
+  backoffice".
+- **Checks added.** Canary C-L1-05; orchestrator **v3** O3-3 (a flake is a tracked defect with an owner, never a
+  silent rerun).
+
+### L-orch — the orchestrator's process
+
+#### E-080 · P3 · Pr · Estimated chronicle times recurred four times despite rule O2-4
+- **Defect.** Four timeline times were first written wrong:
+
+  | Entry | Written | Correct |
+  |---|---|---|
+  | Quality steward round 0 | 17:24 | 17:27 |
+  | Parity merge | 18:08 | 18:02 |
+  | Fix sweep | 18:13 | 18:15 |
+  | Integration-step re-review | 18:30 | 18:29 |
+
+  Each was corrected within minutes from the agent records (`9d08ee7`, `5e486f1`, `c6a34eb`, `f62ddf0`). The error
+  shrank from 10–60 minutes (E-055) to 1–6 minutes, but did not stop.
+- **Should have been caught by.** L-orch. O2-4 is a rule a person has to remember, and the record it points to
+  (`agents.json`) is refreshed only when the chronicle is extracted.
+- **Effect on the round-1 anomaly.** The 17:24 vs 17:26:52 question is resolved: it was an estimate. The timeline now
+  reads 17:27, while the record says 17:26:51; a rounding convention is still needed.
+- **Checks added.** Orchestrator **v3** O3-1 (times derived by a helper that reads the live transcript, and verified
+  at commit). The prototype is `canary-scripts/when.py` in the session scratchpad. Retro edit 1.
+
+#### E-081 · P2 · Pr · A force-push was attempted on a branch whose pushed checkpoint commit the agent had rewritten
+- **Defect.** `tools/checkpoint.sh` committed and pushed a WIP commit in a running agent's worktree. The resume message
+  did not tell the agent to build on top of it, and the integration builder "replaced the usage-limit WIP checkpoint
+  with a proper commit".
+- **What happened next.** The normal push was refused, and the orchestrator attempted a force-push. The safety policy
+  declined it. The divergence was resolved with an `-s ours` merge, and a rule was added to the builder playbook
+  (`51dd70c`).
+- **Should have been caught by.** L-orch: the checkpoint and resume procedure, and the choice of a destructive
+  remedy. The builder contributed.
+- **Checks added.**
+  - Orchestrator **v3** O3-2 (the resume message names the WIP commit and the build-on-top rule; never force-push;
+    reconcile by merge).
+  - Retro edit 2.
+
+### Not counted as escapes this round (recorded for completeness)
+
+- **R2-P2-1** (card ownership is first-saver) was a declared and tracked gap in the builder's report.
+- The **R2-P3** items, and the sweep's tracked residuals (booking exemption, optional scope, rates siblings), were
+  already logged as E-039, E-045 and E-046.
+- **17 parity rows downgraded** by the parity researcher itself under PR2-1. That is the playbook working at the
+  source, not an escape.
+- **Identity round 4's self-detected vocabulary copies in platform** (BS3-1). The builder found them itself.
+
+---
+
+<!-- Round 3 entries go below this line: "## Round 3 — <date>" -->
