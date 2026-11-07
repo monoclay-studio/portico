@@ -446,7 +446,7 @@ export async function toBookingView(
   const counted = stays.filter((s) => ACTIVE_FOR_TOTALS.has(s.status.stay));
   const totals = addTotals(
     b.currency,
-    counted.map((s) => s.totals),
+    counted.map((s) => s.totals ?? zeroTotals(b.currency)),
   );
   const guarantee = (b.guarantee ?? { kind: 'none' }) as Booking['guarantee'];
   return {

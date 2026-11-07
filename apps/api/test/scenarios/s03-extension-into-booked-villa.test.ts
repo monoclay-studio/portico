@@ -68,7 +68,7 @@ describe('S03 — extension into a booked villa', () => {
       checkIn: { registration: { identityVerified: true }, access: { kind: 'card', count: 2 } },
     });
     expect(checkIn.run?.status).toBe('completed');
-    const agreedBefore = ivanova.stays[0]?.totals.gross.amountMinor as number;
+    const agreedBefore = ivanova.stays[0]?.totals?.gross.amountMinor as number;
 
     const plain = await org.run(desk, (tx) =>
       reservations.previewChange(tx, {
@@ -111,7 +111,7 @@ describe('S03 — extension into a booked villa', () => {
       ['2027-03-12', '2027-03-14', k.units['216']],
     ]);
     // Agreed nights keep the agreed price; the new agreement is sealed by rates and supersedes nothing it should not.
-    expect(stay?.totals.gross.amountMinor).toBeGreaterThan(agreedBefore);
+    expect(stay?.totals?.gross.amountMinor).toBeGreaterThan(agreedBefore);
     const docs = await sql<{ document: { providerDocument: unknown } }>`
       select document from reservations.terms_snapshots where stay_id = ${stayId}`.execute(s.t.admin.kysely);
     expect(docs.rows).toHaveLength(2);

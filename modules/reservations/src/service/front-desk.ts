@@ -5,7 +5,7 @@ import { composeReadiness } from '../domain/readiness';
 import { type StepState, summarize } from '../domain/workflow';
 import { RESERVATIONS_PERMISSIONS as P } from '../manifest';
 import { type GuaranteeKind, type PaymentStatusValue, paymentReadiness, type UnitCondition } from '../ports';
-import { type Deps, db, isModuleUnavailable, policy } from './context';
+import { type Deps, db, isModuleUnavailable, MONEY_NOT_SHOWN, policy, seesMoney } from './context';
 import { currentUnit, loadSnapshots, loadStayRecords, occ, type StayRecord, snapshotOf } from './repo';
 
 /**
@@ -145,28 +145,20 @@ export async function listArrivals(
             'unknown' as const,
           )
         : null;
-      const stayPay = await safely(
-        async () =>
-          paymentReadiness(
-            await deps.ports.payments.getPaymentStatus(
-              tx,
-              { type: 'stay', id: stay.row.id },
-              { propertyId: stay.row.property_id },
+      // UX FD-15 (review P2-1): roles without money permissions never trigger a payments read for this board.
+      const money = seesMoney(tx, input.propertyId);
+      const read = (ref: { type: string; id: string }) =>
+        safely(
+          async () =>
+            paymentReadiness(
+              await deps.ports.payments.getPaymentStatus(tx, ref, { propertyId: stay.row.property_id }),
             ),
-          ),
-        'unknown' as const,
-      );
-      const bookingPay = await safely(
-        async () =>
-          paymentReadiness(
-            await deps.ports.payments.getPaymentStatus(
-              tx,
-              { type: 'booking', id: stay.row.booking_id },
-              { propertyId: stay.row.property_id },
-            ),
-          ),
-        'unknown' as const,
-      );
+          'unknown' as const,
+        );
+      const stayPay = money ? await read({ type: 'stay', id: stay.row.id }) : ('unknown' as const);
+      const bookingPay = money
+        ? await read({ type: 'booking', id: stay.row.booking_id })
+        : ('unknown' as const);
       const rank: Array<PaymentStatusValue | 'unknown'> = [
         'paid',
         'partially_paid',
@@ -189,21 +181,11 @@ export async function listArrivals(
         guaranteeKind: stay.row.commercial_type === 'standard' ? guarantee.kind : 'company',
         guaranteeRequired,
         paymentStatus,
+        ...(money ? {} : { paymentRedacted: MONEY_NOT_SHOWN }),
         registrationComplete: Boolean(primary?.name),
         openRequests: requests.filter((r) => r.status === 'open').length,
       });
-      if (!seesMoney(tx, input.propertyId) && row.readiness) {
-        const r = row.readiness;
-        row.readiness = {
-          ...r,
-          checks: r.checks.map((c) => (c.key === 'payment_secured' ? { ...c, message: NOT_SHOWN } : c)),
-          blockingReason:
-            r.blockingReason?.key === 'payment_secured'
-              ? { ...r.blockingReason, message: NOT_SHOWN }
-              : r.blockingReason,
-        };
-        row.redacted = true;
-      }
+      if (!money) row.redacted = true;
     }
     out.push(row);
   }
@@ -214,13 +196,6 @@ export async function listArrivals(
     counts: { total: out.length, ready: out.filter((r) => r.readiness?.ready).length },
   };
 }
-
-/** UX FD-15: money detail on the boards only for roles that handle money (the server decides, not the menu). */
-const MONEY_READ = ['finance.folio.read', 'payments.payment.read', 'payments.payment.collect'] as const;
-function seesMoney(tx: TxContext, propertyId: string): boolean {
-  return MONEY_READ.some((p) => tx.authz.can(p, { propertyId }));
-}
-const NOT_SHOWN = 'Payment detail is not shown for your role.';
 
 async function staysBalance(
   deps: Deps,

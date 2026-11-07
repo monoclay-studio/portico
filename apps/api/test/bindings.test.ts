@@ -47,11 +47,11 @@ describe('reservations → rates (ratesPortFrom)', () => {
     const bar = quote.find((o) => o.ratePlanId === k.plans.BAR);
     // High season BAR for a Beach Villa: USD 900 per night for two (rates seed), plus the Maldives taxes.
     expect(bar).toMatchObject({ available: 3, bookable: true });
-    expect(bar?.totals.net.amountMinor).toBeGreaterThan(0);
-    expect(bar?.totals.gross.amountMinor).toBe(
-      (bar?.totals.net.amountMinor ?? 0) +
-        (bar?.totals.taxes.amountMinor ?? 0) +
-        (bar?.totals.fees.amountMinor ?? 0),
+    expect(bar?.totals?.net.amountMinor).toBeGreaterThan(0);
+    expect(bar?.totals?.gross.amountMinor).toBe(
+      (bar?.totals?.net.amountMinor ?? 0) +
+        (bar?.totals?.taxes.amountMinor ?? 0) +
+        (bar?.totals?.fees.amountMinor ?? 0),
     );
 
     const booking = applied<Booking>(
@@ -69,7 +69,7 @@ describe('reservations → rates (ratesPortFrom)', () => {
       select document from reservations.terms_snapshots where stay_id = ${stayId}`.execute(s.t.admin.kysely);
     const doc = stored.rows[0]?.document;
     expect(rates.verifyTerms(doc?.providerDocument)).toBe(true);
-    expect(doc?.totals.gross.amountMinor).toBe(bar?.totals.gross.amountMinor);
+    expect(doc?.totals?.gross.amountMinor).toBe(bar?.totals?.gross.amountMinor);
 
     // Extension: agreed nights keep their agreed price; the new night is priced by rates.priceChange.
     const preview = await org.run(agent, (tx) =>

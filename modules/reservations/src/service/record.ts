@@ -6,7 +6,7 @@ import { conditionMeets } from '../domain/readiness';
 import type { BookingStatus, StayStatus } from '../domain/status';
 import { RESERVATIONS_PERMISSIONS as P } from '../manifest';
 import { paymentReadiness, type UnitCondition } from '../ports';
-import { type Deps, db, isModuleUnavailable, policy } from './context';
+import { type Deps, db, isModuleUnavailable, policy, seesMoney } from './context';
 import { type BookingRecord, currentUnit, type StayRecord, toBookingView } from './repo';
 
 async function safely<T>(fn: () => Promise<T>, fallback: T): Promise<T> {
@@ -47,15 +47,22 @@ async function stayExtras(
     unitId && active
       ? await safely(async () => (await deps.ports.operations.getUnitCondition(tx, unitId)).condition, null)
       : null;
-  const payment = active
-    ? await safely(
-        async () =>
-          paymentReadiness(
-            await deps.ports.payments.getPaymentStatus(tx, { type: 'stay', id: stay.row.id }, { propertyId }),
-          ),
-        null,
-      )
-    : null;
+  // UX FD-15 (review P2-1): payment state, totals and folio links only for roles that handle money.
+  const money = seesMoney(tx, propertyId);
+  const payment =
+    active && money
+      ? await safely(
+          async () =>
+            paymentReadiness(
+              await deps.ports.payments.getPaymentStatus(
+                tx,
+                { type: 'stay', id: stay.row.id },
+                { propertyId },
+              ),
+            ),
+          null,
+        )
+      : null;
   const runs = await db(tx)
     .selectFrom('reservations.workflow_runs')
     .select(['kind', 'status', 'steps'])
@@ -149,10 +156,12 @@ async function stayExtras(
       });
   }
   if (unitId) links.push({ rel: 'unit', type: 'unit', id: unitId, ...(unitName ? { title: unitName } : {}) });
-  const folios = await safely(
-    () => deps.ports.finance.listFolios(tx, { propertyId, owner: { type: 'stay', id: stay.row.id } }),
-    [],
-  );
+  const folios = money
+    ? await safely(
+        () => deps.ports.finance.listFolios(tx, { propertyId, owner: { type: 'stay', id: stay.row.id } }),
+        [],
+      )
+    : [];
   for (const f of folios)
     links.push({ rel: 'folio', type: 'folio', id: f.folioId, ...(f.label ? { title: f.label } : {}) });
   for (const r of relocations) links.push({ rel: 'relocation', type: 'relocation_case', id: r.id });
@@ -185,6 +194,7 @@ async function stayExtras(
   });
   return {
     ...view,
+    ...(money ? {} : { totals: null, moneyRedacted: true }),
     status: {
       ...view.status,
       ...(payment ? { payment } : {}),
@@ -222,13 +232,20 @@ export async function bookingRecord(deps: Deps, tx: TxContext, rec: BookingRecor
     );
   }
   const can = (p: string) => tx.authz.can(p, { propertyId });
-  const payment = await safely(
-    async () =>
-      paymentReadiness(
-        await deps.ports.payments.getPaymentStatus(tx, { type: 'booking', id: rec.row.id }, { propertyId }),
-      ),
-    null,
-  );
+  const money = seesMoney(tx, propertyId);
+  const payment = money
+    ? await safely(
+        async () =>
+          paymentReadiness(
+            await deps.ports.payments.getPaymentStatus(
+              tx,
+              { type: 'booking', id: rec.row.id },
+              { propertyId },
+            ),
+          ),
+        null,
+      )
+    : null;
   const issues: RecordIssue[] = [];
   const bookingIssues = await db(tx)
     .selectFrom('reservations.issues')
@@ -286,6 +303,7 @@ export async function bookingRecord(deps: Deps, tx: TxContext, rec: BookingRecor
   const statuses = rec.stays.map((s) => s.row.status);
   return {
     ...view,
+    ...(money ? {} : { totals: null, depositRequirement: null, moneyRedacted: true }),
     status: { ...view.status, ...(payment ? { payment } : {}) },
     stays,
     allowedActions: bookingActions({

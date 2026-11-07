@@ -46,7 +46,7 @@ describe('change preview → commit token', () => {
     expect((await org.run((tx) => org.svc.getBooking(tx, b.id))).stays[0]?.departure).toBe('2026-12-13');
     // The fresh preview commits; the old token stays refused.
     const ok = created(await org.svc.commitChangeSafely(t.db, org.ctx, { previewToken: fresh.token }));
-    expect(ok.booking.stays[0]?.totals.net.amountMinor).toBe(3 * 30_000 + 2 * 33_000);
+    expect(ok.booking.stays[0]?.totals?.net.amountMinor).toBe(3 * 30_000 + 2 * 33_000);
     const status = await org.run((tx) =>
       sql<{
         status: string;
@@ -71,7 +71,7 @@ describe('change preview → commit token', () => {
     expect(err.details?.differences).toEqual([]);
     const ok = created(await org.svc.commitChangeSafely(t.db, org.ctx, { previewToken: fresh.token }));
     // Occupancy change reprices supplements and per-person levies from the change date (Green Tax, RES-R19).
-    expect(ok.booking.stays[0]?.totals.fees.amountMinor).toBe(3 * 3 * 1_200);
+    expect(ok.booking.stays[0]?.totals?.fees.amountMinor).toBe(3 * 3 * 1_200);
     await expect(org.svc.commitChangeSafely(t.db, org.ctx, { previewToken: fresh.token })).rejects.toThrow(
       /already committed/,
     );
@@ -116,7 +116,7 @@ describe('change preview → commit token', () => {
       org.fakes.inventory.consumptionOf(tx, { type: 'stay', id: stayId }),
     );
     expect(consumption.map((c) => c.unitTypeId === org.types.overwater)).toEqual([false, false, true]);
-    expect(res.booking.stays[0]?.totals.net.amountMinor).toBe(2 * 30_000 + 50_000);
+    expect(res.booking.stays[0]?.totals?.net.amountMinor).toBe(2 * 30_000 + 50_000);
   });
 
   it('cancellation preview applies the agreed tier in Malé time; waiving needs permission', async () => {
@@ -236,7 +236,7 @@ describe('room moves', () => {
       }),
     );
     expect(p.feasible).toBe(true);
-    expect(p.totals.difference.amountMinor).toBe(0); // complimentary move to a better type keeps the agreed price
+    expect(p.totals?.difference.amountMinor).toBe(0); // complimentary move to a better type keeps the agreed price
     const res = created(await org.svc.commitChangeSafely(t.db, org.ctx, { previewToken: p.token }));
     expect(res.keys).toEqual([
       { stayId, action: 'move', result: expect.objectContaining({ status: 'pending' }) },

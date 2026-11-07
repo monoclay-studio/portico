@@ -103,12 +103,12 @@ describe.each(['fake', 'real'] as const)(
         ['2026-12-13', 'added', 30_000],
         ['2026-12-14', 'added', 30_000],
       ]);
-      expect(extra?.preview.totals.difference.amountMinor).toBe(2 * 37_500);
+      expect(extra?.preview.totals?.difference.amountMinor).toBe(2 * 37_500);
       expect(extra?.preview.deposits.requiredAfter.amountMinor).toBe(Math.round(5 * 37_500 * 0.3));
       const upgrade = preview.alternatives.find((a) => a.id.startsWith('upgrade:'));
       const comp = preview.alternatives.find((a) => a.id.startsWith('upgrade_complimentary:'));
-      expect(upgrade?.preview.totals.difference.amountMinor).toBeGreaterThan(
-        comp?.preview.totals.difference.amountMinor ?? 0,
+      expect(upgrade?.preview.totals?.difference.amountMinor).toBeGreaterThan(
+        comp?.preview.totals?.difference.amountMinor ?? 0,
       );
 
       // Commit option (a): exactly what was previewed.
@@ -121,7 +121,7 @@ describe.each(['fake', 'real'] as const)(
         ['2026-12-10', '2026-12-13', org.units.V101],
         ['2026-12-13', '2026-12-15', org.units.V103],
       ]);
-      expect(result.booking.totals.gross.amountMinor).toBe(5 * 37_500);
+      expect(result.booking.totals?.gross.amountMinor).toBe(5 * 37_500);
       const assignments = await assignmentsOf(org, stayId);
       expect(assignments).toEqual([
         { unitId: org.units.V101, from: '2026-12-10', to: '2026-12-13' },
@@ -170,7 +170,7 @@ describe.each(['fake', 'real'] as const)(
         unitTypeId: org.types.overwater,
         unitId: org.units.W201,
       });
-      expect(res.booking.stays[0]?.totals.net.amountMinor).toBe(5 * 30_000);
+      expect(res.booking.stays[0]?.totals?.net.amountMinor).toBe(5 * 30_000);
 
       const org2 = await setupOrg(t, { inventory });
       const s2 = await scenario(org2);

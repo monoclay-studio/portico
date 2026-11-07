@@ -400,3 +400,63 @@ describe('P1-3 — a late charge asks the guest for what the folio owes, never m
     expect(reqs[0]).toMatchObject({ amount_minor: owed, status: 'open', payer_type: 'guest_profile' });
   });
 });
+
+describe('P2-1 — FD-15: housekeeping cannot tell paid from unpaid arrivals nor read booking money', () => {
+  it('the payment check, totals, deposit requirement, payment status and folio links are withheld', async () => {
+    const org = await organization(s);
+    const k = await kandu(s, org, '2027-03-10');
+    const { reservations, payments } = s.c.services;
+    const desk = org.staff('front_desk', 'Hassan', [k.id]);
+    const book = async (lastName: string) =>
+      applied<Booking>(
+        await org.run(desk, (tx) =>
+          reservations.createBooking(
+            tx,
+            bookingInput(k, {
+              arrival: '2027-03-10',
+              departure: '2027-03-12',
+              guest: { firstName: 'G', lastName },
+            }),
+          ),
+        ),
+      );
+    const paid = await book('Paid');
+    const unpaid = await book('Unpaid');
+    const card = await cardOnFile(s, org, k.id, k.legalEntityId);
+    await payments.chargeNow(desk, {
+      propertyId: k.id,
+      methodId: card.id,
+      amount: { amountMinor: 90_000, currency: 'USD' },
+      ref: { type: 'booking', id: paid.id },
+      businessKey: `dep:${newId()}`,
+    });
+    const hk = org.staff('housekeeping_supervisor', 'Mariyam', [k.id]);
+    const board = await org.run(hk, (tx) => reservations.listArrivals(tx, { propertyId: k.id }));
+    const pay = (bookingId: string) =>
+      board.items
+        .find((r) => r.bookingId === bookingId)
+        ?.readiness?.checks.find((c) => c.key === 'payment_secured');
+    expect(board.items.every((r) => r.redacted === true)).toBe(true);
+    expect(pay(paid.id)).toEqual(pay(unpaid.id));
+    expect(pay(paid.id)).toMatchObject({
+      status: 'unknown',
+      message: 'Payment detail is not shown for your role.',
+    });
+    expect(board.items.every((r) => r.readiness?.blockingReason?.key !== 'payment_secured')).toBe(true);
+    const rec = await org.run(hk, (tx) => reservations.getBooking(tx, paid.id));
+    expect(rec).toMatchObject({ totals: null, depositRequirement: null, moneyRedacted: true });
+    expect(rec.status.payment).toBeUndefined();
+    expect(rec.stays.every((st) => st.totals === null && st.status.payment === undefined)).toBe(true);
+    expect(rec.stays.flatMap((st) => st.links).some((l) => l.type === 'folio')).toBe(false);
+    // The desk (money role) still sees everything.
+    const deskRec = await org.run(desk, (tx) => reservations.getBooking(tx, paid.id));
+    expect(deskRec.totals?.gross.amountMinor).toBeGreaterThan(0);
+    expect(deskRec.status.payment).toBeDefined();
+    const deskBoard = await org.run(desk, (tx) => reservations.listArrivals(tx, { propertyId: k.id }));
+    expect(
+      deskBoard.items
+        .find((r) => r.bookingId === paid.id)
+        ?.readiness?.checks.find((c) => c.key === 'payment_secured')?.status,
+    ).toBe('ok');
+  });
+});

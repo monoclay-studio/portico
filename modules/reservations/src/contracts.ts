@@ -259,7 +259,9 @@ export const stay = z.object({
   etd: z.string().nullable(),
   arrivalDetails: z.record(z.string(), z.unknown()),
   waitlist: z.object({ priority: z.number(), expiresAt: localDate }).nullable(),
-  totals: z.object({ net: money, taxes: money, fees: money, gross: money }),
+  /** Null with `moneyRedacted` for roles that do not handle money (UX FD-15, review P2-1). */
+  totals: z.object({ net: money, taxes: money, fees: money, gross: money }).nullable(),
+  moneyRedacted: z.boolean().optional(),
   checkedInAt: z.string().nullable(),
   checkedOutAt: z.string().nullable(),
   version: z.number().int(),
@@ -305,7 +307,9 @@ export const booking = z.object({
   specialRequests: z.array(z.string()),
   tags: z.array(z.string()),
   currency: z.string(),
-  totals: z.object({ net: money, taxes: money, fees: money, gross: money }),
+  /** Null with `moneyRedacted` (as `depositRequirement` and `status.payment`) for roles without money permissions. */
+  totals: z.object({ net: money, taxes: money, fees: money, gross: money }).nullable(),
+  moneyRedacted: z.boolean().optional(),
   stays: z.array(stay),
   pendingForwardedChanges: z.array(forwardedChangeView),
   createdAt: z.string(),

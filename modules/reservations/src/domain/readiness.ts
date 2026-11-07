@@ -24,6 +24,11 @@ export interface ReadinessInput {
   /** Whether the agreed terms require a card/deposit guarantee before arrival. */
   guaranteeRequired: boolean;
   paymentStatus: PaymentStatusValue | 'unknown';
+  /**
+   * UX FD-15 (review P2-1): the viewer may not see payment state. The payment check is shown as `unknown` with a
+   * plain message and does not count towards `ready` / `blockingReason` (housekeeping must not infer who has paid).
+   */
+  paymentRedacted?: string;
   registrationComplete: boolean;
   openRequests: number;
 }
@@ -136,7 +141,11 @@ export function composeReadiness(input: ReadinessInput): Readiness {
       });
     }
   }
-  checks.push(paymentSecured(input));
+  checks.push(
+    input.paymentRedacted
+      ? { key: 'payment_secured', status: 'unknown', message: input.paymentRedacted }
+      : paymentSecured(input),
+  );
   checks.push(
     input.registrationComplete
       ? { key: 'registration', status: 'ok', message: 'Required guest details are complete.' }
@@ -151,7 +160,8 @@ export function composeReadiness(input: ReadinessInput): Readiness {
           message: `${input.openRequests} request${input.openRequests === 1 ? '' : 's'} not yet prepared.`,
         },
   );
-  const blocking = checks.find((c) => c.status !== 'ok') ?? null;
+  const blocking =
+    checks.find((c) => c.status !== 'ok' && !(input.paymentRedacted && c.key === 'payment_secured')) ?? null;
   return {
     ready: blocking === null,
     checks,

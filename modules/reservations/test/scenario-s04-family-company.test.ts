@@ -57,8 +57,8 @@ describe('S04: family multi-room booking with company-paid accommodation', () =>
     expect(new Set(b.stays.map((s) => s.status.stay))).toEqual(new Set(['expected']));
     // Children: age 8 adds the child supplement and pays Green Tax; the infant (1) pays neither.
     const kids = b.stays[1];
-    expect(kids?.totals.net.amountMinor).toBe(3 * (30_000 + 4_000));
-    expect(kids?.totals.fees.amountMinor).toBe(3 * 2 * 1_200);
+    expect(kids?.totals?.net.amountMinor).toBe(3 * (30_000 + 4_000));
+    expect(kids?.totals?.fees.amountMinor).toBe(3 * 2 * 1_200);
     expect(kids?.occupants.map((o) => [o.kind, o.ageAtArrival])).toEqual([
       ['adult', null],
       ['child', 8],
@@ -67,7 +67,9 @@ describe('S04: family multi-room booking with company-paid accommodation', () =>
     // Each stay keeps its own agreed terms.
     expect(new Set(b.stays.map((s) => s.segments[0]?.termsSnapshotId)).size).toBe(3);
     // Booking totals aggregate stays.
-    expect(b.totals.gross.amountMinor).toBe(b.stays.reduce((n, s) => n + s.totals.gross.amountMinor, 0));
+    expect(b.totals?.gross.amountMinor).toBe(
+      b.stays.reduce((n, s) => n + (s.totals?.gross.amountMinor ?? 0), 0),
+    );
 
     // Billing instructions → finance: per stay an incidentals folio (default, the occupant) and an accommodation
     // folio (the company) with a rule routing room & package charges.
@@ -130,11 +132,11 @@ describe('S04: family multi-room booking with company-paid accommodation', () =>
       }),
     );
     expect(preview.feasible).toBe(true);
-    expect(preview.totals.before.amountMinor).toBe(b.totals.gross.amountMinor);
+    expect(preview.totals?.before.amountMinor).toBe(b.totals?.gross.amountMinor);
     const newStay = preview.stays.find((s) => s.stayId === null);
-    expect(newStay?.totals.after.net.amountMinor).toBe(3 * (70_000 + 2 * 4_000));
+    expect(newStay?.totals?.after.net.amountMinor).toBe(3 * (70_000 + 2 * 4_000));
     const res = created(await org.svc.commitChangeSafely(t.db, org.ctx, { previewToken: preview.token }));
     expect(res.booking.stays).toHaveLength(2);
-    expect(res.booking.totals.gross.amountMinor).toBe(preview.totals.after.amountMinor);
+    expect(res.booking.totals?.gross.amountMinor).toBe(preview.totals?.after.amountMinor);
   });
 });

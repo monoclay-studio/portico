@@ -60,7 +60,7 @@ describe('S04 — family, company pays accommodation', () => {
     );
     expect(b.stays).toHaveLength(3);
     // Child ages drive the price: the stay with two children costs more than a 2-adult stay of the cheaper type.
-    const [p1, , p3] = b.stays.map((st) => st.totals.gross.amountMinor);
+    const [p1, , p3] = b.stays.map((st) => st.totals?.gross.amountMinor);
     expect(p3).toBeGreaterThan(p1 as number);
 
     // finance holds the instructions: per stay a company folio for accommodation and the guest's default folio.

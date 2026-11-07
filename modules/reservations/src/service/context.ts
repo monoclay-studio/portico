@@ -93,3 +93,17 @@ export function parseNights(value: string): { from: LocalDate; to: LocalDate } {
 }
 
 export const json = (v: unknown): string => JSON.stringify(v ?? null);
+
+/**
+ * UX FD-15 / C11.2 (review P2-1): money (totals, deposits, balances, payment state) is returned only to roles that
+ * handle money at the property. The server decides; hidden navigation is not access control.
+ */
+export const MONEY_READ = [
+  'finance.folio.read',
+  'payments.payment.read',
+  'payments.payment.collect',
+] as const;
+export function seesMoney(tx: TxContext, propertyId: string): boolean {
+  return MONEY_READ.some((p) => tx.authz.can(p, { propertyId }));
+}
+export const MONEY_NOT_SHOWN = 'Payment detail is not shown for your role.';

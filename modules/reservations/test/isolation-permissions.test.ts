@@ -144,7 +144,12 @@ describe('money only for roles that handle money (UX FD-15)', () => {
     const row = hk.items[0];
     expect(row?.redacted).toBe(true);
     const pay = row?.readiness?.checks.find((c) => c.key === 'payment_secured');
-    expect(pay?.message).toBe('Payment detail is not shown for your role.');
+    expect(pay).toMatchObject({ status: 'unknown', message: 'Payment detail is not shown for your role.' });
+    expect(row?.readiness?.blockingReason?.key).not.toBe('payment_secured');
+    // Records: no totals, deposit requirement, payment status or folio links for this role (review P2-1).
+    const rec = await org.run((tx) => org.svc.getBooking(tx, hk.items[0]?.bookingId as string), housekeeping);
+    expect(rec).toMatchObject({ totals: null, depositRequirement: null, moneyRedacted: true });
+    expect(rec.stays.every((st) => st.totals === null)).toBe(true);
     const seen = await org.run((tx) => org.svc.listArrivals(tx, { propertyId: org.propertyId }), desk);
     expect(seen.items[0]?.redacted).toBeUndefined();
     expect(seen.items[0]?.readiness?.checks.find((c) => c.key === 'payment_secured')?.message).not.toBe(

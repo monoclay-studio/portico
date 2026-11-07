@@ -253,7 +253,7 @@ describe('S02: channel booking delivered twice, modified, reordered and cancelle
       }),
     );
     const b = await org.run((tx) => org.svc.getBooking(tx, res.bookingId ?? ''));
-    expect(b.totals.net.amountMinor).toBe(81_000);
+    expect(b.totals?.net.amountMinor).toBe(81_000);
     expect(b.issues.map((i) => i.code)).toContain('channel_rate_discrepancy');
   });
 });

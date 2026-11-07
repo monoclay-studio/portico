@@ -47,6 +47,7 @@ import {
   json,
   policy,
   propertyInfo,
+  seesMoney,
 } from './context';
 import { emitReservationEvent } from './event-payload';
 import { assertGuaranteeMethod } from './guarantee';
@@ -1355,7 +1356,17 @@ export async function listBookings(
       links: _l,
       ...rest
     } = view;
-    items.push({ ...rest, arrival: r.first_arrival, departure: r.last_departure, stayCount: r.stay_count });
+    // UX FD-15 (review P2-1, sibling of the booking record): no money in lists for roles that do not handle it.
+    const money = seesMoney(tx, rec.row.property_id)
+      ? {}
+      : { totals: null, depositRequirement: null, moneyRedacted: true };
+    items.push({
+      ...rest,
+      ...money,
+      arrival: r.first_arrival,
+      departure: r.last_departure,
+      stayCount: r.stay_count,
+    });
   }
   return { items, nextCursor: rows.length > q.limit ? (page[page.length - 1]?.id ?? null) : null };
 }

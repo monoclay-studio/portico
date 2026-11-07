@@ -21,7 +21,7 @@ describe('booking lifecycle', () => {
     const stay = b.stays[0];
     expect(stay?.status).toMatchObject({ stay: 'expected', booking: 'confirmed' });
     // 3 nights × (30 000 net + 17% TGST 5 100 + green tax 2 × 1 200) = 3 × 37 500
-    expect(b.totals.gross).toEqual({ amountMinor: 112_500, currency: 'USD' });
+    expect(b.totals?.gross).toEqual({ amountMinor: 112_500, currency: 'USD' });
     const consumption = await org.run((tx) =>
       org.fakes.inventory.consumptionOf(tx, { type: 'stay', id: stay?.id ?? '' }),
     );
@@ -136,7 +136,7 @@ describe('booking lifecycle', () => {
       ),
     );
     expect(confirmed.status.booking).toBe('confirmed');
-    expect(confirmed.totals.net.amountMinor).toBe(90_000);
+    expect(confirmed.totals?.net.amountMinor).toBe(90_000);
     const after = await org.run((tx) =>
       org.fakes.inventory.getAvailability(tx, {
         propertyId: org.propertyId,
@@ -236,9 +236,9 @@ describe('booking lifecycle', () => {
       ),
     );
     // Room and TGST are zero; Green Tax is still due on a complimentary stay (MIRA Green Tax FAQ): 3 nights × 2 adults.
-    expect(b.totals.net.amountMinor).toBe(0);
-    expect(b.totals.taxes.amountMinor).toBe(0);
-    expect(b.totals.fees.amountMinor).toBe(3 * 2 * 1_200);
+    expect(b.totals?.net.amountMinor).toBe(0);
+    expect(b.totals?.taxes.amountMinor).toBe(0);
+    expect(b.totals?.fees.amountMinor).toBe(3 * 2 * 1_200);
     expect(b.stays[0]?.commercialType).toBe('complimentary');
     // ...and it is charged to the house: the stay's default folio is a house folio.
     const folios = await org.run((tx) =>
