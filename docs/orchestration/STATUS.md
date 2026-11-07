@@ -135,7 +135,7 @@ any time (OPEN_QUESTIONS.md always conflicts at the end: keep both sides, sort b
 
 - Platform `getPropertyFacts` (permission-free internal lookup) — assigned to identity-plus branch.
 - DONE on main 739e671: client IP trusted only from `TRUSTED_PROXY_CIDRS` (identity-plus P1-7/P1-8 foundation part).
-- Kernel `staticAuthorizer.lookup` must union all matching grants (identity-plus review P2-10; fails closed today).
+- DONE on main: kernel `staticAuthorizer` unions all matching grants (identity-plus review P2-10).
 - Guests requests: production KMS cipher + separate hashing key; history endpoint vs cross-property sharing;
   role templates need guests permissions (do at merge).
 - Domain map: fold in contract changes from guests, inventory, rates READMEs at merge.
