@@ -107,6 +107,75 @@ Template:
 **If the answer differs:** for a resort pilot, the resort module (wave 3a), POS posting and lock interfaces move earlier.
 **Blocks:** nothing now; it shapes engineering priority and pilot outreach.
 **Raised by / date:** operational-readiness agent, 2026-11-07
+
+### Q40 — Billing-rule precedence and a third-party patent application   Status: open
+**Context:** Research 01 (§6.5, §9 item 3) notes that Agilysys holds US patent application 2017/0124610, which describes evaluating each charge against a stay's *ranked* routing rules, assigning a destination folio, and processing the charge per that folio's payment method. The research recommends a freedom-to-operate check before copying the claimed mechanism. We have not reviewed the claims, their current status (granted, abandoned, expired) or territorial scope, and we draw **no legal conclusion**.
+**Question:** Will you have qualified patent counsel review this application (status, claims, territories, design-around options) before we design ranked/prioritized billing-rule precedence?
+**Default we are proceeding with:** `finance` billing rules have **no rank or priority field**. Rules on the same folio owner may not overlap (configuration rejects an overlapping rule and explains which rule it collides with); a charge that matches no rule goes to the owner's default folio; a rule's cap overflow goes to the default folio. Manual transfers and previewed retroactive re-application are supported. See `docs/specs/finance.md` §3.4.
+**If the answer differs:** if counsel clears ranked precedence or advises a design-around, precedence is an additive change to `finance` (medium effort, no data migration of existing rules).
+**Blocks:** ranked/overlapping billing-rule precedence only. Finance wave 1 proceeds.
+**Raised by / date:** product strategy, 2026-11-07
+
+### Q41 — Maldives tax and fee computation details               Status: open
+**Context:** Research 04 verified TGST 17% (from 1 Jul 2025) and Green Tax of $12 / $6 per person-night by property class. It did **not** verify: the legal treatment of the customary 10% service charge; whether TGST is computed on price + service charge; whether Green Tax is itself subject to TGST or service charge; exemptions (children by age, long stays, residents/work-permit holders, transit nights); rounding; the MVR conversion rate source for returns; MIRA invoice content and numbering requirements.
+**Question:** Can you obtain MIRA guidance or a Maldivian tax adviser's confirmation of computation order, exemptions, rounding and invoice requirements, so the Maldives rule pack can be marked *verified*?
+**Default we are proceeding with:** the Maldives rule pack ships as data marked `unverified`, citing research 04: service charge 10% on taxable room and F&B net; TGST 17% on (net + service charge); Green Tax per person-night by property classification, outside the service-charge and TGST base, no child exemption; per-line half-up rounding to the currency minor unit. Admins see an "unverified rule pack" warning; a live property cannot issue invoices from an unverified pack (market launch gate).
+**If the answer differs:** data change to the rule pack; no code change expected because the tax engine supports compounding bases, exemptions and rounding modes as configuration.
+**Blocks:** live invoicing for a Maldives pilot. Nothing in development or demo.
+**Raised by / date:** product strategy, 2026-11-07
+
+### Q42 — Which tax rule applies when tax law changes between booking and stay   Status: open
+**Context:** Agreed prices are snapshotted at booking and never silently rewritten. Tax rules are effective-dated data. The Maldives raised TGST from 16% to 17% on 1 Jul 2025, so bookings made before that date for stays after it existed. Whether the applicable rate follows the service date, invoice date or booking/payment date is a legal question.
+**Question:** For the Maldives (and as the product default), which date determines the applicable tax rule for agreed bookings?
+**Default we are proceeding with:** the rule in force on the **service date** applies. Agreed *prices* stay unchanged; for tax-exclusive agreed prices the tax line changes (the guest pays the difference); for tax-inclusive agreed prices the net changes. Before a new tax rule version is activated, admins see a change report listing affected future stays and the per-stay difference. The tax engine stores a `taxPointPolicy` per rule (`service_date` | `booking_date` | `invoice_date`) so the answer is configuration.
+**If the answer differs:** configuration change only.
+**Blocks:** nothing.
+**Raised by / date:** product strategy, 2026-11-07
+
+### Q43 — Maldives guest registration and tourism reporting obligations   Status: open
+**Context:** The readiness brief (§11) requires validating guest-registration, identity-record and reporting obligations before declaring a market supported. Research 04 did not cover what Maldivian resorts and guesthouses must report (immigration, Ministry of Tourism statistics, other authorities), which fields, how often, or whether passport images may or must be kept.
+**Question:** Which reports must a Maldivian tourist establishment submit (authority, fields, frequency, format), and what are the rules for storing passport data and images?
+**Default we are proceeding with:** passport number, nationality, date of birth and document expiry are optional, field-encrypted occupant fields; document images are not stored unless the property enables it; a manual CSV export of guest-nights by nationality exists; no government submission is built (environment safety would block it anyway).
+**If the answer differs:** new export formats or a submission adapter in `integration`; field requirements become property policy.
+**Blocks:** Maldives market readiness sign-off. Nothing in development.
+**Raised by / date:** product strategy, 2026-11-07
+
+### Q44 — Record-retention periods for the Maldives                Status: open
+**Context:** Retention schedules are per data category and per country (readiness §12). Fiscal records must outlive guest-erasure requests. We do not know the Maldivian statutory periods for tax/accounting records or identity data.
+**Question:** What retention periods apply in the Maldives to accounting/tax records, invoices, guest identity data and guest communications?
+**Default we are proceeding with:** configurable per property and category; placeholder defaults: ledger, folios and fiscal documents 10 years; identity-document fields erased 1 year after departure; communications 3 years; marketing data consent-bound. Erasure anonymizes non-fiscal data and locks fiscal records until their period ends.
+**If the answer differs:** configuration change.
+**Blocks:** privacy notice and DPA text for a Maldives pilot. Nothing in development.
+**Raised by / date:** product strategy, 2026-11-07
+
+### Q45 — How usage-based third-party costs reach hotels            Status: open
+**Context:** WhatsApp/SMS conversation fees and AI inference grow with each hotel's activity (readiness §14–16). Editions (`docs/product/editions.md`) meter them as `usage.messages` and `usage.aiCredits` instead of bundling them, so their cost never silently becomes Monoclay's.
+**Question:** Should usage-based third-party costs be passed through at cost, marked up, or included as an allowance per edition?
+**Default we are proceeding with:** metered per organization, visible to hotel admins in real time, with hard caps (0 in demo; set by the admin in live; budget notifications distinct from caps); paid messaging and AI are off until an admin enables them; intended to be billed as pass-through line items once SaaS billing exists. No included allowance.
+**If the answer differs:** billing configuration; entitlement limits for included allowances.
+**Blocks:** SaaS billing configuration for usage. Nothing in development.
+**Raised by / date:** product strategy, 2026-11-07
+
+### Q46 — Default for sharing guest profiles across properties     Status: open
+**Context:** Brief §7 allows cross-property sharing only within permissions and consent rules. Properties of one organization may belong to different legal entities, and the lawful basis can differ by jurisdiction (readiness §12). OPERA's chain-level sharing switch is irreversible (research 01) — we will not copy that.
+**Question:** Is the default below acceptable as the product default until market-specific legal advice is obtained?
+**Default we are proceeding with:** within one organization, a profile's core identity, contact data, preferences and stay history are visible to staff at other properties who hold `guests.profile.readShared`; property-private notes, alerts marked private, identity documents and payment tokens are never shared; marketing consent is recorded per legal entity; sharing can be switched off and on again per organization (reversible); nothing is ever shared across organizations.
+**If the answer differs:** policy defaults change; possibly per-legal-entity partitions (medium).
+**Blocks:** nothing in development; privacy documentation for multi-property pilots.
+**Raised by / date:** product strategy, 2026-11-07
+
+### Q47 — Tax treatment of Monoclay's SaaS invoices                Status: open
+**Context:** `billing` issues Monoclay's own invoices to hotel organizations (Delaware company invoicing Maldivian and
+other legal entities). Whether Maldivian GST or other taxes apply to imported digital services, and Monoclay's own US
+tax position, need professional advice; we must not hard-code an assumption.
+**Question:** What tax (if any) must appear on Monoclay's SaaS invoices to Maldivian customers (and other target
+markets), and who is responsible for remitting it?
+**Default we are proceeding with:** SaaS invoice tax rules are configuration marked `unverified`; no tax lines are added;
+billing is not activated for live customers until this is answered.
+**If the answer differs:** configuration of SaaS tax rules; possible registration obligations for Monoclay.
+**Blocks:** live SaaS billing. Nothing in development.
+**Raised by / date:** product strategy, 2026-11-07
+
 ### Q60 — Packaging and pricing for standalone modules and migration services    Status: open
 **Context:** The adoption brief lets hotels keep their PMS and use selected Portico capabilities (housekeeping, guest messaging, reporting, transfers — `docs/adoption/adoption-paths.md` §4). Every edition in `modules/platform/src/domain/plans.ts` is built on the full PMS core, and Essentials allows only 1 property, so a 3-property group adopting only housekeeping and messaging cannot be represented. Migration effort (rehearsals, OPERA imports) is also a cost: competitors sell reservation import separately (Cloudbeds) or include it.
 **Question:** (a) Do you approve selling standalone modules as separate "connected" packages (per property or per unit, with their own limits), independent of the PMS editions? (b) Is migration of future reservations, profiles and open balances included in onboarding, or a paid service?
@@ -146,3 +215,4 @@ Template:
 **If the answer differs:** priorities in the coverage matrix and roadmap are re-ranked; no completed work is lost.
 **Blocks:** choosing the RS-2 POS/ERP/lock vendors; any readiness level above R6 (needs a named hotel).
 **Raised by / date:** Integration & Adoption lead, 2026-11-07
+
