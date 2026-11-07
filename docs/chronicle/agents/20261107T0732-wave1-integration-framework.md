@@ -1,7 +1,7 @@
 # Agent run: Wave1: integration framework
 
 - Started: 2026-11-07T07:32:35.598Z · last activity: 2026-11-07T12:15:14.162Z
-- Turns: 754 · tool uses: 409 · output tokens: 1,715,438
+- Turns: 372 · tool uses: 409 · output tokens: 650,711
 - Type: general-purpose
 
 ## Brief (2026-11-07T07:32:35.598Z)

@@ -113,5 +113,35 @@
   "ts": "2026-11-07T17:59:35.328Z",
   "text": "only check 5hour window on checks",
   "via": "message"
+ },
+ {
+  "ts": "2026-11-07T18:59:58.687Z",
+  "text": "rough estimates are fine. how much of the app is done? at the current speed how long would it be to get done considering usage limits.. don't force yourself to stick to these limits, i don't mind you going way way beyond them if you have to",
+  "via": "message"
+ },
+ {
+  "ts": "2026-11-07T19:04:07.193Z",
+  "text": "if i get 10 small guesthouses to use the system to test for free how much cost would i incur per month roughly? and what are these costs",
+  "via": "message"
+ },
+ {
+  "ts": "2026-11-07T19:07:50.709Z",
+  "text": "is it in your system to make the product channex ready at the end of this run? meaning to name just a few \"ARI Engine: Your PMS must actively track and batch availability, rate, and restriction (ARI) changes (no heavy database polling loops).\n\n* Outbox & Queue: A stable queue system that batches updates into Channex API calls while respecting their 20 ARI/minute rate limits.\n* Webhook Endpoint: A live endpoint in your PMS configured to receive, parse, and durably save booking delivery revisions.\n* Acknowledge Flow: A functioning mechanism that sends back booking confirmations/acknowledgments to Channex once received.\"",
+  "via": "queued"
+ },
+ {
+  "ts": "2026-11-07T19:21:06.823Z",
+  "text": "mews offer over 1000+ api integrations. how long would it take to build something equal?",
+  "via": "message"
+ },
+ {
+  "ts": "2026-11-07T19:30:40.669Z",
+  "text": "short answer. in your honest review, can this product once it hit the market compete against the likes of mews, cloudbeds, opera?",
+  "via": "message"
+ },
+ {
+  "ts": "2026-11-07T19:34:33.036Z",
+  "text": "and for your question. should I add the partner platform after Channex. yes and anything else that you think is going to be helpful and make the product better. open api. i don't care how long the whole project takes, as long as the final product is in it's most powerful form to compete with opera, cloudbeds, mews etc.. keep adding on if it's not overkill for where we are going and where our vision is",
+  "via": "message"
  }
 ]

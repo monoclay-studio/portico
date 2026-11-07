@@ -86,6 +86,10 @@ proves useless is marked *retired* with a date, never deleted.
   only the provider may set (for example `active`, fees) must not be writable by the tenant.
 - **Applies to:** payments, integration, distribution, identity SSO, access (keys).
 - **Canary:** C-L2-03.
+- **Round 3:** infra P1-1 (E-096). A cloud role's OIDC trust is keyed on `repo:<name>`, a name someone else can
+  claim (the examples say `monoclay/portico`; the repository is `monoclay-studio/portico`). **Probe addition:** trust
+  between systems is keyed on immutable ids (`repository_id`, `repository_owner_id`, `job_workflow_ref`, ref),
+  matched exactly; a name in an example or test is checked against the real one.
 
 ### AP-04 · Trust attribute declared by the client
 - **Seen in:**
@@ -159,6 +163,15 @@ proves useless is marked *retired* with a date, never deleted.
   - **Probe addition:** for each delegable configuration **field**, ask: does this field decide who signs in, or which
     roles a sign-in grants? If yes, it is a root change.
   - Recommend the **principle**, not a list.
+- **Round 3:**
+  - Infra P1-1 (E-096): `ecs:RegisterTaskDefinition` + `ecs:RunTask` with overrides + `iam:PassRole` on the
+    bootstrap execution role + `logs:FilterLogEvents` = read the database master password. A deploy identity is as
+    powerful as everything its tasks can be made to run.
+  - R3-P2-4: `payments.payment.collect` meant "charge any guest's mandated card at the property, any amount, any
+    folio" until consent was enforced.
+
+  **Probe addition:** for infrastructure roles, chain *register or override what runs* + *pass a role* + *read its
+  output*; any role that can do all three holds the passed role's power.
 
 ### AP-10 · Separation of duties satisfied by one person
 - **Seen in:**
@@ -224,6 +237,9 @@ proves useless is marked *retired* with a date, never deleted.
     HTTP responses for the secret value.
   - Replay the `Idempotency-Key` as a different user of the same org: it must not return the stored body.
 - **Applies to:** identity, payments (tokens), integration (credentials), guests (PII in create responses).
+- **Round 3:** infra P3-5. `log_statement = ddl` writes the SCRAM verifier of every `ALTER ROLE` to the log store,
+  which the CI role can read. **Probe addition:** list every server-side log setting (statement, duration, error
+  verbosity) and what each writes.
 
 ### AP-16 · Cached or session state leaks across users on a shared device
 - **Seen in:** backoffice P0-1. After the session expired, the next user on the same tab saw the previous user's staff
@@ -258,6 +274,10 @@ proves useless is marked *retired* with a date, never deleted.
 
   Only records that **identify** the subject (exact ids, normalized email or phone as whole JSON strings) may be
   touched.
+- **Round 3:** infra P2-5 (E-103). Database **server** logs hold guest PII: bind values of slow queries and key values
+  in constraint-error DETAIL. Erasure cannot reach a log store with 30-day retention. **Probe addition:** the
+  erasure and "PII never logged" probes include the database's own logs, the load balancer's and the CDN's, and
+  whoever configures them owns the item; an infra self-check never marks PII "N/A".
 
 ### AP-18 · A privacy or sharing setting is bypassed through a secondary path
 - **Seen in:**
@@ -274,6 +294,12 @@ proves useless is marked *retired* with a date, never deleted.
 - **Round 2:** integration-step R2-P2-2 (E-076). This was the second sibling miss on FD-15: workflow runs (check-in
   step results) and stay issues built from them still gave payment state to every booking reader. **Probe addition:**
   enumerate every **derived** artefact (step results, issues, counts, messages), not only routes.
+- **Round 3:** R3-P2-2 (E-089), the **third** FD-15 sibling. The balance was copied into stored issue text ("folio
+  17550 USD") and `details`, read by `listIssues` and handover, where no field filter reaches it. UX round 2a
+  (R2a-P4-F04) shows the same on the simulated UI: Departures balances and the Extend stay price preview for a
+  housekeeping supervisor. **Probe addition:** search for every place the protected value is **copied** (messages,
+  details, search summaries, exports, previews), not only the fields that hold it; derive the list by search and
+  paste it.
 
 ### AP-19 · A simulator or dev path is reachable in live, or the environment changes mid-operation
 - **Seen in:**
@@ -287,6 +313,29 @@ proves useless is marked *retired* with a date, never deleted.
   - Start an operation in trial, switch the org to live, then execute: it must be refused (`environment_changed`).
   - Confirm `assertExternalEffectAllowed` runs at execution time, not only when the operation is recorded.
 - **Applies to:** payments, integration, comms, identity, backoffice, kernel crypto.
+- **Round 3:**
+  - Infra P2-1 (E-098): the "live keys only in production" guard checks the **variable name** only; staging accepts the
+    live key under the TEST name.
+  - Infra P2-9 (E-099): every deployment sets `NODE_ENV=production`, so the app treats demo and staging as
+    production; the deployment variable it should read is read by nothing.
+
+  **Probe addition:** a guard on a name → value mapping checks both sides (the name, and the value or the secret it
+  points to); the app's notion of "live" comes from one deployment fact that tests assert by **value**.
+
+### AP-60 · A stored control fact is enforced on one path only (numbered in order of discovery)
+- **Seen in:** R3-P1-2 (E-087). The cardholder's mandate stores legal entity, properties, purposes, an amount limit and
+  bookings. The guarantee path reads the bookings and the amount; `charge` and `authorize` read only legal entity and
+  properties; `incrementAuthorization` reads none. The README says all five are enforced. A card agreed for "booking
+  A, at most USD 100" was charged USD 5,000 onto another guest's folio.
+- **Probe:**
+  - For each stored control fact (consent, mandate, scope, limit, delegation, hold, approval), list **every field**
+    and **every path that acts under it**: charge, authorize, increment, capture beyond the authorization, payment
+    requests drawn on it, refunds, imports.
+  - Fill the grid: path × field → the line that checks it. An empty cell is a finding.
+  - A staff permission decides **who may initiate within** the fact, never how far beyond it.
+- **Applies to:** card mandates and stored-credential agreements, data-sharing consent, delegated approvals, rate or
+  credit limits, legal holds.
+- **Canary:** C-L2-21.
 
 ### AP-53 · A delegated port call accepts effect parameters the entry permission does not imply (numbered in order of discovery)
 - **Seen in:** integration-step P1-2 (E-040). Check-in (`reservations.stay.checkIn`) could hold **any** saved card for
@@ -404,6 +453,11 @@ proves useless is marked *retired* with a date, never deleted.
   deposit a second time. The guard covered `chargeNow` only. **Probe addition:** run the double-collection probe
   through every path that turns money into a posting (charge, authorize and capture, recorded payment, VCC, link,
   check-in guarantee), and under a lock per (ref, purpose).
+- **Round 3:** R3-P2-1 (E-088). After the path fix, the guard still keys on the **purpose label** and the **exact
+  reference**, both chosen by the client: relabel the same money `incidentals`, or charge the stay folio of a booking
+  whose deposit link is paid. **Probe addition:** the reference **family** (booking, its stays and their folios) and
+  every label are one key; a second collection on the family while a link is open or paid needs a reason and an
+  audit, whatever its label.
 
 ### AP-29 · Time semantics and deadlines: the wrong clock, or a deadline that nothing enforces
 - **Seen in:**
@@ -509,6 +563,13 @@ proves useless is marked *retired* with a date, never deleted.
   two-transaction test that proves the second waits.
 - **Applies to:** inventory, finance, payments, identity counters, every limit.
 - **Canary:** C-L2-04.
+- **Round 3:**
+  - R3-P2-3 (E-090): concurrent opening-deposit imports both pass a "held elsewhere" check read before the row lock,
+    and land in one account across two legal entities.
+  - R3-P3-3 (E-092): finance locks folio then collection; payments locks collection then folio.
+
+  **Probe addition:** for every cross-module call made while holding a lock, write the lock order into the domain map
+  and check every path against it; re-check an invariant **under** the lock, after it is taken.
 
 ### AP-37 · An external effect happens inside the database transaction
 - **Seen in:**
@@ -561,6 +622,24 @@ proves useless is marked *retired* with a date, never deleted.
 
 ---
 
+### AP-59 · An external system holds a copy of a record and keeps acting on it after Portico changes it (numbered in order of discovery)
+- **Seen in:** R3-P1-1(iii) (E-086). A re-issued balance request cancelled the old request in Portico, but its
+  payment link stayed live at the provider: the guest paid both emails, USD 585 for a USD 351 debt.
+  Also R3-P1-1(ii): a provider failure event is the only trigger that can end a deferral.
+- **Probe:**
+  - For each record a fix touches, list the **external holders** of a copy: payment provider (links, intents,
+    mandates), channel manager, OTA, door locks, POS, email already sent, exported files.
+  - For every Portico transition (amend, cancel, supersede, settle elsewhere, erase), the external copy is
+    **deactivated or updated first**, and until the provider confirms, the record is "possibly live" (pending
+    verification), never closed.
+  - For every external event (paid, failed, expired, disputed), find the Portico transition it drives, including on
+    a record Portico already considers superseded.
+  - The simulator models the external holder's behaviour (a cancelled-in-Portico link that is still payable), or the
+    test proves nothing (AP-41).
+- **Applies to:** payment links and requests, channel bookings and ARI, guest messages, keys and lock credentials,
+  integrations in connected mode, erasure (copies sent out).
+- **Canary:** C-L2-20.
+
 ## D. Contracts and cross-module coherence
 
 ### AP-40 · A port does not match its provider
@@ -611,6 +690,9 @@ proves useless is marked *retired* with a date, never deleted.
 - **Probe:** producers export Zod payload schemas from their contracts, and each consumer has a test that parses
   producer-generated events with the producer's schema.
 - **Applies to:** every event.
+- **Round 3:** EC-INV-049 (E-112). Reservations' waitlist consumer reads `payload.cells`; inventory emits a unit type
+  and a range. Its test feeds a hand-made payload, so it passes. **Probe addition:** consumer tests build events with
+  the producer's exported schema or factory, never by hand.
 
 ### AP-44 · Validation at save time is weaker than at use time
 - **Seen in:** finance F-03: a rule set nested `[BRKF, FOOD]` inside `food` and was accepted, but posting `BRKF` then
@@ -642,6 +724,14 @@ proves useless is marked *retired* with a date, never deleted.
 
   **Probe addition:** removal is a sibling of addition; derived fields are siblings of the field; fixtures are
   siblings of the config.
+- **Round 3:**
+  - R3-P1-2 (E-087): the mandate scope is enforced on the guarantee path, not on charge, authorize or increment
+    (siblings among the **readers** of a control fact; AP-60).
+  - NAV-07 (E-107): "every tile opens its list" was asserted for the Arrivals tile only; three other tiles open
+    unfiltered lists.
+
+  **Probe addition:** a claim stated for a family ("every tile", "every money movement") is tested for each member,
+  listed by search.
 
 ### AP-46 · A failure path commits partial state
 - **Seen in:** identity R2-P1-3 (E-003): `fail()` returned and phase 3 committed the user and the SSO link, although the
@@ -700,6 +790,8 @@ proves useless is marked *retired* with a date, never deleted.
 - **Applies to:** every fix round (builder self-check v4 BS4-1(a)) and every reviewer recommendation (steward
   SR2-6).
 - **Canary:** C-L2-18.
+- **Round 3:** R3-P3-1 (E-091). "Only a guest acting for themselves is customer-initiated" was implemented as "any
+  guest actor". The actor's **kind** is a premise; the fact is ownership of the card.
 
 ### AP-58 · Lifecycle closure: the fixed quantity drifts after a repeated or inverse operation (numbered in order of discovery)
 - **Seen in:** R2-P1-2 (E-074), on a departed folio:
@@ -719,6 +811,14 @@ proves useless is marked *retired* with a date, never deleted.
 - **Applies to:** money and collection logic, caps and limits, inventory consumption, redaction rules, any fix that
   creates a record of its own.
 - **Canary:** C-L2-19.
+- **Round 3:** R3-P1-1 (E-086). Repeat and inverse were closed; the record's **other exits** were not:
+  - settled to receivables (a sibling writer: `transferToReceivables`, `recordPaymentAdjustment`);
+  - the fix's own **deferral** state never resumes when the in-flight payment fails;
+  - a **superseded** request stays payable at the provider (AP-59).
+
+  **Probe addition:** draw the record's state machine, every state and transition including failed, expired,
+  cancelled, superseded, transferred and settled elsewhere, and every exemption or deferral state with its exit
+  trigger; test each transition. A state with no exit is a finding.
 
 ---
 
@@ -735,6 +835,13 @@ proves useless is marked *retired* with a date, never deleted.
   no such line, the claim is downgraded.
 - **Applies to:** every module README, `docs/parity/*`, `docs/readiness/*`.
 - **Canary:** C-L5-01.
+- **Round 3:** the claim surface is wider than READMEs. Runbooks (infra P1-1: "the deploy role cannot read secret values";
+  E-096), monitoring promises (P1-3, P2-10: "pages on-call"; E-097, E-100), security descriptions (P2-11; E-101), a
+  recorded default (Q158; E-104), "Done" refinements (NAV-07, NAV-08, C3/C9, FD-13; E-106, E-107, E-109, E-110), parity
+  lists in READMEs (13 of 49 inventory rows; E-111) and self-check "yes" answers. **Probe addition:** search the
+  module's prose for capability words (*cannot, never, only, always, every, pages, refuses, guarantees, Done,
+  tested*) and put each hit in a claim ledger with its asserting test or a code reference; a hit with neither is
+  rewritten or downgraded.
 
 ### AP-51 · A scenario is proven only against fakes
 - **Seen in:**
@@ -769,6 +876,38 @@ proves useless is marked *retired* with a date, never deleted.
   - list the checks the merge gate does **not** run.
 - **Round 2:** E-079. An end-to-end test (409 toast) was flaky on non-default ports and passed on re-run. A flake is a
   tracked defect with an owner. Never accept a silent re-run.
+- **Round 3:**
+  - E-094: `pnpm lint` exits 0 with a Biome warning; warnings accumulate unseen.
+  - E-095: the infra checks a builder reports (`terraform validate/test`, `verify-roles.sh`, `deploy-cell.test.sh`)
+    run in no CI job.
+
+  **Probe addition:** every check a report cites runs in a gate; a gate that allows warnings says so.
+
+### AP-61 · A monitor alarms on failure signals only, so a job that never runs is silent (dead-man's switch) (numbered in order of discovery)
+- **Seen in:** infra P1-3 (E-097). The restore drill's image is never pushed; the task fails to start, has no exit
+  code, so the "exit code ≠ 0" rule never matches; no metric is published, so the failure alarm stays OK.
+  Infra P2-10 (E-100): the on-call topic refuses AWS Backup and SES, so "failed backup jobs page" can never page.
+- **Probe:**
+  - For every periodic job whose result matters (restore drill, backup copy, night audit, reconciliation, outbox
+    dispatcher, certificate renewal, ARI full resync), find the alarm on the **absence of success within its
+    period**, not only on failure.
+  - Break the job before it starts (missing image, missing permission, schedule disabled): something must page.
+  - Send a test notification through each alarm path to its destination; a policy that refuses the sender is a
+    silent monitor.
+- **Applies to:** infra, the worker's schedulers, Day Close, integrations' sync jobs.
+- **Canary:** C-L1-08.
+
+### AP-62 · A recorded decision or default differs from what the code does (numbered in order of discovery)
+- **Seen in:** Q158 (E-104). The open question recorded "Default we are proceeding with: NAT gateway (private
+  tasks)", while the code's lean preset deployed public task IPs and the README said so. If the owner approved "the
+  defaults", the weaker posture would deploy.
+- **Probe:**
+  - For each "default we are proceeding with", ADR decision or runbook statement, find the code or configuration that
+    implements it and cite it (file and line).
+  - A default not yet implemented carries a pending-fix line that makes the code match.
+  - A builder's "owner decision" list states which option the code does today.
+- **Applies to:** `docs/OPEN_QUESTIONS.md`, ADRs, runbooks, `infra/README.md`, readiness entries.
+- **Canary:** C-L1-09 (scripted, orchestrator).
 
 ### AP-55 · A test exercises the path but asserts neither the outcome nor the claim (numbered in order of discovery)
 - **Seen in:**
@@ -790,6 +929,16 @@ proves useless is marked *retired* with a date, never deleted.
   - R2-P2-4 (E-078): the regression test asserts `done`, not the attestation.
 
   **Probe addition:** remove or revert the fix; the regression test must fail. If it still passes, it proves nothing.
+- **Round 3:**
+  - E-114 (mutation canary r3-l1): "ten concurrent desk charges against a fresh link race" commits the link **before**
+    the charges, so nothing races the lock; removing the lock leaves 137/137 payments and 129/129 API tests green.
+  - E-099: `runtime_contract` asserts variable names, not values.
+  - E-113: a test titled "… channel id …" never searches a channel id.
+  - Counter-example (works): the guests erasure fix round 2 (merged `096a038`) removed each of its 14 fix elements in
+    turn and named the test each one turned red.
+
+  **Probe addition:** for a lock or ordering guard, the competing writer must start **inside** the window (a barrier,
+  or a held transaction), and the test must fail with the lock removed.
 
 ---
 
@@ -801,12 +950,12 @@ These are the probes for UI reviews (steward SR2-5) and the traps for L4 lab can
 | ID | Trap | Seen in | Probe (UI review) |
 |---|---|---|---|
 | UX-01 | **Dead end:** an action leads nowhere | `N` opens a palette with no commands (T1); a search result does nothing (E-026); a tile opens the wrong list (T16); Confirm enabled on an infeasible preview (P1 extend); a "Check status" text with no button | Activate every button, link, key, result and tile; each must change state or navigate where its label says |
-| UX-02 | **A number does not reconcile with its destination** | Today shows 9 ready, Arrivals 7; the payments-pending total matches nothing (T6/T11) | For each KPI or count, open its destination and count the rows; they must be equal |
-| UX-03 | **Contradictory status** | "Paid" next to a balance due; in house and "Ready for check-in" together; "not operating" with 106 guests in house (T11) | For each record, compare the chips with the facts on the same screen; separate questions get separate chips |
+| UX-02 | **A number does not reconcile with its destination** | Today shows 9 ready, Arrivals 7; the payments-pending total matches nothing (T6/T11). Round 2a (E-107): exceptions and payments tiles open one unfiltered list; occupancy opens a generic timeline, after "Done" was claimed from one tile's test | For **each** KPI or count (every tile, not one), open its destination and count the rows; they must be equal and the list filtered to what was counted |
+| UX-03 | **Contradictory status** | "Paid" next to a balance due; in house and "Ready for check-in" together; "not operating" with 106 guests in house (T11). Round 2a (E-109): an arrival "Ready / Inspected" in a villa whose departing guest is in house; the housekeeping board calls it Vacant | For each record, compare the chips with the facts on the same screen; separate questions get separate chips. **Across screens**: one fact (a unit's occupant) gives the same answer on every screen and role, simulated data included |
 | UX-03b | **Value shown under the wrong vocabulary family** (round 1) | A discrepancy (`skip`) rendered with the occupancy vocabulary fell back to a neutral chip (E-054) | For each chip, check that the value's own family supplies the vocabulary. A neutral fallback in a demo dataset is a finding, not polish |
 | UX-04 | **Raw technical text shown to staff** | Zod JSON, `common.loading`, permission codes, role codes, UUIDs, "wave 1", "(scenario S03)", "demo-seeder" (T12/T13, E-025, E-031) | Copy sweep of every screen and every error; nothing from the development vocabulary may appear |
 | UX-05 | **Harmful or wrong recovery advice** | "Reload the page" (loses edits); "Trying again unchanged will fail…" on every error; "Try fewer words" for one word; "nothing was sent" | Trigger each error class (validation, 403, 404, 409, network loss, timeout); the advice must be correct for that class and must not lose work |
-| UX-06 | **Focus not moved, or a keyboard trap** | The drawer leaves focus behind it, so it takes 17 Tabs to reach Check in; there are no action keys (T15) | Keyboard only: open, act, close; focus must land in the drawer and return to the row |
+| UX-06 | **Focus not moved, or a keyboard trap** | The drawer leaves focus behind it, so it takes 17 Tabs to reach Check in; there are no action keys (T15). Round 2a (E-110): j/k need 25 Tabs from page load; Esc returns to the first row opened, not the one being read | Keyboard only, **from page load**: open, act, move with j/k, close; focus must land in the drawer and return to the row last shown |
 | UX-07 | **Overflow, or controls off-screen** | 111 px overflow at 1024 px; the drawer's Close at x=1075 (E-027) | Viewport matrix 390/768/1024/1280/1440/1920: no horizontal page scroll, and every control is reachable |
 | UX-08 | **The phone is a squeezed desktop** | The first number at about 830 px; sideways tables; a 10,514 px list (T17) | On a 390×844 screen, the first operational number must be within 300 px; there must be no sideways table |
 | UX-09 | **The UI does not reflect permissions honestly** | The Invite button on the forbidden page; access by URL; "Whole organization" as the default (E-028, E-029) | Role × route and role × action matrix; risky defaults; hidden navigation is never treated as access control |
@@ -818,3 +967,4 @@ These are the probes for UI reviews (steward SR2-5) and the traps for L4 lab can
 | UX-15 | **Shared-desk handover** | The next user on the tab sees the previous user's data (L2 P0-1, AP-16) | Sign in as user 1, let the session expire, sign in as user 2 with fewer rights; nothing of user 1's may show |
 | UX-16 | **The most important text is truncated** | The arrival blocker is cut with "…", and the full text is only in a `title` attribute (backoffice P1-4, P1) | At each viewport, the decision-critical text must be fully readable without hovering |
 | UX-17 | **A verb cannot be found** | 0 of 17 action words found by the palette; no Day Close in navigation or search (T5) | Search for every staff verb in the lookup set (`docs/ux/scorecard.md`); the right action must be first |
+| UX-18 | **A context switch by keyboard lands silently on the wrong context** (round 3) | `g s` opens the property switcher on the first item, typing does not filter, Enter switches to the wrong hotel with no confirmation (R2a-P7-F02, E-108) | Switch property, organization and business date **by keyboard only**: focus starts on the current item, typing filters, the result is announced, and the header says where you are now |

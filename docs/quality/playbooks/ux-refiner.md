@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Current version** | **v2** (2026-11-07, round 0) |
+| **Current version** | **v2.1** (2026-11-07, round 3: adds the triage-only variant) |
 | **Theme of v2** | Evidence and hand-off integrity: verify what you cite; your output always reaches the orchestrator |
 | **Previous** | `archive/ux-refiner-v1.md` (the round-1 brief, verbatim) |
 | **Launch** | The orchestrator fills the **Run parameters** and hands over the **Launch brief** |
@@ -16,6 +16,7 @@
 | v2 | 2026-11-07 | **UR2-1** | **Open every screenshot you cite** and confirm it shows the claimed state. If it does not, list it under "Evidence gaps" as invalid and never use it as proof | The refiner caught the missing files and the skeleton image, but cited `p2-08-live-guest.jpg` for GST-01. That image is identical to the home screen and does not show the claimed state | E-034 | Invalid citations propagated: round 1 had 1; target 0. Canary C-L4-11 |
 | v2 | 2026-11-07 | **UR2-2** | **Return the summary text in your final reply** as well as writing it. If any write is refused, put the full content in the reply with its intended path | The harness refused the `summary.md` write ("Subagents should return findings as text, not write report files"), and the orchestrator had to reconstruct it from the reply | E-036 | Zero deliverables lost or reconstructed |
 | v2 | 2026-11-07 | **UR2-3** | **A traceability table:** every tester finding ID maps to its refinement IDs, or to "not refined: reason" | Without IDs (E-035), nobody can check that every finding was handled. Round 1 mapped the top 20 only | E-035; coverage | % of tester findings traced (target 100 %) |
+| v2.1 | 2026-11-07 | **UR2-4** | **Triage-only variant** for focused rounds (below). No new refinements unless a major finding maps to none. Output: a disposition per finding, triaged by **cause** (UI logic, data, missing capability, copy), and a confirm/refute table for earlier "Done" claims the round touched | Round 2a skipped the refiner to save cost (round 1's refiner: 175,562 output tokens, counted per message). Nothing replaced its triage: 39 of 49 findings got no disposition, a navigation defect tagged SIM was routed nowhere, and 4 refuted "Done" claims were not recorded | E-105, E-107 (RC-16) | Findings with a disposition (round 3: 20 %); refuted "Done" claims recorded |
 
 ### Queued for later versions (one theme each)
 
@@ -25,6 +26,32 @@
   acceptance rate per category, and refinements that were rejected and are now re-proposed, with new evidence.
 
 ---
+
+## Variant: triage only (v2.1, UR2-4) — for focused rounds
+
+Use when a round re-tests a few changed surfaces and a full refinement pass would cost more than it returns. It
+replaces the full pass; it is never skipped. Cost: unmeasured; expected to be a small fraction of a full pass
+*(estimate)*.
+
+**Inputs:** the round's findings (with IDs and evidence manifest), the previous round's `decisions/` files, and
+`docs/orchestration/pending-fixes.md`.
+
+**Do:**
+1. For **every** finding ID, write one row:
+
+   | Finding | Cause | Route | Existing ID or new line | Note |
+   |---|---|---|---|---|
+   | R2a-X-F01 | UI logic (tile routing) | fix now (it does not depend on data) | NAV-07, reopened | e2e asserted one tile only |
+   | R2a-P1-F01 | data (simulator contradicts itself) | real-data acceptance check | C9, reopened | |
+   | R2a-X-F04 | missing capability (help content) | existing refinement | HLP-01 | already "next round" |
+
+   Causes: **UI logic** (navigation, focus, keys, routing, validation, layout, column priority, role guards),
+   **data** (values the simulator or seed produces), **missing capability** (not built yet), **copy**. The page's
+   `[SIM]`/`[LIVE]` badge tells you where the data comes from, not where the defect is.
+2. For every earlier "Done" claim the round's tasks touched, a confirm/refute row with the finding that decides it.
+3. A **new** refinement only for a major finding that maps to no existing ID, with a check the next round can run.
+
+**Reply:** both tables, plus the list of finding IDs with no route (it must be empty).
 
 ## Run parameters (filled by the orchestrator)
 

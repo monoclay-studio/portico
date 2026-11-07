@@ -12,7 +12,7 @@
     "build": "turbo run build",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test --concurrency=2",
-    "lint": "biome check . && node tools/check-boundaries.mjs",
+    "lint": "biome check . --error-on-warnings && node tools/check-boundaries.mjs",
     "format": "biome format --write .",
     "migrate": "pnpm --filter @portico/api migrate",
     "db:up": "bash tools/db-up.sh",

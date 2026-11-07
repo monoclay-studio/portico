@@ -243,6 +243,15 @@ Pending cross-module fixes awaiting the next round for each author: `docs/orches
 7. Quality meta loop: after every steward review / fix round / scenario run / UX round, resume the quality steward
    (retro, scorecard, escapes, playbook versions); launch future checkers from `docs/quality/playbooks/` (latest).
 8. After any merge batch that contains fixes for 3 or more modules, run a fix re-attack sweep from steward v2.1.
+9. **UI unreviewed** (quality round 3, until orchestrator v5): a fix round that adds a user-facing surface (route, key
+   binding, switcher, dialog) is listed below as UI unreviewed, and that surface enters the next UX round's scope.
+10. **Every build and fix brief requires builder self-check v6** (`docs/quality/playbooks/module-builder-self-check.md`):
+   § 5 with the v5 steps (state machine, external holders, pasted searches, control-fact grid, key fields and
+   recommendation lines, concurrency column, the § 5.4 mutation table for P0/P1 fixes) and § 6 (claim ledger), tables
+   included. Running builders (day-close, distribution, migration) apply it at their first fix round.
+
+**UI unreviewed (enters the next UX round):** identity-plus `g s` property switcher and sign-in code step (re-tested
+in 2a, findings open); help and learning content once HLP-01 lands.
 **Merge order:** guests, inventory, rates (independent) → operations, integration, finance → payments (needs
 finance ledger port) → reservations (needs all) → identity-platform-enterprise → backoffice → infra → docs branches
 any time (OPEN_QUESTIONS.md always conflicts at the end: keep both sides, sort by number).
