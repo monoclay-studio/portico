@@ -154,4 +154,15 @@ Each agent's brief and report are in `agents/`.
   - The quality steward launches (round 0: playbooks v1/v2 from today's real briefs, escapes, patterns, canaries,
     scorecard, retro).
   - The 3-hourly heartbeat now also resumes the quality steward after every checking round.
+- **17:35 — Integration step done** (branch `feat/integration-step`; 331 tool uses, about 48 minutes).
+  - Every stubbed port between reservations, rates, finance, payments, guests, operations and inventory is bound to
+    its real provider.
+  - ADR-0015 is applied: providers refuse foreign-property records instead of re-checking the caller's permissions,
+    using a new kernel `delegateAtProperty`.
+  - 12 of the 20 proof scenarios pass end to end with global consistency checks; the rest are todo with the missing
+    capability named.
+  - Five contract bugs were found only by binding for real. The worst: every booking deposit failed to post when the
+    Maldives tax rules were installed, because Green Tax needs occupancy and the deposit has none.
+  - 17:40: an independent steward review launches before merge, because authorization moved across module
+    boundaries.
 
