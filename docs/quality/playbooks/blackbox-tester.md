@@ -28,6 +28,15 @@ The tester must never receive build context. That means no module names, no code
 | v2 | 2026-11-07 | **BT2-3** | An **evidence manifest** at the end of the report (finding ID → files → what each shows), plus a self-check that every cited file exists in the output folder | Six cited files were missing after the hand-off | E-032 | Cited files present after the hand-off: 100 % |
 | v2 | 2026-11-07 | *editorial* | Standing calibration notice; the demo password is given as a parameter | Canary blindness (`canaries.md` § 1.5); credentials are not copied into playbooks | — | — |
 
+### Round-3 measurement: v2 works (no version change)
+
+The first run on v2 (focused round 2a, 4 personas):
+- **BT2-1:** 49 of 49 findings carry stable IDs.
+- **BT2-2 / BT2-3:** 74 of 74 cited files present after the hand-off (H-1), 0 duplicate screenshots (H-2), and an
+  evidence manifest. Round 1 was 68 of 76 (89 %).
+- **No baseline by design.** The tester had no round-1 report, and must not get one. Comparing with earlier rounds is
+  the orchestrator's and the refiner's job (orchestrator v4 O4-2; refiner v2.1), never the tester's.
+
 ### Queued for later versions (one theme each)
 
 - **v3, coverage.** Planned tasks:
