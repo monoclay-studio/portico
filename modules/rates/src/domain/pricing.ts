@@ -52,18 +52,28 @@ export interface DerivationStep {
   unitTypeAdjustments: Record<string, Adjustment>;
 }
 
-export function deriveParams(p: OccupancyPricing, step: DerivationStep, unitTypeId: string): OccupancyPricing {
-  const adj = step.unitTypeAdjustments[unitTypeId] ?? step.adjustment;
-  const f = (n: number) => applyAdjustment(n, adj, step.rounding);
-  const mapValues = (r: Record<string, number>) => Object.fromEntries(Object.entries(r).map(([k, v]) => [k, f(v)]));
+/**
+ * Adjust every price parameter. A percent adjustment scales all of them; an amount adjustment is a per
+ * unit-night surcharge/discount, so it changes the unit prices (base, single, occupancy overrides) but not the
+ * per-person extra-adult and child amounts.
+ */
+export function adjustParams(p: OccupancyPricing, adj: Adjustment, rounding: PriceRounding): OccupancyPricing {
+  const f = (n: number) => applyAdjustment(n, adj, rounding);
+  const perPerson = (n: number) => (adj.kind === 'percent' ? f(n) : n);
+  const mapValues = (r: Record<string, number>, g: (n: number) => number) =>
+    Object.fromEntries(Object.entries(r).map(([k, v]) => [k, g(v)]));
   return {
     baseOccupancy: p.baseOccupancy,
     baseAmountMinor: f(p.baseAmountMinor),
     singleAmountMinor: p.singleAmountMinor === null ? null : f(p.singleAmountMinor),
-    extraAdultMinor: p.extraAdultMinor === null ? null : f(p.extraAdultMinor),
-    childAmountsMinor: mapValues(p.childAmountsMinor),
-    occupancyAmountsMinor: mapValues(p.occupancyAmountsMinor),
+    extraAdultMinor: p.extraAdultMinor === null ? null : perPerson(p.extraAdultMinor),
+    childAmountsMinor: mapValues(p.childAmountsMinor, perPerson),
+    occupancyAmountsMinor: mapValues(p.occupancyAmountsMinor, f),
   };
+}
+
+export function deriveParams(p: OccupancyPricing, step: DerivationStep, unitTypeId: string): OccupancyPricing {
+  return adjustParams(p, step.unitTypeAdjustments[unitTypeId] ?? step.adjustment, step.rounding);
 }
 
 /** Root (base plan) parameters → the parameters of the last plan in `steps` (root first). */

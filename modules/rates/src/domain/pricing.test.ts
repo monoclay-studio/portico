@@ -7,6 +7,7 @@ import {
   DEFAULT_CHILD_AGE_BANDS,
   descendants,
   priceForOccupancy,
+  type DerivationStep,
   resolveDerivedParams,
   validateDerivationGraph,
 } from './pricing';
@@ -56,7 +57,7 @@ describe('derived plans', () => {
   });
 
   it('derives every price parameter through a multi-level chain, with per-unit-type differentials', () => {
-    const steps = [
+    const steps: DerivationStep[] = [
       { ratePlanId: 'nr', adjustment: { kind: 'percent' as const, percent: '-10' }, rounding: { incrementMinor: 100, mode: 'half_up' as const }, unitTypeAdjustments: {} },
       {
         ratePlanId: 'pkg',
@@ -67,7 +68,9 @@ describe('derived plans', () => {
     ];
     const room = resolveDerivedParams(params, steps, 'room');
     expect(room.baseAmountMinor).toBe(40_500 + 5_000);
-    expect(room.childAmountsMinor).toEqual({ infant: 5_000, child: 10_400 });
+    // Percent scales per-person amounts; the amount step is per unit-night and leaves them unchanged.
+    expect(room.childAmountsMinor).toEqual({ infant: 0, child: 5_400 });
+    expect(room.extraAdultMinor).toBe(10_800);
     const villa = resolveDerivedParams(params, steps, 'villa');
     expect(villa.baseAmountMinor).toBe(40_500 + 10_000);
   });
