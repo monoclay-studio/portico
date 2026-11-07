@@ -143,10 +143,11 @@ describe('distribution API (composition root)', () => {
       h.t.admin.kysely,
     );
     const hook = rows[0]?.state.webhook;
+    const simKey = newId();
     const book = await h.app.inject({
       method: 'POST',
       url: `/v1/distribution/connections/${conn.id}/simulator/bookings`,
-      headers: { ...auth, 'idempotency-key': newId() },
+      headers: { ...auth, 'idempotency-key': simKey },
       payload: {
         status: 'new',
         rooms: [
@@ -167,7 +168,7 @@ describe('distribution API (composition root)', () => {
     const again = await h.app.inject({
       method: 'POST',
       url: `/v1/distribution/connections/${conn.id}/simulator/bookings`,
-      headers: { ...auth, 'idempotency-key': book.request.headers['idempotency-key'] as string },
+      headers: { ...auth, 'idempotency-key': simKey },
       payload: {
         status: 'new',
         rooms: [
