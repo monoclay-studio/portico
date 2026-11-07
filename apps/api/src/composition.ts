@@ -30,7 +30,20 @@ import {
   guestsSearchProvider,
 } from '@portico/guests';
 import type { Authenticator, HttpModule } from '@portico/http';
-import { type IdentityPorts, identityAuthenticator, identityHttp, identityManifest } from '@portico/identity';
+import {
+  fetchOidcHttp,
+  fieldEncryptedSecretStore,
+  IDENTITY_JOBS,
+  type IdentityPorts,
+  identityAuthenticator,
+  identityHttp,
+  identityManifest,
+  operatorDirectoryFromConfig,
+  outboxNotifier,
+  ssoDomainRecheckJob,
+  systemTxtResolver,
+  unknownGeo,
+} from '@portico/identity';
 import {
   createConnectorRegistry,
   type IntegrationDeps,
@@ -86,7 +99,13 @@ import {
   paymentsSearch,
   seedPaymentsDemo,
 } from '@portico/payments';
-import { platform, platformHttp, platformManifest, platformSearch } from '@portico/platform';
+import {
+  type PlatformPorts,
+  platform,
+  platformHttp,
+  platformManifest,
+  platformSearch,
+} from '@portico/platform';
 import {
   createRatesDemoSeed,
   type RatesPorts,
@@ -112,7 +131,7 @@ import {
   reservationsManifest,
   reservationsService,
 } from '@portico/reservations';
-
+import { createTrialForOrganization, provisioningHttp } from './provisioning';
 import { recordsHttp } from './records-routes';
 import type { DemoSeedStep } from './seed/demo';
 
@@ -196,15 +215,67 @@ export interface Composition {
   };
   /** Demo data contributed by each module, run in order inside each demo organization (apps/api/src/seed). */
   demoSeedSteps: DemoSeedStep[];
+  identityPorts: IdentityPorts;
+  platformPorts: PlatformPorts;
 }
 
-export function compose(database: PorticoDatabase): Composition {
+export interface CompositionOptions {
+  /** Configuration source (defaults to process.env). */
+  env?: Record<string, string | undefined>;
+  /** Test/integration overrides for identity ports (e.g. a fake identity provider, a GeoIP fake). */
+  identity?: Partial<IdentityPorts>;
+  platform?: Partial<PlatformPorts>;
+}
+
+export function compose(database: PorticoDatabase, options: CompositionOptions = {}): Composition {
+  const env = options.env ?? process.env;
+
   // ── platform ──
-  const platformModule = platformHttp({ database });
+  const platformPorts: PlatformPorts = {
+    // Other modules append their configuration sections, trial participants and activation checks here.
+    configurationSections: platform.platformConfigurationSections(),
+    trialParticipants: [],
+    activationChecks: [],
+    trialProvisioner: { createTrial: createTrialForOrganization },
+    ...options.platform,
+  };
+  const platformModule = platformHttp({ database, ports: platformPorts });
 
   // ── identity ──
-  const identityPorts: IdentityPorts = { propertyIdsInScope: platform.propertyIdsInScope };
-  const identityModule = identityHttp({ database });
+  // Field encryption (TOTP secrets, PKCE verifiers, SSO client secrets) from the single kernel key source.
+  const { cipher } = fieldCryptoFromEnv(env);
+  const appBaseUrl = env.PORTICO_APP_BASE_URL ?? 'http://localhost:5173';
+  const production = env.NODE_ENV === 'production';
+  const identityPorts: IdentityPorts = {
+    propertyIdsInScope: platform.propertyIdsInScope,
+    permissionCatalog,
+    cipher,
+    secrets: fieldEncryptedSecretStore(cipher),
+    notifier: outboxNotifier(cipher),
+    // SSRF-safe (public https only, pinned DNS, no redirects); a local http IdP only outside production (P2-2).
+    oidcHttp: fetchOidcHttp({ allowLocalDevelopment: !production }),
+    dnsTxt: systemTxtResolver,
+    geo: unknownGeo,
+    operators: operatorDirectoryFromConfig(env.PORTICO_OPERATORS),
+    hasEntitlement: (tx, feature) => platform.hasEntitlement(tx, feature),
+    organizationName: async (tx) => (await platform.getOrganization(tx)).name,
+    assertPropertyExists: async (tx, propertyId) => {
+      await platform.getPropertyFacts(tx, propertyId);
+    },
+    config: {
+      appBaseUrl,
+      ssoRedirectUri: env.PORTICO_SSO_REDIRECT_URI ?? `${appBaseUrl}/auth/sso/callback`,
+      totpIssuer: 'Portico',
+      allowLocalIdentityProvider: !production,
+      // P2-17: static operator tokens (no expiry, no MFA) are refused in production until IAM Identity Center.
+      operatorConsoleEnabled: !production,
+    },
+    ...options.identity,
+  };
+  const identityModule = identityHttp({ database, ports: identityPorts });
+
+  // ── provisioning (operator console: trials for prospects) ──
+  const provisioningModule = provisioningHttp({ database, ports: identityPorts });
 
   // ── guests ── (other wave-1 providers — referenceCounters, personalDataContributors, communications — are
   // bound by the orchestrator when reservations / finance / comms merge; until then the ports are empty.)
@@ -509,6 +580,7 @@ export function compose(database: PorticoDatabase): Composition {
     httpModules: [
       platformModule,
       identityModule,
+      provisioningModule,
       inventoryModule,
       guestsModule,
       financeModule,
@@ -529,6 +601,8 @@ export function compose(database: PorticoDatabase): Composition {
     searchProviders,
     jobs: [
       ...CORE_JOBS,
+      ...IDENTITY_JOBS,
+      ssoDomainRecheckJob(systemTxtResolver),
       ...createInventoryJobs(inventoryService),
       ...guestsJobs(guestsService),
       ...reservationsJobs(reservations),
@@ -563,6 +637,8 @@ export function compose(database: PorticoDatabase): Composition {
       { name: 'payments', run: seedPaymentsDemo },
       { name: 'finance', run: (tx, org) => financeDemoSeed(tx, org) },
     ],
+    identityPorts,
+    platformPorts,
   };
 }
 

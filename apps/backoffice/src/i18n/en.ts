@@ -114,6 +114,59 @@ export const en = {
     signedOut: 'You signed out.',
     environmentHint: 'Environment',
     footer: 'Shared computer? Your session ends when the browser closes.',
+    // Second step: code from the authenticator app (or a recovery code).
+    codeTitle: 'Enter your sign-in code',
+    codeHelp: 'Open the authenticator app on your phone and enter the 6-digit code it shows for {{product}}.',
+    codeOrganization: 'Signing in to',
+    code: '6-digit code',
+    recoveryTitle: 'Enter a recovery code',
+    recoveryHelp:
+      'Use one of the recovery codes you saved when you set up two-step verification. Each one works once.',
+    recoveryCode: 'Recovery code',
+    useRecoveryCode: 'Use a recovery code instead',
+    useAuthenticator: 'Use the authenticator app instead',
+    verify: 'Verify and sign in',
+    startAgain: 'Start again',
+    codeFormat: 'Enter the 6 digits shown in your authenticator app.',
+    recoveryFormat: 'Enter the whole recovery code — 10 letters and numbers, like 7K3QW-PX9MB.',
+    wrongCode: 'That code is not right. Codes change every 30 seconds — enter the one showing now.',
+    wrongRecoveryCode:
+      'That recovery code is not right, or it has already been used. Check it and try again.',
+    triesLeft_one: '1 more try, then you need to enter your password again.',
+    triesLeft_other: '{{count}} more tries, then you need to enter your password again.',
+    codeExpired:
+      'Your sign-in stopped — it was open too long or had too many wrong codes. Enter your password again to continue.',
+    lockedTitle: 'Too many wrong codes',
+    lockedDetail:
+      'To protect your account, codes are paused until {{time}}. If you did not enter these codes, tell your administrator.',
+    lockedWait: 'You can try again in {{seconds}} s.',
+    lockedReady: 'You can try again now.',
+    demoCodeHint:
+      'Demo organization: use the demo authenticator secret from the demo sign-in details to get the code.',
+    // Organization signs in with its company account (single sign-on).
+    companySignInTitle: 'Your organization signs in with its company account',
+    companySignInDetail:
+      'Use the company sign-in link your administrator gave you. If you need to sign in with a password instead, ask your Portico administrator to allow it for your account.',
+    // Offer to set up two-step verification (people who have none yet).
+    setupTitle: 'Protect your account with two-step verification',
+    setupHelp:
+      'Sensitive actions — such as managing staff, roles or security settings — need a code from an authenticator app on your phone. Setting it up takes about a minute.',
+    setupNow: 'Set up now',
+    setupLater: 'Not now',
+    setupStep1:
+      'In your authenticator app, add an account and enter this key (choose “time-based” if asked):',
+    setupKey: 'Key',
+    setupOpenLink: 'Open in an authenticator app on this device',
+    setupStep2: 'Enter the 6-digit code the app now shows:',
+    setupConfirm: 'Confirm',
+    setupRestart: 'Start the set-up again',
+    setupWrongCode:
+      'That code is not right. Check that your phone sets its time automatically, then enter the code showing now.',
+    recoveryCodesTitle: 'Save your recovery codes',
+    recoveryCodesHelp:
+      'If you lose your phone, each of these codes lets you sign in once. Keep them somewhere safe — they are shown only now.',
+    recoveryCodesSaved: 'I have saved them — continue',
+    setupDone: 'Two-step verification is on. From now on, sign-in asks for a code after your password.',
   },
   common: {
     loading: 'Loading…',
