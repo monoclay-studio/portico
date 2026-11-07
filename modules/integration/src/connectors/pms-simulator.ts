@@ -634,7 +634,7 @@ export const pmsSimulatorDefinition: ConnectorDefinition = {
     level: 'R3',
     label: 'Implemented and tested internally (simulator only)',
     evidence: [
-      'modules/integration/test/scenario-connect-alongside.test.ts — full setup journey, faults and recovery against the simulator.',
+      'modules/integration/test/setup-journey.test.ts, scenario-s02-inbound-faults.test.ts, scenario-s20-integration-outage.test.ts, credentials.test.ts — journey, faults and recovery against the simulator (2026-11-07, automated).',
     ],
   },
   externalApproval: { status: 'not_required', note: 'Simulator: no vendor involved.' },
