@@ -22,6 +22,12 @@ export interface TaxLine {
   kind: 'tax' | 'fee';
   amount: Money;
   ruleVersionId?: string;
+  /**
+   * How the rule computes (rates RAT-R22 kinds). Value-based lines (`percentage`, `banded`) follow the price;
+   * quantity-based lines (`per_person_night`, `per_unit_night`, `per_stay`, `fixed_per_charge`) do not — e.g.
+   * Maldives Green Tax is due on complimentary stays too (MIRA Green Tax FAQ, docs/readiness/maldives-tax-rules.md §5).
+   */
+  basis?: 'percentage' | 'banded' | 'per_person_night' | 'per_unit_night' | 'per_stay' | 'fixed_per_charge';
 }
 
 /** Penalty shape inside agreed terms (rates spec RAT-R18). */

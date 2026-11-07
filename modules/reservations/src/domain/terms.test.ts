@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { makeSnapshot, usd } from '../../test/fixtures/terms';
+import type { TaxLine } from '../ports';
 import {
+  appliesWhenComplimentary,
   cancellationPenalty,
   complimentarySnapshot,
   nightlyGross,
@@ -141,15 +143,33 @@ describe('totals, deposits and snapshots', () => {
     expect(snapshotHash({ ...snap, ratePlanId: 'other' })).not.toBe(snapshotHash(snap));
   });
 
-  it('complimentary snapshots price zero and keep the original totals for reporting', () => {
+  it('complimentary snapshots zero the room and value-based taxes but keep Green Tax (MIRA: comp stays still pay)', () => {
     const comp = complimentarySnapshot(snap, {
       kind: 'complimentary',
       reason: 'travel agent fam trip',
       approvedBy: 'GM',
     });
-    expect(comp.totals.gross).toEqual(usd(0));
+    expect(comp.totals.net).toEqual(usd(0));
+    expect(comp.totals.taxes).toEqual(usd(0)); // TGST follows the zero value
+    expect(comp.totals.fees).toEqual(usd(3 * 3 * 600)); // 2 adults + child 8 per night; the infant is exempt
+    expect(comp.totals.gross).toEqual(usd(5_400));
+    expect(comp.nights[0]?.taxes.map((t) => t.code)).toEqual(['GREEN']);
     expect(comp.priceSource).toBe('override');
     expect(comp.originalTotals).toEqual(snap.totals);
-    expect(rangeTotals(comp, { from: '2026-12-20', to: '2026-12-23' }).gross).toEqual(usd(0));
+  });
+
+  it('decides by the rule basis when rates states it, otherwise by kind', () => {
+    const line = (kind: 'tax' | 'fee', basis?: TaxLine['basis']): TaxLine => ({
+      code: 'X',
+      name: 'X',
+      kind,
+      amount: usd(100),
+      ...(basis ? { basis } : {}),
+    });
+    expect(appliesWhenComplimentary(line('fee', 'per_person_night'))).toBe(true);
+    expect(appliesWhenComplimentary(line('fee', 'percentage'))).toBe(false); // e.g. a 10% service charge
+    expect(appliesWhenComplimentary(line('tax', 'per_stay'))).toBe(true);
+    expect(appliesWhenComplimentary(line('tax'))).toBe(false);
+    expect(appliesWhenComplimentary(line('fee'))).toBe(true);
   });
 });

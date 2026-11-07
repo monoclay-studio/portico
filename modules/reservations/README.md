@@ -2,7 +2,7 @@
 
 ## Checkpoint
 
-- **Done:** everything below; 129 module tests (75 unit + 54 integration/scenario/HTTP) and 13 API tests green;
+- **Done:** everything below; 130 module tests (76 unit + 54 integration/scenario/HTTP) and 13 API tests green;
   `pnpm lint`, `pnpm typecheck`, boundary check clean. Wired in `apps/api/src/composition.ts` (routes,
   subscriptions, search provider, `reservations.expireBookings` job).
 - **In progress:** nothing.
@@ -29,7 +29,7 @@ environment-safe fallback adapter (no lock vendor), i.e. R1 for real door locks.
 | RES-R01/R02 | Booking (8-char confirmation code, booker profile/company/agency/channel, source, channel & external refs, market segment, commission, guarantee, deposit requirement, notes, requests, tags, owner, version) and stays (occupants with child ages, commercial type, ETA/ETD, arrival details, requests, block reference nullable) | Built |
 | RES-R03 | Stay segments partition nights exactly (exclusion constraint + domain check); split stays and moves create segments | Built |
 | RES-R04 | Multi-stay bookings; `add_stay` / `cancel_stay` as previewed changes; booking totals aggregate stays | Built |
-| RES-R05 | Complimentary / house-use stays with permission + reason, consume inventory, zero agreed price (original totals kept) | Built |
+| RES-R05 | Complimentary / house-use stays with permission + reason, consume inventory, zero room price and value-based taxes; quantity-based levies (Maldives Green Tax) still due and charged to a house folio (the stay's default folio); original totals kept | Built |
 | RES-R06 | Guarantee kinds; non-guaranteed release time | Guarantee built; automatic release at release time **not built** (gap) |
 | RES-R07/R08 | Separate booking/stay status machines; inventory follows status in the same tx (hold / consume / release) | Built |
 | RES-R09 | Tentative option date; job `reservations.expireBookings` (every 60 s) expires lapsed holds and raises an option-date issue (auto-expire only by policy) | Built |
@@ -159,6 +159,8 @@ concurrency fidelity; rates/guests/payments/operations/access in memory with scr
     `recordStayHistory` with `bookingId`/`role`; `recordReferenceRepoints`. Reservations' own HTTP contract keeps
     simple booking-form fields (firstName/lastName/email/phone…) and maps them in `src/service/guests.ts`.
 11. Booking and stay events: payload version 2 with `stays[]` (see Events).
+12. `TaxLine.basis` (`percentage | banded | per_person_night | per_unit_night | per_stay | fixed_per_charge`, rates
+    RAT-R22 kinds) is read to decide which lines survive on complimentary terms — rates should always send it.
 
 ## Events
 
@@ -223,9 +225,11 @@ starts from the current night); the waitlist consumer raises an issue rather tha
 
 ## Owner questions
 
-- Green Tax (and other per-person levies) on **complimentary / house-use** stays: reservations currently zeroes
-  all taxes on complimentary agreed terms. The real answer must come from the tax rules (rates); default kept
-  until the owner/tax adviser confirms. (Not added to docs/OPEN_QUESTIONS.md from this worktree; please add.)
+- Answered (orchestrator, MIRA Green Tax FAQ, `docs/readiness/maldives-tax-rules.md` §5): complimentary stays still
+  pay Green Tax. Implemented: complimentary/house-use agreed terms keep quantity-based levies (per person-night,
+  under-2 exempt as computed by rates) and zero value-based taxes (TGST, percentage service charge); the levy is
+  charged to the stay's house folio. Decided by the tax line's `basis` from rates (fallback when absent: `fee`
+  lines kept, `tax` lines zeroed).
 
 ## Research adopted
 

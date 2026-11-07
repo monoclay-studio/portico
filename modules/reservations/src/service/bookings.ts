@@ -460,6 +460,16 @@ export async function insertStayWithInventory(
     !input.waitlisted &&
     (input.bookingStatus === 'tentative' || input.bookingStatus === 'confirmed')
   ) {
+    if (s.commercialType !== 'standard') {
+      // Complimentary / house-use: the house carries what is still due (e.g. Green Tax per person-night) on the
+      // stay's default folio (first opened); guests' own incidentals can be routed elsewhere by billing rules.
+      await deps.ports.finance.openFolio(tx, {
+        propertyId: input.propertyId,
+        owner: ref,
+        payer: { type: 'house', id: input.propertyId },
+        label: s.commercialType === 'complimentary' ? 'House (complimentary stay)' : 'House use',
+      });
+    }
     const result = await inventory.consume(tx, {
       propertyId: input.propertyId,
       unitTypeId: s.unitTypeId,

@@ -79,6 +79,7 @@ export class FakeRates implements RatesPort {
         kind: 'tax',
         amount: money(Math.round((net * t.taxBp) / 10_000), this.currency),
         ruleVersionId: 'tgst-v1',
+        basis: 'percentage',
       });
     const persons = occ.adults + occ.childrenAges.filter((a) => a >= t.levyMinAge).length;
     if (t.levyPerPersonNight)
@@ -88,6 +89,7 @@ export class FakeRates implements RatesPort {
         kind: 'fee',
         amount: money(t.levyPerPersonNight * persons, this.currency),
         ruleVersionId: 'green-v1',
+        basis: 'per_person_night',
       });
     return lines;
   }

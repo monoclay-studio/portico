@@ -215,8 +215,50 @@ describe('booking lifecycle', () => {
         ),
       ),
     );
-    expect(b.totals.gross.amountMinor).toBe(0);
+    // Room and TGST are zero; Green Tax is still due on a complimentary stay (MIRA Green Tax FAQ): 3 nights × 2 adults.
+    expect(b.totals.net.amountMinor).toBe(0);
+    expect(b.totals.taxes.amountMinor).toBe(0);
+    expect(b.totals.fees.amountMinor).toBe(3 * 2 * 1_200);
     expect(b.stays[0]?.commercialType).toBe('complimentary');
+    // ...and it is charged to the house: the stay's default folio is a house folio.
+    const folios = await org.run((tx) =>
+      org.fakes.finance.listFolios(tx, { owner: { type: 'stay', id: b.stays[0]?.id ?? '' } }),
+    );
+    expect(folios[0]).toMatchObject({
+      isDefault: true,
+      payer: { type: 'house', id: org.propertyId },
+      label: 'House (complimentary stay)',
+    });
+    const green = await org.run((tx) =>
+      org.fakes.finance.postCharge(tx, {
+        propertyId: org.propertyId,
+        target: { type: 'stay', id: b.stays[0]?.id ?? '' },
+        chargeCode: 'GREEN_TAX',
+        amount: { amountMinor: 2_400, currency: 'USD' },
+        serviceDate: BUSINESS_DATE,
+        description: 'Green Tax',
+        sourceRef: { type: 'stay', id: b.stays[0]?.id ?? '' },
+        idempotencyKey: `green:${b.stays[0]?.id}:${BUSINESS_DATE}`,
+      }),
+    );
+    expect(green.folioId).toBe(folios[0]?.folioId);
+    // The Day Close feed carries the Green Tax line for the night (value-based taxes are gone).
+    expect(
+      (
+        await org.run((tx) =>
+          org.svc.listInHouseStaysForNight(tx, { propertyId: org.propertyId, date: BUSINESS_DATE }),
+        )
+      ).length,
+    ).toBe(0); // not in house yet
+    const snapId = b.stays[0]?.segments[0]?.termsSnapshotId;
+    const doc = await org.run((tx) =>
+      sql<{
+        document: { nights: Array<{ taxes: Array<{ code: string; amount: { amountMinor: number } }> }> };
+      }>`select document from reservations.terms_snapshots where id = ${snapId}`.execute(tx.db),
+    );
+    expect(doc.rows[0]?.document.nights[0]?.taxes.map((x) => [x.code, x.amount.amountMinor])).toEqual([
+      ['GREEN', 2_400],
+    ]);
     expect(
       await org.run((tx) =>
         org.fakes.inventory.consumptionOf(tx, { type: 'stay', id: b.stays[0]?.id ?? '' }),

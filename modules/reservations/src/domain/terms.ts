@@ -13,7 +13,7 @@ import {
   ValidationError,
   zero,
 } from '@portico/kernel';
-import type { CancellationPolicy, DepositItem, Penalty, TermsSnapshot } from '../ports';
+import type { CancellationPolicy, DepositItem, Penalty, TaxLine, TermsSnapshot } from '../ports';
 import { deadlineBeforeArrival } from './time';
 
 /** Content hash of agreed terms (excludes any embedded `hash`). Verifies immutability (RES-I04). */
@@ -238,22 +238,52 @@ export function nightlyGross(doc: TermsSnapshot, range: DateRange): Money[] {
     .map((l) => add(l.net, ...l.taxes.map((t) => t.amount)));
 }
 
+const QUANTITY_BASED: ReadonlySet<string> = new Set([
+  'per_person_night',
+  'per_unit_night',
+  'per_stay',
+  'fixed_per_charge',
+]);
+
 /**
- * Turn a priced snapshot into a complimentary / house-use snapshot: agreed prices become zero and the original
- * totals are kept for reporting. Taxes and levies are zeroed too — whether per-person levies (e.g. Maldives Green
- * Tax) apply to complimentary stays is a tax-rule question recorded in README (owner question), to be answered
- * by the rates tax engine, never hard-coded here.
+ * Does a tax/fee line still apply when the room is given for free? Quantity-based levies do (Maldives Green Tax is
+ * due on complimentary stays — MIRA Green Tax FAQ, docs/readiness/maldives-tax-rules.md §5); value-based taxes follow
+ * the zero value. When rates does not state the basis, a `fee` line is treated as a quantity-based levy and a `tax`
+ * line as value-based (documented fallback; rates should always send `basis`).
+ */
+export function appliesWhenComplimentary(line: TaxLine): boolean {
+  if (line.basis) return QUANTITY_BASED.has(line.basis);
+  return line.kind === 'fee';
+}
+
+/**
+ * Turn a priced snapshot into a complimentary / house-use snapshot: the room price becomes zero, value-based taxes
+ * follow the zero value, quantity-based levies (Green Tax per person-night, under-2 exempt as computed by rates)
+ * are kept and are posted to the stay's house folio. The original totals are kept for reporting.
  */
 export function complimentarySnapshot(
   doc: TermsSnapshot,
   override: { kind: 'complimentary' | 'house_use'; reason: string; approvedBy: string },
 ): TermsSnapshot {
   const currency = doc.currency;
+  const nights = doc.nights.map((n) => ({
+    ...n,
+    net: zero(currency),
+    taxes: n.taxes.filter(appliesWhenComplimentary),
+  }));
+  const taxes = sum(
+    currency,
+    nights.flatMap((n) => n.taxes.filter((t) => t.kind === 'tax').map((t) => t.amount)),
+  );
+  const fees = sum(
+    currency,
+    nights.flatMap((n) => n.taxes.filter((t) => t.kind === 'fee').map((t) => t.amount)),
+  );
   return {
     ...doc,
     priceSource: 'override',
-    nights: doc.nights.map((n) => ({ ...n, net: zero(currency), taxes: [] })),
-    totals: zeroTotals(currency),
+    nights,
+    totals: { net: zero(currency), taxes, fees, gross: add(taxes, fees) },
     override: { kind: override.kind, reason: override.reason, approvedBy: override.approvedBy },
     originalTotals: doc.totals,
   };
