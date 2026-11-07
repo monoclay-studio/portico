@@ -57,13 +57,15 @@ LABEL org.opencontainers.image.title="portico-api" \
       org.opencontainers.image.vendor="Monoclay LLC" \
       org.opencontainers.image.revision="${GIT_SHA}"
 
-# Amazon RDS CA bundle so node-postgres can use sslmode=verify-full against Aurora. The checksum pins the bundle
+# Amazon RDS CA bundle so node-postgres can use sslmode=verify-full against Aurora (0644: a URL ADD defaults to
+# 0600, which the non-root user could not read and Node would then skip silently). The checksum pins the bundle
 # as fetched on 2026-11-07; when AWS publishes a new bundle the build fails loudly — update the hash after review.
-ADD --checksum=sha256:90a6f1a7978a1b1b096dca6c57511ca48d3b8cf052f8e704baf358f34ea2f21b \
+ADD --chmod=0644 --checksum=sha256:90a6f1a7978a1b1b096dca6c57511ca48d3b8cf052f8e704baf358f34ea2f21b \
     https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem /etc/ssl/certs/rds-global-bundle.pem
 
 ENV NODE_ENV=production \
     NODE_EXTRA_CA_CERTS=/etc/ssl/certs/rds-global-bundle.pem \
+    TSX_DISABLE_CACHE=1 \
     PORT=4000 \
     PORTICO_GIT_SHA=${GIT_SHA}
 
@@ -74,8 +76,8 @@ COPY --from=build /out /app
 COPY infra/db/bootstrap-roles.mjs /app/ops/bootstrap-roles.mjs
 RUN chmod -R a-w /app /opt/tsx
 
-# Read-only root filesystem friendly: the only write path is /tmp (tsx transform cache), which ECS mounts as an
-# ephemeral volume. Nothing else writes to disk; logs go to stdout.
+# Read-only root filesystem: TSX_DISABLE_CACHE=1 stops tsx writing its transform cache to /tmp, so the process
+# writes nothing to disk (verified outside Docker with no writable TMPDIR). Logs go to stdout.
 USER 1000:1000
 EXPOSE 4000
 STOPSIGNAL SIGTERM
