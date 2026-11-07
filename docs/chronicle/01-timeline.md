@@ -302,4 +302,13 @@ Each agent's brief and report are in `agents/`.
   - the parity evidence re-run for inventory and reservations;
   - **UX round 2a**, a focused black-box run from tester playbook v2 with stable finding IDs, on a lab rebuilt from
     main. A demo authenticator command (`tools/demo-authenticator.mjs`) stands in for the tester's phone app.
+- **21:37 — Integration-step re-review #3: merge after fixes** <!-- t: agent-ab1275ea4fe3cfee6 @ 2026-11-07T21:37:42.248Z (Focused re-review #3: integration-step) --> (P1 2). Every earlier PoC is refused.
+  - New P1s: a payment link for a departed guest outlives settlement and failure, and a superseded link stays payable
+    at the provider. The cardholder's mandate scope was stored but not enforced.
+  - **ADR-0015 Amendment 2:** staff permission never exceeds cardholder consent; payment links have external writers.
+  - Fix round 3 is sent.
+  - Day-close build launched (gap-plan M6) on `feat/day-close`.
+- Note (21:38): money paths have needed 3 re-reviews. Each round closes the reported invariant and the next finds a
+  writer outside it (the provider, settlement, payment failure). This is evidence for the quality steward that
+  external systems must be listed as writers in invariant closure. <!-- t: now @ 2026-11-07T21:38:41Z -->
 
