@@ -22,6 +22,7 @@ import {
   readyUnit,
   type Scenario,
   type ScenarioOrg,
+  signIn,
   startScenario,
 } from './scenarios/harness';
 
@@ -414,6 +415,39 @@ describe('R4-P1-1 — a card-on-file agreement covers only the bookings it names
     expect(codeOf(r)).toBe('mandate_reference_not_covered');
   });
 
+  it('sibling: naming the cardholder as the PAYER of another guest’s folio does not let staff charge her card for it', async () => {
+    const org = await organization(s);
+    const k = await kandu(s, org, '2027-03-10');
+    const { payments } = s.c.services;
+    const desk = org.staff('front_desk', 'Hassan', [k.id]);
+    const { profileId: vera, card } = await guestWithCard(s, org, k, {
+      firstName: 'Vera',
+      lastName: 'Victim',
+    });
+    const { profileId: otto } = await guestWithCard(
+      s,
+      org,
+      k,
+      { firstName: 'Otto', lastName: 'Other' },
+      'pm_card_mastercard',
+    );
+    const y = await bookFor(org, k, desk, otto, '2027-06-24', '2027-06-26');
+    // Staff open Otto's stay folio with Vera as its payer.
+    const folioId = await folioOfStay(org, k, y.stays[0]?.id as string, vera);
+    const r = await settle(
+      payments.chargeNow(desk, {
+        propertyId: k.id,
+        methodId: card.id,
+        amount: usd(100_000),
+        ref: { type: 'folio', id: folioId },
+        purpose: 'balance',
+        businessKey: newId(),
+      }),
+    );
+    expect(codeOf(r)).toBe('mandate_reference_not_covered');
+    expect(await paymentsOn(folioId)).toEqual([]);
+  });
+
   it('sibling: staff cannot confirm a card for a booking on the cardholder’s behalf', async () => {
     const org = await organization(s);
     const k = await kandu(s, org, '2027-03-10');
@@ -733,14 +767,25 @@ describe('R4-P2-2 — a deactivation the provider never confirms is owned, aged 
       // The late item never claims a link exists to send.
       const items = (await lateItems(folio?.id as string)).filter((i) => i.status === 'open');
       for (const i of items) expect(i.message).not.toMatch(/is open — send it/);
-      // Staff stop it in the provider dashboard and confirm (over HTTP); the exception closes, the replacement goes out.
+      // Staff stop it in the provider dashboard and confirm it over HTTP; the exception closes, the replacement goes out.
       await org.run(org.setup, (tx) => payments.tx.setSimulatorControls(tx, account, { outage: null }));
-      await org.run(manager, (tx) =>
-        payments.tx.confirmLinkStopped(tx, {
-          requestId: first?.id as string,
-          reason: 'Expired in the dashboard',
-        }),
+      // A role without payment-request rights cannot confirm it.
+      const housekeeping = org.staff('housekeeping_supervisor', 'Mariyam', [k.id]);
+      const denied = await settle(
+        org.run(housekeeping, (tx) =>
+          payments.tx.confirmLinkStopped(tx, { requestId: first?.id as string, reason: 'Not mine to say' }),
+        ),
       );
+      expect(denied.ok ? 'confirmed' : (denied.e as { status?: number }).status).toBe(403);
+      const auth = await signIn(s, org);
+      const confirmed = await s.app.inject({
+        method: 'POST',
+        url: `/v1/payments/requests/${first?.id}/link-stopped`,
+        headers: { ...auth, 'idempotency-key': newId() },
+        payload: { reason: 'Expired in the dashboard' },
+      });
+      expect(confirmed.statusCode, confirmed.body).toBe(200);
+      expect(confirmed.json()).toMatchObject({ id: first?.id });
       await s.drain();
       const closed = (await payExceptions(org)).filter((e) => e.kind === 'payment_link_not_stopped');
       expect(closed.map((e) => e.status)).toEqual(['resolved']);
