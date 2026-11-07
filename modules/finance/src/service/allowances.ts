@@ -191,7 +191,7 @@ export async function grantAllowance(
       description: input.label,
       chargeCodeId: code.id,
       chargeCode: code.code,
-      serviceDate: Math.min(validFrom, businessDate),
+      serviceDate: [validFrom, businessDate].sort()[0] as string,
       revenueDate: validFrom,
       allowanceInstanceId: instanceId,
       counterAccountId: clearing,
