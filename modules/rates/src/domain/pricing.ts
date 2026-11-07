@@ -57,7 +57,11 @@ export interface DerivationStep {
  * unit-night surcharge/discount, so it changes the unit prices (base, single, occupancy overrides) but not the
  * per-person extra-adult and child amounts.
  */
-export function adjustParams(p: OccupancyPricing, adj: Adjustment, rounding: PriceRounding): OccupancyPricing {
+export function adjustParams(
+  p: OccupancyPricing,
+  adj: Adjustment,
+  rounding: PriceRounding,
+): OccupancyPricing {
   const f = (n: number) => applyAdjustment(n, adj, rounding);
   const perPerson = (n: number) => (adj.kind === 'percent' ? f(n) : n);
   const mapValues = (r: Record<string, number>, g: (n: number) => number) =>
@@ -72,7 +76,11 @@ export function adjustParams(p: OccupancyPricing, adj: Adjustment, rounding: Pri
   };
 }
 
-export function deriveParams(p: OccupancyPricing, step: DerivationStep, unitTypeId: string): OccupancyPricing {
+export function deriveParams(
+  p: OccupancyPricing,
+  step: DerivationStep,
+  unitTypeId: string,
+): OccupancyPricing {
   return adjustParams(p, step.unitTypeAdjustments[unitTypeId] ?? step.adjustment, step.rounding);
 }
 
@@ -132,7 +140,8 @@ export function priceForOccupancy(
   if (override !== undefined) adultPart = override;
   else if (adults === 1 && p.singleAmountMinor !== null) adultPart = p.singleAmountMinor;
   else if (adults <= p.baseOccupancy) adultPart = p.baseAmountMinor;
-  else if (p.extraAdultMinor !== null) adultPart = p.baseAmountMinor + (adults - p.baseOccupancy) * p.extraAdultMinor;
+  else if (p.extraAdultMinor !== null)
+    adultPart = p.baseAmountMinor + (adults - p.baseOccupancy) * p.extraAdultMinor;
   else {
     return {
       ok: false,
@@ -160,7 +169,10 @@ export function validateDerivationGraph(
   const codeOf = new Map(plans.map((p) => [p.id, p.code]));
   parentOf.set(planId, newParentId);
   if (newParentId !== null && !parentOf.has(newParentId)) {
-    throw new DerivationError('parent_plan_not_found', 'The parent rate plan does not exist at this property.');
+    throw new DerivationError(
+      'parent_plan_not_found',
+      'The parent rate plan does not exist at this property.',
+    );
   }
   // Depth of the new parent chain (cycle-safe walk).
   const depthOf = (id: string): number => {
@@ -183,7 +195,8 @@ export function validateDerivationGraph(
     return d;
   };
   const children = new Map<string, string[]>();
-  for (const [id, parent] of parentOf) if (parent) children.set(parent, [...(children.get(parent) ?? []), id]);
+  for (const [id, parent] of parentOf)
+    if (parent) children.set(parent, [...(children.get(parent) ?? []), id]);
   const stack = [planId];
   while (stack.length) {
     const id = stack.pop() as string;
@@ -199,13 +212,17 @@ export function validateDerivationGraph(
 }
 
 /** Chain from the root base plan to `planId` (root first). */
-export function ancestry<T extends { id: string; parentId: string | null }>(plans: readonly T[], planId: string): T[] {
+export function ancestry<T extends { id: string; parentId: string | null }>(
+  plans: readonly T[],
+  planId: string,
+): T[] {
   const byId = new Map(plans.map((p) => [p.id, p]));
   const chain: T[] = [];
   let cur = byId.get(planId);
   const seen = new Set<string>();
   while (cur) {
-    if (seen.has(cur.id)) throw new DerivationError('derivation_cycle', 'Rate plan derivation contains a cycle.');
+    if (seen.has(cur.id))
+      throw new DerivationError('derivation_cycle', 'Rate plan derivation contains a cycle.');
     seen.add(cur.id);
     chain.unshift(cur);
     cur = cur.parentId ? byId.get(cur.parentId) : undefined;
@@ -214,7 +231,10 @@ export function ancestry<T extends { id: string; parentId: string | null }>(plan
 }
 
 /** Every plan deriving (directly or indirectly) from `planId`. */
-export function descendants<T extends { id: string; parentId: string | null }>(plans: readonly T[], planId: string): T[] {
+export function descendants<T extends { id: string; parentId: string | null }>(
+  plans: readonly T[],
+  planId: string,
+): T[] {
   const out: T[] = [];
   const queue = [planId];
   while (queue.length) {

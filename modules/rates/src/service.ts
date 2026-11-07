@@ -21,7 +21,8 @@ export function ratesService(ports: RatesPorts) {
     quoteDetailed: (tx: TxContext, request: unknown) => quoting.quoteDetailed(ports, tx, request),
     priceChange: (tx: TxContext, input: unknown) => quoting.priceChange(ports, tx, input),
     computeTaxes: (tx: TxContext, input: ComputeTaxesInput) => taxes.computeTaxes(ports, tx, input),
-    computeTaxesDetailed: (tx: TxContext, input: ComputeTaxesInput) => taxes.computeTaxesDetailed(ports, tx, input),
+    computeTaxesDetailed: (tx: TxContext, input: ComputeTaxesInput) =>
+      taxes.computeTaxesDetailed(ports, tx, input),
     getRatePlan: plans.getRatePlan,
     listRatePlans: plans.listRatePlans,
     recordPlanSale: quoting.recordPlanSale,
@@ -31,9 +32,13 @@ export function ratesService(ports: RatesPorts) {
     verifyTerms: (terms: TermsSnapshot) => verifyTerms(terms),
 
     // ── Universal record views (status per family, next actions, issues, links) ──
-    ratePlanRecord: (tx: TxContext, plan: Parameters<typeof records.ratePlanRecord>[2]) => records.ratePlanRecord(ports, tx, plan),
-    ratePlanRecords: (tx: TxContext, propertyId: string, list: Parameters<typeof records.ratePlanRecords>[3]) =>
-      records.ratePlanRecords(ports, tx, propertyId, list),
+    ratePlanRecord: (tx: TxContext, plan: Parameters<typeof records.ratePlanRecord>[2]) =>
+      records.ratePlanRecord(ports, tx, plan),
+    ratePlanRecords: (
+      tx: TxContext,
+      propertyId: string,
+      list: Parameters<typeof records.ratePlanRecords>[3],
+    ) => records.ratePlanRecords(ports, tx, propertyId, list),
     taxRuleRecord: records.taxRuleRecord,
 
     // ── Rate plans ──
@@ -48,14 +53,20 @@ export function ratesService(ports: RatesPorts) {
     applyPriceUpdate: (tx: TxContext, input: unknown) => calendar.applyPriceUpdate(ports, tx, input),
     getPriceCalendar: calendar.getPriceCalendar,
     getPriceHistory: calendar.getPriceHistory,
-    previewRestrictionUpdate: (tx: TxContext, input: unknown) => calendar.previewRestrictionUpdate(ports, tx, input),
-    applyRestrictionUpdate: (tx: TxContext, input: unknown) => calendar.applyRestrictionUpdate(ports, tx, input),
+    previewRestrictionUpdate: (tx: TxContext, input: unknown) =>
+      calendar.previewRestrictionUpdate(ports, tx, input),
+    applyRestrictionUpdate: (tx: TxContext, input: unknown) =>
+      calendar.applyRestrictionUpdate(ports, tx, input),
     getRestrictions: calendar.getRestrictions,
 
     // ── Catalog ──
     createPolicy: (tx: TxContext, input: unknown) => catalog.createPolicy(ports, tx, input),
-    updatePolicy: (tx: TxContext, id: string, expectedVersion: number, patch: { name?: string; structure?: unknown }) =>
-      catalog.updatePolicy(ports, tx, id, expectedVersion, patch),
+    updatePolicy: (
+      tx: TxContext,
+      id: string,
+      expectedVersion: number,
+      patch: { name?: string; structure?: unknown },
+    ) => catalog.updatePolicy(ports, tx, id, expectedVersion, patch),
     getPolicy: (tx: TxContext, id: string) => catalog.getPolicy(ports, tx, id),
     listPolicies: (tx: TxContext, propertyId: string) => catalog.listPolicies(ports, tx, propertyId),
     policyVersionHistory: catalog.policyVersionHistory,

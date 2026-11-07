@@ -6,7 +6,12 @@ import type { PlanChainLink } from '../domain/restrictions';
 export function derivationSteps(chain: readonly RatePlanDto[]): DerivationStep[] {
   return chain.slice(1).map((p) => {
     const d = p.derivation as NonNullable<RatePlanDto['derivation']>;
-    return { ratePlanId: p.id, adjustment: d.adjustment, rounding: d.rounding, unitTypeAdjustments: d.unitTypeAdjustments };
+    return {
+      ratePlanId: p.id,
+      adjustment: d.adjustment,
+      rounding: d.rounding,
+      unitTypeAdjustments: d.unitTypeAdjustments,
+    };
   });
 }
 

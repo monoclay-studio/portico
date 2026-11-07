@@ -14,7 +14,10 @@ export interface RestrictionRow {
   values: RestrictionValues;
 }
 
-export type EffectiveValue = { value: number | boolean; source: { ratePlanId: string | null; unitTypeId: string | null } };
+export type EffectiveValue = {
+  value: number | boolean;
+  source: { ratePlanId: string | null; unitTypeId: string | null };
+};
 export type EffectiveRestrictions = Partial<Record<RestrictionKind, EffectiveValue>>;
 
 const MAX_KINDS: RestrictionKind[] = ['minLos', 'minLosThrough', 'minAdvanceDays'];
@@ -38,7 +41,11 @@ export function ownerPlanForKind(chain: readonly PlanChainLink[], kind: Restrict
   return (chain[0] as PlanChainLink).id;
 }
 
-function moreRestrictive(kind: RestrictionKind, a: EffectiveValue | undefined, b: EffectiveValue): EffectiveValue {
+function moreRestrictive(
+  kind: RestrictionKind,
+  a: EffectiveValue | undefined,
+  b: EffectiveValue,
+): EffectiveValue {
   if (!a) return b;
   if (BOOL_KINDS.includes(kind)) return a.value ? a : b;
   if (MAX_KINDS.includes(kind)) return (b.value as number) > (a.value as number) ? b : a;
@@ -56,11 +63,16 @@ export function effectiveRestrictions(
   for (const row of rows) {
     if (row.unitTypeId !== null && row.unitTypeId !== unitTypeId) continue;
     const cell = out.get(row.date) ?? {};
-    for (const [k, v] of Object.entries(row.values) as Array<[RestrictionKind, number | boolean | null | undefined]>) {
+    for (const [k, v] of Object.entries(row.values) as Array<
+      [RestrictionKind, number | boolean | null | undefined]
+    >) {
       if (v === null || v === undefined) continue;
       if (BOOL_KINDS.includes(k) && v === false) continue;
       if (row.ratePlanId !== null && row.ratePlanId !== owners.get(k)) continue;
-      cell[k] = moreRestrictive(k, cell[k], { value: v, source: { ratePlanId: row.ratePlanId, unitTypeId: row.unitTypeId } });
+      cell[k] = moreRestrictive(k, cell[k], {
+        value: v,
+        source: { ratePlanId: row.ratePlanId, unitTypeId: row.unitTypeId },
+      });
     }
     out.set(row.date, cell);
   }
@@ -102,34 +114,93 @@ export function evaluateRestrictions(c: RestrictionCheck): Violation[] {
   const los = nights.length;
   const advance = diffDays(c.bookingDate, c.arrival);
   const arr = c.effective.get(c.arrival) ?? {};
-  if (arr.closedToArrival?.value) out.push(v('closed_to_arrival', c.arrival, `Arrival on ${c.arrival} is not allowed (closed to arrival).`, arr.closedToArrival));
+  if (arr.closedToArrival?.value)
+    out.push(
+      v(
+        'closed_to_arrival',
+        c.arrival,
+        `Arrival on ${c.arrival} is not allowed (closed to arrival).`,
+        arr.closedToArrival,
+      ),
+    );
   if (arr.minLos && los < (arr.minLos.value as number))
-    out.push(v('min_los', c.arrival, `Arriving on ${c.arrival} requires at least ${arr.minLos.value} nights; this stay has ${los}.`, arr.minLos, los));
+    out.push(
+      v(
+        'min_los',
+        c.arrival,
+        `Arriving on ${c.arrival} requires at least ${arr.minLos.value} nights; this stay has ${los}.`,
+        arr.minLos,
+        los,
+      ),
+    );
   if (arr.maxLos && los > (arr.maxLos.value as number))
-    out.push(v('max_los', c.arrival, `Arriving on ${c.arrival} allows at most ${arr.maxLos.value} nights; this stay has ${los}.`, arr.maxLos, los));
+    out.push(
+      v(
+        'max_los',
+        c.arrival,
+        `Arriving on ${c.arrival} allows at most ${arr.maxLos.value} nights; this stay has ${los}.`,
+        arr.maxLos,
+        los,
+      ),
+    );
   if (arr.minAdvanceDays && advance < (arr.minAdvanceDays.value as number))
     out.push(
-      v('min_advance', c.arrival, `This rate must be booked at least ${arr.minAdvanceDays.value} days before arrival; it is ${advance} days.`, arr.minAdvanceDays, advance),
+      v(
+        'min_advance',
+        c.arrival,
+        `This rate must be booked at least ${arr.minAdvanceDays.value} days before arrival; it is ${advance} days.`,
+        arr.minAdvanceDays,
+        advance,
+      ),
     );
   if (arr.maxAdvanceDays && advance > (arr.maxAdvanceDays.value as number))
     out.push(
-      v('max_advance', c.arrival, `This rate can be booked at most ${arr.maxAdvanceDays.value} days before arrival; it is ${advance} days.`, arr.maxAdvanceDays, advance),
+      v(
+        'max_advance',
+        c.arrival,
+        `This rate can be booked at most ${arr.maxAdvanceDays.value} days before arrival; it is ${advance} days.`,
+        arr.maxAdvanceDays,
+        advance,
+      ),
     );
   for (const d of nights) {
     const e = c.effective.get(d) ?? {};
     if (e.closed?.value) out.push(v('closed', d, `The night of ${d} is closed for sale.`, e.closed));
     if (e.minLosThrough && los < (e.minLosThrough.value as number))
-      out.push(v('min_los_through', d, `Stays including the night of ${d} require at least ${e.minLosThrough.value} nights; this stay has ${los}.`, e.minLosThrough, los));
+      out.push(
+        v(
+          'min_los_through',
+          d,
+          `Stays including the night of ${d} require at least ${e.minLosThrough.value} nights; this stay has ${los}.`,
+          e.minLosThrough,
+          los,
+        ),
+      );
     if (e.salesLimit) {
       const sold = c.sold?.get(d) ?? 0;
       const qty = c.quantity ?? 1;
       if (sold + qty > (e.salesLimit.value as number))
-        out.push(v('sales_limit', d, `The sales limit of ${e.salesLimit.value} for the night of ${d} is reached (${sold} sold).`, e.salesLimit, sold));
+        out.push(
+          v(
+            'sales_limit',
+            d,
+            `The sales limit of ${e.salesLimit.value} for the night of ${d} is reached (${sold} sold).`,
+            e.salesLimit,
+            sold,
+          ),
+        );
     }
   }
   const dep = c.effective.get(c.departure) ?? {};
   if (dep.closedToDeparture?.value)
-    out.push(v('closed_to_departure', c.departure, `Departure on ${c.departure} is not allowed (closed to departure).`, dep.closedToDeparture));
+    out.push(
+      v(
+        'closed_to_departure',
+        c.departure,
+        `Departure on ${c.departure} is not allowed (closed to departure).`,
+        dep.closedToDeparture,
+      ),
+    );
   return out;
 }
 

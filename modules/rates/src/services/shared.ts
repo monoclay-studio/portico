@@ -1,5 +1,11 @@
 import { type Selectable, sql, type TxContext, typed } from '@portico/db';
-import { actorId, BusinessRuleError, ConflictError, requirePermission, ValidationError } from '@portico/kernel';
+import {
+  actorId,
+  BusinessRuleError,
+  ConflictError,
+  requirePermission,
+  ValidationError,
+} from '@portico/kernel';
 import type { ZodType } from 'zod';
 import type { RatesPorts } from '../ports';
 import type { RatesDB } from '../tables';
@@ -66,9 +72,13 @@ export function parseStored<T>(schema: ZodType<T>, value: unknown, what: string)
 export function parseInput<T>(schema: ZodType<T>, value: unknown): T {
   const r = schema.safeParse(value);
   if (!r.success) {
-    throw new ValidationError('validation_failed', 'Some fields are missing or invalid. Correct them and try again.', {
-      errors: r.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
-    });
+    throw new ValidationError(
+      'validation_failed',
+      'Some fields are missing or invalid. Correct them and try again.',
+      {
+        errors: r.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
+      },
+    );
   }
   return r.data;
 }

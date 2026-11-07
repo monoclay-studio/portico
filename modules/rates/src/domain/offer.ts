@@ -89,7 +89,14 @@ export interface NightDraft {
 
 export function checkEligibility(
   plan: { status: string; eligibility: Eligibility },
-  req: { channelId?: string | undefined; companyId?: string | undefined; occupancy: Occupancy; bookingDate: LocalDate; arrival: LocalDate; departure: LocalDate },
+  req: {
+    channelId?: string | undefined;
+    companyId?: string | undefined;
+    occupancy: Occupancy;
+    bookingDate: LocalDate;
+    arrival: LocalDate;
+    departure: LocalDate;
+  },
 ): Violation[] {
   const out: Violation[] = [];
   const v = (kind: Violation['kind'], message: string, date: LocalDate | null = null): Violation => ({
@@ -102,9 +109,12 @@ export function checkEligibility(
     source: null,
   });
   const e = plan.eligibility;
-  if (plan.status !== 'active') out.push(v('plan_not_active', `This rate plan is ${plan.status} and cannot be sold.`));
+  if (plan.status !== 'active')
+    out.push(v('plan_not_active', `This rate plan is ${plan.status} and cannot be sold.`));
   if (e.channels && !e.channels.includes(req.channelId ?? 'direct'))
-    out.push(v('not_eligible_channel', `This rate plan is not sold through ${req.channelId ?? 'direct bookings'}.`));
+    out.push(
+      v('not_eligible_channel', `This rate plan is not sold through ${req.channelId ?? 'direct bookings'}.`),
+    );
   if (e.companyIds && (!req.companyId || !e.companyIds.includes(req.companyId)))
     out.push(v('not_eligible_company', 'This is a negotiated rate for specific companies or agencies only.'));
   const guests = req.occupancy.adults + req.occupancy.childrenAges.length;
@@ -116,8 +126,16 @@ export function checkEligibility(
     out.push(v('occupancy_not_allowed', `This rate allows at most ${e.maxChildren} children.`));
   if (e.maxGuests !== undefined && guests > e.maxGuests)
     out.push(v('occupancy_not_allowed', `This rate allows at most ${e.maxGuests} guests.`));
-  if ((e.sellDates?.from && req.bookingDate < e.sellDates.from) || (e.sellDates?.to && req.bookingDate > e.sellDates.to))
-    out.push(v('outside_sell_dates', `This rate can only be booked between ${e.sellDates?.from ?? 'any date'} and ${e.sellDates?.to ?? 'any date'}.`));
+  if (
+    (e.sellDates?.from && req.bookingDate < e.sellDates.from) ||
+    (e.sellDates?.to && req.bookingDate > e.sellDates.to)
+  )
+    out.push(
+      v(
+        'outside_sell_dates',
+        `This rate can only be booked between ${e.sellDates?.from ?? 'any date'} and ${e.sellDates?.to ?? 'any date'}.`,
+      ),
+    );
   for (const d of eachNight({ from: req.arrival, to: req.departure })) {
     if ((e.stayDates?.from && d < e.stayDates.from) || (e.stayDates?.to && d > e.stayDates.to)) {
       out.push(v('outside_stay_dates', `The night of ${d} is outside this rate's stay dates.`, d));
@@ -203,7 +221,13 @@ export interface AssembleInput {
   bands: readonly ChildAgeBand[];
   drafts: readonly NightDraft[];
   inclusions: readonly InclusionSnapshot[];
-  promotions: ReadonlyArray<{ id: string; version: number; code: string; name: string; discount: PromotionDiscount }>;
+  promotions: ReadonlyArray<{
+    id: string;
+    version: number;
+    code: string;
+    name: string;
+    discount: PromotionDiscount;
+  }>;
   policies: PlanPolicies;
   taxRules: readonly LoadedTaxRule[];
   meta: {
@@ -240,7 +264,11 @@ export function assemble(input: AssembleInput): Assembled {
   const nightIndex = new Map(eachNight({ from: input.arrival, to: input.departure }).map((d, i) => [d, i]));
   const inc = computeInclusions({
     inclusions: input.inclusions,
-    nights: nights.map((n) => ({ date: n.date, amountMinor: n.amountMinor, baseAmountMinor: n.baseAmountMinor })),
+    nights: nights.map((n) => ({
+      date: n.date,
+      amountMinor: n.amountMinor,
+      baseAmountMinor: n.baseAmountMinor,
+    })),
     departure: input.departure,
     occupancy: input.occupancy,
     bands: input.bands,
@@ -331,8 +359,14 @@ export function assemble(input: AssembleInput): Assembled {
       components: comps.map(({ lineId: _lineId, ...c }) => c),
       occupancyPricing: n.params,
       taxes: results.flatMap((r) => r?.taxes ?? []),
-      net: m(results.reduce((s, r) => s + (r?.net.amountMinor ?? 0), 0), cur),
-      gross: m(results.reduce((s, r) => s + (r?.gross.amountMinor ?? 0), 0), cur),
+      net: m(
+        results.reduce((s, r) => s + (r?.net.amountMinor ?? 0), 0),
+        cur,
+      ),
+      gross: m(
+        results.reduce((s, r) => s + (r?.gross.amountMinor ?? 0), 0),
+        cur,
+      ),
     };
   });
   const added: AddedComponent[] = inc.added.map((o, i) => {
@@ -380,7 +414,11 @@ export function assemble(input: AssembleInput): Assembled {
   }
   const taxesAndFees = [...summary.values()];
 
-  const timing = { arrival: input.arrival, timeZone: input.property.timezone, checkInTime: input.property.checkInTime };
+  const timing = {
+    arrival: input.arrival,
+    timeZone: input.property.timezone,
+    checkInTime: input.property.checkInTime,
+  };
   const p = input.policies;
   const policies: OfferPolicies = {
     cancellation: p.cancellation
@@ -427,12 +465,16 @@ export function assemble(input: AssembleInput): Assembled {
   let commission: TermsSnapshot['commission'] = null;
   if (input.plan.commission) {
     const c = input.plan.commission;
-    const roomNet = nightly.reduce(
-      (s, n) => s + (byLine.get(`n:${n.date}:room`)?.net.amountMinor ?? 0),
-      0,
-    );
-    const base = c.base === 'room_net' ? roomNet : c.base === 'stay_net' ? totals.net.amountMinor : totals.gross.amountMinor;
-    const pct = c.percent ? new Decimal(base).mul(c.percent).div(100).toDecimalPlaces(0, Decimal.ROUND_HALF_UP).toNumber() : 0;
+    const roomNet = nightly.reduce((s, n) => s + (byLine.get(`n:${n.date}:room`)?.net.amountMinor ?? 0), 0);
+    const base =
+      c.base === 'room_net'
+        ? roomNet
+        : c.base === 'stay_net'
+          ? totals.net.amountMinor
+          : totals.gross.amountMinor;
+    const pct = c.percent
+      ? new Decimal(base).mul(c.percent).div(100).toDecimalPlaces(0, Decimal.ROUND_HALF_UP).toNumber()
+      : 0;
     commission = { ...c, amount: m(pct + (c.amountPerNightMinor ?? 0) * nights.length, cur) };
   }
 
@@ -485,7 +527,13 @@ export function assemble(input: AssembleInput): Assembled {
       fulfilmentOutlets: [...i.fulfilmentOutlets],
       allowance: i.allowance,
     })),
-    promotions: input.promotions.map((x) => ({ id: x.id, version: x.version, code: x.code, name: x.name, discount: x.discount })),
+    promotions: input.promotions.map((x) => ({
+      id: x.id,
+      version: x.version,
+      code: x.code,
+      name: x.name,
+      discount: x.discount,
+    })),
     policies,
     commission,
     taxes: { summary: taxesAndFees, ruleVersionIds: tax?.ruleVersionIds ?? [] },
@@ -504,7 +552,9 @@ export function assemble(input: AssembleInput): Assembled {
     policies,
     commission,
     violations: inc.violations,
-    unverifiedTaxRules: [...new Set(taxesAndFees.filter((t) => t.verificationStatus !== 'verified').map((t) => t.ruleCode))],
+    unverifiedTaxRules: [
+      ...new Set(taxesAndFees.filter((t) => t.verificationStatus !== 'verified').map((t) => t.ruleCode)),
+    ],
     terms,
   };
 }
@@ -537,4 +587,3 @@ export function toOffer(
     terms: a.terms,
   };
 }
-

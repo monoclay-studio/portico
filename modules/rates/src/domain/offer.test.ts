@@ -33,7 +33,14 @@ function build(opts: { arrival?: string; departure?: string; base?: number } = {
     occupancy,
     bands: DEFAULT_CHILD_AGE_BANDS,
     promotions: [],
-    promotionContext: { arrival, departure, nights: 3, bookingDate: '2026-11-07', unitTypeId: UT, ratePlanId: PLAN },
+    promotionContext: {
+      arrival,
+      departure,
+      nights: 3,
+      bookingDate: '2026-11-07',
+      unitTypeId: UT,
+      ratePlanId: PLAN,
+    },
     currency: 'USD',
   });
   const assembled = assemble({
@@ -130,7 +137,12 @@ describe('offer assembly', () => {
     expect(verifyTerms(assembled.terms)).toBe(true);
     const roundTrip = termsSnapshot.parse(JSON.parse(JSON.stringify(assembled.terms)));
     expect(verifyTerms(roundTrip)).toBe(true);
-    const tampered = { ...roundTrip, nights: roundTrip.nights.map((x, i) => (i === 0 ? { ...x, amount: { ...x.amount, amountMinor: 1 } } : x)) };
+    const tampered = {
+      ...roundTrip,
+      nights: roundTrip.nights.map((x, i) =>
+        i === 0 ? { ...x, amount: { ...x.amount, amountMinor: 1 } } : x,
+      ),
+    };
     expect(verifyTerms(tampered)).toBe(false);
   });
 
@@ -138,7 +150,11 @@ describe('offer assembly', () => {
     const { assembled } = build();
     const plan = postingPlan(assembled.terms, 'stay-1');
     expect(plan).toHaveLength(6);
-    expect(plan[0]).toMatchObject({ idempotencyKey: 'room:stay-1:2026-12-01', amount: { amountMinor: 38_000 }, taxCategory: 'accommodation' });
+    expect(plan[0]).toMatchObject({
+      idempotencyKey: 'room:stay-1:2026-12-01',
+      amount: { amountMinor: 38_000 },
+      taxCategory: 'accommodation',
+    });
     expect(plan[1]?.idempotencyKey).toBe('inclusion:stay-1:00000000-0000-7000-8000-00000000d001:2026-12-01');
     const sum = plan.reduce((s, l) => s + l.amount.amountMinor, 0);
     expect(sum).toBe(assembled.totals.net.amountMinor);
@@ -146,10 +162,27 @@ describe('offer assembly', () => {
 
   it('reports eligibility violations as not overridable', () => {
     const v = checkEligibility(
-      { status: 'active', eligibility: { channels: ['direct'], companyIds: ['00000000-0000-7000-8000-000000000001'], maxAdults: 2 } },
-      { channelId: 'ota-x', occupancy: { adults: 3, childrenAges: [] }, bookingDate: '2026-11-07', arrival: '2026-12-01', departure: '2026-12-02' },
+      {
+        status: 'active',
+        eligibility: {
+          channels: ['direct'],
+          companyIds: ['00000000-0000-7000-8000-000000000001'],
+          maxAdults: 2,
+        },
+      },
+      {
+        channelId: 'ota-x',
+        occupancy: { adults: 3, childrenAges: [] },
+        bookingDate: '2026-11-07',
+        arrival: '2026-12-01',
+        departure: '2026-12-02',
+      },
     );
-    expect(v.map((x) => x.kind)).toEqual(['not_eligible_channel', 'not_eligible_company', 'occupancy_not_allowed']);
+    expect(v.map((x) => x.kind)).toEqual([
+      'not_eligible_channel',
+      'not_eligible_company',
+      'occupancy_not_allowed',
+    ]);
     expect(v.every((x) => !x.overridable)).toBe(true);
   });
 });
@@ -158,8 +191,14 @@ describe('repricing agreed terms (change previews)', () => {
   const ctx = (current: ReturnType<typeof build>['priced'] | null) => ({
     property: { id: PROP, timezone: 'Indian/Maldives', checkInTime: '14:00', classification: RESORT },
     taxRules: maldivesLikeRules(),
-    meta: { quoteId: '00000000-0000-7000-8000-00000000f002', quotedAt: '2026-11-20T08:00:00.000Z', configVector: 'cv2' },
-    current: current ? { drafts: new Map(current.drafts.map((d) => [d.date, d])), violations: current.violations } : null,
+    meta: {
+      quoteId: '00000000-0000-7000-8000-00000000f002',
+      quotedAt: '2026-11-20T08:00:00.000Z',
+      configVector: 'cv2',
+    },
+    current: current
+      ? { drafts: new Map(current.drafts.map((d) => [d.date, d])), violations: current.violations }
+      : null,
     currentAgreedType: null,
   });
 

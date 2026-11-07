@@ -36,9 +36,18 @@ export async function seedGuesthouseRates(
     propertyId,
     code: 'FLEX7',
     name: 'Flexible — free until 7 days before arrival',
-    structure: { tiers: [{ from: { kind: 'days_before_arrival', days: 7 }, penalty: { kind: 'first_night' } }], noShow: { kind: 'first_night' } },
+    structure: {
+      tiers: [{ from: { kind: 'days_before_arrival', days: 7 }, penalty: { kind: 'first_night' } }],
+      noShow: { kind: 'first_night' },
+    },
   });
-  const card = await rates.createPolicy(tx, { kind: 'guarantee', propertyId, code: 'CARD', name: 'Card guarantee', structure: { accepted: ['card'], holdUntil: '18:00' } });
+  const card = await rates.createPolicy(tx, {
+    kind: 'guarantee',
+    propertyId,
+    code: 'CARD',
+    name: 'Card guarantee',
+    structure: { accepted: ['card'], holdUntil: '18:00' },
+  });
   const breakfast = await rates.createInclusion(tx, {
     propertyId,
     code: 'BRKF',
@@ -46,7 +55,11 @@ export async function seedGuesthouseRates(
     kind: 'component',
     chargeCode: 'FB_BREAKFAST',
     taxCategory: 'food_beverage',
-    pricing: { kind: 'fixed', amountMinor: usd(8), childBandAmountsMinor: { infant: 0, child: usd(4), teen: usd(8) } },
+    pricing: {
+      kind: 'fixed',
+      amountMinor: usd(8),
+      childBandAmountsMinor: { infant: 0, child: usd(4), teen: usd(8) },
+    },
     basis: 'per_person',
     rhythm: { kind: 'nightly' },
     priceMode: 'included',
@@ -65,8 +78,20 @@ export async function seedGuesthouseRates(
     priceMode: 'included',
     fulfilmentOutlets: ['guesthouse-cafe'],
   });
-  const bb = await rates.createPackage(tx, { propertyId, code: 'BB', name: 'Bed & breakfast', mealPlanCode: 'BB', inclusionIds: [breakfast.id] });
-  const hb = await rates.createPackage(tx, { propertyId, code: 'HB', name: 'Half board', mealPlanCode: 'HB', inclusionIds: [breakfast.id, dinner.id] });
+  const bb = await rates.createPackage(tx, {
+    propertyId,
+    code: 'BB',
+    name: 'Bed & breakfast',
+    mealPlanCode: 'BB',
+    inclusionIds: [breakfast.id],
+  });
+  const hb = await rates.createPackage(tx, {
+    propertyId,
+    code: 'HB',
+    name: 'Half board',
+    mealPlanCode: 'HB',
+    inclusionIds: [breakfast.id, dinner.id],
+  });
   const bbPlan = await rates.createRatePlan(tx, {
     propertyId,
     code: 'BB',
@@ -82,7 +107,11 @@ export async function seedGuesthouseRates(
     code: 'HB',
     name: 'Half board',
     mealPlan: 'HB',
-    derivation: { parentRatePlanId: bbPlan.id, adjustment: { kind: 'amount', amountMinor: usd(30) }, rounding: { incrementMinor: 100, mode: 'half_up' } },
+    derivation: {
+      parentRatePlanId: bbPlan.id,
+      adjustment: { kind: 'amount', amountMinor: usd(30) },
+      rounding: { incrementMinor: 100, mode: 'half_up' },
+    },
     inherit: { packages: false },
     packageIds: [hb.id],
     marketSegment: 'leisure',
@@ -96,13 +125,25 @@ export async function seedGuesthouseRates(
       extraAdultMinor: usd(20),
       childAmountsMinor: { infant: 0, child: usd(10), teen: usd(15) },
     });
-    await rates.applyPriceUpdate(tx, { propertyId, ratePlanId: bbPlan.id, unitTypeIds: [ut.id], ranges: [{ from: input.from, to }], set: set(low), reason: 'demo: low season' });
+    await rates.applyPriceUpdate(tx, {
+      propertyId,
+      ratePlanId: bbPlan.id,
+      unitTypeIds: [ut.id],
+      ranges: [{ from: input.from, to }],
+      set: set(low),
+      reason: 'demo: low season',
+    });
     // High season: December to mid-April (sample).
-    const highRanges = seasonRanges(input.from, to, [
-      ['12-01', '04-15'],
-    ]);
+    const highRanges = seasonRanges(input.from, to, [['12-01', '04-15']]);
     if (highRanges.length > 0)
-      await rates.applyPriceUpdate(tx, { propertyId, ratePlanId: bbPlan.id, unitTypeIds: [ut.id], ranges: highRanges, set: set(low + 25), reason: 'demo: high season' });
+      await rates.applyPriceUpdate(tx, {
+        propertyId,
+        ratePlanId: bbPlan.id,
+        unitTypeIds: [ut.id],
+        ranges: highRanges,
+        set: set(low + 25),
+        reason: 'demo: high season',
+      });
   }
   await activate(rates, tx, bbPlan.id);
   await activate(rates, tx, hbPlan.id);
@@ -135,7 +176,10 @@ export async function seedResortRates(
     structure: {
       tiers: [
         { from: { kind: 'days_before_arrival', days: 21 }, penalty: { kind: 'nights', nights: 3 } },
-        { from: { kind: 'days_before_arrival', days: 7 }, penalty: { kind: 'percent_of_stay', percent: '100' } },
+        {
+          from: { kind: 'days_before_arrival', days: 7 },
+          penalty: { kind: 'percent_of_stay', percent: '100' },
+        },
       ],
       noShow: { kind: 'percent_of_stay', percent: '100' },
       earlyDeparture: { kind: 'percent_of_stay', percent: '100' },
@@ -146,9 +190,18 @@ export async function seedResortRates(
     propertyId,
     code: 'NONREF',
     name: 'Non-refundable',
-    structure: { tiers: [{ from: { kind: 'at_booking' }, penalty: { kind: 'percent_of_stay', percent: '100' } }], noShow: { kind: 'percent_of_stay', percent: '100' } },
+    structure: {
+      tiers: [{ from: { kind: 'at_booking' }, penalty: { kind: 'percent_of_stay', percent: '100' } }],
+      noShow: { kind: 'percent_of_stay', percent: '100' },
+    },
   });
-  const guarantee = await rates.createPolicy(tx, { kind: 'guarantee', propertyId, code: 'CARD-DEP', name: 'Card or deposit', structure: { accepted: ['card', 'deposit', 'agency'] } });
+  const guarantee = await rates.createPolicy(tx, {
+    kind: 'guarantee',
+    propertyId,
+    code: 'CARD-DEP',
+    name: 'Card or deposit',
+    structure: { accepted: ['card', 'deposit', 'agency'] },
+  });
   const deposit = await rates.createPolicy(tx, {
     kind: 'deposit',
     propertyId,
@@ -156,8 +209,19 @@ export async function seedResortRates(
     name: '30% at booking, balance 30 days before arrival',
     structure: {
       items: [
-        { kind: 'deposit', amount: { basis: 'percent', percent: '30' }, due: { anchor: 'booking', offsetDays: 0 }, method: 'payment_request' },
-        { kind: 'balance', amount: { basis: 'remaining' }, due: { anchor: 'arrival', offsetDays: -30 }, method: 'payment_request', onOverdue: { action: 'task' } },
+        {
+          kind: 'deposit',
+          amount: { basis: 'percent', percent: '30' },
+          due: { anchor: 'booking', offsetDays: 0 },
+          method: 'payment_request',
+        },
+        {
+          kind: 'balance',
+          amount: { basis: 'remaining' },
+          due: { anchor: 'arrival', offsetDays: -30 },
+          method: 'payment_request',
+          onOverdue: { action: 'task' },
+        },
       ],
     },
   });
@@ -166,16 +230,30 @@ export async function seedResortRates(
     propertyId,
     code: 'PREPAID',
     name: 'Full prepayment at booking',
-    structure: { items: [{ kind: 'deposit', amount: { basis: 'remaining' }, due: { anchor: 'booking', offsetDays: 0 }, method: 'payment_request' }] },
+    structure: {
+      items: [
+        {
+          kind: 'deposit',
+          amount: { basis: 'remaining' },
+          due: { anchor: 'booking', offsetDays: 0 },
+          method: 'payment_request',
+        },
+      ],
+    },
   });
-  const inc = async (body: Record<string, unknown>) => rates.createInclusion(tx, { propertyId, fulfilmentOutlets: [], ...body });
+  const inc = async (body: Record<string, unknown>) =>
+    rates.createInclusion(tx, { propertyId, fulfilmentOutlets: [], ...body });
   const breakfast = await inc({
     code: 'BRKF',
     name: 'Breakfast',
     kind: 'component',
     chargeCode: 'FB_BREAKFAST',
     taxCategory: 'food_beverage',
-    pricing: { kind: 'fixed', amountMinor: usd(35), childBandAmountsMinor: { infant: 0, child: usd(18), teen: usd(35) } },
+    pricing: {
+      kind: 'fixed',
+      amountMinor: usd(35),
+      childBandAmountsMinor: { infant: 0, child: usd(18), teen: usd(35) },
+    },
     basis: 'per_person',
     rhythm: { kind: 'nightly' },
     priceMode: 'included',
@@ -252,7 +330,13 @@ export async function seedResortRates(
     priceMode: 'added',
     fulfilmentOutlets: ['dive-centre'],
   });
-  const bbPkg = await rates.createPackage(tx, { propertyId, code: 'BB', name: 'Bed & breakfast', mealPlanCode: 'BB', inclusionIds: [breakfast.id] });
+  const bbPkg = await rates.createPackage(tx, {
+    propertyId,
+    code: 'BB',
+    name: 'Bed & breakfast',
+    mealPlanCode: 'BB',
+    inclusionIds: [breakfast.id],
+  });
   const aiPkg = await rates.createPackage(tx, {
     propertyId,
     code: 'AI',
@@ -260,7 +344,12 @@ export async function seedResortRates(
     mealPlanCode: 'AI',
     inclusionIds: [aiBoard.id, dining.id, seaplaneIn.id, seaplaneOut.id],
   });
-  const honeyPkg = await rates.createPackage(tx, { propertyId, code: 'HONEYMOON', name: 'Honeymoon extras', inclusionIds: [sunset.id] });
+  const honeyPkg = await rates.createPackage(tx, {
+    propertyId,
+    code: 'HONEYMOON',
+    name: 'Honeymoon extras',
+    inclusionIds: [sunset.id],
+  });
   const bar = await rates.createRatePlan(tx, {
     propertyId,
     code: 'BAR',
@@ -277,7 +366,11 @@ export async function seedResortRates(
     code: 'BAR-NR',
     name: 'Non-refundable — bed & breakfast (−10%)',
     mealPlan: 'BB',
-    derivation: { parentRatePlanId: bar.id, adjustment: { kind: 'percent', percent: '-10' }, rounding: { incrementMinor: 100, mode: 'half_up' } },
+    derivation: {
+      parentRatePlanId: bar.id,
+      adjustment: { kind: 'percent', percent: '-10' },
+      rounding: { incrementMinor: 100, mode: 'half_up' },
+    },
     inherit: { cancellationPolicy: false, depositPolicy: false },
     cancellationPolicyId: nonRef.id,
     depositPolicyId: prepaid.id,
@@ -304,7 +397,14 @@ export async function seedResortRates(
     { name: 'peak', ranges: [['12-20', '01-10']], base: [1400, 1900] },
   ];
   for (const season of seasons) {
-    const ranges = season.name === 'low' ? [{ from: input.from, to }] : seasonRanges(input.from, to, season.ranges.map(([a, b]) => [a, b]));
+    const ranges =
+      season.name === 'low'
+        ? [{ from: input.from, to }]
+        : seasonRanges(
+            input.from,
+            to,
+            season.ranges.map(([a, b]) => [a, b]),
+          );
     if (ranges.length === 0) continue;
     for (const [i, ut] of input.unitTypes.entries()) {
       const base = season.base[Math.min(i, season.base.length - 1)] as number;
@@ -324,7 +424,14 @@ export async function seedResortRates(
       });
     }
     if (season.name === 'peak') {
-      await rates.applyRestrictionUpdate(tx, { propertyId, ratePlanId: null, unitTypeIds: [null], ranges, set: { minLos: 5 }, reason: 'demo: festive minimum stay' });
+      await rates.applyRestrictionUpdate(tx, {
+        propertyId,
+        ratePlanId: null,
+        unitTypeIds: [null],
+        ranges,
+        set: { minLos: 5 },
+        reason: 'demo: festive minimum stay',
+      });
     }
   }
   const honeymoon = await rates.createPromotion(tx, {
@@ -349,7 +456,11 @@ export async function seedResortRates(
     code: 'AI-HONEY',
     name: 'All inclusive honeymoon (sunset cruise)',
     mealPlan: 'AI',
-    derivation: { parentRatePlanId: ai.id, adjustment: { kind: 'amount', amountMinor: 0 }, rounding: { incrementMinor: 100, mode: 'half_up' } },
+    derivation: {
+      parentRatePlanId: ai.id,
+      adjustment: { kind: 'amount', amountMinor: 0 },
+      rounding: { incrementMinor: 100, mode: 'half_up' },
+    },
     packageIds: [honeyPkg.id],
     eligibility: { minAdults: 2, maxAdults: 2, maxChildren: 0 },
     marketSegment: 'leisure',
@@ -367,13 +478,23 @@ export async function seedResortRates(
       SUNSET_CRUISE: sunset.id,
     },
     packages: { BB: bbPkg.id, AI: aiPkg.id, HONEYMOON: honeyPkg.id },
-    policies: { FLEX21: flex.id, NONREF: nonRef.id, 'CARD-DEP': guarantee.id, DEP30: deposit.id, PREPAID: prepaid.id },
+    policies: {
+      FLEX21: flex.id,
+      NONREF: nonRef.id,
+      'CARD-DEP': guarantee.id,
+      DEP30: deposit.id,
+      PREPAID: prepaid.id,
+    },
     promotions: { HONEYMOON: honeymoon.id, STAY7PAY6: stay7.id },
   };
 }
 
 /** Recurring month-day windows ('MM-DD' inclusive, may wrap the year) clipped to [from, to). */
-export function seasonRanges(from: LocalDate, to: LocalDate, windows: ReadonlyArray<readonly [string, string]>) {
+export function seasonRanges(
+  from: LocalDate,
+  to: LocalDate,
+  windows: ReadonlyArray<readonly [string, string]>,
+) {
   const out: Array<{ from: LocalDate; to: LocalDate }> = [];
   const startYear = Number(from.slice(0, 4)) - 1;
   const endYear = Number(to.slice(0, 4));
@@ -394,7 +515,10 @@ export function seasonRanges(from: LocalDate, to: LocalDate, windows: ReadonlyAr
  * property by profile. Needs the inventory port (`listUnitTypes`) to find the property's unit types.
  */
 export function createRatesDemoSeed(rates: RatesService, ports: RatesPorts) {
-  return async (tx: TxContext, org: { properties: ReadonlyArray<{ id: string; profile: string }> }): Promise<void> => {
+  return async (
+    tx: TxContext,
+    org: { properties: ReadonlyArray<{ id: string; profile: string }> },
+  ): Promise<void> => {
     if (!ports.listUnitTypes) {
       throw new BusinessRuleError(
         'rates_demo_needs_inventory',
@@ -405,7 +529,9 @@ export function createRatesDemoSeed(rates: RatesService, ports: RatesPorts) {
     for (const p of org.properties) {
       const unitTypes = await ports.listUnitTypes(tx, p.id);
       if (unitTypes.length === 0) continue;
-      const from = ports.getBusinessDate ? await ports.getBusinessDate(tx, p.id) : tx.now.toISOString().slice(0, 10);
+      const from = ports.getBusinessDate
+        ? await ports.getBusinessDate(tx, p.id)
+        : tx.now.toISOString().slice(0, 10);
       if (p.profile === 'resort') await seedResortRates(rates, tx, { propertyId: p.id, unitTypes, from });
       else await seedGuesthouseRates(rates, tx, { propertyId: p.id, unitTypes, from });
     }

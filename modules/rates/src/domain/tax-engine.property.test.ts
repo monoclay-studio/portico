@@ -37,7 +37,9 @@ function randomRules(r: ReturnType<typeof prng>): LoadedTaxRule[] {
           base,
           appliesTo: { taxCategories: [...CATEGORIES] },
           rounding: { mode: r.pick(['half_up', 'half_even'] as const) },
-          ...(r.next() < 0.15 ? { caps: { maxAmountPerLine: { value: `${r.int(1, 200)}`, currency: 'USD' } } } : {}),
+          ...(r.next() < 0.15
+            ? { caps: { maxAmountPerLine: { value: `${r.int(1, 200)}`, currency: 'USD' } } }
+            : {}),
         };
     rules.push(rule({ code, category: r.bool() ? 'tax' : 'fee', sequence: i }, [{ def }]));
     codes.push(code);
@@ -72,7 +74,10 @@ describe('tax engine properties over random inputs', () => {
           taxCategory: r.pick(CATEGORIES),
           quantity: r.int(1, 3),
           units: r.int(1, 2),
-          occupancy: { adults: r.int(1, 4), childrenAges: Array.from({ length: r.int(0, 2) }, () => r.int(0, 17)) },
+          occupancy: {
+            adults: r.int(1, 4),
+            childrenAges: Array.from({ length: r.int(0, 2) }, () => r.int(0, 17)),
+          },
           taxInclusion: inclusion,
         }),
       );
@@ -101,7 +106,9 @@ describe('tax engine properties over random inputs', () => {
       expect(t.net.amountMinor).toBe(result.lines.reduce((s, l) => s + l.net.amountMinor, 0)); // P3
       expect(t.gross.amountMinor).toBe(result.lines.reduce((s, l) => s + l.gross.amountMinor, 0));
       expect(t.net.amountMinor + t.taxes.amountMinor + t.fees.amountMinor).toBe(t.gross.amountMinor);
-      expect(JSON.stringify(computeTaxesPure(rules, lines, { classification: {} }))).toBe(JSON.stringify(result)); // P6
+      expect(JSON.stringify(computeTaxesPure(rules, lines, { classification: {} }))).toBe(
+        JSON.stringify(result),
+      ); // P6
       checked++;
     }
     expect(checked).toBeGreaterThan(2_500);
@@ -114,9 +121,13 @@ describe('tax engine properties over random inputs', () => {
       const net = r.int(0, 10_000_000);
       const occupancy = { adults: r.int(1, 3), childrenAges: [] };
       const excl = computeLine(rules, line({ amountMinor: net, occupancy }), { classification: {} });
-      const incl = computeLine(rules, line({ amountMinor: excl.gross.amountMinor, occupancy, taxInclusion: { mode: 'inclusive' } }), {
-        classification: {},
-      });
+      const incl = computeLine(
+        rules,
+        line({ amountMinor: excl.gross.amountMinor, occupancy, taxInclusion: { mode: 'inclusive' } }),
+        {
+          classification: {},
+        },
+      );
       expect(incl.gross.amountMinor).toBe(excl.gross.amountMinor);
       expect(Math.abs(incl.net.amountMinor - net)).toBeLessThanOrEqual(rules.length);
     }

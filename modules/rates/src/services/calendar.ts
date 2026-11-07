@@ -1,6 +1,13 @@
 /** Rate calendar: prices and restrictions, bulk updates with preview, versioned history, events. */
 import { sql, type TxContext } from '@portico/db';
-import { BusinessRuleError, type DateRange, type LocalDate, NotFoundError, newId, ValidationError } from '@portico/kernel';
+import {
+  BusinessRuleError,
+  type DateRange,
+  type LocalDate,
+  NotFoundError,
+  newId,
+  ValidationError,
+} from '@portico/kernel';
 import {
   type OccupancyPricing,
   type PriceBulkUpdate,
@@ -17,9 +24,9 @@ import { coalesceDates, expandDates } from '../domain/calendar';
 import { adjustParams, ancestry, descendants, resolveDerivedParams } from '../domain/pricing';
 import { RATES_EVENTS } from '../events';
 import type { RatesPorts } from '../ports';
+import { derivationSteps } from './plan-chain';
 import { asNodes, loadPlansForProperty, toRatePlan } from './rate-plans';
 import { actorKey, db, guardConfigWrite, json, parseInput, type Row, requireRead } from './shared';
-import { derivationSteps } from './plan-chain';
 
 export const MAX_BULK_CELLS = 20_000;
 
@@ -45,7 +52,16 @@ function cell(
   version: number | null,
   derivedFrom: string | null = null,
 ): PriceCell {
-  return { ratePlanId, unitTypeId, date, currency, ...p, derived: derivedFrom !== null, derivedFrom, version };
+  return {
+    ratePlanId,
+    unitTypeId,
+    date,
+    currency,
+    ...p,
+    derived: derivedFrom !== null,
+    derivedFrom,
+    version,
+  };
 }
 
 const sameParams = (a: OccupancyPricing, b: OccupancyPricing) => JSON.stringify(a) === JSON.stringify(b);
@@ -64,7 +80,8 @@ function nextParams(before: OccupancyPricing | null, u: PriceBulkUpdate): Occupa
   return {
     baseOccupancy,
     baseAmountMinor,
-    singleAmountMinor: s.singleAmountMinor !== undefined ? s.singleAmountMinor : (before?.singleAmountMinor ?? null),
+    singleAmountMinor:
+      s.singleAmountMinor !== undefined ? s.singleAmountMinor : (before?.singleAmountMinor ?? null),
     extraAdultMinor: s.extraAdultMinor !== undefined ? s.extraAdultMinor : (before?.extraAdultMinor ?? null),
     childAmountsMinor: { ...(before?.childAmountsMinor ?? {}), ...(s.childAmountsMinor ?? {}) },
     occupancyAmountsMinor: { ...(before?.occupancyAmountsMinor ?? {}), ...(s.occupancyAmountsMinor ?? {}) },
@@ -72,35 +89,62 @@ function nextParams(before: OccupancyPricing | null, u: PriceBulkUpdate): Occupa
 }
 
 async function loadBasePlanForPrices(tx: TxContext, u: PriceBulkUpdate) {
-  const row = await db(tx).selectFrom('rates.rate_plans').selectAll().where('id', '=', u.ratePlanId).executeTakeFirst();
+  const row = await db(tx)
+    .selectFrom('rates.rate_plans')
+    .selectAll()
+    .where('id', '=', u.ratePlanId)
+    .executeTakeFirst();
   if (!row || row.property_id !== u.propertyId) throw new NotFoundError('rate_plan', u.ratePlanId);
   const plan = toRatePlan(row);
   if (plan.derivation) {
-    const parent = await db(tx).selectFrom('rates.rate_plans').select('code').where('id', '=', plan.derivation.parentRatePlanId).executeTakeFirst();
+    const parent = await db(tx)
+      .selectFrom('rates.rate_plans')
+      .select('code')
+      .where('id', '=', plan.derivation.parentRatePlanId)
+      .executeTakeFirst();
     throw new BusinessRuleError(
       'derived_plan_prices_computed',
       `${plan.code} is derived from ${parent?.code ?? 'its parent'}; its prices are computed and cannot be edited. Change the parent's prices or the derivation instead.`,
       { ratePlanId: plan.id, parentRatePlanId: plan.derivation.parentRatePlanId },
     );
   }
-  if (plan.status === 'retired') throw new BusinessRuleError('rate_plan_retired', `${plan.code} is retired; its prices can no longer change.`);
+  if (plan.status === 'retired')
+    throw new BusinessRuleError(
+      'rate_plan_retired',
+      `${plan.code} is retired; its prices can no longer change.`,
+    );
   return plan;
 }
 
-async function assertUnitTypes(ports: RatesPorts, tx: TxContext, propertyId: string, ids: ReadonlyArray<string | null>) {
+async function assertUnitTypes(
+  ports: RatesPorts,
+  tx: TxContext,
+  propertyId: string,
+  ids: ReadonlyArray<string | null>,
+) {
   if (!ports.listUnitTypes) return;
   const known = new Set((await ports.listUnitTypes(tx, propertyId)).map((u) => u.id));
   const unknown = ids.filter((id): id is string => id !== null && !known.has(id));
   if (unknown.length > 0) {
-    throw new ValidationError('unit_type_not_found', 'Some unit types do not exist at this property.', { unknown });
+    throw new ValidationError('unit_type_not_found', 'Some unit types do not exist at this property.', {
+      unknown,
+    });
   }
 }
 
-async function buildPricePreview(tx: TxContext, u: PriceBulkUpdate, currency: string, lock: boolean): Promise<PricePreview> {
+async function buildPricePreview(
+  tx: TxContext,
+  u: PriceBulkUpdate,
+  currency: string,
+  lock: boolean,
+): Promise<PricePreview> {
   const dates = expandDates(u.ranges, u.weekdays);
   const unitTypeIds = [...new Set(u.unitTypeIds)];
   if (dates.length * unitTypeIds.length > MAX_BULK_CELLS) {
-    throw new ValidationError('bulk_update_too_large', `A bulk update may change at most ${MAX_BULK_CELLS} cells. Split it by date range or unit type.`);
+    throw new ValidationError(
+      'bulk_update_too_large',
+      `A bulk update may change at most ${MAX_BULK_CELLS} cells. Split it by date range or unit type.`,
+    );
   }
   let q = db(tx)
     .selectFrom('rates.prices')
@@ -149,7 +193,11 @@ async function buildPricePreview(tx: TxContext, u: PriceBulkUpdate, currency: st
   };
 }
 
-export async function previewPriceUpdate(ports: RatesPorts, tx: TxContext, raw: unknown): Promise<PricePreview> {
+export async function previewPriceUpdate(
+  ports: RatesPorts,
+  tx: TxContext,
+  raw: unknown,
+): Promise<PricePreview> {
   const u = parseInput(priceBulkUpdate, raw);
   requireRead(tx, u.propertyId);
   const plan = await loadBasePlanForPrices(tx, u);
@@ -188,7 +236,15 @@ export async function applyPriceUpdate(
       actor: json(tx.actor),
       actor_key: actorKey(tx),
       reason: u.reason ?? null,
-      summary: json({ ...preview.summary, request: { ranges: u.ranges, weekdays: u.weekdays ?? null, set: u.set ?? null, adjust: u.adjust ?? null } }),
+      summary: json({
+        ...preview.summary,
+        request: {
+          ranges: u.ranges,
+          weekdays: u.weekdays ?? null,
+          set: u.set ?? null,
+          adjust: u.adjust ?? null,
+        },
+      }),
       created_at: tx.now,
     })
     .execute();
@@ -278,10 +334,15 @@ export async function getPriceCalendar(
   tx: TxContext,
   input: { ratePlanId: string; from: LocalDate; to: LocalDate; unitTypeId?: string | undefined },
 ): Promise<{ ratePlanId: string; cells: PriceCell[] }> {
-  const row = await db(tx).selectFrom('rates.rate_plans').selectAll().where('id', '=', input.ratePlanId).executeTakeFirst();
+  const row = await db(tx)
+    .selectFrom('rates.rate_plans')
+    .selectAll()
+    .where('id', '=', input.ratePlanId)
+    .executeTakeFirst();
   if (!row) throw new NotFoundError('rate_plan', input.ratePlanId);
   requireRead(tx, row.property_id);
-  if (input.to <= input.from) throw new ValidationError('invalid_date_range', 'The end date must be after the start date.');
+  if (input.to <= input.from)
+    throw new ValidationError('invalid_date_range', 'The end date must be after the start date.');
   const plans = await loadPlansForProperty(tx, row.property_id);
   const chain = ancestry(asNodes(plans), input.ratePlanId);
   const root = chain[0] as (typeof chain)[number];
@@ -315,15 +376,35 @@ export async function getPriceCalendar(
 
 export async function getPriceHistory(
   tx: TxContext,
-  input: { ratePlanId: string; unitTypeId?: string | undefined; from?: LocalDate | undefined; to?: LocalDate | undefined },
+  input: {
+    ratePlanId: string;
+    unitTypeId?: string | undefined;
+    from?: LocalDate | undefined;
+    to?: LocalDate | undefined;
+  },
 ) {
-  const plan = await db(tx).selectFrom('rates.rate_plans').select('property_id').where('id', '=', input.ratePlanId).executeTakeFirst();
+  const plan = await db(tx)
+    .selectFrom('rates.rate_plans')
+    .select('property_id')
+    .where('id', '=', input.ratePlanId)
+    .executeTakeFirst();
   if (!plan) throw new NotFoundError('rate_plan', input.ratePlanId);
   requireRead(tx, plan.property_id);
   let q = db(tx)
     .selectFrom('rates.price_history as h')
     .innerJoin('rates.change_sets as c', 'c.id', 'h.change_set_id')
-    .select(['h.id', 'h.change_set_id', 'h.rate_plan_id', 'h.unit_type_id', 'h.stay_date', 'h.before', 'h.after', 'h.changed_at', 'h.changed_by', 'c.reason'])
+    .select([
+      'h.id',
+      'h.change_set_id',
+      'h.rate_plan_id',
+      'h.unit_type_id',
+      'h.stay_date',
+      'h.before',
+      'h.after',
+      'h.changed_at',
+      'h.changed_by',
+      'c.reason',
+    ])
     .where('h.rate_plan_id', '=', input.ratePlanId)
     .orderBy('h.changed_at')
     .orderBy('h.stay_date')
@@ -384,7 +465,10 @@ async function restrictionPreviewFor(tx: TxContext, u: RestrictionBulkUpdate, lo
   const dates = expandDates(u.ranges, u.weekdays);
   const unitTypeIds = [...new Set(u.unitTypeIds)];
   if (dates.length * unitTypeIds.length > MAX_BULK_CELLS) {
-    throw new ValidationError('bulk_update_too_large', `A bulk update may change at most ${MAX_BULK_CELLS} cells. Split it.`);
+    throw new ValidationError(
+      'bulk_update_too_large',
+      `A bulk update may change at most ${MAX_BULK_CELLS} cells. Split it.`,
+    );
   }
   let q = db(tx)
     .selectFrom('rates.restrictions')
@@ -396,14 +480,28 @@ async function restrictionPreviewFor(tx: TxContext, u: RestrictionBulkUpdate, lo
   if (lock) q = q.forUpdate();
   const rows = await q.execute();
   const existing = new Map(rows.map((r) => [`${r.unit_type_id ?? '*'}|${r.stay_date}`, r]));
-  const changes: Array<{ ratePlanId: string | null; unitTypeId: string | null; date: LocalDate; before: RestrictionValues | null; after: RestrictionValues; version: number }> = [];
+  const changes: Array<{
+    ratePlanId: string | null;
+    unitTypeId: string | null;
+    date: LocalDate;
+    before: RestrictionValues | null;
+    after: RestrictionValues;
+    version: number;
+  }> = [];
   for (const unitTypeId of unitTypeIds) {
     for (const date of dates) {
       const r = existing.get(`${unitTypeId ?? '*'}|${date}`);
       const before = r ? restrictionValues(r) : null;
       const after = mergeRestriction(before ?? {}, u.set);
       if (JSON.stringify(before ?? {}) === JSON.stringify(after)) continue;
-      changes.push({ ratePlanId: u.ratePlanId, unitTypeId, date, before, after, version: r ? r.version + 1 : 1 });
+      changes.push({
+        ratePlanId: u.ratePlanId,
+        unitTypeId,
+        date,
+        before,
+        after,
+        version: r ? r.version + 1 : 1,
+      });
     }
   }
   const changedKinds = RESTRICTION_KINDS.filter((k) => k in u.set && k !== 'salesLimit');
@@ -435,7 +533,11 @@ async function restrictionPreviewFor(tx: TxContext, u: RestrictionBulkUpdate, lo
 
 async function validateRestrictionScope(ports: RatesPorts, tx: TxContext, u: RestrictionBulkUpdate) {
   if (u.ratePlanId) {
-    const plan = await db(tx).selectFrom('rates.rate_plans').select(['property_id']).where('id', '=', u.ratePlanId).executeTakeFirst();
+    const plan = await db(tx)
+      .selectFrom('rates.rate_plans')
+      .select(['property_id'])
+      .where('id', '=', u.ratePlanId)
+      .executeTakeFirst();
     if (!plan || plan.property_id !== u.propertyId) throw new NotFoundError('rate_plan', u.ratePlanId);
   }
   await assertUnitTypes(ports, tx, u.propertyId, u.unitTypeIds);
@@ -474,7 +576,10 @@ export async function applyRestrictionUpdate(ports: RatesPorts, tx: TxContext, r
       actor: json(tx.actor),
       actor_key: actorKey(tx),
       reason: u.reason ?? null,
-      summary: json({ ...preview.summary, request: { ranges: u.ranges, weekdays: u.weekdays ?? null, set: u.set } }),
+      summary: json({
+        ...preview.summary,
+        request: { ranges: u.ranges, weekdays: u.weekdays ?? null, set: u.set },
+      }),
       created_at: tx.now,
     })
     .execute();

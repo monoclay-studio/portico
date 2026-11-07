@@ -22,14 +22,26 @@ describe('restrictions', () => {
   });
   const chain = [
     { id: 'bar', inheritedKinds: [] },
-    { id: 'nr', inheritedKinds: ['closed', 'closedToArrival', 'closedToDeparture', 'minLosThrough', 'maxLos'] as const },
+    {
+      id: 'nr',
+      inheritedKinds: ['closed', 'closedToArrival', 'closedToDeparture', 'minLosThrough', 'maxLos'] as const,
+    },
   ];
 
   it('reports every violated restriction with night, kind and a reason', () => {
     const rows = [
-      row({ date: '2026-12-20', ratePlanId: 'bar', values: { closedToArrival: true, minLos: 5, maxAdvanceDays: 10 } }),
+      row({
+        date: '2026-12-20',
+        ratePlanId: 'bar',
+        values: { closedToArrival: true, minLos: 5, maxAdvanceDays: 10 },
+      }),
       row({ date: '2026-12-21', values: { closed: true } }),
-      row({ date: '2026-12-22', ratePlanId: 'bar', unitTypeId: 'villa', values: { minLosThrough: 4, salesLimit: 2 } }),
+      row({
+        date: '2026-12-22',
+        ratePlanId: 'bar',
+        unitTypeId: 'villa',
+        values: { minLosThrough: 4, salesLimit: 2 },
+      }),
       row({ date: '2026-12-23', values: { closedToDeparture: true } }),
     ];
     const eff = effectiveRestrictions(rows, chain.slice(0, 1), 'villa');
@@ -52,13 +64,24 @@ describe('restrictions', () => {
     expect(v.find((x) => x.kind === 'min_los')?.message).toMatch(/at least 5 nights; this stay has 3/);
     expect(v.every((x) => x.overridable)).toBe(true);
     // Another unit type is not affected by the villa-specific row (only the all-types CTD applies).
-    const room = evaluateRestrictions({ arrival: '2026-12-22', departure: '2026-12-23', bookingDate: '2026-12-01', effective: effectiveRestrictions(rows, chain.slice(0, 1), 'room') });
+    const room = evaluateRestrictions({
+      arrival: '2026-12-22',
+      departure: '2026-12-23',
+      bookingDate: '2026-12-01',
+      effective: effectiveRestrictions(rows, chain.slice(0, 1), 'room'),
+    });
     expect(room.map((x) => x.kind)).toEqual(['closed_to_departure']);
   });
 
-  it('never inherits sales limits (they count the plan\'s own sales)', () => {
-    const rows = [row({ date: '2026-12-20', ratePlanId: 'bar', values: { salesLimit: 1 } }), row({ date: '2026-12-21', ratePlanId: 'nr', values: { salesLimit: 2 } })];
-    const allKinds = [{ id: 'bar', inheritedKinds: [] }, { id: 'nr', inheritedKinds: ['salesLimit', 'closed'] as const }];
+  it("never inherits sales limits (they count the plan's own sales)", () => {
+    const rows = [
+      row({ date: '2026-12-20', ratePlanId: 'bar', values: { salesLimit: 1 } }),
+      row({ date: '2026-12-21', ratePlanId: 'nr', values: { salesLimit: 2 } }),
+    ];
+    const allKinds = [
+      { id: 'bar', inheritedKinds: [] },
+      { id: 'nr', inheritedKinds: ['salesLimit', 'closed'] as const },
+    ];
     const eff = effectiveRestrictions(rows, allKinds, 'room');
     expect(eff.get('2026-12-20')?.salesLimit).toBeUndefined();
     expect(eff.get('2026-12-21')?.salesLimit?.value).toBe(2);
@@ -87,7 +110,9 @@ describe('restrictions', () => {
 });
 
 describe('promotions', () => {
-  const promo = (p: Partial<PromotionCandidate> & Pick<PromotionCandidate, 'code' | 'discount'>): PromotionCandidate => ({
+  const promo = (
+    p: Partial<PromotionCandidate> & Pick<PromotionCandidate, 'code' | 'discount'>,
+  ): PromotionCandidate => ({
     id: `00000000-0000-7000-8000-0000000000${p.code.length}${p.code.charCodeAt(0)}`.slice(0, 36),
     version: 1,
     name: p.code,
@@ -97,23 +122,54 @@ describe('promotions', () => {
     sequence: 100,
     ...p,
   });
-  const ctx = { arrival: '2026-12-01', departure: '2026-12-08', nights: 7, bookingDate: '2026-09-01', unitTypeId: 'u', ratePlanId: 'p' };
-  const nights = Array.from({ length: 7 }, (_, i) => ({ date: `2026-12-0${i + 1}`, amountMinor: i === 3 ? 30_000 : 40_000 }));
+  const ctx = {
+    arrival: '2026-12-01',
+    departure: '2026-12-08',
+    nights: 7,
+    bookingDate: '2026-09-01',
+    unitTypeId: 'u',
+    ratePlanId: 'p',
+  };
+  const nights = Array.from({ length: 7 }, (_, i) => ({
+    date: `2026-12-0${i + 1}`,
+    amountMinor: i === 3 ? 30_000 : 40_000,
+  }));
 
   it('chooses the best exclusive promotion and shows its effect per night', () => {
-    const early = promo({ code: 'EARLY', discount: { kind: 'percent', percent: '15' }, conditions: promotionConditions.parse({ minAdvanceDays: 60 }) });
-    const stay7 = promo({ code: 'STAY7', discount: { kind: 'free_nights', stayNights: 7, freeNights: 1, which: 'cheapest' } });
+    const early = promo({
+      code: 'EARLY',
+      discount: { kind: 'percent', percent: '15' },
+      conditions: promotionConditions.parse({ minAdvanceDays: 60 }),
+    });
+    const stay7 = promo({
+      code: 'STAY7',
+      discount: { kind: 'free_nights', stayNights: 7, freeNights: 1, which: 'cheapest' },
+    });
     const r = applyPromotions([early, stay7], ctx, nights);
     expect(r.chosen.map((p) => p.code)).toEqual(['EARLY']); // 15% of 270,000 = 40,500 > cheapest night 30,000
-    expect(r.effects.get('2026-12-01')?.[0]).toMatchObject({ code: 'EARLY', kind: 'percent', discountMinor: 6_000 });
+    expect(r.effects.get('2026-12-01')?.[0]).toMatchObject({
+      code: 'EARLY',
+      kind: 'percent',
+      discountMinor: 6_000,
+    });
     const late = applyPromotions([early, stay7], { ...ctx, bookingDate: '2026-11-20' }, nights);
     expect(late.chosen.map((p) => p.code)).toEqual(['STAY7']);
     expect(late.amounts.get('2026-12-04')).toBe(0); // the cheapest night is free
   });
 
   it('stacks only promotions that list each other, and requires promo codes when configured', () => {
-    const a = promo({ code: 'HONEY', discount: { kind: 'percent', percent: '10' }, combinability: 'stackable', stackableWith: ['DIVE'], conditions: promotionConditions.parse({ promoCode: 'HONEYMOON' }) });
-    const b = promo({ code: 'DIVE', discount: { kind: 'amount_per_night', amountMinor: 1_000 }, combinability: 'stackable' });
+    const a = promo({
+      code: 'HONEY',
+      discount: { kind: 'percent', percent: '10' },
+      combinability: 'stackable',
+      stackableWith: ['DIVE'],
+      conditions: promotionConditions.parse({ promoCode: 'HONEYMOON' }),
+    });
+    const b = promo({
+      code: 'DIVE',
+      discount: { kind: 'amount_per_night', amountMinor: 1_000 },
+      combinability: 'stackable',
+    });
     const none = applyPromotions([a, b], ctx, nights);
     expect(none.chosen.map((p) => p.code)).toEqual(['DIVE']);
     const both = applyPromotions([a, b], { ...ctx, promoCode: 'honeymoon' }, nights);
@@ -121,7 +177,11 @@ describe('promotions', () => {
   });
 
   it('respects blackout dates per night and stay length conditions', () => {
-    const p = promo({ code: 'X', discount: { kind: 'percent', percent: '10' }, conditions: promotionConditions.parse({ blackoutDates: ['2026-12-02'], minNights: 7 }) });
+    const p = promo({
+      code: 'X',
+      discount: { kind: 'percent', percent: '10' },
+      conditions: promotionConditions.parse({ blackoutDates: ['2026-12-02'], minNights: 7 }),
+    });
     const r = applyPromotions([p], ctx, nights);
     expect(r.effects.get('2026-12-02')).toBeUndefined();
     expect(r.effects.get('2026-12-03')).toHaveLength(1);
@@ -138,8 +198,32 @@ describe('inclusions and allowances', () => {
   it('allocates included components from night prices, adds others, and builds allowance entitlements', () => {
     const r = computeInclusions({
       inclusions: [
-        { ...base, id: 'b', code: 'BRKF', name: 'Breakfast', kind: 'component', chargeCode: 'FB_BRKF', taxCategory: 'food_beverage', pricing: { kind: 'fixed', amountMinor: 2_500 }, basis: 'per_person', rhythm: { kind: 'nightly' }, priceMode: 'included' },
-        { ...base, id: 't', code: 'SEAPLANE', name: 'Seaplane', kind: 'component', chargeCode: 'TRANSFER', taxCategory: 'transfer', pricing: { kind: 'fixed', amountMinor: 35_000 }, basis: 'per_person', rhythm: { kind: 'departure' }, priceMode: 'added' },
+        {
+          ...base,
+          id: 'b',
+          code: 'BRKF',
+          name: 'Breakfast',
+          kind: 'component',
+          chargeCode: 'FB_BRKF',
+          taxCategory: 'food_beverage',
+          pricing: { kind: 'fixed', amountMinor: 2_500 },
+          basis: 'per_person',
+          rhythm: { kind: 'nightly' },
+          priceMode: 'included',
+        },
+        {
+          ...base,
+          id: 't',
+          code: 'SEAPLANE',
+          name: 'Seaplane',
+          kind: 'component',
+          chargeCode: 'TRANSFER',
+          taxCategory: 'transfer',
+          pricing: { kind: 'fixed', amountMinor: 35_000 },
+          basis: 'per_person',
+          rhythm: { kind: 'departure' },
+          priceMode: 'added',
+        },
         {
           ...base,
           id: 'd',
@@ -152,7 +236,16 @@ describe('inclusions and allowances', () => {
           basis: 'per_person',
           rhythm: { kind: 'nightly' },
           priceMode: 'included',
-          allowance: { kind: 'monetary', amountMinor: 5_000, period: 'per_night', perPerson: true, eligibleChargeCodes: ['FB'], eligibleOutlets: [], excludedChargeCodes: [], remainderPolicy: 'forfeit' },
+          allowance: {
+            kind: 'monetary',
+            amountMinor: 5_000,
+            period: 'per_night',
+            perPerson: true,
+            eligibleChargeCodes: ['FB'],
+            eligibleOutlets: [],
+            excludedChargeCodes: [],
+            remainderPolicy: 'forfeit',
+          },
         },
       ],
       nights: [
@@ -169,7 +262,12 @@ describe('inclusions and allowances', () => {
       ['DINE', 5_000],
     ]);
     expect(r.added).toHaveLength(1);
-    expect(r.added[0]).toMatchObject({ serviceDate: '2026-12-03', nightDate: '2026-12-02', quantity: 3, amountMinor: 105_000 });
+    expect(r.added[0]).toMatchObject({
+      serviceDate: '2026-12-03',
+      nightDate: '2026-12-02',
+      quantity: 3,
+      amountMinor: 105_000,
+    });
     expect(r.allowances[0]?.periods.map((p) => p.amount?.amountMinor)).toEqual([15_000, 15_000]);
     expect(r.violations).toEqual([]);
   });
@@ -206,7 +304,21 @@ describe('inclusions and allowances', () => {
 
   it('flags inclusions worth more than the night price', () => {
     const r = computeInclusions({
-      inclusions: [{ ...base, id: 'b', code: 'AI', name: 'All inclusive', kind: 'component', chargeCode: 'FB', taxCategory: 'food_beverage', pricing: { kind: 'fixed', amountMinor: 30_000 }, basis: 'per_person', rhythm: { kind: 'nightly' }, priceMode: 'included' }],
+      inclusions: [
+        {
+          ...base,
+          id: 'b',
+          code: 'AI',
+          name: 'All inclusive',
+          kind: 'component',
+          chargeCode: 'FB',
+          taxCategory: 'food_beverage',
+          pricing: { kind: 'fixed', amountMinor: 30_000 },
+          basis: 'per_person',
+          rhythm: { kind: 'nightly' },
+          priceMode: 'included',
+        },
+      ],
       nights: [{ date: '2026-12-01', amountMinor: 50_000 }],
       departure: '2026-12-02',
       occupancy: { adults: 2, childrenAges: [] },
@@ -220,17 +332,26 @@ describe('inclusions and allowances', () => {
 describe('policies', () => {
   it('computes deadlines in the property time zone', () => {
     // Maldives is UTC+5: 2026-12-01 00:00 local = 2026-11-30T19:00Z
-    expect(zonedInstant('2026-12-01', '00:00', 'Indian/Maldives').toISOString()).toBe('2026-11-30T19:00:00.000Z');
+    expect(zonedInstant('2026-12-01', '00:00', 'Indian/Maldives').toISOString()).toBe(
+      '2026-11-30T19:00:00.000Z',
+    );
     // DST zone: New York 2026-07-01 12:00 EDT = 16:00Z; 2026-12-01 12:00 EST = 17:00Z
-    expect(zonedInstant('2026-07-01', '12:00', 'America/New_York').toISOString()).toBe('2026-07-01T16:00:00.000Z');
-    expect(zonedInstant('2026-12-01', '12:00', 'America/New_York').toISOString()).toBe('2026-12-01T17:00:00.000Z');
+    expect(zonedInstant('2026-07-01', '12:00', 'America/New_York').toISOString()).toBe(
+      '2026-07-01T16:00:00.000Z',
+    );
+    expect(zonedInstant('2026-12-01', '12:00', 'America/New_York').toISOString()).toBe(
+      '2026-12-01T17:00:00.000Z',
+    );
     expect(formatLocal(new Date('2026-11-30T19:00:00Z'), 'Indian/Maldives')).toBe('2026-12-01 00:00');
   });
 
   const policy = cancellationStructure.parse({
     tiers: [
       { from: { kind: 'days_before_arrival', days: 14 }, penalty: { kind: 'first_night' } },
-      { from: { kind: 'hours_before_checkin', hours: 48 }, penalty: { kind: 'percent_of_stay', percent: '100' } },
+      {
+        from: { kind: 'hours_before_checkin', hours: 48 },
+        penalty: { kind: 'percent_of_stay', percent: '100' },
+      },
     ],
     noShow: { kind: 'percent_of_stay', percent: '100' },
   });
@@ -242,14 +363,23 @@ describe('policies', () => {
     expect(tierInForce(tiers, new Date('2026-12-05T18:59:59Z'))).toBeNull();
     expect(tierInForce(tiers, new Date('2026-12-05T19:00:00Z'))?.penalty.kind).toBe('first_night');
     expect(tierInForce(tiers, new Date('2026-12-19T00:00:00Z'))?.penalty.kind).toBe('percent_of_stay');
-    expect(tiers[0]?.description).toBe('From 2026-12-06 00:00 (Indian/Maldives): the first night is charged.');
+    expect(tiers[0]?.description).toBe(
+      'From 2026-12-06 00:00 (Indian/Maldives): the first night is charged.',
+    );
   });
 
   it('renders text from structure, including non-refundable plans', () => {
-    expect(renderCancellationText(policy, 'USD')).toMatch(/^Free cancellation until the first deadline\. From 14 days before arrival/);
-    const nr = cancellationStructure.parse({ tiers: [{ from: { kind: 'at_booking' }, penalty: { kind: 'percent_of_stay', percent: '100' } }] });
+    expect(renderCancellationText(policy, 'USD')).toMatch(
+      /^Free cancellation until the first deadline\. From 14 days before arrival/,
+    );
+    const nr = cancellationStructure.parse({
+      tiers: [{ from: { kind: 'at_booking' }, penalty: { kind: 'percent_of_stay', percent: '100' } }],
+    });
     expect(renderCancellationText(nr, 'USD')).toMatch(/^Non-refundable: 100% of the stay is charged/);
-    expect(tierInForce(resolveCancellationTiers(nr, timing, 'USD'), new Date('2026-01-01T00:00:00Z'))?.penalty.kind).toBe('percent_of_stay');
+    expect(
+      tierInForce(resolveCancellationTiers(nr, timing, 'USD'), new Date('2026-01-01T00:00:00Z'))?.penalty
+        .kind,
+    ).toBe('percent_of_stay');
   });
 
   it('computes penalty amounts', () => {
@@ -263,8 +393,18 @@ describe('policies', () => {
   it('instantiates a payment schedule that never exceeds the total and is never due before booking', () => {
     const s = depositStructure.parse({
       items: [
-        { kind: 'deposit', amount: { basis: 'percent', percent: '30' }, due: { anchor: 'booking' }, method: 'payment_request' },
-        { kind: 'balance', amount: { basis: 'remaining' }, due: { anchor: 'arrival', offsetDays: -30 }, method: 'card_on_file' },
+        {
+          kind: 'deposit',
+          amount: { basis: 'percent', percent: '30' },
+          due: { anchor: 'booking' },
+          method: 'payment_request',
+        },
+        {
+          kind: 'balance',
+          amount: { basis: 'remaining' },
+          due: { anchor: 'arrival', offsetDays: -30 },
+          method: 'card_on_file',
+        },
       ],
     });
     const r = instantiateSchedule(s, {

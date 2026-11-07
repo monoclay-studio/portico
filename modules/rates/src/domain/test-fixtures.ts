@@ -39,7 +39,9 @@ export function rule(
   };
 }
 
-export function line(input: Partial<ChargeLineInput> & { amountMinor: number; currency?: string }): ChargeLine {
+export function line(
+  input: Partial<ChargeLineInput> & { amountMinor: number; currency?: string },
+): ChargeLine {
   const { amountMinor, currency, ...rest } = input;
   return chargeLine.parse({
     lineId: rest.lineId ?? `L${fakeUuid().slice(-4)}`,
@@ -55,7 +57,13 @@ export function line(input: Partial<ChargeLineInput> & { amountMinor: number; cu
 export function maldivesLikeRules(): LoadedTaxRule[] {
   return [
     rule({ code: 'SC', category: 'fee', sequence: 10 }, [
-      { def: { kind: 'percentage', ratePercent: '10', appliesTo: { taxCategories: ['accommodation', 'food_beverage'] } } },
+      {
+        def: {
+          kind: 'percentage',
+          ratePercent: '10',
+          appliesTo: { taxCategories: ['accommodation', 'food_beverage'] },
+        },
+      },
     ]),
     rule({ code: 'TGST', sequence: 20 }, [
       {
@@ -116,8 +124,16 @@ export function maldivesLikeRules(): LoadedTaxRule[] {
   ];
 }
 
-export const RESORT = { 'mv.establishmentType': 'resort', 'mv.inhabitedIsland': false, 'mv.registeredRooms': 120 };
-export const GUESTHOUSE = { 'mv.establishmentType': 'guesthouse', 'mv.inhabitedIsland': true, 'mv.registeredRooms': 12 };
+export const RESORT = {
+  'mv.establishmentType': 'resort',
+  'mv.inhabitedIsland': false,
+  'mv.registeredRooms': 120,
+};
+export const GUESTHOUSE = {
+  'mv.establishmentType': 'guesthouse',
+  'mv.inhabitedIsland': true,
+  'mv.registeredRooms': 12,
+};
 
 /** Deterministic PRNG (mulberry32) for property-based-style tests. */
 export function prng(seed: number) {

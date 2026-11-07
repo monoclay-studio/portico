@@ -1,6 +1,6 @@
 /** Policies, inclusions/allowances, packages (incl. meal plans) and promotions. */
 import { explainVersionMiss, sql, type TxContext } from '@portico/db';
-import { newId, NotFoundError, ValidationError } from '@portico/kernel';
+import { NotFoundError, newId, ValidationError } from '@portico/kernel';
 import { z } from 'zod';
 import {
   allowanceTerms,
@@ -8,18 +8,18 @@ import {
   depositStructure,
   guaranteeStructure,
   type InclusionInput,
+  type InclusionSnapshot,
   inclusionInput,
   inclusionPricing,
   inclusionRhythm,
-  type InclusionSnapshot,
   type PackageInput,
-  packageInput,
-  packageUpdate,
   type PolicyDto,
   type PolicyInput,
   type PolicyKind,
-  policyInput,
   type PromotionInput,
+  packageInput,
+  packageUpdate,
+  policyInput,
   promotionConditions,
   promotionDiscount,
   promotionInput,
@@ -28,14 +28,29 @@ import {
 import { renderCancellationText, renderDepositText, renderGuaranteeText } from '../domain/policies';
 import type { PromotionCandidate } from '../domain/promotions';
 import type { RatesPorts } from '../ports';
-import { db, guardConfigWrite, json, parseInput, parseStored, type Row, requireRead, actorKey, withUniqueCode } from './shared';
+import {
+  actorKey,
+  db,
+  guardConfigWrite,
+  json,
+  parseInput,
+  parseStored,
+  type Row,
+  requireRead,
+  withUniqueCode,
+} from './shared';
 
 // ───────────────────────────── Policies ─────────────────────────────
 
-const structureSchema = { cancellation: cancellationStructure, guarantee: guaranteeStructure, deposit: depositStructure } as const;
+const structureSchema = {
+  cancellation: cancellationStructure,
+  guarantee: guaranteeStructure,
+  deposit: depositStructure,
+} as const;
 
 export function policyText(kind: PolicyKind, structure: unknown, currency: string): string {
-  if (kind === 'cancellation') return renderCancellationText(cancellationStructure.parse(structure), currency);
+  if (kind === 'cancellation')
+    return renderCancellationText(cancellationStructure.parse(structure), currency);
   if (kind === 'guarantee') return renderGuaranteeText(guaranteeStructure.parse(structure));
   return renderDepositText(depositStructure.parse(structure), currency);
 }
@@ -86,7 +101,12 @@ export async function createPolicy(ports: RatesPorts, tx: TxContext, raw: unknow
       changed_by: actorKey(tx),
     })
     .execute();
-  await tx.audit({ action: 'rates.policy.create', target: { type: 'rate_policy', id }, propertyId: input.propertyId, after: input });
+  await tx.audit({
+    action: 'rates.policy.create',
+    target: { type: 'rate_policy', id },
+    propertyId: input.propertyId,
+    after: input,
+  });
   return toPolicy(row, property.baseCurrency);
 }
 
@@ -97,13 +117,25 @@ export async function updatePolicy(
   expectedVersion: number,
   patch: { name?: string | undefined; structure?: unknown },
 ): Promise<PolicyDto> {
-  const before = await db(tx).selectFrom('rates.policies').selectAll().where('id', '=', id).executeTakeFirst();
+  const before = await db(tx)
+    .selectFrom('rates.policies')
+    .selectAll()
+    .where('id', '=', id)
+    .executeTakeFirst();
   if (!before) throw new NotFoundError('rate_policy', id);
   await guardConfigWrite(ports, tx, before.property_id, 'rates.policy.manage');
-  const structure = patch.structure === undefined ? before.structure : parseInput(structureSchema[before.kind] as z.ZodType<unknown>, patch.structure);
+  const structure =
+    patch.structure === undefined
+      ? before.structure
+      : parseInput(structureSchema[before.kind] as z.ZodType<unknown>, patch.structure);
   const row = await db(tx)
     .updateTable('rates.policies')
-    .set({ name: patch.name ?? before.name, structure: json(structure), version: sql`version + 1`, updated_at: tx.now })
+    .set({
+      name: patch.name ?? before.name,
+      structure: json(structure),
+      version: sql`version + 1`,
+      updated_at: tx.now,
+    })
     .where('id', '=', id)
     .where('version', '=', expectedVersion)
     .returningAll()
@@ -141,15 +173,28 @@ export async function getPolicy(ports: RatesPorts, tx: TxContext, id: string): P
   return toPolicy(row, property.baseCurrency);
 }
 
-export async function listPolicies(ports: RatesPorts, tx: TxContext, propertyId: string): Promise<PolicyDto[]> {
+export async function listPolicies(
+  ports: RatesPorts,
+  tx: TxContext,
+  propertyId: string,
+): Promise<PolicyDto[]> {
   requireRead(tx, propertyId);
   const property = await ports.getProperty(tx, propertyId);
-  const rows = await db(tx).selectFrom('rates.policies').selectAll().where('property_id', '=', propertyId).orderBy('code').execute();
+  const rows = await db(tx)
+    .selectFrom('rates.policies')
+    .selectAll()
+    .where('property_id', '=', propertyId)
+    .orderBy('code')
+    .execute();
   return rows.map((r) => toPolicy(r, property.baseCurrency));
 }
 
 export async function policyVersionHistory(tx: TxContext, policyId: string) {
-  const policy = await db(tx).selectFrom('rates.policies').select('property_id').where('id', '=', policyId).executeTakeFirst();
+  const policy = await db(tx)
+    .selectFrom('rates.policies')
+    .select('property_id')
+    .where('id', '=', policyId)
+    .executeTakeFirst();
   if (!policy) throw new NotFoundError('rate_policy', policyId);
   requireRead(tx, policy.property_id);
   return db(tx)
@@ -210,12 +255,27 @@ export async function createInclusion(ports: RatesPorts, tx: TxContext, raw: unk
       .returningAll()
       .executeTakeFirstOrThrow(),
   );
-  await tx.audit({ action: 'rates.inclusion.create', target: { type: 'inclusion', id }, propertyId: input.propertyId, after: input });
+  await tx.audit({
+    action: 'rates.inclusion.create',
+    target: { type: 'inclusion', id },
+    propertyId: input.propertyId,
+    after: input,
+  });
   return toInclusion(row);
 }
 
-export async function updateInclusion(ports: RatesPorts, tx: TxContext, id: string, expectedVersion: number, raw: unknown) {
-  const before = await db(tx).selectFrom('rates.inclusions').selectAll().where('id', '=', id).executeTakeFirst();
+export async function updateInclusion(
+  ports: RatesPorts,
+  tx: TxContext,
+  id: string,
+  expectedVersion: number,
+  raw: unknown,
+) {
+  const before = await db(tx)
+    .selectFrom('rates.inclusions')
+    .selectAll()
+    .where('id', '=', id)
+    .executeTakeFirst();
   if (!before) throw new NotFoundError('inclusion', id);
   await guardConfigWrite(ports, tx, before.property_id, 'rates.package.manage');
   const current = toInclusion(before);
@@ -265,13 +325,24 @@ export async function updateInclusion(ports: RatesPorts, tx: TxContext, id: stri
     .returningAll()
     .executeTakeFirst();
   if (!row) return explainVersionMiss('inclusion', id, expectedVersion, async () => before.version);
-  await tx.audit({ action: 'rates.inclusion.update', target: { type: 'inclusion', id }, propertyId: row.property_id, before: current, after: toInclusion(row) });
+  await tx.audit({
+    action: 'rates.inclusion.update',
+    target: { type: 'inclusion', id },
+    propertyId: row.property_id,
+    before: current,
+    after: toInclusion(row),
+  });
   return toInclusion(row);
 }
 
 export async function listInclusions(tx: TxContext, propertyId: string) {
   requireRead(tx, propertyId);
-  const rows = await db(tx).selectFrom('rates.inclusions').selectAll().where('property_id', '=', propertyId).orderBy('code').execute();
+  const rows = await db(tx)
+    .selectFrom('rates.inclusions')
+    .selectAll()
+    .where('property_id', '=', propertyId)
+    .orderBy('code')
+    .execute();
   return rows.map(toInclusion);
 }
 
@@ -290,7 +361,11 @@ function toPackage(r: Row<'rates.packages'>) {
   };
 }
 
-async function assertInclusionsAtProperty(tx: TxContext, propertyId: string, ids: readonly string[]): Promise<void> {
+async function assertInclusionsAtProperty(
+  tx: TxContext,
+  propertyId: string,
+  ids: readonly string[],
+): Promise<void> {
   if (ids.length === 0) return;
   const found = await db(tx)
     .selectFrom('rates.inclusions')
@@ -301,7 +376,11 @@ async function assertInclusionsAtProperty(tx: TxContext, propertyId: string, ids
     .execute();
   const missing = ids.filter((id) => !found.some((f) => f.id === id));
   if (missing.length > 0) {
-    throw new ValidationError('inclusion_not_found', 'Some inclusions do not exist at this property or are retired.', { missing });
+    throw new ValidationError(
+      'inclusion_not_found',
+      'Some inclusions do not exist at this property or are retired.',
+      { missing },
+    );
   }
 }
 
@@ -326,13 +405,28 @@ export async function createPackage(ports: RatesPorts, tx: TxContext, raw: unkno
       .returningAll()
       .executeTakeFirstOrThrow(),
   );
-  await tx.audit({ action: 'rates.package.create', target: { type: 'package', id }, propertyId: input.propertyId, after: input });
+  await tx.audit({
+    action: 'rates.package.create',
+    target: { type: 'package', id },
+    propertyId: input.propertyId,
+    after: input,
+  });
   return toPackage(row);
 }
 
-export async function updatePackage(ports: RatesPorts, tx: TxContext, id: string, expectedVersion: number, raw: unknown) {
+export async function updatePackage(
+  ports: RatesPorts,
+  tx: TxContext,
+  id: string,
+  expectedVersion: number,
+  raw: unknown,
+) {
   const patch = parseInput(packageUpdate, raw);
-  const before = await db(tx).selectFrom('rates.packages').selectAll().where('id', '=', id).executeTakeFirst();
+  const before = await db(tx)
+    .selectFrom('rates.packages')
+    .selectAll()
+    .where('id', '=', id)
+    .executeTakeFirst();
   if (!before) throw new NotFoundError('package', id);
   await guardConfigWrite(ports, tx, before.property_id, 'rates.package.manage');
   if (patch.inclusionIds) await assertInclusionsAtProperty(tx, before.property_id, patch.inclusionIds);
@@ -350,32 +444,73 @@ export async function updatePackage(ports: RatesPorts, tx: TxContext, id: string
     .returningAll()
     .executeTakeFirst();
   if (!row) return explainVersionMiss('package', id, expectedVersion, async () => before.version);
-  await tx.audit({ action: 'rates.package.update', target: { type: 'package', id }, propertyId: row.property_id, before: toPackage(before), after: toPackage(row) });
+  await tx.audit({
+    action: 'rates.package.update',
+    target: { type: 'package', id },
+    propertyId: row.property_id,
+    before: toPackage(before),
+    after: toPackage(row),
+  });
   return toPackage(row);
 }
 
 export async function listPackages(tx: TxContext, propertyId: string) {
   requireRead(tx, propertyId);
-  const rows = await db(tx).selectFrom('rates.packages').selectAll().where('property_id', '=', propertyId).orderBy('code').execute();
+  const rows = await db(tx)
+    .selectFrom('rates.packages')
+    .selectAll()
+    .where('property_id', '=', propertyId)
+    .orderBy('code')
+    .execute();
   return rows.map(toPackage);
 }
 
-export async function assertPackagesAtProperty(tx: TxContext, propertyId: string, ids: readonly string[]): Promise<void> {
+export async function assertPackagesAtProperty(
+  tx: TxContext,
+  propertyId: string,
+  ids: readonly string[],
+): Promise<void> {
   if (ids.length === 0) return;
-  const found = await db(tx).selectFrom('rates.packages').select('id').where('property_id', '=', propertyId).where('id', 'in', [...ids]).execute();
+  const found = await db(tx)
+    .selectFrom('rates.packages')
+    .select('id')
+    .where('property_id', '=', propertyId)
+    .where('id', 'in', [...ids])
+    .execute();
   const missing = ids.filter((id) => !found.some((f) => f.id === id));
-  if (missing.length > 0) throw new ValidationError('package_not_found', 'Some packages do not exist at this property.', { missing });
+  if (missing.length > 0)
+    throw new ValidationError('package_not_found', 'Some packages do not exist at this property.', {
+      missing,
+    });
 }
 
 /** Inclusion snapshots for a set of packages (deduplicated, package order kept). */
-export async function inclusionsForPackages(tx: TxContext, packageIds: readonly string[]): Promise<InclusionSnapshot[]> {
+export async function inclusionsForPackages(
+  tx: TxContext,
+  packageIds: readonly string[],
+): Promise<InclusionSnapshot[]> {
   if (packageIds.length === 0) return [];
-  const packages = await db(tx).selectFrom('rates.packages').selectAll().where('id', 'in', [...packageIds]).where('status', '=', 'active').execute();
-  const ordered = packageIds.map((id) => packages.find((p) => p.id === id)).filter((p): p is Row<'rates.packages'> => !!p);
+  const packages = await db(tx)
+    .selectFrom('rates.packages')
+    .selectAll()
+    .where('id', 'in', [...packageIds])
+    .where('status', '=', 'active')
+    .execute();
+  const ordered = packageIds
+    .map((id) => packages.find((p) => p.id === id))
+    .filter((p): p is Row<'rates.packages'> => !!p);
   const ids = [...new Set(ordered.flatMap((p) => p.inclusion_ids))];
   if (ids.length === 0) return [];
-  const rows = await db(tx).selectFrom('rates.inclusions').selectAll().where('id', 'in', ids).where('status', '=', 'active').execute();
-  return ids.map((id) => rows.find((r) => r.id === id)).filter((r): r is Row<'rates.inclusions'> => !!r).map(toInclusionSnapshot);
+  const rows = await db(tx)
+    .selectFrom('rates.inclusions')
+    .selectAll()
+    .where('id', 'in', ids)
+    .where('status', '=', 'active')
+    .execute();
+  return ids
+    .map((id) => rows.find((r) => r.id === id))
+    .filter((r): r is Row<'rates.inclusions'> => !!r)
+    .map(toInclusionSnapshot);
 }
 
 // ───────────────────────────── Promotions ─────────────────────────────
@@ -415,7 +550,11 @@ async function withPromoCodeUnique<T>(code: string, fn: () => Promise<T>): Promi
     return await fn();
   } catch (err) {
     if ((err as { code?: string; constraint?: string }).constraint === 'promotions_code_idx') {
-      throw new ValidationError('promo_code_taken', 'Another active promotion at this property already uses this promo code.', { code });
+      throw new ValidationError(
+        'promo_code_taken',
+        'Another active promotion at this property already uses this promo code.',
+        { code },
+      );
     }
     throw err;
   }
@@ -445,13 +584,28 @@ export async function createPromotion(ports: RatesPorts, tx: TxContext, raw: unk
         .executeTakeFirstOrThrow(),
     ),
   );
-  await tx.audit({ action: 'rates.promotion.create', target: { type: 'promotion', id }, propertyId: input.propertyId, after: input });
+  await tx.audit({
+    action: 'rates.promotion.create',
+    target: { type: 'promotion', id },
+    propertyId: input.propertyId,
+    after: input,
+  });
   return toPromotion(row);
 }
 
-export async function updatePromotion(ports: RatesPorts, tx: TxContext, id: string, expectedVersion: number, raw: unknown) {
+export async function updatePromotion(
+  ports: RatesPorts,
+  tx: TxContext,
+  id: string,
+  expectedVersion: number,
+  raw: unknown,
+) {
   const patch = parseInput(promotionUpdate, raw);
-  const before = await db(tx).selectFrom('rates.promotions').selectAll().where('id', '=', id).executeTakeFirst();
+  const before = await db(tx)
+    .selectFrom('rates.promotions')
+    .selectAll()
+    .where('id', '=', id)
+    .executeTakeFirst();
   if (!before) throw new NotFoundError('promotion', id);
   await guardConfigWrite(ports, tx, before.property_id, 'rates.promotion.manage');
   const row = await withPromoCodeUnique(patch.conditions?.promoCode ?? '', () =>
@@ -474,12 +628,23 @@ export async function updatePromotion(ports: RatesPorts, tx: TxContext, id: stri
       .executeTakeFirst(),
   );
   if (!row) return explainVersionMiss('promotion', id, expectedVersion, async () => before.version);
-  await tx.audit({ action: 'rates.promotion.update', target: { type: 'promotion', id }, propertyId: row.property_id, before: toPromotion(before), after: toPromotion(row) });
+  await tx.audit({
+    action: 'rates.promotion.update',
+    target: { type: 'promotion', id },
+    propertyId: row.property_id,
+    before: toPromotion(before),
+    after: toPromotion(row),
+  });
   return toPromotion(row);
 }
 
 export async function listPromotions(tx: TxContext, propertyId: string) {
   requireRead(tx, propertyId);
-  const rows = await db(tx).selectFrom('rates.promotions').selectAll().where('property_id', '=', propertyId).orderBy('code').execute();
+  const rows = await db(tx)
+    .selectFrom('rates.promotions')
+    .selectAll()
+    .where('property_id', '=', propertyId)
+    .orderBy('code')
+    .execute();
   return rows.map(toPromotion);
 }

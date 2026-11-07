@@ -7,12 +7,12 @@ import {
   BusinessRuleError,
   canonicalJson,
   type DateRange,
-  eachNight,
   type EntityRef,
+  eachNight,
   type LocalDate,
   localDateIn,
-  newId,
   NotFoundError,
+  newId,
   type Occupancy,
   requirePermission,
   sha256Hex,
@@ -23,17 +23,25 @@ import {
   depositStructure,
   guaranteeStructure,
   type InclusionSnapshot,
-  type Offer,
   type OccupancyPricing,
+  type Offer,
   priceChangeRequest,
   quoteRequest,
   type RatePlanDto,
   type RepricingResult,
   type Violation,
 } from '../contracts';
-import { assemble, checkEligibility, type NightDraft, type PlanPolicies, type PolicySnapshot, priceNights, toOffer } from '../domain/offer';
-import { type ChildAgeBand, DEFAULT_CHILD_AGE_BANDS, ancestry } from '../domain/pricing';
-import type { PromotionCandidate } from '../domain/promotions';
+import { earlierDate, laterDate } from '../domain/calendar';
+import {
+  assemble,
+  checkEligibility,
+  type NightDraft,
+  type PlanPolicies,
+  type PolicySnapshot,
+  priceNights,
+  toOffer,
+} from '../domain/offer';
+import { ancestry, type ChildAgeBand, DEFAULT_CHILD_AGE_BANDS } from '../domain/pricing';
 import { effectiveRestrictions, evaluateRestrictions, type RestrictionRow } from '../domain/restrictions';
 import type { LoadedTaxRule } from '../domain/tax-engine';
 import { reprice, verifyTerms } from '../domain/terms';
@@ -52,7 +60,9 @@ export interface QuoteResult {
 }
 
 async function childBands(ports: RatesPorts, tx: TxContext, propertyId: string): Promise<ChildAgeBand[]> {
-  const r = await ports.resolvePolicy<ChildAgeBand[]>(tx, propertyId, 'rates.childAgeBands', [...DEFAULT_CHILD_AGE_BANDS]);
+  const r = await ports.resolvePolicy<ChildAgeBand[]>(tx, propertyId, 'rates.childAgeBands', [
+    ...DEFAULT_CHILD_AGE_BANDS,
+  ]);
   return r.value;
 }
 
@@ -73,20 +83,30 @@ interface QuoteConfig {
 async function loadQuoteConfig(
   ports: RatesPorts,
   tx: TxContext,
-  input: { propertyId: string; arrival: LocalDate; departure: LocalDate; planIds: (plans: Array<RatePlanDto & { parentId: string | null }>) => string[]; unitTypeIds?: readonly string[] | undefined },
+  input: {
+    propertyId: string;
+    arrival: LocalDate;
+    departure: LocalDate;
+    planIds: (plans: Array<RatePlanDto & { parentId: string | null }>) => string[];
+    unitTypeIds?: readonly string[] | undefined;
+  },
 ): Promise<QuoteConfig & { candidateIds: string[] }> {
   const property = await ports.getProperty(tx, input.propertyId);
   const plans = asNodes(await loadPlansForProperty(tx, input.propertyId));
   const candidateIds = input.planIds(plans);
   const chainIds = new Set(candidateIds.flatMap((id) => ancestry(plans, id).map((p) => p.id)));
-  const rootIds = [...new Set(candidateIds.map((id) => ancestry(plans, id)[0]?.id).filter((x): x is string => !!x))];
+  const rootIds = [
+    ...new Set(candidateIds.map((id) => ancestry(plans, id)[0]?.id).filter((x): x is string => !!x)),
+  ];
   let priceQ = db(tx)
     .selectFrom('rates.prices')
     .selectAll()
     .where('stay_date', '>=', input.arrival)
     .where('stay_date', '<', input.departure);
-  priceQ = rootIds.length > 0 ? priceQ.where('rate_plan_id', 'in', rootIds) : priceQ.where(sql<boolean>`false`);
-  if (input.unitTypeIds && input.unitTypeIds.length > 0) priceQ = priceQ.where('unit_type_id', 'in', [...input.unitTypeIds]);
+  priceQ =
+    rootIds.length > 0 ? priceQ.where('rate_plan_id', 'in', rootIds) : priceQ.where(sql<boolean>`false`);
+  if (input.unitTypeIds && input.unitTypeIds.length > 0)
+    priceQ = priceQ.where('unit_type_id', 'in', [...input.unitTypeIds]);
   const priceRows = await priceQ.execute();
   const restrictionRows = await db(tx)
     .selectFrom('rates.restrictions')
@@ -95,7 +115,9 @@ async function loadQuoteConfig(
     .where('stay_date', '>=', input.arrival)
     .where('stay_date', '<=', input.departure)
     .where((eb) =>
-      chainIds.size > 0 ? eb.or([eb('rate_plan_id', 'is', null), eb('rate_plan_id', 'in', [...chainIds])]) : eb('rate_plan_id', 'is', null),
+      chainIds.size > 0
+        ? eb.or([eb('rate_plan_id', 'is', null), eb('rate_plan_id', 'in', [...chainIds])])
+        : eb('rate_plan_id', 'is', null),
     )
     .execute();
   const promotions = await db(tx)
@@ -115,7 +137,13 @@ async function loadQuoteConfig(
     inclusionsByPlan.set(id, await inclusionsForPackages(tx, effectivePackageIds(chain)));
   }
   const policyRows =
-    policyIds.size > 0 ? await db(tx).selectFrom('rates.policies').selectAll().where('id', 'in', [...policyIds]).execute() : [];
+    policyIds.size > 0
+      ? await db(tx)
+          .selectFrom('rates.policies')
+          .selectAll()
+          .where('id', 'in', [...policyIds])
+          .execute()
+      : [];
   const soldRows =
     candidateIds.length > 0
       ? await db(tx)
@@ -167,7 +195,9 @@ function configVector(c: QuoteConfig): string {
 function planPolicies(c: QuoteConfig, chain: RatePlanDto[]): PlanPolicies {
   const snap = <T>(id: string | null, parse: (v: unknown) => T): PolicySnapshot<T> | null => {
     const r = id ? c.policies.get(id) : undefined;
-    return r && r.status === 'active' ? { id: r.id, code: r.code, name: r.name, version: r.version, structure: parse(r.structure) } : null;
+    return r && r.status === 'active'
+      ? { id: r.id, code: r.code, name: r.name, version: r.version, structure: parse(r.structure) }
+      : null;
   };
   return {
     cancellation: snap(effectivePolicyId(chain, 'cancellationPolicy'), (v) => cancellationStructure.parse(v)),
@@ -177,11 +207,20 @@ function planPolicies(c: QuoteConfig, chain: RatePlanDto[]): PlanPolicies {
 }
 
 function rootPricesFor(c: QuoteConfig, rootId: string, unitTypeId: string): Map<LocalDate, OccupancyPricing> {
-  return new Map(c.priceRows.filter((r) => r.rate_plan_id === rootId && r.unit_type_id === unitTypeId).map((r) => [r.stay_date, rowParams(r)]));
+  return new Map(
+    c.priceRows
+      .filter((r) => r.rate_plan_id === rootId && r.unit_type_id === unitTypeId)
+      .map((r) => [r.stay_date, rowParams(r)]),
+  );
 }
 
 function restrictionRowsFor(c: QuoteConfig): RestrictionRow[] {
-  return c.restrictionRows.map((r) => ({ ratePlanId: r.rate_plan_id, unitTypeId: r.unit_type_id, date: r.stay_date, values: restrictionValues(r) }));
+  return c.restrictionRows.map((r) => ({
+    ratePlanId: r.rate_plan_id,
+    unitTypeId: r.unit_type_id,
+    date: r.stay_date,
+    values: restrictionValues(r),
+  }));
 }
 
 interface PriceForPlanInput {
@@ -248,7 +287,10 @@ function planMeta(plan: RatePlanDto, chain: RatePlanDto[]) {
   };
 }
 
-const RELEVANCE_FILTER: ReadonlySet<Violation['kind']> = new Set(['not_eligible_channel', 'not_eligible_company']);
+const RELEVANCE_FILTER: ReadonlySet<Violation['kind']> = new Set([
+  'not_eligible_channel',
+  'not_eligible_company',
+]);
 
 /** Provider (domain map) + HTTP: price a stay request into offers. */
 export async function quoteDetailed(ports: RatesPorts, tx: TxContext, raw: unknown): Promise<QuoteResult> {
@@ -256,13 +298,17 @@ export async function quoteDetailed(ports: RatesPorts, tx: TxContext, raw: unkno
   requirePermission(tx, 'rates.quote.read', { propertyId: req.propertyId });
   if (req.restrictionOverride) {
     if (req.channelId) {
-      throw new ValidationError('override_not_allowed_for_channels', 'Restriction overrides are for staff bookings only; channels and the booking engine can never book through restrictions.');
+      throw new ValidationError(
+        'override_not_allowed_for_channels',
+        'Restriction overrides are for staff bookings only; channels and the booking engine can never book through restrictions.',
+      );
     }
     requirePermission(tx, 'rates.restriction.override', { propertyId: req.propertyId });
   }
   const arrival = req.nights.from;
   const departure = req.nights.to;
-  if (eachNight(req.nights).length > 366) throw new ValidationError('stay_too_long', 'A quote can cover at most 366 nights.');
+  if (eachNight(req.nights).length > 366)
+    throw new ValidationError('stay_too_long', 'A quote can cover at most 366 nights.');
   const config = await loadQuoteConfig(ports, tx, {
     propertyId: req.propertyId,
     arrival,
@@ -270,7 +316,9 @@ export async function quoteDetailed(ports: RatesPorts, tx: TxContext, raw: unkno
     unitTypeIds: req.unitTypeIds,
     planIds: (plans) =>
       plans
-        .filter((p) => (req.ratePlanIds ? req.ratePlanIds.includes(p.id) && p.status !== 'retired' : p.status === 'active'))
+        .filter((p) =>
+          req.ratePlanIds ? req.ratePlanIds.includes(p.id) && p.status !== 'retired' : p.status === 'active',
+        )
         .map((p) => p.id),
   });
   if (req.ratePlanIds) {
@@ -287,7 +335,11 @@ export async function quoteDetailed(ports: RatesPorts, tx: TxContext, raw: unkno
     const chain = ancestry(config.plans, planId);
     const plan = chain[chain.length - 1] as RatePlanDto;
     const root = chain[0] as RatePlanDto;
-    const unitTypes = req.unitTypeIds ?? [...new Set(config.priceRows.filter((r) => r.rate_plan_id === root.id).map((r) => r.unit_type_id))].sort();
+    const unitTypes =
+      req.unitTypeIds ??
+      [
+        ...new Set(config.priceRows.filter((r) => r.rate_plan_id === root.id).map((r) => r.unit_type_id)),
+      ].sort();
     for (const unitTypeId of unitTypes) {
       const eligibility = checkEligibility(plan, {
         channelId: req.channelId,
@@ -298,12 +350,27 @@ export async function quoteDetailed(ports: RatesPorts, tx: TxContext, raw: unkno
         departure,
       });
       if (eligibility.some((v) => RELEVANCE_FILTER.has(v.kind))) continue;
-      const p = priceForPlan(config, { planId, unitTypeId, arrival, departure, nights, occupancy: req.occupancy, bookingDate, channelId: req.channelId, promoCode: req.promoCode });
+      const p = priceForPlan(config, {
+        planId,
+        unitTypeId,
+        arrival,
+        departure,
+        nights,
+        occupancy: req.occupancy,
+        bookingDate,
+        channelId: req.channelId,
+        promoCode: req.promoCode,
+      });
       const violations = [...eligibility, ...p.priced.violations, ...p.restrictionViolations];
       const overridable = violations.filter((v) => v.overridable);
       const useOverride = !!req.restrictionOverride && overridable.length > 0;
       const assembled = assemble({
-        property: { id: config.property.id, timezone: config.property.timezone, checkInTime: config.property.checkInTime, classification: config.property.classification },
+        property: {
+          id: config.property.id,
+          timezone: config.property.timezone,
+          checkInTime: config.property.checkInTime,
+          classification: config.property.classification,
+        },
         plan: planMeta(plan, chain),
         unitTypeId,
         arrival,
@@ -322,12 +389,19 @@ export async function quoteDetailed(ports: RatesPorts, tx: TxContext, raw: unkno
           configVector: vector,
           priceSource: 'portico_quote',
           restrictionOverride: useOverride
-            ? { reason: req.restrictionOverride?.reason ?? '', by: overrideBy, at: tx.now.toISOString(), violations: overridable }
+            ? {
+                reason: req.restrictionOverride?.reason ?? '',
+                by: overrideBy,
+                at: tx.now.toISOString(),
+                violations: overridable,
+              }
             : null,
           supersedesHash: null,
         },
       });
-      offers.push(toOffer(assembled, { unitTypeId, plan: planMeta(plan, chain), violations, override: useOverride }));
+      offers.push(
+        toOffer(assembled, { unitTypeId, plan: planMeta(plan, chain), violations, override: useOverride }),
+      );
     }
   }
   // Channels and the booking engine never see unbookable offers (RAT-I07).
@@ -346,7 +420,11 @@ export async function quoteDetailed(ports: RatesPorts, tx: TxContext, raw: unkno
       target: { type: 'quote', id: quoteId },
       propertyId: req.propertyId,
       reason: req.restrictionOverride?.reason ?? null,
-      after: overridden.map((o) => ({ ratePlanId: o.ratePlanId, unitTypeId: o.unitTypeId, violations: o.overriddenViolations.map((v) => v.kind) })),
+      after: overridden.map((o) => ({
+        ratePlanId: o.ratePlanId,
+        unitTypeId: o.unitTypeId,
+        violations: o.overriddenViolations.map((v) => v.kind),
+      })),
     });
   }
   return { quoteId, configVector: vector, offers: visible };
@@ -362,19 +440,37 @@ export async function priceChange(ports: RatesPorts, tx: TxContext, raw: unknown
   const { terms, change } = parseInput(priceChangeRequest, raw);
   requirePermission(tx, 'rates.quote.read', { propertyId: terms.propertyId });
   if (!verifyTerms(terms)) {
-    throw new ValidationError('terms_hash_mismatch', 'These agreed terms do not match their hash, so they may have been altered. Load the agreed terms again from the booking.');
+    throw new ValidationError(
+      'terms_hash_mismatch',
+      'These agreed terms do not match their hash, so they may have been altered. Load the agreed terms again from the booking.',
+    );
   }
   const range: DateRange = change.nights ?? { from: terms.stay.arrival, to: terms.stay.departure };
   const occupancy = change.occupancy ?? terms.occupancy;
   const unitTypeId = change.unitTypeId ?? terms.unitTypeId;
   const newNightsPolicy =
     change.newNightsPolicy ??
-    (await ports.resolvePolicy<'current_rates' | 'agreed_average' | 'manual'>(tx, terms.propertyId, 'reservations.repricing.newNights', 'current_rates')).value;
+    (
+      await ports.resolvePolicy<'current_rates' | 'agreed_average' | 'manual'>(
+        tx,
+        terms.propertyId,
+        'reservations.repricing.newNights',
+        'current_rates',
+      )
+    ).value;
   const typeChangePolicy =
     change.typeChangePolicy ??
-    (await ports.resolvePolicy<'keep_agreed' | 'difference' | 'reprice'>(tx, terms.propertyId, 'reservations.repricing.typeChange', 'keep_agreed')).value;
+    (
+      await ports.resolvePolicy<'keep_agreed' | 'difference' | 'reprice'>(
+        tx,
+        terms.propertyId,
+        'reservations.repricing.typeChange',
+        'keep_agreed',
+      )
+    ).value;
   const changeAt = change.changeAt ? new Date(change.changeAt) : tx.now;
-  if (Number.isNaN(changeAt.getTime())) throw new ValidationError('invalid_change_at', 'changeAt must be an ISO date-time.');
+  if (Number.isNaN(changeAt.getTime()))
+    throw new ValidationError('invalid_change_at', 'changeAt must be an ISO date-time.');
   const agreedDates = new Set(terms.nights.map((n) => n.date));
   const newDates = eachNight(range);
   const typeChanged = unitTypeId !== terms.unitTypeId;
@@ -382,8 +478,8 @@ export async function priceChange(ports: RatesPorts, tx: TxContext, raw: unknown
   const needType = typeChanged && typeChangePolicy !== 'keep_agreed';
   const config = await loadQuoteConfig(ports, tx, {
     propertyId: terms.propertyId,
-    arrival: range.from < terms.stay.arrival ? range.from : terms.stay.arrival,
-    departure: range.to > terms.stay.departure ? range.to : terms.stay.departure,
+    arrival: earlierDate(range.from, terms.stay.arrival),
+    departure: laterDate(range.to, terms.stay.departure),
     planIds: (plans) => (plans.some((p) => p.id === terms.ratePlan.id) ? [terms.ratePlan.id] : []),
   });
   const planExists = config.candidateIds.length > 0;
@@ -392,7 +488,15 @@ export async function priceChange(ports: RatesPorts, tx: TxContext, raw: unknown
   let current: { drafts: Map<LocalDate, NightDraft>; violations: Violation[] } | null = null;
   let currentAgreedType: Map<LocalDate, NightDraft> | null = null;
   if ((needCurrent || needType) && planExists) {
-    const p = priceForPlan(config, { planId: terms.ratePlan.id, unitTypeId, arrival: range.from, departure: range.to, nights: newDates, occupancy, bookingDate });
+    const p = priceForPlan(config, {
+      planId: terms.ratePlan.id,
+      unitTypeId,
+      arrival: range.from,
+      departure: range.to,
+      nights: newDates,
+      occupancy,
+      bookingDate,
+    });
     const arrivalChanged = range.from !== terms.stay.arrival;
     const departureChanged = range.to !== terms.stay.departure;
     const relevant = p.restrictionViolations.filter((v) => {
@@ -400,19 +504,39 @@ export async function priceChange(ports: RatesPorts, tx: TxContext, raw: unknown
       if (v.kind === 'closed_to_departure') return departureChanged;
       // Length-of-stay rules always matter for a changed stay; arrival rules only when the arrival moved.
       if (v.kind === 'min_los' || v.kind === 'max_los') return true;
-      if (v.kind === 'closed_to_arrival' || v.kind === 'min_advance' || v.kind === 'max_advance') return arrivalChanged;
+      if (v.kind === 'closed_to_arrival' || v.kind === 'min_advance' || v.kind === 'max_advance')
+        return arrivalChanged;
       return false;
     });
-    current = { drafts: new Map(p.priced.drafts.map((d) => [d.date, d])), violations: [...p.priced.violations, ...relevant] };
+    current = {
+      drafts: new Map(p.priced.drafts.map((d) => [d.date, d])),
+      violations: [...p.priced.violations, ...relevant],
+    };
     if (needType && typeChangePolicy === 'difference') {
-      const old = priceForPlan(config, { planId: terms.ratePlan.id, unitTypeId: terms.unitTypeId, arrival: range.from, departure: range.to, nights: newDates, occupancy, bookingDate });
+      const old = priceForPlan(config, {
+        planId: terms.ratePlan.id,
+        unitTypeId: terms.unitTypeId,
+        arrival: range.from,
+        departure: range.to,
+        nights: newDates,
+        occupancy,
+        bookingDate,
+      });
       currentAgreedType = new Map(old.priced.drafts.map((d) => [d.date, d]));
     }
   } else if ((needCurrent || needType) && !planExists) {
     current = {
       drafts: new Map(),
       violations: [
-        { kind: 'plan_not_active', date: null, message: `Rate plan ${terms.ratePlan.code} no longer exists; new nights cannot be priced at current rates. Use agreed average or manual pricing.`, required: null, actual: null, overridable: false, source: null },
+        {
+          kind: 'plan_not_active',
+          date: null,
+          message: `Rate plan ${terms.ratePlan.code} no longer exists; new nights cannot be priced at current rates. Use agreed average or manual pricing.`,
+          required: null,
+          actual: null,
+          overridable: false,
+          source: null,
+        },
       ],
     };
   }
@@ -427,7 +551,12 @@ export async function priceChange(ports: RatesPorts, tx: TxContext, raw: unknown
     current,
     currentAgreedType,
     changeAt,
-    property: { id: property.id, timezone: terms.propertyTimezone, checkInTime: terms.checkInTime, classification: property.classification },
+    property: {
+      id: property.id,
+      timezone: terms.propertyTimezone,
+      checkInTime: terms.checkInTime,
+      classification: property.classification,
+    },
     taxRules: config.taxRules,
     meta: { quoteId: newId(), quotedAt: tx.now.toISOString(), configVector: configVector(config) },
   });
@@ -441,7 +570,14 @@ export async function priceChange(ports: RatesPorts, tx: TxContext, raw: unknown
  */
 export async function recordPlanSale(
   tx: TxContext,
-  input: { propertyId: string; ratePlanId: string; unitTypeId: string; nights: DateRange; quantity?: number; ref: EntityRef },
+  input: {
+    propertyId: string;
+    ratePlanId: string;
+    unitTypeId: string;
+    nights: DateRange;
+    quantity?: number;
+    ref: EntityRef;
+  },
 ): Promise<void> {
   const qty = input.quantity ?? 1;
   const plans = asNodes(await loadPlansForProperty(tx, input.propertyId));
@@ -457,13 +593,20 @@ export async function recordPlanSale(
     .where('sales_limit', 'is not', null)
     .execute();
   const effective = effectiveRestrictions(
-    rows.map((r) => ({ ratePlanId: r.rate_plan_id, unitTypeId: r.unit_type_id, date: r.stay_date, values: restrictionValues(r) })),
+    rows.map((r) => ({
+      ratePlanId: r.rate_plan_id,
+      unitTypeId: r.unit_type_id,
+      date: r.stay_date,
+      values: restrictionValues(r),
+    })),
     restrictionChain(chain),
     input.unitTypeId,
   );
   for (const date of dates) {
     // Deterministic lock order (plan, date) so concurrent bookings serialize per night without deadlocks.
-    await sql`select pg_advisory_xact_lock(hashtext(${`rates.sales:${input.ratePlanId}:${date}`}))`.execute(tx.db);
+    await sql`select pg_advisory_xact_lock(hashtext(${`rates.sales:${input.ratePlanId}:${date}`}))`.execute(
+      tx.db,
+    );
     const already = await db(tx)
       .selectFrom('rates.plan_sales')
       .select(['id', 'released_at'])
@@ -483,16 +626,24 @@ export async function recordPlanSale(
         .where('released_at', 'is', null)
         .executeTakeFirstOrThrow();
       if (Number(s.sold) + qty > limit) {
-        throw new BusinessRuleError('sales_limit_reached', `The sales limit of ${limit} for this rate on ${date} has been reached. Offer another rate.`, {
-          ratePlanId: input.ratePlanId,
-          date,
-          limit,
-          sold: Number(s.sold),
-        });
+        throw new BusinessRuleError(
+          'sales_limit_reached',
+          `The sales limit of ${limit} for this rate on ${date} has been reached. Offer another rate.`,
+          {
+            ratePlanId: input.ratePlanId,
+            date,
+            limit,
+            sold: Number(s.sold),
+          },
+        );
       }
     }
     if (already) {
-      await db(tx).updateTable('rates.plan_sales').set({ released_at: null, quantity: qty }).where('id', '=', already.id).execute();
+      await db(tx)
+        .updateTable('rates.plan_sales')
+        .set({ released_at: null, quantity: qty })
+        .where('id', '=', already.id)
+        .execute();
       continue;
     }
     await db(tx)
@@ -513,13 +664,17 @@ export async function recordPlanSale(
 }
 
 /** Provider (contract addition): release a stay's plan consumption (cancellation, shortening). */
-export async function releasePlanSale(tx: TxContext, input: { ref: EntityRef; nights?: DateRange }): Promise<void> {
+export async function releasePlanSale(
+  tx: TxContext,
+  input: { ref: EntityRef; nights?: DateRange },
+): Promise<void> {
   let q = db(tx)
     .updateTable('rates.plan_sales')
     .set({ released_at: tx.now })
     .where('ref_type', '=', input.ref.type)
     .where('ref_id', '=', input.ref.id)
     .where('released_at', 'is', null);
-  if (input.nights) q = q.where('stay_date', '>=', input.nights.from).where('stay_date', '<', input.nights.to);
+  if (input.nights)
+    q = q.where('stay_date', '>=', input.nights.from).where('stay_date', '<', input.nights.to);
   await q.execute();
 }

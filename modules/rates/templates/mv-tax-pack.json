@@ -28,9 +28,21 @@
             "note": "Tourism businesses must levy at least 10% (news sources; Labour Relations Authority regulation not read directly). The hotel sets its own rate and the charge categories it applies to. That service charge is part of the GST taxable value IS verified (GST Regulation) and is modelled in MV-TGST's base."
           },
           "sources": [
-            { "url": "https://atolltimes.mv/post/business/15673", "title": "Atoll Times — service charge reporting", "retrievedOn": "2026-11-07" },
-            { "url": "https://lra.gov.mv/2021/03/", "title": "Labour Relations Authority — Service Charge Regulation gazetted", "retrievedOn": "2026-11-07" },
-            { "url": "https://www.mira.gov.mv/Legislations/View/Goods-and-Services-Tax-Regulation-consolidated", "title": "MIRA — GST Regulation (consolidated): service charge in taxable value", "retrievedOn": "2026-11-07" }
+            {
+              "url": "https://atolltimes.mv/post/business/15673",
+              "title": "Atoll Times — service charge reporting",
+              "retrievedOn": "2026-11-07"
+            },
+            {
+              "url": "https://lra.gov.mv/2021/03/",
+              "title": "Labour Relations Authority — Service Charge Regulation gazetted",
+              "retrievedOn": "2026-11-07"
+            },
+            {
+              "url": "https://www.mira.gov.mv/Legislations/View/Goods-and-Services-Tax-Regulation-consolidated",
+              "title": "MIRA — GST Regulation (consolidated): service charge in taxable value",
+              "retrievedOn": "2026-11-07"
+            }
           ],
           "notes": "Voluntary tips are not service charge and are outside the GST base: post them with tax category 'gratuity' (no rule applies). Confirm the rate and categories with the hotel and the adviser."
         }
@@ -52,7 +64,15 @@
             "ratePercent": "16",
             "base": { "includeNet": true, "includeRuleCodes": ["MV-SC"] },
             "appliesTo": {
-              "taxCategories": ["accommodation", "food_beverage", "transfer", "spa", "activity", "retail", "other_service"],
+              "taxCategories": [
+                "accommodation",
+                "food_beverage",
+                "transfer",
+                "spa",
+                "activity",
+                "retail",
+                "other_service"
+              ],
               "excludeOutletKinds": ["general_sector"]
             },
             "inclusiveDefault": false,
@@ -63,8 +83,16 @@
             "note": "16% for supplies with time of supply until 2025-06-30 (MIRA page). The date this 16% rate started is not recorded here. Not legal advice — adviser to confirm (Q20)."
           },
           "sources": [
-            { "url": "https://mira.gov.mv/Pages/View/gst", "title": "MIRA — GST overview", "retrievedOn": "2026-11-07" },
-            { "url": "https://www.mira.gov.mv/ContentItems/View/circular-issued-changes-to-tgst-rate", "title": "MIRA — circular on the TGST rate change", "retrievedOn": "2026-11-07" }
+            {
+              "url": "https://mira.gov.mv/Pages/View/gst",
+              "title": "MIRA — GST overview",
+              "retrievedOn": "2026-11-07"
+            },
+            {
+              "url": "https://www.mira.gov.mv/ContentItems/View/circular-issued-changes-to-tgst-rate",
+              "title": "MIRA — circular on the TGST rate change",
+              "retrievedOn": "2026-11-07"
+            }
           ],
           "notes": "Tax point = time of supply (earlier of invoice issue or payment). A deposit received before 2025-07-01 fixed TGST at 16% for that amount."
         },
@@ -76,7 +104,15 @@
             "ratePercent": "17",
             "base": { "includeNet": true, "includeRuleCodes": ["MV-SC"] },
             "appliesTo": {
-              "taxCategories": ["accommodation", "food_beverage", "transfer", "spa", "activity", "retail", "other_service"],
+              "taxCategories": [
+                "accommodation",
+                "food_beverage",
+                "transfer",
+                "spa",
+                "activity",
+                "retail",
+                "other_service"
+              ],
               "excludeOutletKinds": ["general_sector"]
             },
             "inclusiveDefault": false,
@@ -87,9 +123,21 @@
             "note": "17% for supplies with time of supply on/after 2025-07-01 (MIRA page + circular). Service charge is in the base; Green Tax is NOT (GST is not charged on Green Tax). Rounding per line half-up is Portico's default, not a MIRA rule. Not legal advice — adviser to confirm (Q20)."
           },
           "sources": [
-            { "url": "https://mira.gov.mv/Pages/View/gst", "title": "MIRA — GST overview", "retrievedOn": "2026-11-07" },
-            { "url": "https://www.mira.gov.mv/ContentItems/View/circular-issued-changes-to-tgst-rate", "title": "MIRA — circular on the TGST rate change", "retrievedOn": "2026-11-07" },
-            { "url": "https://www.mira.gov.mv/Legislations/View/Goods-and-Services-Tax-Regulation-consolidated", "title": "MIRA — GST Regulation (consolidated)", "retrievedOn": "2026-11-07" }
+            {
+              "url": "https://mira.gov.mv/Pages/View/gst",
+              "title": "MIRA — GST overview",
+              "retrievedOn": "2026-11-07"
+            },
+            {
+              "url": "https://www.mira.gov.mv/ContentItems/View/circular-issued-changes-to-tgst-rate",
+              "title": "MIRA — circular on the TGST rate change",
+              "retrievedOn": "2026-11-07"
+            },
+            {
+              "url": "https://www.mira.gov.mv/Legislations/View/Goods-and-Services-Tax-Regulation-consolidated",
+              "title": "MIRA — GST Regulation (consolidated)",
+              "retrievedOn": "2026-11-07"
+            }
           ],
           "notes": "Tourism-sector tax is reported and paid in USD; a non-USD invoice must record a USD conversion within ±2% of the MMA rate for the time of supply (finance records rate, source and date)."
         }
@@ -110,7 +158,15 @@
             "kind": "percentage",
             "ratePercent": "8",
             "appliesTo": {
-              "taxCategories": ["accommodation", "food_beverage", "transfer", "spa", "activity", "retail", "other_service"],
+              "taxCategories": [
+                "accommodation",
+                "food_beverage",
+                "transfer",
+                "spa",
+                "activity",
+                "retail",
+                "other_service"
+              ],
               "outletKinds": ["general_sector"]
             },
             "inclusiveDefault": false,
@@ -121,8 +177,16 @@
             "note": "General-sector GST 8% (current, MIRA GST overview); start date not recorded. Applies only to outlets explicitly registered in the general sector (outlet kind 'general_sector'); outlets inside tourist premises default to the tourism sector. Not legal advice — adviser to confirm (Q20)."
           },
           "sources": [
-            { "url": "https://mira.gov.mv/Pages/View/gst", "title": "MIRA — GST overview", "retrievedOn": "2026-11-07" },
-            { "url": "https://www.mira.gov.mv/Pages/View/FAQ_GST", "title": "MIRA — GST FAQ (sector registration)", "retrievedOn": "2026-11-07" }
+            {
+              "url": "https://mira.gov.mv/Pages/View/gst",
+              "title": "MIRA — GST overview",
+              "retrievedOn": "2026-11-07"
+            },
+            {
+              "url": "https://www.mira.gov.mv/Pages/View/FAQ_GST",
+              "title": "MIRA — GST FAQ (sector registration)",
+              "retrievedOn": "2026-11-07"
+            }
           ]
         }
       ]
@@ -145,10 +209,16 @@
               "taxCategories": ["accommodation"],
               "classification": {
                 "all": [
-                  { "key": "mv.establishmentType", "in": ["resort", "integrated_resort", "resort_hotel", "hotel", "guesthouse", "vessel"] }
+                  {
+                    "key": "mv.establishmentType",
+                    "in": ["resort", "integrated_resort", "resort_hotel", "hotel", "guesthouse", "vessel"]
+                  }
                 ],
                 "any": [
-                  { "key": "mv.establishmentType", "in": ["resort", "integrated_resort", "resort_hotel", "vessel"] },
+                  {
+                    "key": "mv.establishmentType",
+                    "in": ["resort", "integrated_resort", "resort_hotel", "vessel"]
+                  },
                   { "key": "mv.inhabitedIsland", "equals": false },
                   { "key": "mv.registeredRooms", "min": 51 }
                 ]
@@ -163,10 +233,26 @@
             "note": "USD 12 per guest per day from 2025-01-01 for resorts, integrated resorts, resort hotels, hotels, guesthouses and tourist vessels, except hotels/guesthouses on inhabited islands with ≤ 50 registered rooms (MV-GREEN-6). Children under 2 at check-in exempt; complimentary stays still taxable. Not legal advice — adviser to confirm (Q20)."
           },
           "sources": [
-            { "url": "https://www.mira.gov.mv/ContentItems/View/circular-re-changes-to-grt-rates-on-20250101-news", "title": "MIRA — circular on Green Tax rates from 1 Jan 2025", "retrievedOn": "2026-11-07" },
-            { "url": "https://www.mira.gov.mv/Legislations/View/14-th-amendment-to%20the-tourism-act", "title": "MIRA — 14th amendment to the Tourism Act", "retrievedOn": "2026-11-07" },
-            { "url": "https://mira.gov.mv/Pages/View/FAQ_GreenTax", "title": "MIRA — Green Tax FAQ", "retrievedOn": "2026-11-07" },
-            { "url": "https://mira.gov.mv/Legislations/View/Green-tax-regulation", "title": "MIRA — Green Tax Regulation (consolidated)", "retrievedOn": "2026-11-07" }
+            {
+              "url": "https://www.mira.gov.mv/ContentItems/View/circular-re-changes-to-grt-rates-on-20250101-news",
+              "title": "MIRA — circular on Green Tax rates from 1 Jan 2025",
+              "retrievedOn": "2026-11-07"
+            },
+            {
+              "url": "https://www.mira.gov.mv/Legislations/View/14-th-amendment-to%20the-tourism-act",
+              "title": "MIRA — 14th amendment to the Tourism Act",
+              "retrievedOn": "2026-11-07"
+            },
+            {
+              "url": "https://mira.gov.mv/Pages/View/FAQ_GreenTax",
+              "title": "MIRA — Green Tax FAQ",
+              "retrievedOn": "2026-11-07"
+            },
+            {
+              "url": "https://mira.gov.mv/Legislations/View/Green-tax-regulation",
+              "title": "MIRA — Green Tax Regulation (consolidated)",
+              "retrievedOn": "2026-11-07"
+            }
           ],
           "notes": "Charged per guest per 24-hour block; the check-out block counts if 12 hours or more were spent in it (a late check-out that crosses the threshold is posted as an extra accommodation line). Must appear as its own invoice line and is outside the GST base. Paid to MIRA in USD monthly (MIRA 501)."
         }
@@ -205,8 +291,16 @@
             "note": "USD 6 per guest per day from 2025-01-01 for hotels and guesthouses on inhabited islands with 50 or fewer REGISTERED rooms. Children under 2 at check-in exempt; complimentary stays still taxable. Not legal advice — adviser to confirm (Q20)."
           },
           "sources": [
-            { "url": "https://www.mira.gov.mv/ContentItems/View/circular-re-changes-to-grt-rates-on-20250101-news", "title": "MIRA — circular on Green Tax rates from 1 Jan 2025", "retrievedOn": "2026-11-07" },
-            { "url": "https://mira.gov.mv/Pages/View/FAQ_GreenTax", "title": "MIRA — Green Tax FAQ", "retrievedOn": "2026-11-07" }
+            {
+              "url": "https://www.mira.gov.mv/ContentItems/View/circular-re-changes-to-grt-rates-on-20250101-news",
+              "title": "MIRA — circular on Green Tax rates from 1 Jan 2025",
+              "retrievedOn": "2026-11-07"
+            },
+            {
+              "url": "https://mira.gov.mv/Pages/View/FAQ_GreenTax",
+              "title": "MIRA — Green Tax FAQ",
+              "retrievedOn": "2026-11-07"
+            }
           ],
           "notes": "Same daily-block, separate-line and non-GST-base treatment as MV-GREEN-12."
         }

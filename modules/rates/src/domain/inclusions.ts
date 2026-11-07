@@ -24,7 +24,11 @@ export interface InclusionOutcome {
   violations: Violation[];
 }
 
-function occurrences(inc: InclusionSnapshot, nights: readonly LocalDate[], departure: LocalDate): Array<{ serviceDate: LocalDate; nightDate: LocalDate }> {
+function occurrences(
+  inc: InclusionSnapshot,
+  nights: readonly LocalDate[],
+  departure: LocalDate,
+): Array<{ serviceDate: LocalDate; nightDate: LocalDate }> {
   const first = nights[0] as LocalDate;
   const last = nights[nights.length - 1] as LocalDate;
   let out: Array<{ serviceDate: LocalDate; nightDate: LocalDate }>;
@@ -47,7 +51,10 @@ function occurrences(inc: InclusionSnapshot, nights: readonly LocalDate[], depar
   return inc.basis === 'per_stay' ? out.slice(0, 1) : out;
 }
 
-function childrenInBands(occ: Occupancy, bands: readonly ChildAgeBand[]): Array<{ age: number; band: string | null }> {
+function childrenInBands(
+  occ: Occupancy,
+  bands: readonly ChildAgeBand[],
+): Array<{ age: number; band: string | null }> {
   const maxAge = bands.reduce((m, b) => Math.max(m, b.maxAge), -1);
   return occ.childrenAges
     .filter((a) => a <= maxAge)
@@ -70,16 +77,31 @@ function quantityFor(inc: InclusionSnapshot, occ: Occupancy, bands: readonly Chi
   }
 }
 
-function amountFor(inc: InclusionSnapshot, occ: Occupancy, bands: readonly ChildAgeBand[], nightAmountMinor: number, quantity: number): number {
+function amountFor(
+  inc: InclusionSnapshot,
+  occ: Occupancy,
+  bands: readonly ChildAgeBand[],
+  nightAmountMinor: number,
+  quantity: number,
+): number {
   const p = inc.pricing;
   if (p.kind === 'percent_of_night') {
-    return new Decimal(nightAmountMinor).mul(p.percent).div(100).toDecimalPlaces(0, Decimal.ROUND_HALF_UP).toNumber();
+    return new Decimal(nightAmountMinor)
+      .mul(p.percent)
+      .div(100)
+      .toDecimalPlaces(0, Decimal.ROUND_HALF_UP)
+      .toNumber();
   }
   if ((inc.basis === 'per_child' || inc.basis === 'per_person') && p.childBandAmountsMinor) {
     const children = childrenInBands(occ, bands);
-    const childTotal = children.reduce((s, c) => s + (p.childBandAmountsMinor?.[c.band ?? ''] ?? p.amountMinor), 0);
+    const childTotal = children.reduce(
+      (s, c) => s + (p.childBandAmountsMinor?.[c.band ?? ''] ?? p.amountMinor),
+      0,
+    );
     // per_person: adults (and children older than every band) at the adult amount, children by band.
-    return inc.basis === 'per_person' ? (quantity - children.length) * p.amountMinor + childTotal : childTotal;
+    return inc.basis === 'per_person'
+      ? (quantity - children.length) * p.amountMinor + childTotal
+      : childTotal;
   }
   return p.amountMinor * quantity;
 }
@@ -104,9 +126,16 @@ export function computeInclusions(input: {
     const quantity = quantityFor(inc, input.occupancy, input.bands);
     for (const o of occurrences(inc, nightDates, input.departure)) {
       if (quantity === 0 && inc.pricing.kind === 'fixed') continue;
-      const amountMinor = amountFor(inc, input.occupancy, input.bands, nightAmount.get(o.nightDate) ?? 0, quantity);
+      const amountMinor = amountFor(
+        inc,
+        input.occupancy,
+        input.bands,
+        nightAmount.get(o.nightDate) ?? 0,
+        quantity,
+      );
       const occ: InclusionOccurrence = { inclusion: inc, ...o, quantity, amountMinor };
-      if (inc.priceMode === 'included') included.set(o.nightDate, [...(included.get(o.nightDate) ?? []), occ]);
+      if (inc.priceMode === 'included')
+        included.set(o.nightDate, [...(included.get(o.nightDate) ?? []), occ]);
       else added.push(occ);
     }
     if (inc.kind === 'allowance' && inc.allowance) {
@@ -125,7 +154,10 @@ export function computeInclusions(input: {
         terms: a,
         periods: periods.map((p) => ({
           ...p,
-          amount: a.kind === 'monetary' ? { amountMinor: (a.amountMinor ?? 0) * persons, currency: input.currency } : null,
+          amount:
+            a.kind === 'monetary'
+              ? { amountMinor: (a.amountMinor ?? 0) * persons, currency: input.currency }
+              : null,
           quantity: a.kind === 'quantity' ? (a.quantity ?? 0) * persons : null,
         })),
       });
@@ -152,7 +184,10 @@ export function computeInclusions(input: {
     // delivered, so their revenue share shrinks in proportion (largest remainder, exact) — never a negative room.
     const night = nightAmount.get(date) ?? 0;
     if (allocated > night && allocated > 0) {
-      const shares = allocate(money(night, input.currency), occs.map((o) => o.amountMinor));
+      const shares = allocate(
+        money(night, input.currency),
+        occs.map((o) => o.amountMinor),
+      );
       occs.forEach((o, i) => {
         o.amountMinor = shares[i]?.amountMinor ?? 0;
       });

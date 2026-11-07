@@ -1,5 +1,12 @@
 /** Calendar helpers for bulk price/restriction updates (pure). */
-import { addDays, type DateRange, eachNight, type LocalDate, ValidationError } from '@portico/kernel';
+import {
+  addDays,
+  compareDates,
+  type DateRange,
+  eachNight,
+  type LocalDate,
+  ValidationError,
+} from '@portico/kernel';
 
 /** ISO weekday: 1 = Monday … 7 = Sunday. */
 export function isoWeekday(date: LocalDate): number {
@@ -14,7 +21,10 @@ export function expandDates(ranges: readonly DateRange[], weekdays?: readonly nu
   const set = new Set<LocalDate>();
   for (const r of ranges) {
     if (r.to <= r.from) {
-      throw new ValidationError('invalid_date_range', `The range ${r.from} → ${r.to} is empty. Ranges are [from, to).`);
+      throw new ValidationError(
+        'invalid_date_range',
+        `The range ${r.from} → ${r.to} is empty. Ranges are [from, to).`,
+      );
     }
     for (const d of eachNight(r)) {
       if (!weekdays || weekdays.includes(isoWeekday(d))) set.add(d);
@@ -40,3 +50,7 @@ export function coalesceDates(dates: Iterable<LocalDate>): DateRange[] {
   }
   return out;
 }
+
+/** Earlier / later of two dates (LocalDate strings compare lexically; Math.min/max must not be used). */
+export const earlierDate = (a: LocalDate, b: LocalDate): LocalDate => (compareDates(a, b) <= 0 ? a : b);
+export const laterDate = (a: LocalDate, b: LocalDate): LocalDate => (compareDates(a, b) >= 0 ? a : b);

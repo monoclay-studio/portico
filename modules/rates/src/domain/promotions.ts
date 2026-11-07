@@ -69,7 +69,13 @@ function applySet(set: readonly PromotionCandidate[], nights: readonly NightAmou
   const amounts = new Map(nights.map((n) => [n.date, n.amountMinor]));
   const effects: Applied['effects'] = new Map();
   let total = 0;
-  const push = (date: LocalDate, p: PromotionCandidate, kind: PromotionEffect['kind'], discountMinor: number, percent: string | null) => {
+  const push = (
+    date: LocalDate,
+    p: PromotionCandidate,
+    kind: PromotionEffect['kind'],
+    discountMinor: number,
+    percent: string | null,
+  ) => {
     if (discountMinor <= 0) return;
     amounts.set(date, (amounts.get(date) ?? 0) - discountMinor);
     total += discountMinor;
@@ -84,16 +90,25 @@ function applySet(set: readonly PromotionCandidate[], nights: readonly NightAmou
     if (d.kind === 'percent') {
       for (const n of eligible) {
         const running = amounts.get(n.date) ?? 0;
-        push(n.date, p, 'percent', new Decimal(running).mul(d.percent).div(100).toDecimalPlaces(0, Decimal.ROUND_HALF_UP).toNumber(), d.percent);
+        push(
+          n.date,
+          p,
+          'percent',
+          new Decimal(running).mul(d.percent).div(100).toDecimalPlaces(0, Decimal.ROUND_HALF_UP).toNumber(),
+          d.percent,
+        );
       }
     } else if (d.kind === 'amount_per_night') {
-      for (const n of eligible) push(n.date, p, 'amount_per_night', Math.min(amounts.get(n.date) ?? 0, d.amountMinor), null);
+      for (const n of eligible)
+        push(n.date, p, 'amount_per_night', Math.min(amounts.get(n.date) ?? 0, d.amountMinor), null);
     } else {
       const free = Math.floor(eligible.length / d.stayNights) * d.freeNights;
       const ordered =
         d.which === 'last'
           ? [...eligible].sort((a, b) => (a.date < b.date ? 1 : -1))
-          : [...eligible].sort((a, b) => (amounts.get(a.date) ?? 0) - (amounts.get(b.date) ?? 0) || (a.date < b.date ? 1 : -1));
+          : [...eligible].sort(
+              (a, b) => (amounts.get(a.date) ?? 0) - (amounts.get(b.date) ?? 0) || (a.date < b.date ? 1 : -1),
+            );
       for (const n of ordered.slice(0, free)) push(n.date, p, 'free_night', amounts.get(n.date) ?? 0, null);
     }
   }
@@ -120,7 +135,9 @@ export function applyPromotions(
   const eligible = candidates
     .filter((p) => isEligible(p, ctx))
     .sort((a, b) => a.sequence - b.sequence || a.code.localeCompare(b.code));
-  const sets: PromotionCandidate[][] = eligible.filter((p) => p.combinability === 'exclusive').map((p) => [p]);
+  const sets: PromotionCandidate[][] = eligible
+    .filter((p) => p.combinability === 'exclusive')
+    .map((p) => [p]);
   const stackables = eligible.filter((p) => p.combinability === 'stackable');
   for (const seed of stackables) {
     const group = [seed];
@@ -139,7 +156,8 @@ export function applyPromotions(
     )
       best = { set, applied };
   }
-  if (!best) return { chosen: [], effects: new Map(), amounts: new Map(nights.map((n) => [n.date, n.amountMinor])) };
+  if (!best)
+    return { chosen: [], effects: new Map(), amounts: new Map(nights.map((n) => [n.date, n.amountMinor])) };
   return { chosen: best.set, effects: best.applied.effects, amounts: best.applied.amounts };
 }
 

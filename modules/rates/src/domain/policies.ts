@@ -11,6 +11,7 @@ import type {
   Penalty,
   ScheduleInstance,
 } from '../contracts';
+import { laterDate } from './calendar';
 
 // ───────────────────────────── Time zones ─────────────────────────────
 
@@ -26,7 +27,14 @@ function tzOffsetMs(instant: number, timeZone: string): number {
     second: '2-digit',
   }).formatToParts(new Date(instant));
   const get = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? 0);
-  const asUtc = Date.UTC(get('year'), get('month') - 1, get('day'), get('hour') % 24, get('minute'), get('second'));
+  const asUtc = Date.UTC(
+    get('year'),
+    get('month') - 1,
+    get('day'),
+    get('hour') % 24,
+    get('minute'),
+    get('second'),
+  );
   return asUtc - Math.floor(instant / 1000) * 1000;
 }
 
@@ -118,7 +126,8 @@ export function renderCancellationText(s: CancellationStructure, currency: strin
     }
   }
   parts.push(`No-show: ${penaltyText(s.noShow, currency)}.`);
-  if (s.earlyDeparture.kind !== 'none') parts.push(`Early departure: ${penaltyText(s.earlyDeparture, currency)}.`);
+  if (s.earlyDeparture.kind !== 'none')
+    parts.push(`Early departure: ${penaltyText(s.earlyDeparture, currency)}.`);
   return parts.join(' ');
 }
 
@@ -129,7 +138,11 @@ export interface ResolvedTier {
 }
 
 /** Tiers with absolute instants for a stay, plus stay-specific text. */
-export function resolveCancellationTiers(s: CancellationStructure, t: StayTiming, currency: string): ResolvedTier[] {
+export function resolveCancellationTiers(
+  s: CancellationStructure,
+  t: StayTiming,
+  currency: string,
+): ResolvedTier[] {
   return sortedTiers(s, t).map((tier) => {
     const at = deadlineInstant(tier.from, t);
     return {
@@ -145,7 +158,8 @@ export function resolveCancellationTiers(s: CancellationStructure, t: StayTiming
 /** The tier in force at an instant (latest tier whose deadline has passed), or null = free cancellation. */
 export function tierInForce(tiers: readonly ResolvedTier[], at: Date): ResolvedTier | null {
   let found: ResolvedTier | null = null;
-  for (const tier of tiers) if (tier.fromInstant === null || Date.parse(tier.fromInstant) <= at.getTime()) found = tier;
+  for (const tier of tiers)
+    if (tier.fromInstant === null || Date.parse(tier.fromInstant) <= at.getTime()) found = tier;
   return found;
 }
 
@@ -220,7 +234,11 @@ export function instantiateSchedule(
     let amount: number;
     switch (i.amount.basis) {
       case 'percent':
-        amount = new Decimal(c.totalGrossMinor).mul(i.amount.percent).div(100).toDecimalPlaces(0, Decimal.ROUND_HALF_UP).toNumber();
+        amount = new Decimal(c.totalGrossMinor)
+          .mul(i.amount.percent)
+          .div(100)
+          .toDecimalPlaces(0, Decimal.ROUND_HALF_UP)
+          .toNumber();
         break;
       case 'nights':
         amount = c.nightsGrossMinor.slice(0, i.amount.nights).reduce((x, y) => x + y, 0);
@@ -235,11 +253,12 @@ export function instantiateSchedule(
     amount = Math.max(0, Math.min(amount, remaining));
     // A pre-authorization holds funds; it is not collected, so it does not reduce what remains to schedule.
     if (i.kind !== 'preauthorization') scheduled += amount;
-    const anchor = i.due.anchor === 'booking' ? c.bookingDate : i.due.anchor === 'arrival' ? c.arrival : c.departure;
+    const anchor =
+      i.due.anchor === 'booking' ? c.bookingDate : i.due.anchor === 'arrival' ? c.arrival : c.departure;
     const due = addDays(anchor, i.due.offsetDays);
     return {
       kind: i.kind,
-      dueDate: due < c.bookingDate ? c.bookingDate : due,
+      dueDate: laterDate(due, c.bookingDate),
       amount: { amountMinor: amount, currency: c.currency },
       method: i.method,
       onOverdue: i.onOverdue,

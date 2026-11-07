@@ -47,16 +47,20 @@ export interface PostingLine {
  */
 export function postingPlan(terms: TermsSnapshot, stayId: string): PostingLine[] {
   const index = new Map(terms.nights.map((n, i) => [n.date, i]));
-  const common = { taxInclusion: terms.taxInclusion, occupancy: terms.occupancy, stayNights: terms.stay.nights };
+  const common = {
+    taxInclusion: terms.taxInclusion,
+    occupancy: terms.occupancy,
+    stayNights: terms.stay.nights,
+  };
   const out: PostingLine[] = [];
   for (const n of terms.nights) {
     for (const c of n.components) {
       const inclusion = c.inclusionId ? terms.inclusions.find((i) => i.id === c.inclusionId) : undefined;
-      const serviceDate =
-        inclusion?.rhythm.kind === 'departure' ? terms.stay.departure : n.date;
+      const serviceDate = inclusion?.rhythm.kind === 'departure' ? terms.stay.departure : n.date;
       out.push({
         ...common,
-        idempotencyKey: c.kind === 'room' ? `room:${stayId}:${n.date}` : `inclusion:${stayId}:${c.inclusionId}:${n.date}`,
+        idempotencyKey:
+          c.kind === 'room' ? `room:${stayId}:${n.date}` : `inclusion:${stayId}:${c.inclusionId}:${n.date}`,
         kind: c.kind,
         nightDate: n.date,
         serviceDate,
@@ -113,7 +117,8 @@ export interface RepriceInput {
 type Source = RepricingResult['nights'][number]['source'];
 
 const sameOccupancy = (a: Occupancy, b: Occupancy) =>
-  a.adults === b.adults && JSON.stringify([...a.childrenAges].sort()) === JSON.stringify([...b.childrenAges].sort());
+  a.adults === b.adults &&
+  JSON.stringify([...a.childrenAges].sort()) === JSON.stringify([...b.childrenAges].sort());
 
 function noPrice(date: LocalDate, message: string): Violation {
   return { kind: 'no_price', date, message, required: null, actual: null, overridable: false, source: null };
@@ -166,7 +171,10 @@ export function reprice(input: RepriceInput): RepricingResult {
         draft = {
           ...draft,
           baseAmountMinor: r.amountMinor,
-          effects: a.promotions.map((e, i) => ({ ...e, discount: { amountMinor: re.discounts[i] ?? 0, currency: cur } })),
+          effects: a.promotions.map((e, i) => ({
+            ...e,
+            discount: { amountMinor: re.discounts[i] ?? 0, currency: cur },
+          })),
           amountMinor: re.amountMinor,
         };
         source = 'occupancy_repriced';
@@ -183,11 +191,21 @@ export function reprice(input: RepriceInput): RepricingResult {
         } else {
           const co = input.currentAgreedType?.get(d);
           if (!cn || !co) {
-            violations.push(noPrice(d, `The price difference between unit types cannot be computed for ${d} (missing current price).`));
+            violations.push(
+              noPrice(
+                d,
+                `The price difference between unit types cannot be computed for ${d} (missing current price).`,
+              ),
+            );
             continue;
           }
           const amount = Math.max(0, draft.amountMinor + cn.amountMinor - co.amountMinor);
-          draft = { ...draft, params: cn.params, amountMinor: amount, baseAmountMinor: draft.baseAmountMinor + (amount - draft.amountMinor) };
+          draft = {
+            ...draft,
+            params: cn.params,
+            amountMinor: amount,
+            baseAmountMinor: draft.baseAmountMinor + (amount - draft.amountMinor),
+          };
           source = 'type_difference';
         }
       }
@@ -210,7 +228,13 @@ export function reprice(input: RepriceInput): RepricingResult {
         violations.push(noPrice(d, 'The agreement has no nights to average.'));
         continue;
       }
-      drafts.push({ date: d, params: firstParams, baseAmountMinor: average, effects: [], amountMinor: average });
+      drafts.push({
+        date: d,
+        params: firstParams,
+        baseAmountMinor: average,
+        effects: [],
+        amountMinor: average,
+      });
       sources.set(d, 'agreed_average');
     } else {
       const amount = input.manualAmountsMinor?.[d];
@@ -219,12 +243,20 @@ export function reprice(input: RepriceInput): RepricingResult {
         continue;
       }
       manualUsed = true;
-      drafts.push({ date: d, params: firstParams, baseAmountMinor: amount, effects: [], amountMinor: amount });
+      drafts.push({
+        date: d,
+        params: firstParams,
+        baseAmountMinor: amount,
+        effects: [],
+        amountMinor: amount,
+      });
       sources.set(d, 'manual');
     }
   }
   if (input.current) {
-    const newSet = new Set(newDates.filter((d) => !agreed.has(d) || (typeChanged && input.typeChangePolicy === 'reprice')));
+    const newSet = new Set(
+      newDates.filter((d) => !agreed.has(d) || (typeChanged && input.typeChangePolicy === 'reprice')),
+    );
     for (const v of input.current.violations) if (v.date === null || newSet.has(v.date)) violations.push(v);
   }
 
@@ -234,7 +266,9 @@ export function reprice(input: RepriceInput): RepricingResult {
   const cancel = t.policies.cancellation;
   if (removed.length > 0 && cancel) {
     const arrivalInstant = zonedInstant(t.stay.arrival, t.checkInTime, t.propertyTimezone);
-    const basisAmounts = removed.map((n) => ({ amountMinor: cancel.structure.basis === 'net' ? n.net.amountMinor : n.gross.amountMinor }));
+    const basisAmounts = removed.map((n) => ({
+      amountMinor: cancel.structure.basis === 'net' ? n.net.amountMinor : n.gross.amountMinor,
+    }));
     if (input.changeAt < arrivalInstant) {
       const tier = tierInForce(cancel.tiers, input.changeAt);
       if (tier && tier.penalty.kind !== 'none') {
@@ -307,7 +341,10 @@ export function reprice(input: RepriceInput): RepricingResult {
     penalties,
     before: t.totals,
     after: assembled.totals,
-    difference: { amountMinor: assembled.totals.gross.amountMinor - t.totals.gross.amountMinor, currency: cur },
+    difference: {
+      amountMinor: assembled.totals.gross.amountMinor - t.totals.gross.amountMinor,
+      currency: cur,
+    },
     violations: [...violations, ...assembled.violations],
     candidateTerms: assembled.terms,
   };

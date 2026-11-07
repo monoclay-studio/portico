@@ -63,20 +63,32 @@ export type Classification = Record<string, string | number | boolean>;
 export interface TaxEngineContext {
   classification: Classification;
   occupancy?: Occupancy | undefined;
-  stayContext?: { stayNights: number; arrival?: LocalDate | undefined; bookingDate?: LocalDate | undefined } | undefined;
+  stayContext?:
+    | { stayNights: number; arrival?: LocalDate | undefined; bookingDate?: LocalDate | undefined }
+    | undefined;
   invoiceDate?: LocalDate | undefined;
   paymentDate?: LocalDate | undefined;
   fxRates?: readonly FxRate[];
-  exemptionCertificates?: ReadonlyArray<{ ruleCode: string; reference: string; validFrom: LocalDate; validTo: LocalDate }>;
+  exemptionCertificates?: ReadonlyArray<{
+    ruleCode: string;
+    reference: string;
+    validFrom: LocalDate;
+    validTo: LocalDate;
+  }>;
 }
 
 const ROUNDING = { half_up: Decimal.ROUND_HALF_UP, half_even: Decimal.ROUND_HALF_EVEN } as const;
 
 // ───────────────────────────── Version selection ─────────────────────────────
 
-export function versionEffectiveOn(versions: readonly TaxRuleVersionData[], date: LocalDate): TaxRuleVersionData | undefined {
+export function versionEffectiveOn(
+  versions: readonly TaxRuleVersionData[],
+  date: LocalDate,
+): TaxRuleVersionData | undefined {
   return versions.find(
-    (v) => (v.effectiveFrom === null || v.effectiveFrom <= date) && (v.effectiveTo === null || date < v.effectiveTo),
+    (v) =>
+      (v.effectiveFrom === null || v.effectiveFrom <= date) &&
+      (v.effectiveTo === null || date < v.effectiveTo),
   );
 }
 
@@ -86,7 +98,10 @@ export function versionEffectiveOn(versions: readonly TaxRuleVersionData[], date
  * payment), the service date is used as the estimate and reported on the tax line.
  */
 /** Pinned versions: the latest start on or before the date (end dates ignored). */
-export function pinnedVersionOn(versions: readonly TaxRuleVersionData[], date: LocalDate): TaxRuleVersionData | undefined {
+export function pinnedVersionOn(
+  versions: readonly TaxRuleVersionData[],
+  date: LocalDate,
+): TaxRuleVersionData | undefined {
   let best: TaxRuleVersionData | undefined;
   for (const v of versions) {
     if (v.effectiveFrom !== null && v.effectiveFrom > date) continue;
@@ -125,7 +140,10 @@ function evalCondition(c: ClassificationCondition, cls: Classification): Tri {
 }
 
 /** Three-valued: a missing classification key is 'unknown' unless the result is decided without it. */
-export function evalClassification(p: ClassificationPredicate | undefined, cls: Classification): { result: Tri; missing: string[] } {
+export function evalClassification(
+  p: ClassificationPredicate | undefined,
+  cls: Classification,
+): { result: Tri; missing: string[] } {
   if (!p) return { result: true, missing: [] };
   const missing: string[] = [];
   let all: Tri = true;
@@ -170,7 +188,10 @@ function applicableRules(
     if (!version) continue;
     const def = version.definition;
     if (!def.appliesTo.taxCategories.includes(line.taxCategory)) continue;
-    if (def.appliesTo.outletKinds && (!line.outletKind || !def.appliesTo.outletKinds.includes(line.outletKind)))
+    if (
+      def.appliesTo.outletKinds &&
+      (!line.outletKind || !def.appliesTo.outletKinds.includes(line.outletKind))
+    )
       continue;
     if (line.outletKind && def.appliesTo.excludeOutletKinds?.includes(line.outletKind)) continue;
     const cls = evalClassification(def.appliesTo.classification, ctx.classification);
@@ -223,11 +244,13 @@ function applicableRules(
 }
 
 /** Dependencies (base.includeRuleCodes) first; ties by sequence then code. Cycles are configuration errors. */
-export function orderForCompounding<T extends { rule: Pick<TaxRuleHeader, 'code' | 'sequence'>; def: Pick<TaxRuleDefinition, 'base'> }>(
-  items: readonly T[],
-): T[] {
+export function orderForCompounding<
+  T extends { rule: Pick<TaxRuleHeader, 'code' | 'sequence'>; def: Pick<TaxRuleDefinition, 'base'> },
+>(items: readonly T[]): T[] {
   const byCode = new Map(items.map((i) => [i.rule.code, i]));
-  const sorted = [...items].sort((a, b) => a.rule.sequence - b.rule.sequence || a.rule.code.localeCompare(b.rule.code));
+  const sorted = [...items].sort(
+    (a, b) => a.rule.sequence - b.rule.sequence || a.rule.code.localeCompare(b.rule.code),
+  );
   const done = new Set<string>();
   const out: T[] = [];
   const visit = (i: T, stack: string[]) => {
@@ -264,7 +287,12 @@ interface Prepared extends Applicable {
   quantity: { persons: number; nights: number; units: number } | null;
 }
 
-function toLineMinor(amount: { value: string; currency: string }, lineCurrency: string, fx: readonly FxRate[], ruleCode: string): Decimal {
+function toLineMinor(
+  amount: { value: string; currency: string },
+  lineCurrency: string,
+  fx: readonly FxRate[],
+  ruleCode: string,
+): Decimal {
   const major = new Decimal(amount.value);
   if (amount.currency === lineCurrency) return major.mul(new Decimal(10).pow(currencyExponent(lineCurrency)));
   const rate = fx.find((r) => r.from === amount.currency && r.to === lineCurrency);
@@ -280,7 +308,8 @@ function toLineMinor(amount: { value: string; currency: string }, lineCurrency: 
 
 function personsFor(def: TaxRuleDefinition, occ: Occupancy): number {
   const under = def.persons?.exemptChildrenUnderAge;
-  const children = under === undefined ? occ.childrenAges.length : occ.childrenAges.filter((a) => a >= under).length;
+  const children =
+    under === undefined ? occ.childrenAges.length : occ.childrenAges.filter((a) => a >= under).length;
   return occ.adults + children;
 }
 
@@ -316,16 +345,24 @@ function prepare(a: Applicable, line: ChargeLine, ctx: TaxEngineContext): Prepar
     }
     const persons = personsFor(def, occ);
     quantity = { persons, nights, units };
-    fixedMinor = toLineMinor(def.amount as { value: string; currency: string }, cur, fx, a.rule.code).mul(persons).mul(nights);
+    fixedMinor = toLineMinor(def.amount as { value: string; currency: string }, cur, fx, a.rule.code)
+      .mul(persons)
+      .mul(nights);
   } else if (def.kind === 'per_unit_night') {
     quantity = { persons: 0, nights, units };
-    fixedMinor = toLineMinor(def.amount as { value: string; currency: string }, cur, fx, a.rule.code).mul(units).mul(nights);
+    fixedMinor = toLineMinor(def.amount as { value: string; currency: string }, cur, fx, a.rule.code)
+      .mul(units)
+      .mul(nights);
   } else if (def.kind === 'per_stay') {
     quantity = { persons: 0, nights: 1, units };
-    fixedMinor = toLineMinor(def.amount as { value: string; currency: string }, cur, fx, a.rule.code).mul(units);
+    fixedMinor = toLineMinor(def.amount as { value: string; currency: string }, cur, fx, a.rule.code).mul(
+      units,
+    );
   } else if (def.kind === 'fixed_per_charge') {
     quantity = { persons: 0, nights: 0, units: line.quantity };
-    fixedMinor = toLineMinor(def.amount as { value: string; currency: string }, cur, fx, a.rule.code).mul(line.quantity);
+    fixedMinor = toLineMinor(def.amount as { value: string; currency: string }, cur, fx, a.rule.code).mul(
+      line.quantity,
+    );
   }
   const rate = def.kind === 'percentage' ? new Decimal(def.ratePercent as string).div(100) : null;
   const bands =
@@ -335,7 +372,9 @@ function prepare(a: Applicable, line: ChargeLine, ctx: TaxEngineContext): Prepar
           rate: new Decimal(b.ratePercent).div(100),
         }))
       : null;
-  const capMinor = def.caps?.maxAmountPerLine ? toLineMinor(def.caps.maxAmountPerLine, cur, fx, a.rule.code) : null;
+  const capMinor = def.caps?.maxAmountPerLine
+    ? toLineMinor(def.caps.maxAmountPerLine, cur, fx, a.rule.code)
+    : null;
   return { ...a, included: includedSet(line.taxInclusion, a), fixedMinor, rate, bands, capMinor, quantity };
 }
 
@@ -455,12 +494,17 @@ function solveInclusiveNet(included: readonly Prepared[], gross: Decimal, line: 
 
 function money(amountMinor: Decimal | number, currency: string) {
   const n = typeof amountMinor === 'number' ? amountMinor : amountMinor.toNumber();
-  if (!Number.isSafeInteger(n)) throw new TaxConfigurationError('amount_out_of_range', `Amount ${n} is out of range.`, {});
+  if (!Number.isSafeInteger(n))
+    throw new TaxConfigurationError('amount_out_of_range', `Amount ${n} is out of range.`, {});
   return { amountMinor: n === 0 ? 0 : n, currency };
 }
 
 /** Compute taxes for one line. */
-export function computeLine(rules: readonly LoadedTaxRule[], line: ChargeLine, ctx: TaxEngineContext): LineTaxResult {
+export function computeLine(
+  rules: readonly LoadedTaxRule[],
+  line: ChargeLine,
+  ctx: TaxEngineContext,
+): LineTaxResult {
   const exemptionsApplied: Array<{ ruleCode: string; reference: string }> = [];
   const applicable = applicableRules(rules, line, ctx, exemptionsApplied);
   const prepared = applicable.map((a) => prepare(a, line, ctx));
@@ -557,7 +601,11 @@ export function computeTaxesPure(
   const ids = new Set<string>();
   for (const l of lines) {
     if (ids.has(l.lineId))
-      throw new TaxConfigurationError('duplicate_line_id', `Line id ${l.lineId} is used twice. Line ids must be unique.`, {});
+      throw new TaxConfigurationError(
+        'duplicate_line_id',
+        `Line id ${l.lineId} is used twice. Line ids must be unique.`,
+        {},
+      );
     ids.add(l.lineId);
   }
   const results = lines.map((l) => computeLine(rules, l, ctx));

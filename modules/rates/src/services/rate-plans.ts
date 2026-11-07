@@ -18,7 +18,17 @@ import { ancestry, descendants, validateDerivationGraph } from '../domain/pricin
 import { RATES_EVENTS } from '../events';
 import type { RatesPorts } from '../ports';
 import { assertPackagesAtProperty } from './catalog';
-import { db, guardConfigWrite, json, lockPlanGraph, parseInput, parseStored, type Row, requireRead, withUniqueCode } from './shared';
+import {
+  db,
+  guardConfigWrite,
+  json,
+  lockPlanGraph,
+  parseInput,
+  parseStored,
+  type Row,
+  requireRead,
+  withUniqueCode,
+} from './shared';
 
 export function toRatePlan(r: Row<'rates.rate_plans'>): RatePlanDto {
   return {
@@ -47,7 +57,12 @@ export function toRatePlan(r: Row<'rates.rate_plans'>): RatePlanDto {
 }
 
 export async function loadPlansForProperty(tx: TxContext, propertyId: string): Promise<RatePlanDto[]> {
-  const rows = await db(tx).selectFrom('rates.rate_plans').selectAll().where('property_id', '=', propertyId).orderBy('code').execute();
+  const rows = await db(tx)
+    .selectFrom('rates.rate_plans')
+    .selectAll()
+    .where('property_id', '=', propertyId)
+    .orderBy('code')
+    .execute();
   return rows.map(toRatePlan);
 }
 
@@ -62,11 +77,21 @@ async function validatePolicyRefs(
 ): Promise<void> {
   for (const ref of refs) {
     if (!ref.id) continue;
-    const p = await db(tx).selectFrom('rates.policies').select(['kind', 'property_id', 'status']).where('id', '=', ref.id).executeTakeFirst();
+    const p = await db(tx)
+      .selectFrom('rates.policies')
+      .select(['kind', 'property_id', 'status'])
+      .where('id', '=', ref.id)
+      .executeTakeFirst();
     if (!p || p.property_id !== propertyId)
-      throw new ValidationError('policy_not_found', `The ${ref.kind} policy ${ref.id} does not exist at this property.`);
+      throw new ValidationError(
+        'policy_not_found',
+        `The ${ref.kind} policy ${ref.id} does not exist at this property.`,
+      );
     if (p.kind !== ref.kind)
-      throw new ValidationError('policy_kind_mismatch', `Policy ${ref.id} is a ${p.kind} policy, not a ${ref.kind} policy.`);
+      throw new ValidationError(
+        'policy_kind_mismatch',
+        `Policy ${ref.id} is a ${p.kind} policy, not a ${ref.kind} policy.`,
+      );
   }
 }
 
@@ -76,17 +101,32 @@ function validateDerivation(
   currency: string,
   derivation: RatePlanInput['derivation'] | null,
 ): void {
-  const nodes = plans.map((p) => ({ id: p.id, parentId: p.derivation?.parentRatePlanId ?? null, code: p.code }));
+  const nodes = plans.map((p) => ({
+    id: p.id,
+    parentId: p.derivation?.parentRatePlanId ?? null,
+    code: p.code,
+  }));
   if (!nodes.some((n) => n.id === planId)) nodes.push({ id: planId, parentId: null, code: 'the new plan' });
   if (!derivation) {
     validateDerivationGraph(nodes, planId, null);
     return;
   }
   const parent = plans.find((p) => p.id === derivation.parentRatePlanId);
-  if (!parent) throw new DerivationError('parent_plan_not_found', 'The parent rate plan does not exist at this property.');
-  if (parent.status === 'retired') throw new DerivationError('parent_plan_retired', `The parent rate plan ${parent.code} is retired. Choose an active plan.`);
+  if (!parent)
+    throw new DerivationError(
+      'parent_plan_not_found',
+      'The parent rate plan does not exist at this property.',
+    );
+  if (parent.status === 'retired')
+    throw new DerivationError(
+      'parent_plan_retired',
+      `The parent rate plan ${parent.code} is retired. Choose an active plan.`,
+    );
   if (parent.currency !== currency)
-    throw new DerivationError('derivation_currency_mismatch', `A derived plan must use its parent's currency (${parent.currency}).`);
+    throw new DerivationError(
+      'derivation_currency_mismatch',
+      `A derived plan must use its parent's currency (${parent.currency}).`,
+    );
   validateDerivationGraph(nodes, planId, parent.id);
 }
 
@@ -98,7 +138,12 @@ export async function createRatePlan(ports: RatesPorts, tx: TxContext, raw: unkn
   assertCurrency(currency);
   await lockPlanGraph(tx, input.propertyId);
   const id = newId();
-  validateDerivation(await loadPlansForProperty(tx, input.propertyId), id, currency, input.derivation ?? null);
+  validateDerivation(
+    await loadPlansForProperty(tx, input.propertyId),
+    id,
+    currency,
+    input.derivation ?? null,
+  );
   await validatePolicyRefs(tx, input.propertyId, [
     { id: input.cancellationPolicyId, kind: 'cancellation' },
     { id: input.guaranteePolicyId, kind: 'guarantee' },
@@ -134,7 +179,12 @@ export async function createRatePlan(ports: RatesPorts, tx: TxContext, raw: unkn
       .executeTakeFirstOrThrow(),
   );
   const plan = toRatePlan(row);
-  await tx.audit({ action: 'rates.ratePlan.create', target: { type: 'rate_plan', id }, propertyId: input.propertyId, after: plan });
+  await tx.audit({
+    action: 'rates.ratePlan.create',
+    target: { type: 'rate_plan', id },
+    propertyId: input.propertyId,
+    after: plan,
+  });
   await tx.emit({
     type: RATES_EVENTS.ratePlanChanged,
     propertyId: input.propertyId,
@@ -152,14 +202,27 @@ export async function updateRatePlan(
   raw: unknown,
 ): Promise<RatePlanDto> {
   const patch = parseInput(ratePlanUpdate, raw);
-  const beforeRow = await db(tx).selectFrom('rates.rate_plans').selectAll().where('id', '=', id).executeTakeFirst();
+  const beforeRow = await db(tx)
+    .selectFrom('rates.rate_plans')
+    .selectAll()
+    .where('id', '=', id)
+    .executeTakeFirst();
   if (!beforeRow) throw new NotFoundError('rate_plan', id);
   const before = toRatePlan(beforeRow);
   await guardConfigWrite(ports, tx, before.propertyId, 'rates.ratePlan.manage');
-  if (before.status === 'retired') throw new BusinessRuleError('rate_plan_retired', 'This rate plan is retired and can no longer be changed.');
+  if (before.status === 'retired')
+    throw new BusinessRuleError(
+      'rate_plan_retired',
+      'This rate plan is retired and can no longer be changed.',
+    );
   await lockPlanGraph(tx, before.propertyId);
   if (patch.derivation !== undefined) {
-    validateDerivation(await loadPlansForProperty(tx, before.propertyId), id, before.currency, patch.derivation);
+    validateDerivation(
+      await loadPlansForProperty(tx, before.propertyId),
+      id,
+      before.currency,
+      patch.derivation,
+    );
   }
   await validatePolicyRefs(tx, before.propertyId, [
     { id: patch.cancellationPolicyId, kind: 'cancellation' },
@@ -173,16 +236,23 @@ export async function updateRatePlan(
       ...(patch.name !== undefined ? { name: patch.name } : {}),
       ...(patch.description !== undefined ? { description: patch.description } : {}),
       ...(patch.derivation !== undefined
-        ? { parent_id: patch.derivation?.parentRatePlanId ?? null, derivation: patch.derivation ? json(patch.derivation) : null }
+        ? {
+            parent_id: patch.derivation?.parentRatePlanId ?? null,
+            derivation: patch.derivation ? json(patch.derivation) : null,
+          }
         : {}),
       ...(patch.inherit !== undefined ? { inherit: json(patch.inherit) } : {}),
       ...(patch.mealPlan !== undefined ? { meal_plan: patch.mealPlan } : {}),
       ...(patch.packageIds !== undefined ? { package_ids: patch.packageIds } : {}),
-      ...(patch.cancellationPolicyId !== undefined ? { cancellation_policy_id: patch.cancellationPolicyId } : {}),
+      ...(patch.cancellationPolicyId !== undefined
+        ? { cancellation_policy_id: patch.cancellationPolicyId }
+        : {}),
       ...(patch.guaranteePolicyId !== undefined ? { guarantee_policy_id: patch.guaranteePolicyId } : {}),
       ...(patch.depositPolicyId !== undefined ? { deposit_policy_id: patch.depositPolicyId } : {}),
       ...(patch.eligibility !== undefined ? { eligibility: json(patch.eligibility) } : {}),
-      ...(patch.commission !== undefined ? { commission: patch.commission ? json(patch.commission) : null } : {}),
+      ...(patch.commission !== undefined
+        ? { commission: patch.commission ? json(patch.commission) : null }
+        : {}),
       ...(patch.taxInclusion !== undefined ? { tax_inclusion: json(patch.taxInclusion) } : {}),
       ...(patch.roomChargeCode !== undefined ? { room_charge_code: patch.roomChargeCode } : {}),
       ...(patch.marketSegment !== undefined ? { market_segment: patch.marketSegment } : {}),
@@ -195,13 +265,24 @@ export async function updateRatePlan(
     .executeTakeFirst();
   if (!row) return explainVersionMiss('rate_plan', id, expectedVersion, async () => before.version);
   const after = toRatePlan(row);
-  await tx.audit({ action: 'rates.ratePlan.update', target: { type: 'rate_plan', id }, propertyId: after.propertyId, before, after });
+  await tx.audit({
+    action: 'rates.ratePlan.update',
+    target: { type: 'rate_plan', id },
+    propertyId: after.propertyId,
+    before,
+    after,
+  });
   const priceShapeChanged = patch.derivation !== undefined;
   await tx.emit({
     type: RATES_EVENTS.ratePlanChanged,
     propertyId: after.propertyId,
     aggregate: { type: 'rate_plan', id },
-    payload: { propertyId: after.propertyId, ratePlanId: id, change: 'updated', pricesAffected: priceShapeChanged },
+    payload: {
+      propertyId: after.propertyId,
+      ratePlanId: id,
+      change: 'updated',
+      pricesAffected: priceShapeChanged,
+    },
   });
   return after;
 }
@@ -220,7 +301,12 @@ export function effectivePolicyId(
 ): string | null {
   for (let i = chain.length - 1; i >= 0; i--) {
     const p = chain[i] as RatePlanDto;
-    const own = kind === 'cancellationPolicy' ? p.cancellationPolicyId : kind === 'guaranteePolicy' ? p.guaranteePolicyId : p.depositPolicyId;
+    const own =
+      kind === 'cancellationPolicy'
+        ? p.cancellationPolicyId
+        : kind === 'guaranteePolicy'
+          ? p.guaranteePolicyId
+          : p.depositPolicyId;
     if (i === 0 || !p.inherit[kind]) return own;
   }
   return null;
@@ -234,18 +320,31 @@ export async function changeRatePlanStatus(
   raw: unknown,
 ): Promise<RatePlanDto> {
   const { status, reason } = parseInput(ratePlanStatusChange, raw);
-  const beforeRow = await db(tx).selectFrom('rates.rate_plans').selectAll().where('id', '=', id).executeTakeFirst();
+  const beforeRow = await db(tx)
+    .selectFrom('rates.rate_plans')
+    .selectAll()
+    .where('id', '=', id)
+    .executeTakeFirst();
   if (!beforeRow) throw new NotFoundError('rate_plan', id);
   const before = toRatePlan(beforeRow);
   await guardConfigWrite(ports, tx, before.propertyId, 'rates.ratePlan.manage');
   if (!TRANSITIONS[before.status]?.includes(status)) {
-    throw new BusinessRuleError('invalid_status_change', `A ${before.status} rate plan cannot become ${status}.`, { from: before.status, to: status });
+    throw new BusinessRuleError(
+      'invalid_status_change',
+      `A ${before.status} rate plan cannot become ${status}.`,
+      { from: before.status, to: status },
+    );
   }
   const plans = await loadPlansForProperty(tx, before.propertyId);
   const chain = ancestry(asNodes(plans), id);
   if (status === 'active') {
     const root = chain[0] as RatePlanDto;
-    const priced = await db(tx).selectFrom('rates.prices').select('id').where('rate_plan_id', '=', root.id).limit(1).executeTakeFirst();
+    const priced = await db(tx)
+      .selectFrom('rates.prices')
+      .select('id')
+      .where('rate_plan_id', '=', root.id)
+      .limit(1)
+      .executeTakeFirst();
     if (!priced) {
       throw new BusinessRuleError(
         'rate_plan_has_no_prices',
@@ -253,11 +352,17 @@ export async function changeRatePlanStatus(
       );
     }
     if (!effectivePolicyId(chain, 'cancellationPolicy')) {
-      throw new BusinessRuleError('rate_plan_needs_cancellation_policy', `${before.code} needs a cancellation policy (its own or inherited) before it can be sold.`);
+      throw new BusinessRuleError(
+        'rate_plan_needs_cancellation_policy',
+        `${before.code} needs a cancellation policy (its own or inherited) before it can be sold.`,
+      );
     }
     const inactiveAncestor = chain.slice(0, -1).find((p) => p.status !== 'active');
     if (inactiveAncestor) {
-      throw new BusinessRuleError('parent_plan_not_active', `${before.code} derives from ${inactiveAncestor.code}, which is ${inactiveAncestor.status}. Activate it first.`);
+      throw new BusinessRuleError(
+        'parent_plan_not_active',
+        `${before.code} derives from ${inactiveAncestor.code}, which is ${inactiveAncestor.status}. Activate it first.`,
+      );
     }
   }
   if (status === 'retired') {
@@ -310,7 +415,11 @@ export async function listRatePlans(
   input: { propertyId: string; status?: RatePlanDto['status'] | undefined },
 ): Promise<RatePlanDto[]> {
   requireRead(tx, input.propertyId);
-  let q = db(tx).selectFrom('rates.rate_plans').selectAll().where('property_id', '=', input.propertyId).orderBy('code');
+  let q = db(tx)
+    .selectFrom('rates.rate_plans')
+    .selectAll()
+    .where('property_id', '=', input.propertyId)
+    .orderBy('code');
   if (input.status) q = q.where('status', '=', input.status);
   return (await q.execute()).map(toRatePlan);
 }

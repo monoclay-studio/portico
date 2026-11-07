@@ -5,7 +5,14 @@
 import { canonicalJson, newId } from '@portico/kernel';
 import type { TestDatabase } from '@portico/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { type Offer, postingPlan, seedResortRates, type TermsSnapshot, termsSnapshot, verifyTerms } from '../src';
+import {
+  type Offer,
+  postingPlan,
+  seedResortRates,
+  type TermsSnapshot,
+  termsSnapshot,
+  verifyTerms,
+} from '../src';
 import { newOrg, startDb, sum, unitTypes } from './harness';
 
 let t: TestDatabase;
@@ -21,7 +28,12 @@ describe('agreed terms survive every later configuration change (E08)', () => {
     const beach = uts[0]?.id as string;
     const seeded = await o.run(async (tx, r) => {
       await r.installTaxTemplate(tx, { template: 'MV' });
-      return seedResortRates(r, tx, { propertyId: o.propertyId, unitTypes: uts, from: '2026-11-07', days: 400 });
+      return seedResortRates(r, tx, {
+        propertyId: o.propertyId,
+        unitTypes: uts,
+        from: '2026-11-07',
+        days: 400,
+      });
     });
     const quote = await o.run((tx, r) =>
       r.quoteDetailed(tx, {
@@ -55,20 +67,33 @@ describe('agreed terms survive every later configuration change (E08)', () => {
         reason: 'post-booking rate rise',
       });
       await r.updateRatePlan(tx, ai?.id as string, ai?.version as number, {
-        derivation: { parentRatePlanId: bar?.id as string, adjustment: { kind: 'amount', amountMinor: 200_000 } },
+        derivation: {
+          parentRatePlanId: bar?.id as string,
+          adjustment: { kind: 'amount', amountMinor: 200_000 },
+        },
       });
-      await r.applyRestrictionUpdate(tx, { propertyId: o.propertyId, ratePlanId: null, unitTypeIds: [null], ranges: [{ from: '2027-02-10', to: '2027-02-14' }], set: { closed: true } });
+      await r.applyRestrictionUpdate(tx, {
+        propertyId: o.propertyId,
+        ratePlanId: null,
+        unitTypeIds: [null],
+        ranges: [{ from: '2027-02-10', to: '2027-02-14' }],
+        set: { closed: true },
+      });
       const policies = await r.listPolicies(tx, o.propertyId);
       const flex = policies.find((p) => p.code === 'FLEX21');
       await r.updatePolicy(tx, flex?.id as string, flex?.version as number, {
-        structure: { tiers: [{ from: { kind: 'at_booking' }, penalty: { kind: 'percent_of_stay', percent: '100' } }] },
+        structure: {
+          tiers: [{ from: { kind: 'at_booking' }, penalty: { kind: 'percent_of_stay', percent: '100' } }],
+        },
       });
       const promos = await r.listPromotions(tx, o.propertyId);
       const honey = promos.find((p) => p.code === 'HONEYMOON');
       await r.updatePromotion(tx, honey?.id as string, honey?.version as number, { status: 'paused' });
       const incs = await r.listInclusions(tx, o.propertyId);
       const board = incs.find((i) => i.code === 'AI_BOARD');
-      await r.updateInclusion(tx, board?.id as string, board?.version as number, { pricing: { kind: 'fixed', amountMinor: 25_000 } });
+      await r.updateInclusion(tx, board?.id as string, board?.version as number, {
+        pricing: { kind: 'fixed', amountMinor: 25_000 },
+      });
       // TGST rises to 18% from 2027-02-12 — in the middle of the agreed stay.
       const tgst = (await r.listTaxRules(tx, { jurisdiction: 'MV' })).find((x) => x.code === 'MV-TGST');
       const withV3 = await r.addTaxRuleVersion(tx, tgst?.id as string, {
@@ -77,14 +102,33 @@ describe('agreed terms survive every later configuration change (E08)', () => {
           kind: 'percentage',
           ratePercent: '18',
           base: { includeNet: true, includeRuleCodes: ['MV-SC'] },
-          appliesTo: { taxCategories: ['accommodation', 'food_beverage', 'transfer', 'spa', 'activity', 'retail', 'other_service'], excludeOutletKinds: ['general_sector'] },
+          appliesTo: {
+            taxCategories: [
+              'accommodation',
+              'food_beverage',
+              'transfer',
+              'spa',
+              'activity',
+              'retail',
+              'other_service',
+            ],
+            excludeOutletKinds: ['general_sector'],
+          },
         },
-        sources: [{ url: 'https://example.gov/hypothetical-tgst-change', title: 'Hypothetical rate change (test only)' }],
+        sources: [
+          {
+            url: 'https://example.gov/hypothetical-tgst-change',
+            title: 'Hypothetical rate change (test only)',
+          },
+        ],
       });
       const v3 = withV3.versions.find((v) => v.versionNo === 3)?.id as string;
       const report = await r.previewTaxRuleActivation(tx, v3);
       expect(report.closes[0]).toMatchObject({ effectiveToBefore: null, effectiveToAfter: '2027-02-12' });
-      await r.activateTaxRuleVersion(tx, v3, { reason: 'test: tax change mid-stay', acknowledgeReport: true });
+      await r.activateTaxRuleVersion(tx, v3, {
+        reason: 'test: tax change mid-stay',
+        acknowledgeReport: true,
+      });
     });
 
     // ── The agreement is unchanged and still verifies ──
@@ -127,16 +171,27 @@ describe('agreed terms survive every later configuration change (E08)', () => {
       occupancy: { adults: p.occupancy.adults, childrenAges: [...p.occupancy.childrenAges] },
       nightIndex: p.nightIndex,
     }));
-    const stayContext = { stayNights: reloaded.stay.nights, arrival: reloaded.stay.arrival, bookingDate: reloaded.bookingDate };
+    const stayContext = {
+      stayNights: reloaded.stay.nights,
+      arrival: reloaded.stay.arrival,
+      bookingDate: reloaded.bookingDate,
+    };
     // (a) Historical: recomputing with the rule versions recorded at quote time reproduces the quoted taxes exactly.
     const pinned = await o.run((tx, r) =>
-      r.computeTaxesDetailed(tx, { propertyId: o.propertyId, lines, stayContext, ruleVersionIds: reloaded.taxes.ruleVersionIds }),
+      r.computeTaxesDetailed(tx, {
+        propertyId: o.propertyId,
+        lines,
+        stayContext,
+        ruleVersionIds: reloaded.taxes.ruleVersionIds,
+      }),
     );
     const quotedTaxTotal = reloaded.totals.taxes.amountMinor + reloaded.totals.fees.amountMinor;
     expect(pinned.totals.taxes.amountMinor + pinned.totals.fees.amountMinor).toBe(quotedTaxTotal);
     // (b) Future postings follow each rule's tax point: supplies on/after 2027-02-12 use the new 18% version,
     //     earlier nights keep 17%; agreed PRICES are unchanged either way (exclusive plan: the tax line changes).
-    const atPosting = await o.run((tx, r) => r.computeTaxesDetailed(tx, { propertyId: o.propertyId, lines, stayContext }));
+    const atPosting = await o.run((tx, r) =>
+      r.computeTaxesDetailed(tx, { propertyId: o.propertyId, lines, stayContext }),
+    );
     const tgstRate = (date: string) =>
       atPosting.lines
         .filter((l) => l.lineId.includes(date))
@@ -147,8 +202,15 @@ describe('agreed terms survive every later configuration change (E08)', () => {
     expect(atPosting.totals.net.amountMinor).toBe(reloaded.totals.net.amountMinor);
     expect(atPosting.totals.taxes.amountMinor).toBeGreaterThan(pinned.totals.taxes.amountMinor);
     // (c) An amount whose time of supply was fixed by an earlier payment (deposit at booking) is not re-taxed.
-    const prepaid = await o.run((tx, r) => r.computeTaxesDetailed(tx, { propertyId: o.propertyId, lines, stayContext, paymentDate: '2026-11-07' }));
-    expect(prepaid.lines.flatMap((l) => l.taxes).filter((x) => x.ruleCode === 'MV-TGST').every((x) => x.ratePercent === '17')).toBe(true);
+    const prepaid = await o.run((tx, r) =>
+      r.computeTaxesDetailed(tx, { propertyId: o.propertyId, lines, stayContext, paymentDate: '2026-11-07' }),
+    );
+    expect(
+      prepaid.lines
+        .flatMap((l) => l.taxes)
+        .filter((x) => x.ruleCode === 'MV-TGST')
+        .every((x) => x.ratePercent === '17'),
+    ).toBe(true);
 
     // ── A change preview on the old agreement keeps agreed nights at agreed prices ──
     const preview = await o.run((tx, r) => r.priceChange(tx, { terms: reloaded, change: {} }));

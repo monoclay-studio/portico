@@ -25,9 +25,9 @@ export const fixedAmount = z.object({ value: nonNegativeDecimal, currency: curre
 export type FixedAmount = z.infer<typeof fixedAmount>;
 
 /** Half-open night range [from, to): from = arrival, to = departure. */
-export const dateRange = z
-  .object({ from: localDate, to: localDate })
-  .refine((r) => r.to > r.from, { message: 'The end date must be after the start date (ranges are [from, to)).' });
+export const dateRange = z.object({ from: localDate, to: localDate }).refine((r) => r.to > r.from, {
+  message: 'The end date must be after the start date (ranges are [from, to)).',
+});
 
 export const occupancy = z.object({
   adults: z.number().int().min(1).max(20),
@@ -120,12 +120,19 @@ export const taxRuleDefinition = z
     /** Whether prices include this rule unless a line says otherwise. */
     inclusiveDefault: z.boolean().default(false),
     rounding: z
-      .object({ mode: z.enum(['half_up', 'half_even']).default('half_up'), scope: z.literal('per_line').default('per_line') })
+      .object({
+        mode: z.enum(['half_up', 'half_even']).default('half_up'),
+        scope: z.literal('per_line').default('per_line'),
+      })
       .default({ mode: 'half_up', scope: 'per_line' }),
   })
   .superRefine((d, ctx) => {
     if (d.kind === 'percentage' && d.ratePercent === undefined)
-      ctx.addIssue({ code: 'custom', message: 'A percentage rule needs ratePercent.', path: ['ratePercent'] });
+      ctx.addIssue({
+        code: 'custom',
+        message: 'A percentage rule needs ratePercent.',
+        path: ['ratePercent'],
+      });
     if (
       ['per_person_night', 'per_unit_night', 'per_stay', 'fixed_per_charge'].includes(d.kind) &&
       d.amount === undefined
@@ -362,7 +369,14 @@ export const deadline = z.discriminatedUnion('kind', [
       .default('00:00'),
   }),
   /** N hours before the property's check-in time on the arrival date. */
-  z.object({ kind: z.literal('hours_before_checkin'), hours: z.number().int().min(0).max(24 * 60) }),
+  z.object({
+    kind: z.literal('hours_before_checkin'),
+    hours: z
+      .number()
+      .int()
+      .min(0)
+      .max(24 * 60),
+  }),
 ]);
 export type Deadline = z.infer<typeof deadline>;
 
@@ -534,7 +548,9 @@ export const inclusion = z.object({
   version: z.number().int(),
 });
 
-export const mealPlanCode = z.string().regex(/^[A-Z0-9_]{2,10}$/, 'Meal plan codes: RO, BB, HB, FB, AI or custom');
+export const mealPlanCode = z
+  .string()
+  .regex(/^[A-Z0-9_]{2,10}$/, 'Meal plan codes: RO, BB, HB, FB, AI or custom');
 
 export const packageInput = z.object({
   propertyId: uuid,
@@ -606,9 +622,12 @@ export const promotionInput = z.object({
   sequence: z.number().int().min(0).max(1000).default(100),
 });
 export type PromotionInput = z.output<typeof promotionInput>;
-export const promotionUpdate = promotionInput.omit({ propertyId: true, code: true }).partial().extend({
-  status: z.enum(['active', 'paused', 'retired']).optional(),
-});
+export const promotionUpdate = promotionInput
+  .omit({ propertyId: true, code: true })
+  .partial()
+  .extend({
+    status: z.enum(['active', 'paused', 'retired']).optional(),
+  });
 export const promotion = z.object({
   id: uuid,
   propertyId: uuid,
@@ -819,7 +838,12 @@ export type PriceCell = z.infer<typeof priceCell>;
 
 export const pricePreview = z.object({
   changes: z.array(
-    z.object({ unitTypeId: uuid, date: localDate, before: priceCell.nullable(), after: priceCell.nullable() }),
+    z.object({
+      unitTypeId: uuid,
+      date: localDate,
+      before: priceCell.nullable(),
+      after: priceCell.nullable(),
+    }),
   ),
   rejected: z.array(z.object({ unitTypeId: uuid, date: localDate, reason: z.string() })),
   affectedDerivedPlans: z.array(z.object({ ratePlanId: uuid, code: z.string() })),
@@ -894,7 +918,10 @@ export const restrictionPreview = z.object({
     }),
   ),
   affectedDerivedPlans: z.array(z.object({ ratePlanId: uuid, code: z.string() })),
-  summary: z.object({ cells: z.number().int(), ranges: z.array(z.object({ from: localDate, to: localDate })) }),
+  summary: z.object({
+    cells: z.number().int(),
+    ranges: z.array(z.object({ from: localDate, to: localDate })),
+  }),
 });
 
 // ───────────────────────────── Quotes, offers and agreed terms ─────────────────────────────
@@ -1089,7 +1116,9 @@ export const policyRef = z.object({
 });
 
 export const offerPolicies = z.object({
-  cancellation: policyRef.extend({ structure: cancellationStructure, tiers: z.array(cancellationTierResolved) }).nullable(),
+  cancellation: policyRef
+    .extend({ structure: cancellationStructure, tiers: z.array(cancellationTierResolved) })
+    .nullable(),
   guarantee: policyRef.extend({ structure: guaranteeStructure }).nullable(),
   deposit: policyRef.extend({ structure: depositStructure, schedule: z.array(scheduleInstance) }).nullable(),
 });
@@ -1135,7 +1164,13 @@ export const termsSnapshot = z.object({
   allowances: z.array(allowanceEntitlement),
   inclusions: z.array(inclusionSnapshot),
   promotions: z.array(
-    z.object({ id: uuid, version: z.number().int(), code: z.string(), name: z.string(), discount: promotionDiscount }),
+    z.object({
+      id: uuid,
+      version: z.number().int(),
+      code: z.string(),
+      name: z.string(),
+      discount: promotionDiscount,
+    }),
   ),
   policies: offerPolicies,
   commission: commissionTerms,
@@ -1163,7 +1198,9 @@ export const offer = z.object({
   bookable: z.boolean(),
   nightly: z.array(nightPrice),
   inclusions: z.object({
-    included: z.array(z.object({ inclusionId: uuid, code: z.string(), name: z.string(), priceMode: z.string() })),
+    included: z.array(
+      z.object({ inclusionId: uuid, code: z.string(), name: z.string(), priceMode: z.string() }),
+    ),
     added: z.array(addedComponent),
     allowances: z.array(allowanceEntitlement),
   }),
@@ -1208,11 +1245,27 @@ export const repricingResult = z.object({
       date: localDate,
       before: money.nullable(),
       after: money.nullable(),
-      source: z.enum(['agreed', 'occupancy_repriced', 'current_rates', 'agreed_average', 'manual', 'removed', 'type_difference', 'type_repriced']),
+      source: z.enum([
+        'agreed',
+        'occupancy_repriced',
+        'current_rates',
+        'agreed_average',
+        'manual',
+        'removed',
+        'type_difference',
+        'type_repriced',
+      ]),
       difference: money,
     }),
   ),
-  penalties: z.array(z.object({ kind: z.enum(['cancellation', 'early_departure']), nights: z.array(localDate), amount: money, description: z.string() })),
+  penalties: z.array(
+    z.object({
+      kind: z.enum(['cancellation', 'early_departure']),
+      nights: z.array(localDate),
+      amount: money,
+      description: z.string(),
+    }),
+  ),
   before: totals,
   after: totals,
   difference: money,
@@ -1235,8 +1288,14 @@ export const restrictionQuery = z.object({
   to: localDate,
   ratePlanId: uuid.optional(),
 });
-export const taxRuleActivation = z.object({ reason: z.string().min(3).max(500), acknowledgeReport: z.boolean() });
-export const taxTemplateInstall = z.object({ template: z.enum(['MV']), propertyIds: z.array(uuid).nullable().default(null) });
+export const taxRuleActivation = z.object({
+  reason: z.string().min(3).max(500),
+  acknowledgeReport: z.boolean(),
+});
+export const taxTemplateInstall = z.object({
+  template: z.enum(['MV']),
+  propertyIds: z.array(uuid).nullable().default(null),
+});
 
 // ───────────────────────────── Universal record contract (experience-architecture §1) ─────────────────────────────
 
@@ -1253,7 +1312,12 @@ export const recordIssue = z.object({
   message: z.string(),
   since: z.string().optional(),
 });
-export const recordLink = z.object({ rel: z.string(), type: z.string(), id: z.string(), title: z.string().optional() });
+export const recordLink = z.object({
+  rel: z.string(),
+  type: z.string(),
+  id: z.string(),
+  title: z.string().optional(),
+});
 const recordParts = {
   status: z.record(z.string(), z.string()),
   allowedActions: z.array(recordAction),

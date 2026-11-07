@@ -22,6 +22,7 @@
     "@portico/identity": "workspace:*",
     "@portico/kernel": "workspace:*",
     "@portico/platform": "workspace:*",
+    "@portico/rates": "workspace:*",
     "zod": "catalog:",
     "pg": "catalog:"
   },

@@ -27,14 +27,23 @@ export function platformPorts(extra: Partial<RatesPorts> = {}): RatesPorts {
       };
     },
     assertWritable: (tx, propertyId, domain) => platform.assertWritable(tx, propertyId, domain),
-    resolvePolicy: (tx, propertyId, key, defaultValue) => platform.resolvePolicy(tx, propertyId, key, defaultValue),
+    resolvePolicy: (tx, propertyId, key, defaultValue) =>
+      platform.resolvePolicy(tx, propertyId, key, defaultValue),
     getBusinessDate: (tx, propertyId) => platform.getBusinessDate(tx, propertyId),
     ...extra,
   };
 }
 
-export const RESORT_CLASSIFICATION = { 'mv.establishmentType': 'resort', 'mv.inhabitedIsland': false, 'mv.registeredRooms': 120 };
-export const GUESTHOUSE_CLASSIFICATION = { 'mv.establishmentType': 'guesthouse', 'mv.inhabitedIsland': true, 'mv.registeredRooms': 12 };
+export const RESORT_CLASSIFICATION = {
+  'mv.establishmentType': 'resort',
+  'mv.inhabitedIsland': false,
+  'mv.registeredRooms': 120,
+};
+export const GUESTHOUSE_CLASSIFICATION = {
+  'mv.establishmentType': 'guesthouse',
+  'mv.inhabitedIsland': true,
+  'mv.registeredRooms': 12,
+};
 
 export interface Org {
   ctx: RequestContext;
@@ -44,13 +53,24 @@ export interface Org {
   /** Run as the all-powerful setup context. */
   run<T>(fn: (tx: TxContext, rates: RatesService) => Promise<T>): Promise<T>;
   /** Run with a restricted context (permissions per property). */
-  as<T>(grants: Array<{ permission: string; propertyIds: string[] | 'all' }>, fn: (tx: TxContext, rates: RatesService) => Promise<T>): Promise<T>;
-  addProperty(code: string, classification?: Record<string, string | number | boolean>, profile?: 'resort' | 'guesthouse'): Promise<string>;
+  as<T>(
+    grants: Array<{ permission: string; propertyIds: string[] | 'all' }>,
+    fn: (tx: TxContext, rates: RatesService) => Promise<T>,
+  ): Promise<T>;
+  addProperty(
+    code: string,
+    classification?: Record<string, string | number | boolean>,
+    profile?: 'resort' | 'guesthouse',
+  ): Promise<string>;
 }
 
 export async function newOrg(
   t: TestDatabase,
-  opts: { profile?: 'resort' | 'guesthouse'; environment?: TenantEnvironment; ports?: Partial<RatesPorts> } = {},
+  opts: {
+    profile?: 'resort' | 'guesthouse';
+    environment?: TenantEnvironment;
+    ports?: Partial<RatesPorts>;
+  } = {},
 ): Promise<Org> {
   const ctx = testContext({ environment: opts.environment ?? 'live' });
   await withTenantTx(t.db, ctx, (tx) =>
@@ -62,11 +82,20 @@ export async function newOrg(
     }),
   );
   const le = await withTenantTx(t.db, ctx, (tx) =>
-    platform.createLegalEntity(tx, { name: 'Azure Atoll', legalName: 'Azure Atoll Pvt Ltd', countryCode: 'MV', baseCurrency: 'USD' }),
+    platform.createLegalEntity(tx, {
+      name: 'Azure Atoll',
+      legalName: 'Azure Atoll Pvt Ltd',
+      countryCode: 'MV',
+      baseCurrency: 'USD',
+    }),
   );
   const ports = platformPorts(opts.ports);
   const rates = ratesService(ports);
-  const addProperty = async (code: string, classification?: Record<string, string | number | boolean>, profile = opts.profile ?? 'resort') => {
+  const addProperty = async (
+    code: string,
+    classification?: Record<string, string | number | boolean>,
+    profile = opts.profile ?? 'resort',
+  ) => {
     const p = await withTenantTx(t.db, ctx, (tx) =>
       platform.createProperty(tx, {
         code,
@@ -77,7 +106,8 @@ export async function newOrg(
         timezone: 'Indian/Maldives',
         baseCurrency: 'USD',
         businessDate: '2026-11-07',
-        classification: classification ?? (profile === 'resort' ? RESORT_CLASSIFICATION : GUESTHOUSE_CLASSIFICATION),
+        classification:
+          classification ?? (profile === 'resort' ? RESORT_CLASSIFICATION : GUESTHOUSE_CLASSIFICATION),
       }),
     );
     return p.id;
@@ -90,8 +120,14 @@ export async function newOrg(
     propertyId,
     run: (fn) => withTenantTx(t.db, ctx, (tx) => fn(tx, rates)),
     as: (grants, fn) =>
-      withTenantTx(t.db, { ...ctx, actor: { kind: 'user', userId: newId(), displayName: 'Limited' }, authz: testContext({ grants }).authz }, (tx) =>
-        fn(tx, rates),
+      withTenantTx(
+        t.db,
+        {
+          ...ctx,
+          actor: { kind: 'user', userId: newId(), displayName: 'Limited' },
+          authz: testContext({ grants }).authz,
+        },
+        (tx) => fn(tx, rates),
       ),
     addProperty,
   };

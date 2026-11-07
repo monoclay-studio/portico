@@ -30,7 +30,12 @@ export interface RatesPorts {
   /** platform.assertWritable for the `rates` data-authority domain. */
   assertWritable(tx: TxContext, propertyId: string, domain: 'rates'): Promise<'portico' | 'forward'>;
   /** platform.resolvePolicy (rates.childAgeBands, reservations.repricing.newNights, …). */
-  resolvePolicy<T>(tx: TxContext, propertyId: string, key: string, defaultValue: T): Promise<{ value: T; source: string }>;
+  resolvePolicy<T>(
+    tx: TxContext,
+    propertyId: string,
+    key: string,
+    defaultValue: T,
+  ): Promise<{ value: T; source: string }>;
   /** Property business date (for "today" in quotes). */
   getBusinessDate?(tx: TxContext, propertyId: string): Promise<LocalDate>;
   /**

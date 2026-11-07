@@ -57,7 +57,16 @@ export const ratesSearch: SearchProvider = {
       if (scope !== 'all') pq = pq.where('property_id', 'in', scope as string[]);
       for (const r of await pq.execute()) {
         if (hits.some((h) => h.id === r.id)) continue;
-        hits.push({ type: 'promotion', id: r.id, title: r.name, subtitle: `Promotion · promo code ${q.toUpperCase()}`, status: { promotion: r.status }, propertyId: r.property_id, score: 0.95, matched: 'promo code' });
+        hits.push({
+          type: 'promotion',
+          id: r.id,
+          title: r.name,
+          subtitle: `Promotion · promo code ${q.toUpperCase()}`,
+          status: { promotion: r.status },
+          propertyId: r.property_id,
+          score: 0.95,
+          matched: 'promo code',
+        });
       }
     }
     if (tx.authz.can('rates.taxRule.read')) {
@@ -68,20 +77,52 @@ export const ratesSearch: SearchProvider = {
         .limit(limit)
         .execute();
       for (const r of rows)
-        hits.push({ type: 'tax_rule', id: r.id, title: r.name, subtitle: `Tax & fee rule · ${r.code} · ${r.jurisdiction}`, status: { taxRule: r.status }, propertyId: null, ...score(q, r.code, r.name) });
+        hits.push({
+          type: 'tax_rule',
+          id: r.id,
+          title: r.name,
+          subtitle: `Tax & fee rule · ${r.code} · ${r.jurisdiction}`,
+          status: { taxRule: r.status },
+          propertyId: null,
+          ...score(q, r.code, r.name),
+        });
     }
     return hits.sort((a, b) => b.score - a.score).slice(0, limit);
   },
   async summarize(tx, type, id): Promise<RecordSummary | null> {
     if (type === 'tax_rule') {
       if (!tx.authz.can('rates.taxRule.read')) return null;
-      const r = await db(tx).selectFrom('rates.tax_rules').select(['id', 'code', 'name', 'status', 'jurisdiction']).where('id', '=', id).executeTakeFirst();
-      return r ? { type, id: r.id, title: r.name, subtitle: `Tax & fee rule · ${r.code} · ${r.jurisdiction}`, status: { taxRule: r.status }, propertyId: null } : null;
+      const r = await db(tx)
+        .selectFrom('rates.tax_rules')
+        .select(['id', 'code', 'name', 'status', 'jurisdiction'])
+        .where('id', '=', id)
+        .executeTakeFirst();
+      return r
+        ? {
+            type,
+            id: r.id,
+            title: r.name,
+            subtitle: `Tax & fee rule · ${r.code} · ${r.jurisdiction}`,
+            status: { taxRule: r.status },
+            propertyId: null,
+          }
+        : null;
     }
     const def = PROPERTY_TYPES[type];
     if (!def) return null;
-    const r = await db(tx).selectFrom(def.table).select(['id', 'code', 'name', 'status', 'property_id']).where('id', '=', id).executeTakeFirst();
+    const r = await db(tx)
+      .selectFrom(def.table)
+      .select(['id', 'code', 'name', 'status', 'property_id'])
+      .where('id', '=', id)
+      .executeTakeFirst();
     if (!r || !tx.authz.can('rates.ratePlan.read', { propertyId: r.property_id })) return null;
-    return { type, id: r.id, title: r.name, subtitle: `${def.label} · ${r.code}`, status: { [def.statusFamily]: r.status }, propertyId: r.property_id };
+    return {
+      type,
+      id: r.id,
+      title: r.name,
+      subtitle: `${def.label} · ${r.code}`,
+      status: { [def.statusFamily]: r.status },
+      propertyId: r.property_id,
+    };
   },
 };
