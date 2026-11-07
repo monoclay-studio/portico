@@ -50,13 +50,22 @@ export async function describeBooking(
  * such record exists in this organization; undefined for reference types reservations does not own.
  */
 export async function describeReference(
-  deps: Deps,
+  _deps: Deps,
   tx: TxContext,
   ref: { type: string; id: string },
-): Promise<{ propertyId: string } | null | undefined> {
+): Promise<{ propertyId: string; source?: string; channelConnectionId?: string | null } | null | undefined> {
   if (ref.type === 'booking') {
-    const b = await describeBooking(deps, tx, ref.id);
-    return b ? { propertyId: b.propertyId } : null;
+    if (!UUID.test(ref.id)) return null;
+    // Review R2-P1-1: where the booking came from — payments accepts a channel's virtual card only for a booking of
+    // that channel connection.
+    const b = await db(tx)
+      .selectFrom('reservations.bookings')
+      .select(['property_id', 'source', 'channel_connection_id'])
+      .where('id', '=', ref.id)
+      .executeTakeFirst();
+    return b
+      ? { propertyId: b.property_id, source: b.source, channelConnectionId: b.channel_connection_id }
+      : null;
   }
   if (ref.type !== 'stay') return undefined;
   if (!UUID.test(ref.id)) return null;

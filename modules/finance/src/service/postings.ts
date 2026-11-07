@@ -4,7 +4,6 @@ import {
   ConflictError,
   convert,
   Decimal,
-  DomainError,
   type EntityRef,
   type LocalDate,
   type Money,

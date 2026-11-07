@@ -390,7 +390,7 @@ describe('P1-3 — a late charge asks the guest for what the folio owes, never m
     expect(ex.rows).toEqual([
       {
         severity: 'routine',
-        details: expect.objectContaining({ collection: 'covered_by_credit', amountRequested: 0 }),
+        details: expect.objectContaining({ collection: 'none', amountRequested: 0, owedMinor: 0 }),
       },
     ]);
     // A USD 600 dinner: the folio now owes its balance — exactly that is requested, addressed to the guest.
@@ -600,9 +600,9 @@ describe('P2-6 — rates does not re-check its own quote key on port calls (ADR-
   });
 });
 
-describe('P3-9 — check-in in connected mode attests money steps handled by the external system', () => {
+describe('P3-9 / R2-P2-4 — connected mode: the external system confirms, a person attests, nothing is claimed', () => {
   for (const domain of ['charges', 'payments'] as const) {
-    it(`${domain} external: check-in completes; the step names the system of record`, async () => {
+    it(`${domain} external: check-in is no dead end, and no money step is "done" without a confirmation`, async () => {
       const org = await organization(s);
       const k = await kandu(s, org, '2027-03-10');
       const { profileId, card } = await guestWithCard(s, org, k);
@@ -623,15 +623,42 @@ describe('P3-9 — check-in in connected mode attests money steps handled by the
       await s.drain();
       await readyUnit(s, org, k.id, k.units['214'] as string);
       await makeExternal(s, org, k.id, domain);
+      const stayId = b.stays[0]?.id as string;
       const r = await reservations.performWorkflow(s.t.db, desk, {
-        stayId: b.stays[0]?.id as string,
+        stayId,
         kind: 'check_in',
         checkIn: { registration: { identityVerified: true }, access: { kind: 'card', count: 1 } },
       });
       expect(r.interrupted).toBeNull();
-      expect(r.run?.status).toBe('completed');
-      const step = r.run?.steps.find((x) => x.key === (domain === 'charges' ? 'deposits' : 'guarantee'));
-      expect(step).toMatchObject({ status: 'done', message: expect.stringMatching(/Legacy PMS/) });
+      if (domain === 'charges') {
+        // Deposits are applied in the external system: skipped (Portico applied none), never "done".
+        expect(r.run?.status).toBe('completed');
+        expect(r.run?.steps.find((x) => x.key === 'deposits')).toMatchObject({
+          status: 'skipped',
+          message: expect.stringMatching(/Legacy PMS/),
+        });
+        return;
+      }
+      // R2-P2-4: the guarantee is taken in the external system: pending until a person records its reference.
+      expect(r.run?.status).toBe('in_progress');
+      expect(r.run?.steps.find((x) => x.key === 'guarantee')).toMatchObject({
+        status: 'pending',
+        message: expect.stringMatching(/Legacy PMS.*record its reference/),
+      });
+      const auths = await sql<{ n: number }>`select count(*)::int as n from payments.authorizations
+        where ref_id = ${stayId}`.execute(s.t.admin.kysely);
+      expect(auths.rows[0]?.n).toBe(0);
+      const attested = await reservations.performWorkflow(s.t.db, desk, {
+        stayId,
+        kind: 'check_in',
+        checkIn: { guarantee: { externalReference: 'LEG-GTD-88231' }, access: { kind: 'card', count: 1 } },
+      });
+      expect(attested.run?.status).toBe('completed');
+      expect(attested.run?.steps.find((x) => x.key === 'guarantee')).toMatchObject({
+        status: 'done',
+        message: expect.stringMatching(/reference LEG-GTD-88231\. Portico did not verify it/),
+        result: expect.objectContaining({ provenance: 'external', externalReference: 'LEG-GTD-88231' }),
+      });
     });
   }
 });

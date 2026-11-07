@@ -364,16 +364,14 @@ describe('reservations → guests, payments, finance, operations (check-in and c
     // finance → payments: a collection request for a folio of another property is refused before any intent is
     // recorded and reported as not possible (finance then lists the late charge for manual collection).
     const collection = await org.run(desk, (tx) =>
-      paymentsCollectionsForFinance(s.c.services.payments).requestCollection(tx, {
+      paymentsCollectionsForFinance(s.c.services.payments).syncBalanceRequest(tx, {
         propertyId: h.id,
         folioId,
-        amount: { amountMinor: 6_400, currency: 'USD' },
-        reason: 'late_charge',
-        ref: { type: 'journal_entry', id: newId() },
-        idempotencyKey: `late:${newId()}`,
+        outstanding: { amountMinor: 6_400, currency: 'USD' },
+        reason: 'Late charge',
       }),
     );
-    expect(collection).toMatchObject({ status: 'not_possible' });
+    expect(collection).toMatchObject({ status: 'not_possible', openMinor: 0 });
     const none = await sql<{ n: number }>`
       select count(*)::int as n from payments.payment_requests where ref_id = ${folioId}`.execute(
       s.t.admin.kysely,

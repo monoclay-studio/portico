@@ -66,7 +66,13 @@ async function demoOrg(name = 'Demo Resort') {
       brand: 'visa',
       last4: '4242',
       owner: { type: 'guest_profile', id: newId() },
-      mitAgreement: false,
+      // The cardholder's recorded card-on-file agreement: every staff use of a stored card is merchant-initiated (SW-PAY-4).
+      mitAgreement: true,
+      mandate: {
+        termsVersion: 'card-on-file-2027-01',
+        acceptedAt: new Date().toISOString(),
+        channel: 'front_desk',
+      },
     });
   /** A folio of this property (payments refuse unknown bookings and folios — review P1-1). */
   const folio = async () =>

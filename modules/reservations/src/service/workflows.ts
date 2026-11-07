@@ -110,7 +110,12 @@ function toView(tx: TxContext, row: RunRow): WorkflowRun {
       mandatory: s.mandatory,
       external: s.external,
       attempts: s.attempts,
-      message: hide(s) && s.message ? MONEY_NOT_SHOWN : s.message,
+      message:
+        hide(s) && s.message
+          ? s.status === 'failed'
+            ? `${MONEY_NOT_SHOWN} A colleague who handles payments can complete this step.`
+            : MONEY_NOT_SHOWN
+          : s.message,
       result: hide(s) ? null : s.result,
       updatedAt: s.updatedAt,
     })),
@@ -1333,7 +1338,7 @@ export async function performWorkflow(
       polled.add(key);
       continue;
     }
-    if (after?.status !== 'done') break;
+    if (after?.status !== 'done' && after?.status !== 'skipped') break;
     if (after.status === before && after.attempts === attemptsBefore) break;
   }
   return { run, interrupted: null, forwarded: null };

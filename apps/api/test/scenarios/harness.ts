@@ -442,7 +442,10 @@ export async function assertGlobalConsistency(
 /**
  * A simulated card on file (payments, tokens only) at a property of a non-live organization, owned by `owner`
  * (default: a guest profile of its own — fine for desk charges; a GUARANTEE card must belong to the booking's guest,
- * booker or payer, review P1-2: use `guestWithCard`).
+ * booker or payer, review P1-2: use `guestWithCard`). Saved by staff with the cardholder's recorded card-on-file
+ * agreement for this hotel company (fix sweep SW-PAY-4: every staff use of a stored card is merchant-initiated and
+ * needs it). The agreement names no booking, so the card is never a booking's AGREED guarantee by itself (ADR-0015
+ * Amendment 1): a user with payments.payment.collect chooses it, or `mandateFor` names the bookings it covers.
  */
 export async function cardOnFile(
   s: Scenario,
@@ -454,11 +457,13 @@ export async function cardOnFile(
     type: 'guest_profile',
     id: newId(),
   },
+  opts: { mandate?: boolean; mandateFor?: string[] } = {},
 ) {
   const p = s.c.services.payments;
   return org.run(org.setup, async (tx) => {
     const account = (await p.tx.listAccounts(tx, legalEntityId)).find((a) => a.provider === 'simulator');
     if (!account) throw new Error('no simulated payment account');
+    const mandate = opts.mandate !== false;
     return p.tx.createMethod(tx, {
       accountId: account.id,
       propertyId,
@@ -467,7 +472,21 @@ export async function cardOnFile(
       brand: 'visa',
       last4: '4242',
       owner,
-      mitAgreement: false,
+      mitAgreement: mandate,
+      ...(mandate
+        ? {
+            mandate: {
+              termsVersion: 'card-on-file-2027-01',
+              acceptedAt: tx.now.toISOString(),
+              channel: 'front_desk',
+              scope: {
+                legalEntityId,
+                purposes: ['guarantee', 'deposit', 'balance', 'incidentals', 'no_show'] as const,
+                ...(opts.mandateFor ? { bookingIds: opts.mandateFor } : {}),
+              },
+            },
+          }
+        : {}),
     });
   });
 }

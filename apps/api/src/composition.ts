@@ -244,9 +244,10 @@ export function compose(database: PorticoDatabase): Composition {
         bound(reservationsRef, 'reservations').describeBooking(tx, bookingId),
     },
     tax: bindFinanceTax(() => bound(ratesRef, 'rates')),
+    // Review R2-P1-2: the departed folio's ONE balance request follows every change to what the folio owes.
     payments: {
-      requestCollection: (tx, input) =>
-        paymentsCollectionsForFinance(bound(paymentsRef, 'payments')).requestCollection(tx, input),
+      syncBalanceRequest: (tx, input) =>
+        paymentsCollectionsForFinance(bound(paymentsRef, 'payments')).syncBalanceRequest(tx, input),
     },
     // Payer names and invoice particulars for folios and tax invoices: guest profiles, companies and agencies (guests).
     payers: {
