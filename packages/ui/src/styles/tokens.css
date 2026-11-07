@@ -1,0 +1,314 @@
+/*
+ * Portico design tokens — the ONE place where colour, type, radius, density and motion are defined.
+ *
+ * The brand is not final (OPEN_QUESTIONS Q1). Rebranding is a token swap: change the values below (or load a
+ * second file that overrides these custom properties) and every component follows. Components never use raw
+ * colour values; Tailwind's default palette is disabled in theme.css so they cannot.
+ *
+ * Contrast targets (WCAG 2.2 AA): body text >= 4.5:1 on every surface token, large text and UI component
+ * boundaries (input borders, focus ring, status icons) >= 3:1. The Playwright smoke test runs axe colour-contrast
+ * on real screens in light mode; dark values mirror the same ratios.
+ *
+ * Status meaning is never carried by colour alone: every status vocabulary also has an icon, a text label and
+ * (for provenance and environments) a pattern.
+ */
+
+:root {
+  color-scheme: light;
+
+  /* Typography — system fonts only: fast, offline-safe, and covers Arabic/Thaana scripts for RTL locales. */
+  --pt-font-sans:
+    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", "Noto Sans Arabic",
+    "Noto Sans Thaana", "Helvetica Neue", Arial, sans-serif;
+  --pt-font-mono: ui-monospace, "SFMono-Regular", "Cascadia Code", "Roboto Mono", Menlo, Consolas, monospace;
+
+  /* Density. Desk layouts are compact; touch layouts get >= 44px targets (see the media query below). */
+  --pt-control-h: 2.25rem;
+  --pt-control-h-sm: 1.75rem;
+  --pt-row-h: 2.5rem;
+  --pt-radius-sm: 0.25rem;
+  --pt-radius-md: 0.375rem;
+  --pt-radius-lg: 0.625rem;
+
+  /* Motion. Reduced-motion users get none (base.css). */
+  --pt-duration-fast: 120ms;
+  --pt-duration-base: 180ms;
+  --pt-ease: cubic-bezier(0.2, 0, 0, 1);
+
+  /* Neutral grey scale — 11 steps, cool hue. Theme-independent; semantic tokens below map onto it. */
+  --pt-gray-50: oklch(0.985 0.002 255);
+  --pt-gray-100: oklch(0.962 0.004 255);
+  --pt-gray-200: oklch(0.925 0.006 255);
+  --pt-gray-300: oklch(0.87 0.008 255);
+  --pt-gray-400: oklch(0.78 0.01 255);
+  --pt-gray-500: oklch(0.66 0.012 255);
+  --pt-gray-600: oklch(0.53 0.014 255);
+  --pt-gray-700: oklch(0.43 0.015 255);
+  --pt-gray-800: oklch(0.31 0.015 255);
+  --pt-gray-900: oklch(0.245 0.014 255);
+  --pt-gray-950: oklch(0.2 0.013 255);
+
+  /* Type scale. KPI numerals use the display size (proportional figures); tables use tabular figures. */
+  --pt-text-xs: 0.75rem;
+  --pt-text-sm: 0.8125rem;
+  --pt-text-md: 0.875rem;
+  --pt-text-lg: 1.125rem;
+  --pt-text-xl: 1.375rem;
+  --pt-text-display: 2.25rem;
+  /* Data voice: monospace annotations for counts, codes and IDs ("96 OF 120 VILLAS", booking codes). */
+  --pt-data-size: 0.6875rem;
+  --pt-data-tracking: 0.04em;
+
+  /* Semantic neutrals — light theme. Elevation comes from surface tone + hairlines, not heavy shadows. */
+  --pt-canvas: var(--pt-gray-50);
+  --pt-surface: oklch(1 0 0);
+  --pt-surface-muted: var(--pt-gray-100);
+  --pt-surface-hover: var(--pt-gray-200);
+  --pt-surface-inverse: var(--pt-gray-900);
+  --pt-line: var(--pt-gray-200);
+  --pt-line-strong: var(--pt-gray-600);
+  --pt-ink: var(--pt-gray-900);
+  --pt-ink-muted: var(--pt-gray-700);
+  --pt-ink-subtle: var(--pt-gray-600);
+  --pt-ink-inverse: var(--pt-gray-50);
+  --pt-scrim: oklch(0.2 0.02 255 / 0.45);
+
+  /* Accent (placeholder brand: calm lagoon teal-blue). */
+  --pt-accent: oklch(0.47 0.085 222);
+  --pt-accent-hover: oklch(0.41 0.085 222);
+  --pt-accent-soft: oklch(0.95 0.022 222);
+  --pt-accent-line: oklch(0.78 0.06 222);
+  --pt-on-accent: oklch(0.99 0 0);
+  --pt-focus: oklch(0.53 0.18 260);
+
+  /* Semantic tones: fg = text/icon on bg, bg = soft fill, line = border, solid = strong fill (with on-solid text). */
+  --pt-success-fg: oklch(0.4 0.09 152);
+  --pt-success-bg: oklch(0.955 0.035 152);
+  --pt-success-line: oklch(0.72 0.1 152);
+  --pt-success-solid: oklch(0.5 0.11 152);
+
+  --pt-warning-fg: oklch(0.43 0.09 60);
+  --pt-warning-bg: oklch(0.962 0.05 88);
+  --pt-warning-line: oklch(0.75 0.13 75);
+  --pt-warning-solid: oklch(0.8 0.15 80);
+
+  --pt-danger-fg: oklch(0.47 0.17 27);
+  --pt-danger-bg: oklch(0.958 0.022 27);
+  --pt-danger-line: oklch(0.72 0.12 27);
+  --pt-danger-solid: oklch(0.54 0.19 27);
+
+  --pt-info-fg: oklch(0.44 0.11 255);
+  --pt-info-bg: oklch(0.956 0.022 255);
+  --pt-info-line: oklch(0.76 0.08 255);
+  --pt-info-solid: oklch(0.52 0.14 255);
+
+  --pt-pending-fg: oklch(0.44 0.13 300);
+  --pt-pending-bg: oklch(0.958 0.025 300);
+  --pt-pending-line: oklch(0.76 0.09 300);
+  --pt-pending-solid: oklch(0.52 0.15 300);
+
+  --pt-neutral-fg: oklch(0.4 0.014 255);
+  --pt-neutral-bg: oklch(0.946 0.005 250);
+  --pt-neutral-line: oklch(0.78 0.01 255);
+
+  /* Provenance & environments (pattern + colour). */
+  --pt-simulated-fg: oklch(0.42 0.14 305);
+  --pt-simulated-bg: oklch(0.955 0.03 305);
+  --pt-simulated-stripe: oklch(0.88 0.06 305);
+
+  --pt-env-demo-bg: oklch(0.36 0.13 295);
+  --pt-env-demo-stripe: oklch(0.42 0.14 295);
+  --pt-env-trial-bg: oklch(0.36 0.07 195);
+  --pt-env-trial-stripe: oklch(0.42 0.08 195);
+  --pt-env-training-bg: oklch(0.83 0.15 85);
+  --pt-env-training-stripe: oklch(0.78 0.15 80);
+  --pt-env-training-fg: oklch(0.22 0.04 70);
+  --pt-env-sandbox-bg: oklch(0.3 0.02 255);
+  --pt-env-sandbox-stripe: oklch(0.6 0.16 50);
+  --pt-env-fg: oklch(0.99 0 0);
+
+  /* Timeline bars. */
+  --pt-bar-expected: oklch(0.9 0.045 230);
+  --pt-bar-expected-line: oklch(0.55 0.1 230);
+  --pt-bar-inhouse: oklch(0.47 0.085 222);
+  --pt-bar-inhouse-fg: oklch(0.99 0 0);
+  --pt-bar-departed: oklch(0.9 0.006 250);
+  --pt-bar-block: oklch(0.93 0.03 27);
+  --pt-bar-block-stripe: oklch(0.84 0.07 27);
+  --pt-bar-hold-line: oklch(0.5 0.12 300);
+
+  /* Shadows only for floating layers (menus, dialogs); cards and tables use tone + hairlines. */
+  --pt-shadow-sm: 0 0 0 0 transparent;
+  --pt-shadow-md: 0 6px 16px oklch(0.2 0.02 255 / 0.1);
+  --pt-shadow-lg: 0 18px 40px oklch(0.2 0.02 255 / 0.16);
+
+  /* Data-viz marks (dataviz method: one sequential hue + a fixed status set; validated with the palette
+     validator against both surfaces). Text never wears these colours. */
+  --pt-viz-seq: #2a78d6;
+  --pt-viz-seq-track: #cde2fb;
+  --pt-viz-neutral: #8f8f8a;
+  --pt-viz-good: #0ca30c;
+  --pt-viz-warning: #fab219;
+  --pt-viz-critical: #d03b3b;
+  --pt-viz-grid: var(--pt-gray-200);
+  /* Label ink printed INSIDE viz fills (checked ≥ 4.5:1 for 12 px text against each fill, per theme). */
+  --pt-viz-good-ink: #111111;
+  --pt-viz-warning-ink: #111111;
+  --pt-viz-critical-ink: #ffffff;
+  --pt-viz-neutral-ink: #111111;
+  --pt-viz-seq-strong: #256abf;
+  --pt-viz-seq-ink: #ffffff;
+}
+
+/* Dark theme: explicit choice … */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --pt-canvas: var(--pt-gray-950);
+  --pt-surface: var(--pt-gray-900);
+  --pt-surface-muted: oklch(0.275 0.015 255);
+  --pt-surface-hover: var(--pt-gray-800);
+  --pt-surface-inverse: var(--pt-gray-100);
+  --pt-line: var(--pt-gray-800);
+  --pt-line-strong: var(--pt-gray-500);
+  --pt-ink: var(--pt-gray-100);
+  --pt-ink-muted: var(--pt-gray-400);
+  --pt-ink-subtle: var(--pt-gray-400);
+  --pt-ink-inverse: var(--pt-gray-950);
+  --pt-scrim: oklch(0.05 0.01 255 / 0.6);
+  --pt-accent: oklch(0.76 0.1 215);
+  --pt-accent-hover: oklch(0.82 0.09 215);
+  --pt-accent-soft: oklch(0.3 0.04 222);
+  --pt-accent-line: oklch(0.5 0.07 222);
+  --pt-on-accent: oklch(0.18 0.02 240);
+  --pt-focus: oklch(0.75 0.15 255);
+  --pt-success-fg: oklch(0.83 0.12 152);
+  --pt-success-bg: oklch(0.29 0.05 152);
+  --pt-success-line: oklch(0.52 0.09 152);
+  --pt-success-solid: oklch(0.7 0.13 152);
+  --pt-warning-fg: oklch(0.86 0.12 85);
+  --pt-warning-bg: oklch(0.3 0.05 75);
+  --pt-warning-line: oklch(0.58 0.11 75);
+  --pt-warning-solid: oklch(0.8 0.15 80);
+  --pt-danger-fg: oklch(0.82 0.1 25);
+  --pt-danger-bg: oklch(0.3 0.06 25);
+  --pt-danger-line: oklch(0.58 0.14 25);
+  --pt-danger-solid: oklch(0.66 0.18 25);
+  --pt-info-fg: oklch(0.83 0.08 255);
+  --pt-info-bg: oklch(0.29 0.05 255);
+  --pt-info-line: oklch(0.55 0.1 255);
+  --pt-info-solid: oklch(0.68 0.13 255);
+  --pt-pending-fg: oklch(0.83 0.09 300);
+  --pt-pending-bg: oklch(0.3 0.06 300);
+  --pt-pending-line: oklch(0.56 0.11 300);
+  --pt-pending-solid: oklch(0.68 0.14 300);
+  --pt-neutral-fg: oklch(0.82 0.01 250);
+  --pt-neutral-bg: oklch(0.28 0.012 255);
+  --pt-neutral-line: oklch(0.48 0.014 255);
+  --pt-simulated-fg: oklch(0.84 0.09 305);
+  --pt-simulated-bg: oklch(0.28 0.06 305);
+  --pt-simulated-stripe: oklch(0.34 0.08 305);
+  --pt-bar-expected: oklch(0.33 0.05 230);
+  --pt-bar-expected-line: oklch(0.65 0.09 230);
+  --pt-bar-inhouse: oklch(0.7 0.1 215);
+  --pt-bar-inhouse-fg: oklch(0.16 0.02 240);
+  --pt-bar-departed: oklch(0.32 0.012 255);
+  --pt-bar-block: oklch(0.3 0.05 25);
+  --pt-bar-block-stripe: oklch(0.38 0.08 25);
+  --pt-bar-hold-line: oklch(0.72 0.12 300);
+  --pt-shadow-sm: 0 0 0 0 transparent;
+  --pt-shadow-md: 0 6px 16px oklch(0 0 0 / 0.45);
+  --pt-shadow-lg: 0 18px 40px oklch(0 0 0 / 0.55);
+  --pt-viz-seq: #3987e5;
+  --pt-viz-seq-track: #184f95;
+  --pt-viz-neutral: #66665f;
+  --pt-viz-grid: var(--pt-gray-800);
+  --pt-viz-neutral-ink: #ffffff;
+  --pt-viz-seq-strong: #3987e5;
+  --pt-viz-seq-ink: #111111;
+}
+
+/* … or follow the operating system unless the user explicitly chose light. Same values as above. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --pt-canvas: var(--pt-gray-950);
+    --pt-surface: var(--pt-gray-900);
+    --pt-surface-muted: oklch(0.275 0.015 255);
+    --pt-surface-hover: var(--pt-gray-800);
+    --pt-surface-inverse: var(--pt-gray-100);
+    --pt-line: var(--pt-gray-800);
+    --pt-line-strong: var(--pt-gray-500);
+    --pt-ink: var(--pt-gray-100);
+    --pt-ink-muted: var(--pt-gray-400);
+    --pt-ink-subtle: var(--pt-gray-400);
+    --pt-ink-inverse: var(--pt-gray-950);
+    --pt-scrim: oklch(0.05 0.01 255 / 0.6);
+    --pt-accent: oklch(0.76 0.1 215);
+    --pt-accent-hover: oklch(0.82 0.09 215);
+    --pt-accent-soft: oklch(0.3 0.04 222);
+    --pt-accent-line: oklch(0.5 0.07 222);
+    --pt-on-accent: oklch(0.18 0.02 240);
+    --pt-focus: oklch(0.75 0.15 255);
+    --pt-success-fg: oklch(0.83 0.12 152);
+    --pt-success-bg: oklch(0.29 0.05 152);
+    --pt-success-line: oklch(0.52 0.09 152);
+    --pt-success-solid: oklch(0.7 0.13 152);
+    --pt-warning-fg: oklch(0.86 0.12 85);
+    --pt-warning-bg: oklch(0.3 0.05 75);
+    --pt-warning-line: oklch(0.58 0.11 75);
+    --pt-warning-solid: oklch(0.8 0.15 80);
+    --pt-danger-fg: oklch(0.82 0.1 25);
+    --pt-danger-bg: oklch(0.3 0.06 25);
+    --pt-danger-line: oklch(0.58 0.14 25);
+    --pt-danger-solid: oklch(0.66 0.18 25);
+    --pt-info-fg: oklch(0.83 0.08 255);
+    --pt-info-bg: oklch(0.29 0.05 255);
+    --pt-info-line: oklch(0.55 0.1 255);
+    --pt-info-solid: oklch(0.68 0.13 255);
+    --pt-pending-fg: oklch(0.83 0.09 300);
+    --pt-pending-bg: oklch(0.3 0.06 300);
+    --pt-pending-line: oklch(0.56 0.11 300);
+    --pt-pending-solid: oklch(0.68 0.14 300);
+    --pt-neutral-fg: oklch(0.82 0.01 250);
+    --pt-neutral-bg: oklch(0.28 0.012 255);
+    --pt-neutral-line: oklch(0.48 0.014 255);
+    --pt-simulated-fg: oklch(0.84 0.09 305);
+    --pt-simulated-bg: oklch(0.28 0.06 305);
+    --pt-simulated-stripe: oklch(0.34 0.08 305);
+    --pt-bar-expected: oklch(0.33 0.05 230);
+    --pt-bar-expected-line: oklch(0.65 0.09 230);
+    --pt-bar-inhouse: oklch(0.7 0.1 215);
+    --pt-bar-inhouse-fg: oklch(0.16 0.02 240);
+    --pt-bar-departed: oklch(0.32 0.012 255);
+    --pt-bar-block: oklch(0.3 0.05 25);
+    --pt-bar-block-stripe: oklch(0.38 0.08 25);
+    --pt-bar-hold-line: oklch(0.72 0.12 300);
+    --pt-shadow-sm: 0 0 0 0 transparent;
+    --pt-shadow-md: 0 6px 16px oklch(0 0 0 / 0.45);
+    --pt-shadow-lg: 0 18px 40px oklch(0 0 0 / 0.55);
+    --pt-viz-seq: #3987e5;
+    --pt-viz-seq-track: #184f95;
+    --pt-viz-neutral: #66665f;
+    --pt-viz-grid: var(--pt-gray-800);
+    --pt-viz-neutral-ink: #ffffff;
+    --pt-viz-seq-strong: #3987e5;
+    --pt-viz-seq-ink: #111111;
+  }
+}
+
+/* Density: compact is the desk default (boards, tables, timeline); comfortable is user-selectable and is
+   what dashboards and touch layouts use. Remembered per user by the app (data-density on <html>). */
+:root[data-density="comfortable"] {
+  --pt-control-h: 2.5rem;
+  --pt-control-h-sm: 2rem;
+  --pt-row-h: 3rem;
+}
+
+/* Touch and small screens: every interactive control is at least 44 x 44 CSS px (WCAG 2.5.8 + Apple/Material). */
+@media (pointer: coarse), (max-width: 767px) {
+  :root {
+    --pt-control-h: 2.75rem;
+    --pt-control-h-sm: 2.75rem;
+    --pt-row-h: 3rem;
+  }
+}

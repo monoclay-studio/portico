@@ -1,0 +1,88 @@
+/*
+ * Tailwind v4 theme: maps utility names to the design tokens in tokens.css.
+ * The default Tailwind colour palette is removed (`--color-*: initial`) so components can only use tokens —
+ * that is what makes a rebrand a token swap.
+ */
+@theme inline {
+  --color-*: initial;
+  --color-transparent: transparent;
+  --color-current: currentColor;
+  --color-white: oklch(1 0 0);
+  --color-black: oklch(0 0 0);
+
+  --color-canvas: var(--pt-canvas);
+  --color-surface: var(--pt-surface);
+  --color-surface-muted: var(--pt-surface-muted);
+  --color-surface-hover: var(--pt-surface-hover);
+  --color-surface-inverse: var(--pt-surface-inverse);
+  --color-line: var(--pt-line);
+  --color-line-strong: var(--pt-line-strong);
+  --color-ink: var(--pt-ink);
+  --color-ink-muted: var(--pt-ink-muted);
+  --color-ink-subtle: var(--pt-ink-subtle);
+  --color-ink-inverse: var(--pt-ink-inverse);
+  --color-scrim: var(--pt-scrim);
+
+  --color-accent: var(--pt-accent);
+  --color-accent-hover: var(--pt-accent-hover);
+  --color-accent-soft: var(--pt-accent-soft);
+  --color-accent-line: var(--pt-accent-line);
+  --color-on-accent: var(--pt-on-accent);
+  --color-focus: var(--pt-focus);
+
+  --color-success-fg: var(--pt-success-fg);
+  --color-success-bg: var(--pt-success-bg);
+  --color-success-line: var(--pt-success-line);
+  --color-success-solid: var(--pt-success-solid);
+  --color-warning-fg: var(--pt-warning-fg);
+  --color-warning-bg: var(--pt-warning-bg);
+  --color-warning-line: var(--pt-warning-line);
+  --color-warning-solid: var(--pt-warning-solid);
+  --color-danger-fg: var(--pt-danger-fg);
+  --color-danger-bg: var(--pt-danger-bg);
+  --color-danger-line: var(--pt-danger-line);
+  --color-danger-solid: var(--pt-danger-solid);
+  --color-info-fg: var(--pt-info-fg);
+  --color-info-bg: var(--pt-info-bg);
+  --color-info-line: var(--pt-info-line);
+  --color-info-solid: var(--pt-info-solid);
+  --color-pending-fg: var(--pt-pending-fg);
+  --color-pending-bg: var(--pt-pending-bg);
+  --color-pending-line: var(--pt-pending-line);
+  --color-pending-solid: var(--pt-pending-solid);
+  --color-neutral-fg: var(--pt-neutral-fg);
+  --color-neutral-bg: var(--pt-neutral-bg);
+  --color-neutral-line: var(--pt-neutral-line);
+  --color-simulated-fg: var(--pt-simulated-fg);
+  --color-simulated-bg: var(--pt-simulated-bg);
+
+  --color-viz-seq: var(--pt-viz-seq);
+  --color-viz-seq-track: var(--pt-viz-seq-track);
+  --color-viz-neutral: var(--pt-viz-neutral);
+  --color-viz-good: var(--pt-viz-good);
+  --color-viz-warning: var(--pt-viz-warning);
+  --color-viz-critical: var(--pt-viz-critical);
+  --color-viz-grid: var(--pt-viz-grid);
+
+  --text-display: var(--pt-text-display);
+  --text-display--line-height: 1.1;
+
+  --font-sans: var(--pt-font-sans);
+  --font-mono: var(--pt-font-mono);
+
+  --radius-sm: var(--pt-radius-sm);
+  --radius-md: var(--pt-radius-md);
+  --radius-lg: var(--pt-radius-lg);
+
+  --shadow-sm: var(--pt-shadow-sm);
+  --shadow-md: var(--pt-shadow-md);
+  --shadow-lg: var(--pt-shadow-lg);
+
+  --spacing-control: var(--pt-control-h);
+  --spacing-control-sm: var(--pt-control-h-sm);
+  --spacing-row: var(--pt-row-h);
+}
+
+/* `dark:` follows the data-theme attribute or, when unset, the OS preference. Components rarely need it because
+   tokens already switch. */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));

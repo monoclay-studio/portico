@@ -14,7 +14,9 @@
         "$TURBO_ROOT$/modules/*/src/**",
         "$TURBO_ROOT$/modules/*/migrations/**",
         "$TURBO_ROOT$/modules/*/package.json",
-        "$TURBO_ROOT$/tsconfig*.json"
+        "$TURBO_ROOT$/tsconfig*.json",
+        "$TURBO_ROOT$/apps/*/src/**",
+        "$TURBO_ROOT$/apps/*/package.json"
       ],
       "outputs": []
     },
@@ -27,7 +29,9 @@
         "$TURBO_ROOT$/modules/*/src/**",
         "$TURBO_ROOT$/modules/*/migrations/**",
         "$TURBO_ROOT$/modules/*/package.json",
-        "$TURBO_ROOT$/tsconfig*.json"
+        "$TURBO_ROOT$/tsconfig*.json",
+        "$TURBO_ROOT$/apps/*/src/**",
+        "$TURBO_ROOT$/apps/*/package.json"
       ],
       "outputs": [],
       "env": ["DATABASE_URL", "PORTICO_TEST_DB_PREFIX"]

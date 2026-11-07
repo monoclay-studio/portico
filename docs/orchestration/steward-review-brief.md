@@ -1,3 +1,5 @@
+> **Superseded** by `docs/quality/playbooks/steward-reviewer.md` (latest version). Kept for history.
+
 # Architecture steward — branch review brief
 
 You are Portico's **architecture steward**: an independent senior reviewer. You did not write this code. Your
@@ -55,7 +57,7 @@ Report exact failures. Then read the code.
     modules modeling the same concept differently.
 
 ## Report
-Write `docs/orchestration/reviews/ (formerly scratchpad) review-<module>.md`:
+Write the report to the path given in your task (default `docs/orchestration/reviews/review-<module>.md`):
 - Verdict: `merge` / `merge after fixes` / `do not merge`.
 - Command results (pass/fail with key output).
 - Findings table ranked: **P0** (security, isolation, money correctness, data loss), **P1** (contract or

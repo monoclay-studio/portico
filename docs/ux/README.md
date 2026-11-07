@@ -22,6 +22,16 @@ experience for a **completely new user** adapting with the least friction.
 
 ## The loop (each round)
 
+**Launch from playbooks (quality steward, 2026-11-07):** the tester runs from `docs/quality/playbooks/blackbox-tester.md`
+and the refiner from `docs/quality/playbooks/ux-refiner.md` (latest versions). Before the refiner starts, the
+orchestrator runs hand-off checks H-1 to H-4 from the refiner playbook:
+- every finding has a stable ID;
+- every cited screenshot exists and shows what the finding claims;
+- the copy into `docs/ux/round-N/` is complete;
+- nothing was compressed away.
+
+The refiner verifies every screenshot it cites and returns its summary in its final reply.
+
 1. **Black-box tester ("mystery user").** Uses the running product only through the browser, as different hotels and
    roles (12-room guesthouse owner on a phone, 120-villa resort front desk at the morning rush, reservations,
    housekeeping on a tablet, night audit, finance, multi-property group director, IT admin, a brand-new hire).

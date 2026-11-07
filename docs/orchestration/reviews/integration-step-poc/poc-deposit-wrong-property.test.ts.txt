@@ -1,0 +1,115 @@
+/**
+ * PoC (steward review, integration step) — a deposit can be taken at property H for a booking that belongs to
+ * property K (or for a booking that does not exist at all). The property comes from the request, the booking is
+ * never checked against reservations (the only module that knows which property owns a booking), and finance
+ * "binds the booking to the property of its first deposit" (ledger-port.ts assertTargetInScope).
+ *
+ * Consequence: the guest's money is posted to H's legal entity (another company's merchant account and ledger),
+ * and K's own check-in / arrivals board can no longer read the booking's payment status (scope_mismatch).
+ */
+import { sql } from '@portico/db';
+import { newId } from '@portico/kernel';
+import type { Booking } from '@portico/reservations';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import {
+  applied,
+  bookingInput,
+  cardOnFile,
+  hiyani,
+  kandu,
+  organization,
+  readyUnit,
+  type Scenario,
+  startScenario,
+} from './scenarios/harness';
+
+let s: Scenario;
+beforeAll(async () => {
+  s = await startScenario();
+});
+afterAll(async () => s?.close());
+
+describe('PoC: deposit for a booking of another property', () => {
+  it("a desk user at H takes a deposit for K's booking; it lands in H's legal entity and blocks K's check-in", async () => {
+    const org = await organization(s);
+    const k = await kandu(s, org, '2027-03-10');
+    const h = await hiyani(s, org, '2027-03-10');
+    expect(k.legalEntityId).not.toBe(h.legalEntityId);
+    const { reservations, payments } = s.c.services;
+    const kAgent = org.staff('reservations_agent', 'Aishath', [k.id]);
+    const b = applied<Booking>(
+      await org.run(kAgent, (tx) =>
+        reservations.createBooking(
+          tx,
+          bookingInput(k, { arrival: '2027-03-10', departure: '2027-03-12', unit: '214' }),
+        ),
+      ),
+    );
+
+    // A front-desk agent of Hiyani ONLY (no rights at Kandu) charges a card at Hiyani "for" Kandu's booking.
+    const hDesk = org.staff('front_desk', 'Hiyani desk', [h.id]);
+    const hCard = await cardOnFile(s, org, h.id, h.legalEntityId);
+    const p = await payments.chargeNow(hDesk, {
+      propertyId: h.id,
+      methodId: hCard.id,
+      amount: { amountMinor: 50_000, currency: 'USD' },
+      ref: { type: 'booking', id: b.id },
+      businessKey: `deposit:${newId()}`,
+    });
+    // BUG: accepted and posted. Nothing asked reservations whether booking b belongs to Hiyani.
+    expect(p.status).toMatchObject({ payment: 'succeeded', ledger: 'posted' });
+    const acct = await sql<{ property_id: string; legal_entity_id: string }>`
+      select property_id, legal_entity_id from finance.deposit_accounts where booking_id = ${b.id}`.execute(
+      s.t.admin.kysely,
+    );
+    // Kandu's booking now has its deposit liability at Hiyani's legal entity.
+    expect(acct.rows).toEqual([{ property_id: h.id, legal_entity_id: h.legalEntityId }]);
+
+    // Kandu's own desk can no longer read the booking's payment status: every read is refused.
+    const kDesk = org.staff('front_desk', 'Kandu desk', [k.id]);
+    await expect(
+      org.run(kDesk, (tx) =>
+        reservations.deps.ports.payments.getPaymentStatus(
+          tx,
+          { type: 'booking', id: b.id },
+          { propertyId: k.id },
+        ),
+      ),
+    ).rejects.toMatchObject({ code: 'scope_mismatch' });
+
+    // ...and Kandu's check-in of its own guest fails in the guarantee step (or is interrupted).
+    await s.drain();
+    await readyUnit(s, org, k.id, k.units['214'] as string);
+    const checkIn = await reservations
+      .performWorkflow(s.t.db, kDesk, {
+        stayId: b.stays[0]?.id as string,
+        kind: 'check_in',
+        checkIn: { registration: { identityVerified: true }, access: { kind: 'card', count: 1 } },
+      })
+      .catch((e: unknown) => e);
+    const outcome = JSON.stringify(checkIn);
+    console.log('check-in outcome:', outcome.slice(0, 600));
+    expect(outcome).toMatch(/scope_mismatch|another property/);
+  });
+
+  it('a deposit for a booking id that does not exist anywhere is accepted and posted as a liability', async () => {
+    const org = await organization(s);
+    const h = await hiyani(s, org, '2027-03-10');
+    const hDesk = org.staff('front_desk', 'Hiyani desk', [h.id]);
+    const hCard = await cardOnFile(s, org, h.id, h.legalEntityId);
+    const ghost = newId();
+    const p = await s.c.services.payments.chargeNow(hDesk, {
+      propertyId: h.id,
+      methodId: hCard.id,
+      amount: { amountMinor: 12_345, currency: 'USD' },
+      ref: { type: 'booking', id: ghost },
+      businessKey: `deposit:${newId()}`,
+    });
+    expect(p.status).toMatchObject({ payment: 'succeeded', ledger: 'posted' });
+    const rows = await sql<{ n: number }>`
+      select count(*)::int as n from finance.deposit_accounts where booking_id = ${ghost}`.execute(
+      s.t.admin.kysely,
+    );
+    expect(rows.rows[0]?.n).toBe(1);
+  });
+});
