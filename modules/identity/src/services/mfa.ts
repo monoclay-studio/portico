@@ -27,6 +27,7 @@ import {
   assertPowerOver,
   assertSessionCurrent,
   assertSoleOrganizationMember,
+  isDemoSeeding,
   lockPerson,
   membershipsElsewhere,
   revokeApiKeysIssuedBy,
@@ -356,6 +357,80 @@ export async function enrolTotp(
   };
 }
 
+/**
+ * Demo seeding only (ADR-0017 rule 12, extended by the coordinator's demo decision): enrol an ACTIVE authenticator
+ * factor with a fixed, published demo secret, so fictitious demo administrators keep their ⚑ permissions (which
+ * never take effect without two-step verification) and the demo, e2e suite and UX lab can sign in.
+ *
+ * Refused unless ALL hold, exactly like `seedDemoMember`: the caller is a system process, the organization is in the
+ * `demo` environment, and the person's address is a reserved fictitious `*.portico.invalid` address. The person must
+ * also be a member of this demo organization. Never routed over HTTP. Idempotent (an active factor is kept).
+ */
+export async function seedDemoTotp(
+  tx: TxContext,
+  ports: Pick<IdentityPorts, 'cipher'>,
+  input: { userId: string; secret: string },
+): Promise<{ factorId: string }> {
+  const refuse = () =>
+    new ValidationError(
+      'demo_factor_not_allowed',
+      'A fixed authenticator secret may be seeded only by a system process, in a demo organization, for a member with a *.portico.invalid address.',
+    );
+  if (tx.actor.kind !== 'system' || tx.environment !== 'demo') throw refuse();
+  const user = await db(tx)
+    .selectFrom('identity.users')
+    .select('email')
+    .where('id', '=', input.userId)
+    .executeTakeFirst();
+  if (!user || !(await isDemoSeeding(tx, user.email))) throw refuse();
+  const member = await db(tx)
+    .selectFrom('identity.memberships')
+    .select('id')
+    .where('user_id', '=', input.userId)
+    .executeTakeFirst();
+  if (!member) throw refuse();
+  // Validate the secret is usable before storing it (base32, at least 80 bits).
+  let bytes = 0;
+  try {
+    bytes = base32Decode(input.secret).length;
+  } catch {
+    bytes = 0;
+  }
+  if (bytes < 10)
+    throw new ValidationError(
+      'invalid_secret',
+      'The demo authenticator secret must be base32 with at least 80 bits.',
+    );
+  const cipher = cipherOf(ports);
+  const person = await lockPerson(tx, input.userId);
+  const existing = await db(tx)
+    .selectFrom('identity.mfa_factors')
+    .select('id')
+    .where('user_id', '=', input.userId)
+    .where('status', '=', 'active')
+    .where(sameEpoch(input.userId))
+    .executeTakeFirst();
+  if (existing) return { factorId: existing.id };
+  const id = newId();
+  await db(tx)
+    .insertInto('identity.mfa_factors')
+    .values({
+      id,
+      user_id: input.userId,
+      kind: 'totp',
+      status: 'active',
+      secret_enc: cipher.encrypt(input.secret, `mfa:${id}`),
+      last_used_step: null,
+      confirmed_at: tx.now,
+      disabled_at: null,
+      created_at: tx.now,
+      credential_epoch: person.epoch,
+    })
+    .execute();
+  await tx.audit({ action: 'identity.mfa.seedDemo', target: { type: 'user', id: input.userId } });
+  return { factorId: id };
+}
+
 async function verifyFactorCode(
   tx: TxContext,
   cipher: FieldCipher,
@@ -428,6 +503,8 @@ export async function confirmTotp(
         failures >= MFA_CONFIRM_MAX_ATTEMPTS
           ? 'Too many wrong codes for this set-up. Start the authenticator set-up again.'
           : 'That code is not valid. Check that your phone’s time is set automatically and enter the current 6-digit code.',
+        // The staff app offers "Start the set-up again" when this set-up was discarded.
+        failures >= MFA_CONFIRM_MAX_ATTEMPTS ? { setupDiscarded: true } : undefined,
       ),
     };
   }
@@ -726,8 +803,30 @@ export async function createMfaChallenge(
   return { challengeToken, expiresAt };
 }
 
-const CHALLENGE_ERROR =
-  'The verification code is not valid or has expired. Sign in again to get a new challenge.';
+/**
+ * Why a sign-in code was refused. The code stays `unauthenticated` (401); `details.reason` lets the sign-in screen
+ * say what to do next: `invalid_code` → try again (with `attemptsRemaining`), `challenge_expired` → enter the
+ * password again. Neither reveals anything about the person that the password step had not already proven.
+ */
+export type MfaChallengeFailure = 'challenge_expired' | 'invalid_code';
+
+export class MfaChallengeError extends DomainError {
+  constructor(reason: MfaChallengeFailure, attemptsRemaining?: number) {
+    super(
+      'unauthenticated',
+      reason === 'invalid_code' && attemptsRemaining !== 0
+        ? 'That code is not right. Check the 6-digit code in your authenticator app (or the recovery code) and try again.'
+        : 'This sign-in request has expired or used up its attempts. Enter your password again to get a new one.',
+      {
+        status: 401,
+        details: {
+          reason: reason === 'invalid_code' && attemptsRemaining === 0 ? 'challenge_expired' : reason,
+          ...(attemptsRemaining !== undefined ? { attemptsRemaining } : {}),
+        },
+      },
+    );
+  }
+}
 
 /** Complete sign-in with the second factor. Returns a session bound to the organization chosen at sign-in. */
 export async function completeMfaChallenge(
@@ -742,13 +841,13 @@ export async function completeMfaChallenge(
   },
 ) {
   const [kind, tenantId] = input.challengeToken.split('.');
-  if (kind !== 'pmc' || !tenantId || !isUuid(tenantId)) throw new UnauthenticatedError(CHALLENGE_ERROR);
+  if (kind !== 'pmc' || !tenantId || !isUuid(tenantId)) throw new MfaChallengeError('challenge_expired');
   const { rows } = await sql<{ id: string; name: string; environment: string; status: string }>`
     select id, name, environment, status from platform.tenant_summaries(${[tenantId]}::uuid[])`.execute(
     database.kysely,
   );
   const org = rows[0];
-  if (org?.status !== 'active') throw new UnauthenticatedError(CHALLENGE_ERROR);
+  if (org?.status !== 'active') throw new MfaChallengeError('challenge_expired');
   const ctx: RequestContext = {
     tenantId,
     environment: org.environment as TenantEnvironment,
@@ -763,13 +862,13 @@ export async function completeMfaChallenge(
       .where('token_hash', '=', sha256Hex(input.challengeToken))
       .forUpdate()
       .executeTakeFirst();
-    if (!c || c.consumed_at || c.expires_at <= tx.now || c.attempts >= MFA_MAX_ATTEMPTS)
-      return { ok: false as const };
+    const expired = { ok: false as const, reason: 'challenge_expired' as const };
+    if (!c || c.consumed_at || c.expires_at <= tx.now || c.attempts >= MFA_MAX_ATTEMPTS) return expired;
     // R3-P1-1: the password behind this challenge was checked in an epoch; a wipe since then voids it.
     const person = await lockPerson(tx, c.user_id);
-    if (person.epoch !== c.credential_epoch) return { ok: false as const };
+    if (person.epoch !== c.credential_epoch) return expired;
     const lock = await reserveSecondFactorAttempt(tx, c.user_id);
-    if (lock) return { ok: false as const, lock };
+    if (lock) return { ok: false as const, reason: 'locked' as const, lock };
     const method = await verifySecondFactor(tx, ports, c.user_id, input);
     if (!method) {
       await db(tx)
@@ -779,7 +878,11 @@ export async function completeMfaChallenge(
         .execute();
       await recordSecondFactorFailure(tx, ports, c.user_id);
       await tx.audit({ action: 'identity.mfa.challengeFailed', target: { type: 'user', id: c.user_id } });
-      return { ok: false as const };
+      return {
+        ok: false as const,
+        reason: 'invalid_code' as const,
+        attemptsRemaining: Math.max(0, MFA_MAX_ATTEMPTS - (c.attempts + 1)),
+      };
     }
     await recordSecondFactorSuccess(tx, c.user_id);
     await db(tx)
@@ -800,8 +903,10 @@ export async function completeMfaChallenge(
     return { ok: true as const, userId: c.user_id, ...session };
   });
   if (!outcome.ok) {
-    if ('lock' in outcome && outcome.lock) throw new SecondFactorLockedError(outcome.lock);
-    throw new UnauthenticatedError(CHALLENGE_ERROR);
+    if (outcome.reason === 'locked') throw new SecondFactorLockedError(outcome.lock);
+    if (outcome.reason === 'invalid_code')
+      throw new MfaChallengeError('invalid_code', outcome.attemptsRemaining);
+    throw new MfaChallengeError('challenge_expired');
   }
   return {
     status: 'signed_in' as const,

@@ -33,6 +33,7 @@ import {
   assertSoleOrganizationMember,
   credentialSummary,
   hasAnyCredential,
+  isDemoSeeding,
   isHumanSelf,
   lockPerson,
   verifyEmailOwnership,
@@ -181,12 +182,7 @@ export async function seedDemoMember(
   tx: TxContext,
   input: CreateUserInput & { password: string },
 ): Promise<{ userId: string }> {
-  const domain = input.email.toLowerCase().split('@').at(-1) ?? '';
-  if (
-    tx.actor.kind !== 'system' ||
-    tx.environment !== 'demo' ||
-    !(domain === 'portico.invalid' || domain.endsWith('.portico.invalid'))
-  )
+  if (!(await isDemoSeeding(tx, input.email)))
     throw new ValidationError(
       'password_not_allowed',
       'Passwords may be seeded only by a system process, in a demo organization, for *.portico.invalid addresses.',

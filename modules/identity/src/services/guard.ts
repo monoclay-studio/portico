@@ -280,6 +280,20 @@ export function assertRootChange(tx: TxContext, what: string): void {
  * lock, so a credential write either completes before the wipe (and is wiped) or starts after it (and sees the new
  * epoch). Returns the current email verification and credential epoch.
  */
+/**
+ * Demo seeding (ADR-0017 rules 12 and 16): only a system process, only in an organization that IS in the `demo`
+ * environment (checked in the database too, not only in the request context), only for a reserved fictitious
+ * `*.portico.invalid` address. Anything else is refused by the caller.
+ */
+export async function isDemoSeeding(tx: TxContext, email: string): Promise<boolean> {
+  if (tx.actor.kind !== 'system' || tx.environment !== 'demo') return false;
+  const domain = email.toLowerCase().split('@').at(-1) ?? '';
+  if (!(domain === 'portico.invalid' || domain.endsWith('.portico.invalid'))) return false;
+  const { rows } = await sql<{ environment: string }>`
+    select environment from platform.tenant_summaries(${[tx.tenantId]}::uuid[])`.execute(tx.db);
+  return rows[0]?.environment === 'demo';
+}
+
 export async function lockPerson(
   tx: TxContext,
   userId: string,

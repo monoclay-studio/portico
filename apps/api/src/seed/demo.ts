@@ -8,7 +8,7 @@
  */
 import { type PorticoDatabase, type TxContext, withTenantTx } from '@portico/db';
 import { identity } from '@portico/identity';
-import { newId, type RequestContext, systemAuthorizer } from '@portico/kernel';
+import { fieldCryptoFromEnv, newId, type RequestContext, systemAuthorizer } from '@portico/kernel';
 import { platform } from '@portico/platform';
 import { provisionOrganization } from '../provisioning';
 
@@ -23,7 +23,7 @@ export interface DemoOrganization {
   tenantId: string;
   name: string;
   properties: DemoProperty[];
-  users: Array<{ email: string; role: string }>;
+  users: Array<{ email: string; role: string; userId: string }>;
 }
 
 /** A module's contribution to demo data. Runs inside the demo organization's transaction. */
@@ -40,6 +40,14 @@ export const DEMO_SEED_STEPS: DemoSeedStep[] = [];
 
 /** Shared demo password — demo environment only; printed by the CLI; never valid in live organizations. */
 export const DEMO_PASSWORD = 'portico-demo-2026';
+
+/**
+ * Shared demo authenticator secret (base32, RFC 6238) — ADR-0017 rule 16. Sensitive (⚑) permissions never take effect
+ * without two-step verification, so the demo CLI enrols this fixed factor for every fictitious demo user and prints
+ * it beside the password (add it to any authenticator app). Identity refuses it outside the `demo` environment and
+ * for any real address. Published on purpose: it protects nothing but fictitious demo data.
+ */
+export const DEMO_TOTP_SECRET = 'PORTICODEMOAUTHENTICATORDEMOKEYS';
 
 interface PropertySpec {
   code: string;
@@ -141,17 +149,28 @@ const emailFor = (slug: string, staffName: string) =>
 
 export async function seedDemo(
   database: PorticoDatabase,
-  opts: { businessDate: string; log?: (m: string) => void; steps?: DemoSeedStep[] },
+  opts: {
+    businessDate: string;
+    log?: (m: string) => void;
+    steps?: DemoSeedStep[];
+    /**
+     * Enrol the fixed demo authenticator (DEMO_TOTP_SECRET) for every demo user (rule 16). The CLI turns it on, so
+     * demo administrators keep their ⚑ permissions; sign-in then asks for the code after the password.
+     */
+    authenticator?: boolean;
+  },
 ): Promise<DemoOrganization[]> {
   const steps = opts.steps ?? [
     ...(await import('../composition')).compose(database).demoSeedSteps,
     ...DEMO_SEED_STEPS,
   ];
   const log = opts.log ?? (() => {});
+  // Same key source as the API (composition), so the API can read the factor the seed stores.
+  const cipher = opts.authenticator ? fieldCryptoFromEnv().cipher : undefined;
   const result: DemoOrganization[] = [];
   for (const spec of ORGS) {
     const adminEmail = emailFor(spec.slug, spec.staff[0]?.name ?? 'admin');
-    const { tenantId } = await provisionOrganization(
+    const { tenantId, adminUserId } = await provisionOrganization(
       database,
       {
         name: spec.name,
@@ -197,12 +216,12 @@ export async function seedDemo(
           legalEntityId: le.id,
         });
       }
-      const users = [{ email: adminEmail, role: spec.staff[0]?.role ?? 'org_admin' }];
+      const users = [{ email: adminEmail, role: spec.staff[0]?.role ?? 'org_admin', userId: adminUserId }];
       for (const s of spec.staff.slice(1)) {
         const email = emailFor(spec.slug, s.name);
         // ADR-0017 rule 12: passwords are seeded only by this system process, in demo organizations, for
         // *.portico.invalid addresses (identity refuses anything else).
-        await identity.seedDemoMember(tx, {
+        const { userId } = await identity.seedDemoMember(tx, {
           email,
           displayName: s.name,
           password: DEMO_PASSWORD,
@@ -211,8 +230,11 @@ export async function seedDemo(
               ? [{ roleKey: s.role, scopeType: 'organization' }]
               : properties.map((p) => ({ roleKey: s.role, scopeType: 'property' as const, scopeId: p.id })),
         });
-        users.push({ email, role: s.role });
+        users.push({ email, role: s.role, userId });
       }
+      if (cipher)
+        for (const u of users)
+          await identity.seedDemoTotp(tx, { cipher }, { userId: u.userId, secret: DEMO_TOTP_SECRET });
       const demoOrg: DemoOrganization = { tenantId, name: spec.name, properties, users };
       for (const step of steps) {
         log(`  ${spec.name}: ${step.name}`);
