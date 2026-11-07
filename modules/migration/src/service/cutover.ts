@@ -88,7 +88,9 @@ export async function planCutover(
         propertyId: job.propertyId,
         domain,
         systemName: job.sourceSystem,
-        connectionId: null,
+        // Platform links an external system of record to a connection: the migration source's identity is that
+        // link (MIG-CR-6 asks integration to register migration sources as file-exchange connections).
+        connectionId: job.sourceIdentity,
         reason: `Migration ${job.id}: ${job.sourceSystem} stays the system of record until the cutover.`,
       });
   }
@@ -599,6 +601,7 @@ export async function requestRollback(
       authority: 'external' as const,
       writeMode: 'read_only' as const,
       systemName: job.sourceSystem,
+      connectionId: job.sourceIdentity,
     })),
     reason: `Rollback of migration ${job.id}: ${input.reason}`,
     rollbackCriteria: 'Not applicable (this is the rollback).',

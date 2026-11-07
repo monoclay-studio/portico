@@ -71,7 +71,7 @@ export interface PlatformPort {
       propertyId: string;
       domain: MigratedDomain;
       systemName: string;
-      connectionId: string | null;
+      connectionId: string;
       reason: string;
     },
   ): Promise<void>;

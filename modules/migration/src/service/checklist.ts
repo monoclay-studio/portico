@@ -99,6 +99,16 @@ export async function completeChecklistItem(
       'checklist_production_only',
       'The checklist belongs to the production migration in the live organization.',
     );
+  if (def.key === 'source_access')
+    throw new BusinessRuleError(
+      'checklist_observed',
+      'Portico confirms source access itself once it has read the data (upload the export or connect the system).',
+    );
+  if (def.key === 'cutover_window')
+    throw new BusinessRuleError(
+      'checklist_use_plan_cutover',
+      'Choose the cutover time with "Plan cutover": it books the switch of system of record for a second person to approve.',
+    );
   const row = (await loadChecklist(tx, job.id)).find((r) => r.key === key);
   if (!row) throw new ValidationError('unknown_checklist_item', `There is no checklist step "${key}".`);
   if (row.status !== 'waiting')
@@ -110,16 +120,6 @@ export async function completeChecklistItem(
   let signoffKind: string | null = null;
   let report: { id: string; fingerprint: string } | null = null;
   switch (def.key) {
-    case 'source_access':
-      throw new BusinessRuleError(
-        'checklist_observed',
-        'Portico confirms source access itself once it has read the data (upload the export or connect the system).',
-      );
-    case 'cutover_window':
-      throw new BusinessRuleError(
-        'checklist_use_plan_cutover',
-        'Choose the cutover time with "Plan cutover": it books the switch of system of record for a second person to approve.',
-      );
     case 'data_authorization':
       if (input.status !== 'done' || !input.evidence.reference)
         throw new ValidationError(

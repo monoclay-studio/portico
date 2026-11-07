@@ -408,7 +408,7 @@ export function migrationPorts(h: {
           propertyId: i.propertyId,
           domain: i.domain,
           authority: 'external',
-          ...(i.connectionId ? { connectionId: i.connectionId } : {}),
+          connectionId: i.connectionId,
           systemName: i.systemName,
           writeMode: 'read_only',
           reason: i.reason,
