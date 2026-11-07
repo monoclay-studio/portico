@@ -4,6 +4,7 @@
  * the attack is REFUSED, plus the self-check re-attacks (reverse order, siblings, failure path, griefing).
  */
 import { sql } from '@portico/db';
+import { financeForReservations } from '@portico/finance';
 import { newId, type RequestContext, staticAuthorizer } from '@portico/kernel';
 import { platform } from '@portico/platform';
 import type { Booking } from '@portico/reservations';
@@ -458,5 +459,32 @@ describe('P2-1 — FD-15: housekeeping cannot tell paid from unpaid arrivals nor
         .find((r) => r.bookingId === paid.id)
         ?.readiness?.checks.find((c) => c.key === 'payment_secured')?.status,
     ).toBe('ok');
+  });
+});
+
+describe("P2-2 — finance never delegates organization-wide on reservations' port", () => {
+  it("a Kandu-only agent cannot read Hiyani's folio, scoped or not", async () => {
+    const org = await organization(s);
+    const k = await kandu(s, org);
+    const h = await hiyani(s, org);
+    const port = financeForReservations(s.c.services.finance);
+    const hStay = { type: 'stay', id: newId() };
+    const { folioId } = await org.run(org.setup, (tx) =>
+      port.openFolio(tx, { propertyId: h.id, owner: hStay, payer: { type: 'house', id: newId() } }),
+    );
+    const kAgent = org.staff('reservations_agent', 'Aishath', [k.id]);
+    await expect(
+      org.run(kAgent, (tx) => port.getFolioBalance(tx, folioId, { propertyId: k.id })),
+    ).rejects.toMatchObject({ status: 403 });
+    await expect(
+      org.run(kAgent, (tx) => port.listFolios(tx, { propertyId: k.id, owner: hStay })),
+    ).rejects.toMatchObject({ status: 403 });
+    // The scope is required by the type; a caller that omits it anyway is refused at run time (no widening).
+    const unscoped = port as unknown as {
+      getFolioBalance(tx: unknown, folioId: string): Promise<unknown>;
+      listFolios(tx: unknown, input: { owner: unknown }): Promise<unknown>;
+    };
+    await expect(org.run(kAgent, (tx) => unscoped.getFolioBalance(tx, folioId))).rejects.toThrow(/scope/);
+    await expect(org.run(kAgent, (tx) => unscoped.listFolios(tx, { owner: hStay }))).rejects.toThrow(/scope/);
   });
 });

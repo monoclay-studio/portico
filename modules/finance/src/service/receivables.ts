@@ -342,7 +342,7 @@ export async function transferToReceivables(
     .limit(1)
     .executeTakeFirst();
   const invoice = uninvoiced
-    ? await issueInvoice(delegated(tx, ['finance.invoice.issue']), deps, {
+    ? await issueInvoice(delegated(tx, ['finance.invoice.issue'], folio.property_id), deps, {
         folioId: folio.id,
         idempotencyKey: `${idempotencyKey}:invoice`,
       })

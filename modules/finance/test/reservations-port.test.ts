@@ -55,6 +55,7 @@ describe('reservations → finance port', () => {
     expect(placeholder.issues.map((i) => i.code)).toContain('payer_name_missing');
 
     const instructions = {
+      propertyId: org.propertyId,
       owner: stay,
       rules: [
         {
@@ -72,6 +73,7 @@ describe('reservations → finance port', () => {
       org.run(
         (tx) =>
           port.setBillingRules(tx, {
+            propertyId: org.propertyId,
             owner: stay,
             rules: [
               { destinationFolioId: accommodation.folioId, chargeCodeGroups: ['rooms'], source: 'manual' },
@@ -146,7 +148,10 @@ describe('reservations → finance port', () => {
       ),
     ).rejects.toMatchObject({ code: 'invalid_charge_target' });
 
-    const folios = await org.run((tx) => port.listFolios(tx, { owner: stay }), agent);
+    const folios = await org.run(
+      (tx) => port.listFolios(tx, { propertyId: org.propertyId, owner: stay }),
+      agent,
+    );
     expect(folios.map((f) => [f.label ?? null, f.payer, f.isDefault, f.status])).toEqual([
       ['Incidentals', { type: 'profile', id: profileId }, true, 'open'],
       ['Accommodation', { type: 'company', id: companyId }, false, 'open'],
@@ -154,7 +159,14 @@ describe('reservations → finance port', () => {
     const [guestBalance, companyBalance] = folios.map((f) => f.balance.amountMinor);
     expect(companyBalance).toBe(25740);
     expect(guestBalance).toBeGreaterThan(15000 + 5000);
-    expect((await org.run((tx) => port.getFolioBalance(tx, incidentals.folioId), agent)).status).toBe('open');
+    expect(
+      (
+        await org.run(
+          (tx) => port.getFolioBalance(tx, incidentals.folioId, { propertyId: org.propertyId }),
+          agent,
+        )
+      ).status,
+    ).toBe('open');
 
     // Deposit applied at check-in.
     await org.run(
@@ -168,12 +180,22 @@ describe('reservations → finance port', () => {
         }),
       agent,
     );
-    expect(await org.run((tx) => port.getDepositBalance(tx, { bookingId }), agent)).toEqual(usd(11700));
     expect(
-      await org.run((tx) => port.applyDeposits(tx, { bookingId, toFolioId: incidentals.folioId }), agent),
+      await org.run((tx) => port.getDepositBalance(tx, { propertyId: org.propertyId, bookingId }), agent),
+    ).toEqual(usd(11700));
+    expect(
+      await org.run(
+        (tx) =>
+          port.applyDeposits(tx, { propertyId: org.propertyId, bookingId, toFolioId: incidentals.folioId }),
+        agent,
+      ),
     ).toEqual({ applied: usd(11700) });
     expect(
-      await org.run((tx) => port.applyDeposits(tx, { bookingId, toFolioId: incidentals.folioId }), agent),
+      await org.run(
+        (tx) =>
+          port.applyDeposits(tx, { propertyId: org.propertyId, bookingId, toFolioId: incidentals.folioId }),
+        agent,
+      ),
     ).toBeUndefined();
     await assertLedgerIntegrity(h, org);
   });
@@ -201,7 +223,10 @@ describe('reservations → finance port', () => {
         }),
       agent,
     );
-    const [folio] = await org.run((tx) => port.listFolios(tx, { owner: booking }), agent);
+    const [folio] = await org.run(
+      (tx) => port.listFolios(tx, { propertyId: org.propertyId, owner: booking }),
+      agent,
+    );
     expect(folio?.folioId).toBe(posted.folioId);
     expect(folio?.balance).toEqual(usd(30000));
     await expect(

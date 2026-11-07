@@ -202,7 +202,7 @@ describe('F-04: re-applying billing instructions is a merge (X10, ADR-0016 §2)'
         source: 'company_default' as const,
       },
     ];
-    await org.run((tx) => port.setBillingRules(tx, { owner, rules }));
+    await org.run((tx) => port.setBillingRules(tx, { propertyId: org.propertyId, owner, rules }));
     // A staff member adds a manual rule (never touched by re-applied defaults).
     await org.run((tx) =>
       h.finance.createBillingRule(tx, {
@@ -228,7 +228,9 @@ describe('F-04: re-applying billing instructions is a merge (X10, ADR-0016 §2)'
       );
     await post(1);
     // Same instructions re-applied (e.g. after a stay change): nothing changes, usage kept.
-    const same = await org.run((tx) => port.setBillingRules(tx, { owner, rules }));
+    const same = await org.run((tx) =>
+      port.setBillingRules(tx, { propertyId: org.propertyId, owner, rules }),
+    );
     expect(same.ruleIds).toHaveLength(2);
     // A new limit: the successor inherits what the predecessor already paid.
     const preview = await org.run((tx) =>

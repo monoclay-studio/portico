@@ -892,7 +892,7 @@ async function folioBalances(
     }
     const bookingId = stays[0]?.row.booking_id;
     const held = bookingId
-      ? await finance.getDepositBalance(c.tx, { propertyId: stays[0]?.row.property_id ?? '', bookingId })
+      ? await finance.getDepositBalance(c.tx, { propertyId: c.propertyId, bookingId })
       : null;
     return { balance: sum(c.currency, balances), held, note: null };
   } catch (err) {

@@ -70,22 +70,29 @@ export interface FinancePort {
   ): Promise<{ postingIds: string[]; folioId: string }>;
   recordDeposit(
     tx: TxContext,
-    input: { bookingId: string; amount: Money; paymentRef: EntityRef; idempotencyKey: string },
+    input: {
+      propertyId: string;
+      bookingId: string;
+      amount: Money;
+      paymentRef: EntityRef;
+      idempotencyKey: string;
+    },
   ): Promise<void>;
   applyDeposits(
     tx: TxContext,
-    input: { bookingId: string; toFolioId: string },
+    input: { propertyId: string; bookingId: string; toFolioId: string },
   ): Promise<{ applied: Money } | undefined>;
   getFolioBalance(
     tx: TxContext,
     folioId: string,
+    scope: { propertyId: string },
   ): Promise<{ folioId: string; balance: Money; status: string }>;
-  listFolios(tx: TxContext, input: { owner: EntityRef }): Promise<FolioSummary[]>;
+  listFolios(tx: TxContext, input: { propertyId: string; owner: EntityRef }): Promise<FolioSummary[]>;
   /** Finance spec proposed contract change #3 (who pays for what). */
   setBillingRules(
     tx: TxContext,
-    input: { owner: EntityRef; rules: BillingRuleInput[] },
+    input: { propertyId: string; owner: EntityRef; rules: BillingRuleInput[] },
   ): Promise<{ ruleIds: string[] }>;
   /** Proposed additive: deposits held (liability) for a booking, for change previews. */
-  getDepositBalance(tx: TxContext, input: { bookingId: string }): Promise<Money | null>;
+  getDepositBalance(tx: TxContext, input: { propertyId: string; bookingId: string }): Promise<Money | null>;
 }

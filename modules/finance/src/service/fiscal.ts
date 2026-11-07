@@ -798,7 +798,7 @@ export async function issueCreditNote(
           { postingId: l.postingId },
         );
       }
-      const res = await adjustPosting(delegated(tx, ['finance.posting.correct']), deps, {
+      const res = await adjustPosting(delegated(tx, ['finance.posting.correct'], inv.property_id), deps, {
         postingId: l.postingId,
         ...(l.amountMinor !== undefined ? { amountMinor: l.amountMinor } : {}),
         reasonCode: 'credit_note',

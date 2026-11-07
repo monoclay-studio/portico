@@ -523,7 +523,8 @@ export function fromReservationsTaxLine(t: ReservationsTaxLine): ProvidedTaxLine
  */
 export function financeForReservations(service: FinanceService) {
   const perms = PROVIDER_DELEGATION.reservations ?? [];
-  const d = (tx: TxContext, propertyId?: string) => delegated(tx, perms, propertyId);
+  // Review P2-2: every call is delegated at the property reservations authorized — never organization-wide.
+  const d = (tx: TxContext, propertyId: string) => delegated(tx, perms, propertyId);
   const payerType = (t: ReservationsPayer['type']): 'guest' | 'company' | 'agency' | 'house' =>
     t === 'profile' ? 'guest' : t;
   const toReservationsPayer = (p: { type: string; id?: string }): ReservationsPayer => ({
@@ -625,14 +626,14 @@ export function financeForReservations(service: FinanceService) {
         amount: Money;
         paymentRef: EntityRef;
         idempotencyKey: string;
-        propertyId?: string;
+        propertyId: string;
       },
     ): Promise<void> {
       await service.recordDeposit(d(tx, input.propertyId), input);
     },
     async applyDeposits(
       tx: TxContext,
-      input: { bookingId: string; toFolioId: string; propertyId?: string },
+      input: { bookingId: string; toFolioId: string; propertyId: string },
     ): Promise<{ applied: Money } | undefined> {
       const r = await service.applyDeposits(d(tx, input.propertyId), {
         bookingId: input.bookingId,
@@ -643,14 +644,15 @@ export function financeForReservations(service: FinanceService) {
     async getFolioBalance(
       tx: TxContext,
       folioId: string,
-      scope?: { propertyId: string },
+      scope: { propertyId: string },
     ): Promise<{ folioId: string; balance: Money; status: string }> {
-      const f = await service.getFolio(d(tx, scope?.propertyId), folioId);
+      // A caller omitting the scope (type-unsafe) is refused by delegated(), never widened.
+      const f = await service.getFolio(d(tx, scope?.propertyId as string), folioId);
       return { folioId, balance: f.balance, status: f.status.folio };
     },
     async listFolios(
       tx: TxContext,
-      input: { owner: EntityRef; propertyId?: string },
+      input: { owner: EntityRef; propertyId: string },
     ): Promise<
       Array<{
         folioId: string;
@@ -679,7 +681,7 @@ export function financeForReservations(service: FinanceService) {
       tx: TxContext,
       input: {
         owner: EntityRef;
-        propertyId?: string;
+        propertyId: string;
         rules: Array<{
           destinationFolioId: string;
           chargeCodeGroups: string[];
@@ -714,7 +716,7 @@ export function financeForReservations(service: FinanceService) {
     },
     async getDepositBalance(
       tx: TxContext,
-      input: { bookingId: string; propertyId?: string },
+      input: { bookingId: string; propertyId: string },
     ): Promise<Money | null> {
       return (await service.getDeposits(d(tx, input.propertyId), input.bookingId))?.balance ?? null;
     },

@@ -41,24 +41,26 @@ export function isUniqueViolation(err: unknown): boolean {
 
 /**
  * A TxContext whose authorizer additionally grants the given finance permissions (provider delegation, ADR-0015).
- * `propertyId` scopes the grant: a string grants only at that property (and checks that name no property, such as
- * legal-entity ledger operations); `null` grants only checks without a property; omitted grants everywhere — used
- * only by finance itself after it has checked the actor's own permission for the command.
+ * `propertyId` is REQUIRED (review P2-2): a string grants only at that property (and checks that name no property,
+ * such as legal-entity ledger operations); `null` grants only checks without a property (explicit legal-entity-level
+ * calls). There is no "every property" mode — omitting the scope is a programming error and throws.
  */
 export function delegated(
   tx: TxContext,
   permissions: readonly string[],
-  propertyId?: string | null,
+  propertyId: string | null,
 ): TxContext {
+  if (propertyId === undefined) {
+    throw new Error('finance delegated(): a property scope (or null for legal-entity level) is required');
+  }
   const base: Authorizer = tx.authz;
   const covers = (scope?: { propertyId?: string | null }) =>
-    propertyId === undefined || !scope?.propertyId || scope.propertyId === propertyId;
+    !scope?.propertyId || (propertyId !== null && scope.propertyId === propertyId);
   const authz: Authorizer = {
     can: (permission, scope) =>
       (permissions.includes(permission) && covers(scope)) || base.can(permission, scope),
     propertyScope: (permission) => {
       if (!permissions.includes(permission)) return base.propertyScope(permission);
-      if (propertyId === undefined) return 'all';
       const own = base.propertyScope(permission);
       if (own === 'all') return 'all';
       return propertyId === null || own.includes(propertyId) ? own : [...own, propertyId];
