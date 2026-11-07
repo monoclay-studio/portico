@@ -9,21 +9,20 @@ domain map § payments.
 
 ## Checkpoint
 
-- **Done:** module (migration, domain, simulator + Stripe Connect adapters, Route D recorded payments + statement
-  import, services, routes, record contract, search, jobs, demo seed), composition wiring, API e2e tests, README,
-  `PARITY.md` (gate passes in a scratch copy), `FOUNDATION_REQUESTS.md`. All payments (96) and API tests passed on
-  the last full run; `pnpm lint` / `pnpm typecheck` green.
-- **In progress:** nothing — final verification passed (lint, typecheck, 96 payments tests ×4 runs, 17 API tests).
-- **Next steps:** none required; orchestrator binds `LedgerPort` to finance at merge, moves `PARITY.md` to
-  `docs/parity/payments.md`, applies the domain-map contract changes listed below.
-- **Known failing tests:** none. The rare teardown race in `@portico/testing` (`FOUNDATION_REQUESTS.md` §1) is
-  guarded in this module's harness.
+- **Done:** wave-1 module, then the steward review fixes (`docs/orchestration/reviews/review-payments.md`, verdict
+  "merge after fixes"): P0-1, P0-2, P0-3, P1-1…P1-11, P2-1/2/3/4/6/9/12/13, P3-1/3/4/7/10 — see § Steward review
+  fixes. Parity matrix moved to `docs/parity/payments.md` (gate passes, statuses corrected). Main merged.
+- **In progress:** nothing.
+- **Next steps (orchestrator):** bind `LedgerPort` to finance (`FOUNDATION_REQUESTS.md` §5 — finance must re-check
+  scope), apply the provider contract below to the domain map, role-template additions (§1).
+- **Known failing tests:** none (113 module tests, 26 API tests; `pnpm lint`, `pnpm typecheck` green).
 
 ## What is built (wave 1)
 
 | Area | Capability | Spec | Status | Readiness |
 |---|---|---|---|---|
-| Accounts | Payment account per legal entity: provider, external account id, capabilities, onboarding status, country/currencies, status `pending/active/restricted/disabled`, optional application fee (Route A only) | PAY-R01 | done | R3 |
+| Accounts | Payment account per legal entity: provider, external account id, capabilities, onboarding status, country/currencies, status `pending/active/restricted/disabled` | PAY-R01 | done | R3 |
+| Accounts | Ownership (P0-2): a provider account id is globally unique (one organization; unambiguous webhook routing); Stripe accounts are linked and application fees set only by Monoclay operators (`operator.linkProviderAccount`, `operator.setApplicationFee`); a Stripe account's activation comes only from Stripe (`account.updated`) — tenants can only disable it | PAY-R01, R03 | done | R3 |
 | Accounts | Merchant-of-record guard: an account may only be used for properties operated by its legal entity | PAY-R01 | done | R3 |
 | Providers | Provider-agnostic adapter port (`authorize`, `incrementAuthorization`, `capture`, `void`, `charge`, `refund`, `lookup`, `createPaymentLink`, `parseWebhook`) with declared capabilities | PAY-R02 | done | R3 |
 | Providers | **SimulatorProvider** (default for demo/trial/training/tests), DB-backed so API and worker share one simulated provider; approved test tokens only (`pm_card_*`, `sim_*`); scenarios: approve, decline (reason codes), soft decline, timeout→succeeded, timeout→failed, outage (refuse / timeout), duplicate and out-of-order webhooks, delayed settlement, dispute, VCC funding delay | PAY-R03 | done | R3 (simulator — never called an integration) |
@@ -33,24 +32,42 @@ domain map § payments.
 | Journal | Provider-operation journal: intent committed before the call (operation, amount, idempotency key), claim `pending→sent` (one sender), outcome recorded; append-only `operation_journal` | PAY-R04, ADR-0007 | done | R3 |
 | Methods | Tokens only (brand, last4, expiry, holder, owner, MIT agreement + mandate, token portability notes); PAN/CVC refused at Zod, service and DB check levels | PAY-R05, PAY-I05 | done | R3 |
 | Holds | Authorizations (`processing, pending_verification, authorized, partially_captured, captured, voided, expired, failed`), partial/multiple captures, increments, release, expiry from provider or policy `payments.authorization.validityDays` (default 7), renewal warning `payments.authorization.renewBeforeDays` (default 2) | PAY-R09, PAY-R10 (warning task only) | done | R3 |
-| Charges | CIT/MIT charges; MIT requires the saved card's agreement; decline explanations with recovery | PAY-R11, PAY-R12 | done | R3 |
-| Verification | `pending_verification` first-class; second collection on the same folio/booking blocked while one is pending; "check now"; resolver backoff 10 s/30 s/2 min/10 min/1 h/6 h; "not found" conclusive only after 15 min; escalation exception after 24 h | PAY-R13, PAY-R14 | done | R3 |
-| Webhooks | Signature-verified, dedupe by provider event id, stored (card data scrubbed), out-of-order safe (events trigger lookups; monotonic transitions), unknown events stored | PAY-R15, PAY-I07 | done | R3 |
-| Reconciliation | Callable `runReconciliation`, worker consumers (`payments.operation-executor`, `payments.reconciler`), scheduled jobs (`payments.reconcile` 60 s, `payments.chargeDueVirtualCards` 15 min); mismatches → exceptions | PAY-R13, PAY-R16 (provider balance-transaction sweep not built) | partial | R3 |
-| Refunds | Separate records referencing the payment; partial; Σ refunds (succeeded + in-flight) ≤ collected enforced by a DB check; retry never refunds twice; recorded refunds for Route D | PAY-R17, PAY-I03 | done (no approval threshold yet) | R3 |
+| Charges | CIT/MIT derived by the server from the consent record (guest actor, or a card entered through hosted entry/terminal within 30 min → customer; otherwise merchant); MIT requires a mandate with terms version + acceptance; decline explanations with recovery | PAY-R11 (no cross-check with the booking's terms snapshot yet), PAY-R12 (`requires_action` → decline) | partial | R3 |
+| Ledger targets | Before any money moves, finance must place the folio/booking (`LedgerPort.describeTarget`) in the caller's property **and** legal entity; every posting carries `{propertyId, legalEntityId}` + clearing account (P0-1) | PAY-I01, ADR-0007 | done | R3 |
+| Collections | One collection in flight per folio/booking (unique index, concurrent-safe); a payment request owns its purpose on a reference — a desk charge / recorded payment / VCC charge for the same purpose needs `separateCollection.reason` (audited) (P1-1, P1-2) | PAY-R14, interim for PAY-R20 | done | R3 |
+| Verification | `pending_verification` first-class; second collection on the same folio/booking blocked while one is pending; "check now"; resolver backoff 10 s/30 s/2 min/10 min/1 h/6 h; "not found" conclusive only after the 15 min grace **and** a second not-found at least 1 h later with the breaker closed; escalation exception after 24 h; an intent is never sent (or looked up) in an environment other than the one that recorded it (`environment_changed`, P1-11) | PAY-R13, PAY-R14 | done | R3 |
+| Webhooks | Signature-verified, dedupe by provider event id, stored (card data scrubbed); marked processed only in the same transaction as its effects, so a failed processing is redone on redelivery; hourly **event backstop** lists provider events since a per-account cursor and applies missed ones (P0-3); out-of-order safe; ambiguous routing refused | PAY-R15, PAY-I07 | done | R3 |
+| Reconciliation | Callable `runReconciliation`, worker consumers (`payments.operation-executor`, `payments.reconciler`), scheduled jobs (`payments.reconcile` 60 s, `payments.eventBackstop` 1 h, `payments.chargeDueVirtualCards` 15 min); ledger retries with backoff 1 min/5 min/30 min/2 h/6 h, then daily; mismatches → exceptions | PAY-R13, PAY-R16 (provider balance-transaction sweep not built) | partial | R3 |
+| Refunds | Separate records referencing the payment; partial; Σ refunds (succeeded + in-flight) ≤ collected **after corrections** (P1-4), enforced by a DB check; retry never refunds twice; refused while disputed; recorded refunds for Route D | PAY-R17, PAY-I03 | done (no approval threshold) | R3 |
 | Disputes | From webhooks: record, evidence checklist (If-Match updates), status, deadline exception, ledger debit/reversal through `LedgerPort.recordDisputeMovement` (proposed) | PAY-R18 | done (evidence submission/accept happen in the provider dashboard) | R3 |
 | Requests | Payment requests/links (`open/partially_paid/paid/expired/cancelled`), paid only from provider-confirmed payments; link created after commit, retried when the provider is back | PAY-R19 | done | R3 |
 | VCC | OTA virtual cards: metadata separate from the token (vault alias), charge exactly the amount from the property-local activation date, funding-delay retries (6/12/24/24/48 h), final failure → owned task | PAY-R07 | done; **PCI vault/proxy unresolved** | R3 (vault dependency R1) |
 | Payouts | Gross/fees/net + included payments/refunds; ledger only when paid and the breakdown is known; webhook payouts without breakdown flagged; failed payouts flagged | PAY-R25 | done | R3 |
 | Outage | Circuit breaker per account (3 consecutive unavailability errors → open 60 s → one probe); visible via `/payments/accounts/:id/health` and `/payments/status`; staff actions: accept cash / payment link later / record manual authorization / record terminal payment | PAY-R26, s20 | done (automation pause/re-validation: see gaps) | R3 |
-| Statements | CSV statement import (file-based, labeled `file_import`): terminal batch, acquirer settlement, bank statement, cash deposit; matching by reference/approval code, then amount+date+last4; mismatches (amount, missing, unrecorded, duplicate, ambiguous) → exceptions with owner; corrections are linked adjustments | coordinator (Route D) | done | R3 |
+| Statements | CSV statement import (file-based, labeled `file_import`): terminal batch, acquirer settlement (gross/fee/net, fees posted to finance via `recordSettlementFees`), bank statement, cash deposit (matched against the day's cash total); matching by reference/approval code, then amount+date+last4; mismatches → exceptions with owner; a match tells finance the money is verified (`markPaymentVerified`); corrections are linked adjustments; card-shaped values refuse the file, other long numbers are kept as last 4 digits | coordinator (Route D) | done | R3 |
+| Route D | Own-terminal approval code unique per account, terminal, reference and property-local day (DB index; audited `duplicateOverride` for a genuine repeat); bank transfers are `awaiting_receipt` (not on the bill) until `confirm-receipt` with the bank reference (`payments.bankTransfer.confirm`), or `cancel-expected` (P1-3, P1-7) | PAY-R23, R24 | done | R3 |
 | Experience | Universal record contract on payment, authorization, refund, payment request, exception (`status` per family, `allowedActions` with reasons, `issues`, `owner`, `links`, `provenance`); `recordTypes`; `paymentsSearch` (provider ref, approval/terminal/bank ref, "last4 amount") | CLAUDE.md §4.17 | done | R3 |
 | Authority | `platform.assertWritable(…,'payments')` on every write; `forward` refused with an explanation | ADR-0014 | done | R3 |
 
-Not built (R1): collection plans and payment automation (PAY-R20–R22), refund approval thresholds, 3DS/hosted card
-entry pages (PAY-R06 — frontend/booking engine), automatic re-authorization, provider balance-transaction
-reconciliation sweep (PAY-R16 full), local Maldivian acquirer adapters (Q2), Adyen, terminals integration, forwarding
-payments to an external folio in connected mode.
+### Spec MUSTs not built (honest gaps, review P1-12)
+
+| Spec | Missing | Interim behavior | Parity row |
+|---|---|---|---|
+| PAY-R06 | Hosted card entry pages (PSP components, CSP/SRI) | Methods are saved from provider tokens only | PAR-PAY-016 |
+| PAY-R10 | Renewal task / automatic re-authorization | Warning exception before expiry; expired holds shown as expired | PAR-PAY-005 |
+| PAY-R11 | Cross-check of MIT against the booking's agreed-terms snapshot | Mandate (terms version + acceptance) on the saved card required | PAR-PAY-006 |
+| PAY-R12 | `requires_action` (3DS challenge) | Reported as a decline with "send a payment link" recovery | PAR-PAY-030 |
+| PAY-R16 | Daily provider balance-transaction reconciliation | Event backstop job (missed webhooks) + statement import | PAR-PAY-031 |
+| PAY-R17 | Refund approval above a threshold | `payments.payment.refund` (sensitive) required | PAR-PAY-019 |
+| PAY-R18 | Evidence-pack export; dispute fee | Evidence checklist; evidence submitted in the provider dashboard | PAR-PAY-010 |
+| PAY-R19 | Allowed methods, partial flag, language, delivery via comms (`message.guest`) | Link created; staff send it | PAR-PAY-008 |
+| PAY-R20–R22 | Collection plans, plan diffs, automation policies | A payment request owns its purpose on a reference (P1-2); one collection in flight per reference | PAR-PAY-015 |
+| PAY-R07 (real path) | PCI vault/proxy for OTA card data | VCC logic on the simulator; hotels charge VCCs on their own terminal and record them | PAR-PAY-032 |
+
+Also not built: local Maldivian acquirer adapters (Q2), Adyen, integrated terminals, forwarding payments to an
+external folio in connected mode, journaling of payment-link creation as a provider operation (review P3-6 — Stripe
+idempotency keys expire after 24 h, so a link retried after a day may create a second Checkout Session; only one is
+ever recorded as the request's link), payload minimisation/retention for stored webhook payloads (P3-8).
 
 ## Invariants and the tests that prove them
 
@@ -65,7 +82,10 @@ payments to an external folio in connected mode.
 | Monotonic states; late events never move backwards; contradictions → exceptions | `domain.test` state machines, `webhooks` out-of-order |
 | Recorded (Route D) money is never shown as provider-verified; corrections are adjustments | `route-d-recorded` |
 | Outage: nothing shows success; nothing is replayed blindly; stale intents are cancelled, not sent late | `scenario-s20` |
-| Merchant of record = property's legal entity | `authorizations` (other legal entity refused) |
+| Merchant of record = property's legal entity; ledger targets belong to the caller's property and legal entity | `authorizations`, `review-regressions` (P0-1), API test (finance not connected → folio refused) |
+| A provider account belongs to one organization; status/fees not tenant-controlled | `review-regressions` (P0-2) |
+| No webhook effect is lost (processing failure or missed delivery) | `review-regressions` (P0-3) |
+| One collection in flight per reference; duplicates are DB facts (concurrent tests) | `review-regressions` (P1-1, P1-2, P1-3) |
 | Tenant isolation and property-scoped permissions | `isolation-permissions`, `apps/api/test/payments.test.ts` |
 
 ## Scenarios covered
@@ -78,20 +98,23 @@ payments to an external folio in connected mode.
 | `test/route-d-recorded.test.ts` | Own-terminal, cash and bank-transfer recording, statement matching, owned exceptions, adjustments, recorded refunds and manual authorizations |
 | `test/webhooks.test.ts` | Dedupe, out-of-order, disputes (+ ledger debit/reversal), payouts (+ breakdown/failed flags, delayed settlement), Stripe public intake (signature, routing, mode separation) |
 | `test/environment-safety.test.ts`, `test/isolation-permissions.test.ts`, `test/authorizations.test.ts`, `test/requests-vcc.test.ts` | as named |
-| `apps/api/test/payments.test.ts` | s05 and s20 over HTTP via the composition root, 402 declines with recovery, PAN refusal, isolation and search, public Stripe webhook route |
+| `test/review-regressions.test.ts` | One regression test per steward finding (P0-1…P2-12), incl. the reviewer's concurrency and failure-injection cases |
+| `apps/api/test/payments.test.ts` | s05 and s20 over HTTP via the composition root (booking deposits — finance not merged), folio refused without finance, 402 declines with recovery, PAN refusal, If-Match on simulator controls, isolation and search, public Stripe webhook route |
 
-Counts: 96 module tests (38 domain unit, 15 Stripe adapter unit, 43 integration on Postgres) + 6 API end-to-end.
+Counts: 113 module tests (39 domain unit, 15 Stripe adapter unit, 59 integration on Postgres incl. 16 review
+regressions) + 7 API end-to-end.
 
 ## HTTP (all under `/v1`)
 
 Accounts `GET/POST /payments/accounts`, `GET/PATCH /payments/accounts/:id` (If-Match), `GET …/:id/health`,
-simulator: `PUT …/:id/simulator-controls`, `POST …/:id/simulator/deliver-webhooks`, `GET /payments/simulator/test-tokens` ·
+simulator: `PUT …/:id/simulator-controls` (If-Match), `POST …/:id/simulator/deliver-webhooks`, `GET /payments/simulator/test-tokens` ·
 methods `POST/GET /payments/methods`, `GET /payments/methods/:id`, `POST …/:id/detach` (If-Match) ·
 holds `POST /payments/authorizations`, `POST /payments/authorizations/recorded`, `GET …/:id`, `POST …/:id/{increment,capture,void,check}` ·
 payments `POST /payments/charges`, `POST /payments/recorded`, `GET /payments/transactions/:id[/history]`, `POST …/:id/check`,
+`POST …/:id/confirm-receipt`, `POST …/:id/cancel-expected` (bank transfers, If-Match),
 `GET /payments/status-by-ref`, `POST /payments/adjustments` · refunds `POST /payments/refunds`, `POST /payments/refunds/recorded`,
 `GET/POST /payments/refunds/:id[/check]` · requests `POST/GET /payments/requests`, `GET …/:id`, `POST …/:id/cancel` (If-Match),
-`POST …/:id/simulate-payment` · VCC `POST /payments/virtual-cards`, `GET …/:id`, `POST …/run-due` · disputes
+`POST …/:id/simulate-payment` (Idempotency-Key) · VCC `POST /payments/virtual-cards`, `GET …/:id`, `POST …/run-due` · disputes
 `GET /payments/disputes`, `GET …/:id`, `PATCH …/:id/evidence` (If-Match) · `POST/GET /payments/payouts` ·
 `POST /payments/statements` · `GET /payments/exceptions`, `POST …/:id/resolve` (If-Match) · `GET /payments/status`,
 `POST /payments/reconciliation/run` · **public** `POST /payments/webhooks/stripe` (raw body, signature-verified).
@@ -103,10 +126,13 @@ in `detail`), 503 `card_payments_unavailable` with `details.actions`.
 ## Permissions
 
 `payments.payment.read` · `payments.payment.collect` · `payments.payment.refund` ⚑ · `payments.paymentRequest.create` ·
-`payments.method.manage` · `payments.vcc.manage` · `payments.reconciliation.manage` ⚑ · `payments.dispute.manage` ⚑ ·
+`payments.method.manage` · `payments.vcc.manage` · `payments.externalRecord.create` (own terminal, cash, expected
+transfers) · `payments.bankTransfer.confirm` ⚑ · `payments.reconciliation.manage` ⚑ · `payments.dispute.manage` ⚑ ·
 `payments.account.read` (org) · `payments.account.manage` ⚑ (org) · `payments.payout.manage` ⚑ (org).
 Reads accept `payments.payment.read` **or** `payments.payment.collect` (the front-desk role template has collect but
-not read — identity may want to add `payments.payment.read` to `front_desk`).
+not read — role-template additions requested in `FOUNDATION_REQUESTS.md` §1). Linking a Stripe account and setting
+an application fee are **not** tenant permissions: they are Monoclay-operator functions (system actor with process
+`operator:*`).
 
 ## Events
 
@@ -122,33 +148,145 @@ carry card data or tokens. Consumed: own operation events only (wave 1).
 
 | Port | Provider | Binding in `apps/api/src/composition.ts` |
 |---|---|---|
-| `LedgerPort` (`recordPayment`, `recordDeposit`, `recordRefund`, `recordPayout`, `recordPaymentAdjustment`*, `recordDisputeMovement`*) | finance (wave 1, parallel) | **`unavailablePort('finance')` stub** — confirmed payments then show `ledger: failed` + urgent exception and are re-posted by reconciliation with the same key once finance is bound. Orchestrator: bind to finance at merge (adapt return shapes if needed). |
+| `LedgerPort` (`describeTarget`, `recordPayment`, `recordDeposit`, `recordRefund`, `recordPayout`, `recordPaymentAdjustment`, `recordDisputeMovement`, `markPaymentVerified`, `recordSettlementFees` — types in § Ledger contract) | finance (wave 1, parallel) | **stub until finance merges**: `describeTarget` refuses folios (503 `module_unavailable` — nobody can place the folio) and returns `null` for bookings; every posting throws `module_unavailable`, so booking deposits show `ledger: failed` + urgent exception and are re-posted by reconciliation with the same key once finance is bound. |
 | `PlatformPort` (`getProperty`, `getLegalEntity`, `assertWritable`, `resolvePolicy`) | platform (main) | bound to `platform` service (`getProperty` with system authz after payments' own permission check) |
 | `ProviderSecretsPort` | env / Secrets Manager | `envProviderSecrets(process.env)` — `PAYMENTS_STRIPE_SECRET_KEY_TEST/LIVE`, `PAYMENTS_STRIPE_WEBHOOK_SECRETS_TEST/LIVE`; none set → nothing is ever sent to Stripe |
-
-\* proposed additions (see contract changes).
 
 Also contributed: `paymentsSearch` (search providers), `payments.http`, `payments.subscriptions`, `payments.jobs`,
 `paymentsManifest` (with `migrateAfter: ['platform']` because `route_webhook`/`tenants_for_jobs` call
 `platform.tenant_environment`). Demo data: `seedPaymentsDemo(tx, org)` (DemoSeedStep-compatible) — a simulated
 account and a recorded-only "own terminal" account per legal entity; refuses live.
 
-## Contract changes (domain map § payments / § finance)
+## Provider contract (for reservations, finance and front desk — domain map § payments)
 
-1. Provider functions take **`propertyId`** (needed for permission scope, merchant-of-record check and data
-   authority; payments cannot resolve a stay's property without calling reservations). `createPaymentRequest`
-   accepts `legalEntityId?` but derives it from the property. All take `idempotencyKey`.
-2. `charge`/`capture` ledger targets are `ref: { type: 'folio' | 'booking' }` (booking = deposit → `recordDeposit`).
-   Authorizations may reference any entity (stay/booking/folio); `capture` accepts `ledgerRef`.
-3. Return shapes: `authorize → Authorization`, `capture/charge → Payment`, `refund → Refund` views with the universal
-   record contract; `status` is a per-family map (`{ payment: 'pending_verification', ledger: 'pending' }`).
-4. `LedgerPort` additions (finance): `recordPayment`/`recordDeposit` gain `method` and `verification`
-   (`provider_confirmed | recorded_unverified`); `recordRefund` gains `bookingId` (deposit refunds);
-   **new** `recordPaymentAdjustment` (Route D corrections) and `recordDisputeMovement` (spec PAY-R18).
-   Return shapes assumed: `{ postingId }` / `{ journalEntryId }` (payouts, disputes).
-5. New provider functions beyond the domain map (spec "proposed"): `incrementAuthorization`, `void`,
-   `recordPayment` (external_terminal/cash/bank_transfer), `recordAuthorization`, `recordRefund`,
-   `adjustRecordedPayment`, `registerVirtualCard`, `importStatement`, `recordPayout`.
+`createPaymentsModule(...).service.provider` — every function runs **inside the caller's transaction** (`tx`), checks
+payments' own permissions and data authority, and takes an `idempotencyKey` derived from business identity
+(e.g. `deposit:{bookingId}:1`). Provider calls happen **after commit** (`tx.afterCommit`); nothing returned here is
+"paid" unless its status says so.
+
+```ts
+type MoneyIn = { amountMinor: number; currency: string };
+type LedgerRef = { type: 'folio' | 'booking'; id: string }; // booking = deposit (finance: recordDeposit)
+
+interface PaymentsProvider {
+  /** Payment link. Created `open`; the provider link is created after commit (link.status 'pending' → 'ready'). */
+  createPaymentRequest(tx: TxContext, i: {
+    propertyId: string;
+    legalEntityId?: string;               // derived from the property; if given it must match
+    payer: { type: 'guest_profile' | 'company' | 'agency' | 'other'; id?: string; name: string; email?: string };
+    amount: MoneyIn;
+    purpose: 'deposit' | 'balance' | 'incidentals_preauth' | 'custom'; // the request owns this purpose on `ref`
+    ref: LedgerRef;
+    expiresAt: Date | string;
+    idempotencyKey: string;
+    description?: string;
+  }): Promise<PaymentRequest>;            // status { request: 'open' | 'partially_paid' | 'paid' | 'expired' | 'cancelled' }
+
+  /** Pre-authorization (guarantee). Returns status { authorization: 'processing' }; executed AFTER COMMIT and settles
+   *  to 'authorized' | 'failed' | 'pending_verification' (events payments.authorization.authorized|failed). The
+   *  initiator (customer/merchant) is derived from the method's consent record, never passed in. */
+  authorize(tx: TxContext, i: {
+    propertyId: string; methodId: string; amount: MoneyIn;
+    ref: { type: string; id: string };   // stay / booking / folio
+    idempotencyKey: string;
+  }): Promise<Authorization>;
+
+  capture(tx: TxContext, i: {
+    authorizationId: string; amount?: MoneyIn; // default: remaining capturable
+    ledgerRef?: LedgerRef;                     // required if the hold's ref is not a folio/booking
+    idempotencyKey: string;
+  }): Promise<Payment>;                         // status { payment: 'processing', ledger: 'pending' } → after commit
+
+  charge(tx: TxContext, i: {
+    propertyId: string; methodId: string; amount: MoneyIn; ref: LedgerRef; idempotencyKey: string;
+    purpose?: 'deposit' | 'balance' | 'incidentals' | 'custom'; // default booking → deposit, folio → balance
+  }): Promise<Payment>;
+
+  refund(tx: TxContext, i: {
+    paymentId: string; amount: MoneyIn; reason: string; idempotencyKey: string;
+  }): Promise<Refund>;                          // ceiling: collected − adjustments − refunded − in-flight
+
+  /** Read FIRST before any collection; never charge again while status is 'pending_verification'. */
+  getPaymentStatus(tx: TxContext, ref: { type: string; id: string }): Promise<{
+    ref: { type: string; id: string };
+    status: 'none' | 'pending_verification' | 'authorized' | 'partially_paid' | 'paid' | 'refunded';
+    pendingVerification: boolean;           // = hasPendingVerification
+    authorizedMinor: number; capturedMinor: number; // first currency seen
+    totals: Array<{ currency: string; confirmedMinor: number; recordedUnverifiedMinor: number;
+                    pendingVerificationMinor: number; refundedMinor: number; heldMinor: number }>;
+    payments: Payment[]; authorizations: Authorization[]; refunds: Refund[];
+    hasPendingVerification: boolean;
+  }>;
+
+  /** Day Close / dashboards. */
+  listUnresolved(tx: TxContext, i: { propertyId: string }): Promise<{
+    propertyId: string;
+    pendingVerification: Array<{ type: 'payment' | 'authorization' | 'refund'; id: string;
+                                 amountMinor: number; currency: string; since: string }>;
+    recordedUnverified: number; ledgerPending: number; openExceptions: number;
+  }>;
+}
+```
+
+`Payment`, `Authorization`, `Refund`, `PaymentRequest` are the Zod views in `src/contracts.ts` (universal record
+contract: `status` map per family, `allowedActions`, `issues`, `owner`, `links`, `provenance`, plus `mode`
+`'simulate' | 'sandbox' | 'live' | 'recorded'` and `presentation { tone, label, confirmed }`). Refusals are
+`DomainError`s with stable codes: `ledger_target_unknown`, `ledger_target_other_property`,
+`wrong_merchant_of_record`, `payment_pending_verification` (409 — also returned when another collection on the
+same reference is in flight), `collection_owned_by_payment_request`, `duplicate_reference`, `mit_not_agreed`, `card_payments_unavailable` (503, `details.actions`),
+`payment_declined` (402 over HTTP), `refund_exceeds_refundable`, `payment_disputed`, `idempotency_conflict`.
+
+Other changes vs the original domain map: provider functions take `propertyId` (permission scope, merchant of
+record, data authority); additional functions `incrementAuthorization`, `void`, `recordPayment`
+(external_terminal/cash/bank_transfer), `confirmBankTransfer`, `cancelBankTransfer`, `recordAuthorization`,
+`recordRefund`, `adjustRecordedPayment`, `registerVirtualCard`, `importStatement`, `recordPayout` (service `tx.*`).
+
+### Ledger contract (`LedgerPort`, implemented by finance)
+
+```ts
+type LedgerScope = { propertyId: string; legalEntityId: string };
+type ClearingRef = { provider: 'simulator' | 'stripe_connect' | 'external_terminal' | 'cash' | 'bank_transfer';
+                     accountId: string | null };
+interface LedgerPort {
+  describeTarget(tx, ref: { type: 'folio' | 'booking'; id: string }): Promise<LedgerScope | null>;
+  recordPayment(tx, LedgerScope & { folioId; amount: Money; paymentRef; method; idempotencyKey;
+    verification: 'provider_confirmed' | 'recorded_unverified' | 'recorded_verified'; clearing: ClearingRef }): Promise<{ postingId }>;
+  recordDeposit(tx, LedgerScope & { bookingId; amount; paymentRef; method; idempotencyKey; verification; clearing }): Promise<{ postingId }>;
+  recordRefund(tx, LedgerScope & { folioId: string | null; bookingId: string | null; amount; refundRef;
+    originalPaymentRef; idempotencyKey; clearing }): Promise<{ postingId }>;
+  recordPayout(tx, { legalEntityId; payoutRef; gross; fees; net; currency; clearing; idempotencyKey }): Promise<{ journalEntryId }>;
+  recordPaymentAdjustment(tx, LedgerScope & { folioId | null; bookingId | null; amount /* signed */; paymentRef;
+    adjustmentRef; reason; idempotencyKey; clearing }): Promise<{ postingId }>;
+  recordDisputeMovement(tx, { legalEntityId; paymentRef; disputeRef; amount; kind: 'debit' | 'reversal'; clearing; idempotencyKey }): Promise<{ journalEntryId }>;
+  markPaymentVerified(tx, LedgerScope & { paymentRef: { type: 'payment' | 'refund'; id }; evidenceRef; idempotencyKey }): Promise<void>;
+  recordSettlementFees(tx, LedgerScope & { statementRef; amount; clearing; idempotencyKey }): Promise<{ journalEntryId }>;
+}
+```
+
+Every call runs in a savepoint of the payments transaction; a refusal leaves the money record committed with
+`ledger: failed`, an owned urgent exception, and a retry with backoff and the same idempotency key.
+
+## Steward review fixes (2026-11-07)
+
+| Finding | Fix | Regression test |
+|---|---|---|
+| P0-1 cross-property posting | `describeTarget` check before any collection; scope + clearing on every posting | `review-regressions` P0-1; API folio refusal |
+| P0-2 account ownership | Global unique provider account id; operator-only linking and fees; provider-controlled status | P0-2 |
+| P0-3 webhook loss | Processed marker in the effects' transaction; reprocess on redelivery; hourly event backstop with cursor | P0-3 (×2) |
+| P1-1 / P1-2 | One in-flight collection per reference (unique index); request owns its purpose (audited override) | P1-1, P1-2 |
+| P1-3 | Approval-code uniqueness as a DB index per terminal/day; audited override | P1-3 |
+| P1-4 | Refund ceiling after adjustments | P1-4 |
+| P1-5 / P1-6 / P1-9 | Deposits carry property; verification and acquirer fees reach finance; fee columns; recovery text | P1-5/6/7/9 |
+| P1-7 | Bank transfers `awaiting_receipt` until confirmed | P1-7 |
+| P1-8 | Initiator derived from consent; mandate required for MIT | `authorizations` |
+| P1-10 | Provider contract published (above); `authorize` returns `processing` and settles after commit | — |
+| P1-11 | Environment/mode re-checked at send and lookup | P1-11 |
+| P1-12 | Honest MUST gaps (above) and parity rows | — |
+| P2 | Exception reopen (P2-1), method dedupe (P2-2), request fingerprint (P2-3), not-found confirmation (P2-4), PAN checks on all free text + DB checks (P2-6), dispute blocks refund (P2-9), cash day totals (P2-12), parity honesty (P2-13) | P2 tests |
+| P3 | `formatMoney` in messages (P3-1), migration comment (P3-3), If-Match / Idempotency-Key on simulator routes (P3-4), breaker row lock (P3-7), harness guard removed (P3-10) | — |
+
+Not done (recorded): P3-2 `sandbox` provenance (kernel; `mode` carries it), P3-5 worker role (foundation), P3-6 link
+journaling, P3-8 payload minimisation; P3-9 (squash at merge) is the orchestrator's.
 
 ## Adoption modes
 
@@ -175,11 +313,11 @@ account and a recorded-only "own terminal" account per legal entity; refuses liv
 
 ## Known gaps and risks
 
-- The finance binding is a stub: until finance merges, succeeded payments show "not yet on the bill" (honest, but
-  every card payment raises a ledger exception in the composed app).
+- The finance binding is a stub: until finance merges, folio collections are refused and booking deposits show
+  "not yet on the bill" (honest; every deposit raises a ledger exception in the composed app).
 - Stripe adapter has only been tested against recorded fixtures; API version pinned to `2024-06-20` (verify before
   R4); Checkout Session expiry is limited by Stripe to 24 h — longer requests need a new link.
-- Pending-collection guard is per folio/booking (no collection plans yet) — conservative; may block legitimate
-  parallel split tenders on the same folio until the first resolves.
+- One collection in flight per folio/booking (no collection plans yet): split tenders are sequential.
+- Bank references with 12+ consecutive digits cannot be entered (they could be card numbers); statements keep only
+  their last 4 digits.
 - Webhook payout events carry net only; ledger posting waits for a breakdown (manual record or report import).
-- Rare test-teardown race in `@portico/testing` drop (see `FOUNDATION_REQUESTS.md`).
