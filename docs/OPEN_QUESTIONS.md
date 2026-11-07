@@ -480,3 +480,11 @@ billing is not activated for live customers until this is answered.
 **If the answer differs:** none if cleared; design-around if counsel advises.
 **Blocks:** ML-based room assignment only.
 **Raised by / date:** market deep dive, 2026-11-07
+
+### Q146 — Charging a departed guest's card for late charges automatically            Status: open
+**Context:** When a restaurant or minibar charge reaches the bill after the guest has left (scenario S10), the hotel can either send the guest a payment link or charge the card kept on file as a merchant-initiated transaction. Charging automatically needs the guest's prior consent in the agreed terms and a stored card mandate; card schemes and guests react badly to surprise charges.
+**Question:** Should Portico charge the card on file automatically for late charges when the booking terms allowed it, or always ask (payment link) unless staff decide to charge?
+**Default we are proceeding with:** always a payment request (link) created by payments as intent only; staff may charge the card on file manually where a mandate exists. Nothing is charged automatically.
+**If the answer differs:** payments adds a merchant-initiated collection path that checks the stay's agreed terms and the card mandate (medium change in payments; finance unchanged).
+**Blocks:** nothing in development; the automatic MIT variant of S10.
+**Raised by / date:** integration step, 2026-11-07

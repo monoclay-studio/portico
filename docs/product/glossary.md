@@ -34,7 +34,7 @@ Portico's terms are original. Where staff know an industry term, the UI may show
 | **Travel agent** [`agency`] | An agency/tour operator/OTA-as-merchant that books on behalf of guests; may earn commission. Modeled as a company with `kind=agency`. |
 | **Booker** | Whoever made the booking (person, company, agency, channel). |
 | **Occupant** | A person staying in a unit on a stay (adult/child with age). |
-| **Payer** | The party responsible for a folio. |
+| **Payer** | The party responsible for a folio. **Payer types** (one vocabulary, integration step): `guest` (a guest profile), `company`, `agency`, `house` (the hotel's own house account), and `other` (a payer known only by name, e.g. a payment-link recipient). Module encodings map to it: finance `guest \| company \| agency \| house`; reservations `profile` = `guest`; payments `guest_profile` = `guest`, `other` = `other`. New code uses the canonical words; adapters translate at the port. |
 
 ## Accommodation and inventory
 
