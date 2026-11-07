@@ -26,6 +26,7 @@ import {
   type OpenUnitTask,
 } from '../domain/conditions';
 import {
+  type Discrepancy,
   HOUSEKEEPING_KINDS,
   type ObservedOccupancy,
   type Occupancy,
@@ -357,10 +358,11 @@ export async function computeReadiness(d: Deps, tx: TxContext, row: UnitRow): Pr
     date: facts.businessDate,
     condition: row.condition as UnitCondition,
     occupancy: row.occupancy as Occupancy,
+    discrepancy: row.discrepancy as Discrepancy,
     block:
       row.block_kind && row.block_from && row.block_to
         ? {
-            kind: row.block_kind as 'out_of_order',
+            kind: row.block_kind as 'out_of_order' | 'out_of_service' | 'house_use',
             from: row.block_from,
             to: row.block_to,
             reason: row.block_reason,
@@ -607,6 +609,7 @@ async function applyRoomStatus(
       type: 'operations.unit.conditionChanged',
       propertyId: row.property_id,
       aggregate: { type: 'unit', id: row.id },
+      aggregateVersion: updated.version,
       payload: {
         unitId: row.id,
         unitNumber: row.unit_number,
@@ -660,7 +663,8 @@ async function applyRoomStatus(
       dueAt: new Date(tx.now.getTime() + settings.resolutionMinutes.high * 60_000),
       refs: [{ type: 'unit', id: row.id }],
       source: 'system',
-      dedupeKey: `discrepancy:${row.id}:${tx.now.toISOString()}`,
+      // One exception per unit, kind and stay (repeated reports do not pile up tasks).
+      dedupeKey: `discrepancy:${row.id}:${discrepancy}:${row.occupancy_stay_id ?? 'no-stay'}`,
     });
   }
   return { row: refreshed, pending: false, forwardId: null };
@@ -1017,6 +1021,63 @@ export async function board(d: Deps, tx: TxContext, propertyId: string, q: Board
   return { propertyId, businessDate: date, generatedAt: tx.now.toISOString(), counts, rows: filtered };
 }
 
+/**
+ * Next-best READY units for an arrival whose unit is not ready (OPS-R09): same unit type, vacant, not blocked, no
+ * occupancy discrepancy, not promised to another arrival today. Based on stored readiness; the desk still moves the
+ * stay through reservations (with its own availability checks).
+ */
+export async function readyAlternatives(
+  d: Deps,
+  tx: TxContext,
+  unit: UnitRow,
+  limit = 3,
+): Promise<Array<{ unitId: string; unitNumber: string }>> {
+  const facts = await propertyFacts(d, tx, unit.property_id);
+  let q = db(tx)
+    .selectFrom('operations.unit_status')
+    .selectAll()
+    .where('property_id', '=', unit.property_id)
+    .where('active', '=', true)
+    .where('id', '!=', unit.id)
+    .where('occupancy', '=', 'vacant')
+    .where('discrepancy', '!=', 'sleep');
+  if (unit.unit_type_id) q = q.where('unit_type_id', '=', unit.unit_type_id);
+  else if (unit.unit_type_code) q = q.where('unit_type_code', '=', unit.unit_type_code);
+  const candidates = (await q.orderBy('unit_number').execute()).filter(
+    (u) =>
+      (u.readiness as Readiness | null)?.ready === true &&
+      !(
+        u.block_kind &&
+        u.block_from &&
+        u.block_to &&
+        u.block_from <= facts.businessDate &&
+        facts.businessDate < u.block_to
+      ),
+  );
+  if (!candidates.length) return [];
+  const promised = new Set(
+    (
+      await db(tx)
+        .selectFrom('operations.stay_projection')
+        .select('unit_id')
+        .where('property_id', '=', unit.property_id)
+        .where('status', '=', 'expected')
+        .where('arrival', '=', facts.businessDate)
+        .where(
+          'unit_id',
+          'in',
+          candidates.map((c) => c.id),
+        )
+        .execute()
+    ).map((r) => r.unit_id),
+  );
+  return candidates
+    .filter((c) => !promised.has(c.id))
+    .sort((a, b) => a.unit_number.localeCompare(b.unit_number, undefined, { numeric: true }))
+    .slice(0, limit)
+    .map((c) => ({ unitId: c.id, unitNumber: c.unit_number }));
+}
+
 /** Arrival readiness for the front desk (scenario 7): each arrival's unit, ready or not, why, and an ETA. */
 export async function arrivalReadiness(
   d: Deps,
@@ -1045,6 +1106,7 @@ export async function arrivalReadiness(
         vip: s.vip,
         guestLabel: s.guest_label,
         readiness: null,
+        alternatives: [],
         blocker: 'No unit assigned yet.',
       });
       continue;
@@ -1063,6 +1125,7 @@ export async function arrivalReadiness(
         vip: s.vip,
         guestLabel: s.guest_label,
         readiness: null,
+        alternatives: [],
         blocker: 'The assigned unit is not known to housekeeping (catalog not synchronised).',
       });
       continue;
@@ -1076,6 +1139,7 @@ export async function arrivalReadiness(
       vip: s.vip,
       guestLabel: s.guest_label,
       readiness: r,
+      alternatives: r.ready ? [] : await readyAlternatives(d, tx, row),
       blocker: r.ready
         ? null
         : (r.reasons.find((x) => x.code !== 'pending_external_confirmation')?.message ?? null),

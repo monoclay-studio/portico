@@ -25,7 +25,7 @@ import {
   UNIT_READ_PERMISSIONS,
 } from './internal';
 import { arrivalContext, housekeepingPriorityFor, insertTask, taskView, transitionTask } from './tasks';
-import { loadUnit, unitView, writeRoomStatus } from './units';
+import { loadUnit, readyAlternatives, unitView, writeRoomStatus } from './units';
 
 type ChecklistTemplateView = typeof checklistTemplate._output;
 
@@ -311,6 +311,8 @@ export async function recordInspection(
         })
         .where('id', '=', workOrderId)
         .where('return_to_service_status', '=', 'awaiting_inspection')
+        // Only an inspection performed after the repair counts (device time for offline records).
+        .where('completed_at', '<=', meta.clientInspectedAt ?? tx.now)
         .execute();
     }
   }
@@ -374,6 +376,8 @@ export async function recordInspection(
       recleanAssigneeUserId: reclean?.assignee_user_id ?? null,
       recleanAssigneeName: reclean?.assignee_name ?? null,
       affectedStay: arrival ? { stayId: arrival.stayId, eta: iso(arrival.eta), vip: arrival.ctx.vip } : null,
+      // OPS-R09: the desk gets the next-best ready units with the alert.
+      alternatives: !passed && arrival ? await readyAlternatives(d, tx, current) : [],
       ready: readiness.ready,
       expectedReadyAt: readiness.expectedReadyAt,
       pendingExternalConfirmation: write.pending,

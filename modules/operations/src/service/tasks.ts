@@ -7,6 +7,7 @@ import {
   requirePermission,
   ValidationError,
   VersionConflictError,
+  zonedTimeToInstant,
 } from '@portico/kernel';
 import type {
   ServiceRequestInput,
@@ -50,7 +51,6 @@ import {
   feedMark,
   iso,
   loadSettings,
-  localTimeToInstant,
   logTask,
   propertyFacts,
   requireAny,
@@ -149,6 +149,14 @@ export async function insertTask(
       ? defaultDueAt(tx.now, priority, settings.resolutionMinutes)
       : null);
   const path = escalationPathFor(settings, departmentKind);
+  // Planned work (a service date in the future, e.g. tomorrow's plan or a preventive job) starts its
+  // acknowledgement clock at the start of that day in property time, never at planning time.
+  let anchor = tx.now;
+  if (t.serviceDate) {
+    const facts = await propertyFacts(d, tx, t.propertyId);
+    const dayStart = zonedTimeToInstant(t.serviceDate, '00:00', facts.timezone);
+    if (dayStart > anchor) anchor = dayStart;
+  }
   const id = newId(tx.now.getTime());
   const inserted = await db(tx)
     .insertInto('operations.tasks')
@@ -184,7 +192,8 @@ export async function insertTask(
       verified_by: null,
       cancelled_at: null,
       escalation_path: JSON.stringify(path),
-      next_escalation_at: nextEscalationAt({ dueAt, createdAt: tx.now, started: false }, path, 0),
+      escalation_anchor_at: anchor,
+      next_escalation_at: nextEscalationAt({ dueAt, createdAt: anchor, started: false }, path, 0),
       last_escalated_at: null,
       source: t.source,
       dedupe_key: t.dedupeKey ?? null,
@@ -216,6 +225,7 @@ export async function insertTask(
     type: 'operations.task.created',
     propertyId: t.propertyId,
     aggregate: { type: 'task', id },
+    aggregateVersion: inserted.version,
     payload: {
       taskId: id,
       kind: t.kind,
@@ -253,7 +263,7 @@ export async function arrivalContext(
   if (!stay) return null;
   const expectedAt = stay.eta
     ? new Date(stay.eta)
-    : localTimeToInstant(facts.businessDate, facts.checkInTime, facts.timezone);
+    : zonedTimeToInstant(facts.businessDate, facts.checkInTime, facts.timezone);
   return {
     ctx: {
       expectedAt,
@@ -619,7 +629,7 @@ export async function transitionTask(
     set.next_escalation_at = nextEscalationAt(
       {
         dueAt: row.due_at ? new Date(row.due_at) : null,
-        createdAt: new Date(row.created_at),
+        createdAt: new Date(row.escalation_anchor_at ?? row.created_at),
         started: input.to === 'in_progress' || !!row.started_at,
       },
       row.escalation_path as EscalationStep[],
@@ -672,6 +682,7 @@ export async function transitionTask(
     type: 'operations.task.statusChanged',
     propertyId: row.property_id,
     aggregate: { type: 'task', id: taskId },
+    aggregateVersion: updated.version,
     payload: {
       taskId,
       kind,
@@ -882,6 +893,7 @@ export async function assignTask(
     type: 'operations.task.assigned',
     propertyId: row.property_id,
     aggregate: { type: 'task', id: taskId },
+    aggregateVersion: updated.version,
     payload: {
       taskId,
       kind: row.kind,
@@ -952,7 +964,7 @@ export async function runEscalations(d: Deps, tx: TxContext, propertyId: string)
     const decision = evaluateEscalation({
       now: tx.now,
       dueAt: t.due_at ? new Date(t.due_at) : null,
-      createdAt: new Date(t.created_at),
+      createdAt: new Date(t.escalation_anchor_at ?? t.created_at),
       started: t.started_at !== null,
       path: t.escalation_path as EscalationStep[],
       currentLevel: t.escalation_level,
@@ -968,7 +980,7 @@ export async function runEscalations(d: Deps, tx: TxContext, propertyId: string)
             nextEscalationAt(
               {
                 dueAt: t.due_at ? new Date(t.due_at) : null,
-                createdAt: new Date(t.created_at),
+                createdAt: new Date(t.escalation_anchor_at ?? t.created_at),
                 started: t.started_at !== null,
               },
               t.escalation_path as EscalationStep[],
@@ -1297,7 +1309,7 @@ export async function setGuestWaiting(
   if (stay.unit_id) await rescoreUnitTasks(d, tx, stay.property_id, stay.unit_id);
   await tx.audit({
     action: input.waiting ? 'operations.arrival.guestWaiting' : 'operations.arrival.guestNoLongerWaiting',
-    target: { type: 'unit', id: stay.unit_id ?? stay.id },
+    target: { type: 'stay', id: stay.id },
     propertyId: stay.property_id,
     after: { stayId: stay.id, waiting: input.waiting },
   });

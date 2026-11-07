@@ -75,7 +75,7 @@ describe('inspection evaluation', () => {
 
 describe('return to service policy', () => {
   const completed = new Date('2026-11-07T08:00:00Z');
-  const policy = { requireWorkOrderCompletion: true, requireInspection: true };
+  const policy = { requireInspection: true };
   it('requires completion and a passed inspection after completion', () => {
     expect(
       checkReturnToService({
@@ -103,8 +103,18 @@ describe('return to service policy', () => {
       }).allowed,
     ).toBe(true);
   });
+  it('completion is always required, even when the policy drops the inspection', () => {
+    expect(
+      checkReturnToService({
+        policy: { requireInspection: false },
+        workOrderCompletedAt: null,
+        lastPassedInspectionAt: null,
+        blockActive: true,
+      }).missing.map((m) => m.code),
+    ).toEqual(['work_order_not_completed']);
+  });
   it('honours a property policy without inspection, and refuses when nothing is blocked', () => {
-    const relaxed = { requireWorkOrderCompletion: true, requireInspection: false };
+    const relaxed = { requireInspection: false };
     expect(
       checkReturnToService({
         policy: relaxed,

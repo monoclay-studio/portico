@@ -49,7 +49,6 @@ export interface OperationsSettings {
   /** Work-order resolution time by urgency (minutes). */
   workOrderResolutionMinutes: Record<Urgency, number>;
   returnToService: {
-    requireWorkOrderCompletion: boolean;
     requireInspection: boolean;
     /** After maintenance the unit is set dirty and a cleaning task is created before inspection. */
     requireCleaning: boolean;
@@ -93,7 +92,7 @@ export const DEFAULT_SETTINGS: OperationsSettings = {
   },
   dndWelfareCheckHours: 48,
   workOrderResolutionMinutes: { emergency: 60, high: 240, normal: 1440, low: 4320 },
-  returnToService: { requireWorkOrderCompletion: true, requireInspection: true, requireCleaning: true },
+  returnToService: { requireInspection: true, requireCleaning: true },
   inspection: { maxMinorFailures: 0 },
   lostFound: { retentionDays: 90, highValueRetentionDays: 180 },
   sync: { maxClockSkewMinutes: 5 },

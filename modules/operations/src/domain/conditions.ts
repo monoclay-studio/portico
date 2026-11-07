@@ -75,6 +75,8 @@ export function deriveDiscrepancy(system: Occupancy, observed: ObservedOccupancy
 export type ReadinessReasonCode =
   | 'out_of_order'
   | 'out_of_service'
+  | 'house_use'
+  | 'reported_occupied'
   | 'occupied'
   | 'dirty'
   | 'cleaning_in_progress'
@@ -105,6 +107,8 @@ export interface ReadinessInput {
   date: LocalDate;
   condition: UnitCondition;
   occupancy: Occupancy;
+  /** Housekeeping-reported discrepancy (a `sleep` makes a vacant unit not ready). */
+  discrepancy?: Discrepancy;
   block: { kind: BlockKind | 'house_use'; from: LocalDate; to: LocalDate; reason: string | null } | null;
   pendingChange: { condition?: UnitCondition } | null;
   lastFailure: { reasons: string[]; inspectedAt: Date } | null;
@@ -144,8 +148,7 @@ export function assessReadiness(input: ReadinessInput): ReadinessAssessment {
   const basis: string[] = [];
   const blocked = blockActive(input.block, input.date);
   if (blocked && input.block) {
-    const code: ReadinessReasonCode =
-      input.block.kind === 'out_of_service' ? 'out_of_service' : 'out_of_order';
+    const code: ReadinessReasonCode = input.block.kind;
     reasons.push({
       code,
       message: `Unit is ${label(input.block.kind)} until ${input.block.to}${input.block.reason ? ` (${input.block.reason})` : ''}.`,
@@ -154,6 +157,13 @@ export function assessReadiness(input: ReadinessInput): ReadinessAssessment {
   }
   if (input.occupancy === 'occupied') {
     reasons.push({ code: 'occupied', message: 'The previous guest is still in the unit.' });
+  } else if (input.discrepancy === 'sleep') {
+    // Physically vacant is required (OPS-R04): housekeeping found someone using the unit.
+    reasons.push({
+      code: 'reported_occupied',
+      message:
+        'Housekeeping found the unit in use although no guest is checked in. Front office must check it first.',
+    });
   }
   const conditionOk = meetsRequired(input.condition, input.requiredCondition);
   if (!conditionOk) {
@@ -193,11 +203,13 @@ export function assessReadiness(input: ReadinessInput): ReadinessAssessment {
   const ready = reasons.every((r) => r.code === 'pending_external_confirmation');
   if (ready) return { ready: true, reasons, expectedReadyAt: null, estimateBasis: [] };
 
-  if (blocked || input.occupancy === 'occupied') {
+  if (blocked || input.occupancy === 'occupied' || input.discrepancy === 'sleep') {
     basis.push(
       blocked
         ? 'No estimate: the unit is blocked for maintenance; readiness depends on the work order and return to service.'
-        : 'No estimate: the unit is still occupied; readiness depends on the guest departing.',
+        : input.occupancy === 'occupied'
+          ? 'No estimate: the unit is still occupied; readiness depends on the guest departing.'
+          : 'No estimate: the front office must resolve the occupancy discrepancy first.',
     );
     return { ready, reasons, expectedReadyAt: null, estimateBasis: basis };
   }

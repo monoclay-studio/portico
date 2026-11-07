@@ -242,7 +242,8 @@ describe('operations HTTP API', () => {
     });
     expect(delta.json().units.map((u: { condition: string }) => u.condition)).toEqual(['clean']);
 
-    // Taking a unit out of order needs inventory, which is not bound in this build: explained, nothing created.
+    // Taking a unit out of order needs inventory, which is not bound in this build: the fault report is kept
+    // (ADR-0015 §6) with the refusal and the next step — never lost, never shown as blocked.
     const wo = await post('/v1/operations/work-orders', {
       propertyId,
       unitId,
@@ -251,18 +252,9 @@ describe('operations HTTP API', () => {
       urgency: 'high',
       block: { kind: 'out_of_order', from: '2026-11-07', to: '2026-11-08', reason: 'AC leak' },
     });
-    expect(wo.statusCode).toBe(503);
-    expect(wo.json()).toMatchObject({
-      code: 'module_unavailable',
-      retryable: true,
-      detail: expect.stringContaining('Nothing was changed'),
-    });
-    const orders = await h.app.inject({
-      method: 'GET',
-      url: `/v1/operations/work-orders?propertyId=${propertyId}`,
-      headers: auth,
-    });
-    expect(orders.json().items).toEqual([]);
+    expect(wo.statusCode).toBe(201);
+    expect(wo.json().block).toMatchObject({ status: 'refused', refusal: { code: 'module_unavailable' } });
+    expect(wo.json().issues.map((i: { code: string }) => i.code)).toContain('block_refused');
     const plain = await post('/v1/operations/work-orders', {
       propertyId,
       unitId,

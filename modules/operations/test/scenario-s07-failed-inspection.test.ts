@@ -29,8 +29,12 @@ afterAll(async () => h?.close());
 describe('scenario 7: a villa fails inspection just before its arriving guest reaches reception', () => {
   it('re-tasks the attendant, tells the front desk which arrival is affected, and shows not-ready with reason + ETA', async () => {
     const org = await setupOrg(h);
-    const [w101] = await seedUnits(h, org, [{ number: 'W101', sectionCode: 'JA', condition: 'inspected' }]);
-    if (!w101) throw new Error('unit');
+    const waterVilla = newId();
+    const [w101, w102] = await seedUnits(h, org, [
+      { number: 'W101', sectionCode: 'JA', condition: 'inspected', unitTypeId: waterVilla },
+      { number: 'W102', sectionCode: 'JA', condition: 'inspected', unitTypeId: waterVilla },
+    ]);
+    if (!w101 || !w102) throw new Error('unit');
     const aminathId = newId();
     const aminath = org.as(ATTENDANT_GRANTS, { userId: aminathId, displayName: 'Aminath' });
     const supervisor = org.as(SUPERVISOR_GRANTS, { displayName: 'Supervisor Ibrahim' });
@@ -187,6 +191,8 @@ describe('scenario 7: a villa fails inspection just before its arriving guest re
       affectedStay: { stayId: arrivingStay, vip: true },
       ready: false,
     });
+    // …with the next-best READY villa of the same type for the desk (OPS-R09).
+    expect(failed?.payload.alternatives).toEqual([{ unitId: w102, unitNumber: 'W102' }]);
     // ETA = re-clean 2 credits × 10 min + inspection 10 min = 30 min after the failed inspection (09:45 → 10:15).
     expect(failed?.payload.expectedReadyAt).toBe('2026-11-07T05:15:00.000Z');
 
@@ -197,6 +203,7 @@ describe('scenario 7: a villa fails inspection just before its arriving guest re
     expect(item?.blocker).toContain('failed inspection: Bathroom: hair in shower drain');
     expect(item?.readiness?.expectedReadyAt).toBe('2026-11-07T05:15:00.000Z');
     expect(item?.readiness?.estimateBasis.join(' ')).toContain('Aminath');
+    expect(item?.alternatives).toEqual([{ unitId: w102, unitNumber: 'W102' }]);
 
     // The guest reaches reception early and waits: the desk flags it and the re-clean jumps to the top.
     const waiting = await org.tx(frontDesk, (tx) =>

@@ -108,11 +108,7 @@ describe('settings merge', () => {
       autoDueKinds: ['general'],
       credits: null,
     });
-    expect(s.returnToService).toEqual({
-      requireWorkOrderCompletion: true,
-      requireInspection: false,
-      requireCleaning: true,
-    });
+    expect(s.returnToService).toEqual({ requireInspection: false, requireCleaning: true });
     expect(s.autoDueKinds).toEqual(['general']);
     expect(s.credits).toEqual(DEFAULT_SETTINGS.credits);
     expect(mergeSettings(undefined)).toEqual(DEFAULT_SETTINGS);

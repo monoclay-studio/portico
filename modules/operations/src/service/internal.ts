@@ -1,4 +1,4 @@
-import { type Selectable, sql, type TxContext, typed } from '@portico/db';
+import { pgCode, type Selectable, sql, type TxContext, typed } from '@portico/db';
 import {
   actorId,
   actorLabel,
@@ -62,31 +62,6 @@ export async function propertyFacts(d: Deps, tx: TxContext, propertyId: string) 
   };
   m.set(propertyId, facts);
   return facts;
-}
-
-/** Instant of a property-local wall-clock time on a date (e.g. check-in 14:00 Indian/Maldives). */
-export function localTimeToInstant(date: LocalDate, hhmm: string, timeZone: string): Date {
-  const [h, m] = hhmm.split(':').map(Number) as [number, number];
-  const guess = Date.UTC(
-    Number(date.slice(0, 4)),
-    Number(date.slice(5, 7)) - 1,
-    Number(date.slice(8, 10)),
-    h,
-    m,
-  );
-  // Offset of the zone at that instant: format the guess in the zone and compare.
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone,
-    hourCycle: 'h23',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).formatToParts(new Date(guess));
-  const get = (t: string) => Number(parts.find((p) => p.type === t)?.value);
-  const asLocal = Date.UTC(get('year'), get('month') - 1, get('day'), get('hour'), get('minute'));
-  return new Date(guess - (asLocal - guess));
 }
 
 /**
@@ -397,5 +372,5 @@ export async function logUnit(
 }
 
 export function pgUniqueViolation(err: unknown): boolean {
-  return (err as { code?: string }).code === '23505';
+  return pgCode(err) === '23505';
 }

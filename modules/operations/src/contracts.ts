@@ -257,6 +257,8 @@ export const arrivalReadinessItem = z.object({
   vip: z.boolean(),
   guestLabel: z.string().nullable(),
   readiness: readiness.nullable(),
+  /** Next-best ready units of the same type when this one is not ready (suggestions, not reservations). */
+  alternatives: z.array(z.object({ unitId: uuid, unitNumber: z.string() })),
   blocker: z.string().nullable(),
 });
 export const arrivalReadiness = z.object({

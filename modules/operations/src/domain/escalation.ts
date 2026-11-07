@@ -31,6 +31,7 @@ export function stepTime(
 
 export interface EscalationClock {
   dueAt: Date | null;
+  /** Start of the acknowledgement clock: max(creation, start of the task's service date in property time). */
   createdAt: Date | null;
   /** Acknowledgement steps are skipped once someone started the task. */
   started: boolean;
@@ -45,7 +46,8 @@ export function nextEscalationAt(
   for (let level = currentLevel; level < path.length; level++) {
     const step = path[level];
     if (!step) break;
-    if (step.from === 'created' && clock.started) continue;
+    // Acknowledgement applies only to work with an SLA (a due time) that nobody has started yet.
+    if (step.from === 'created' && (clock.started || !clock.dueAt)) continue;
     return stepTime(step, clock);
   }
   return null;
@@ -82,7 +84,7 @@ export function evaluateEscalation(
   while (level < path.length) {
     const step = path[level];
     if (!step) break;
-    if (step.from === 'created' && input.started) {
+    if (step.from === 'created' && (input.started || !input.dueAt)) {
       level++;
       continue;
     }

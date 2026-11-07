@@ -1,6 +1,7 @@
 import {
   explainVersionMiss,
   type Selectable,
+  sql,
   type TxContext,
   type Updateable,
   withSavepoint,
@@ -15,6 +16,7 @@ import {
   requirePermission,
   ValidationError,
   VersionConflictError,
+  zonedTimeToInstant,
 } from '@portico/kernel';
 import type {
   AssetView,
@@ -482,6 +484,7 @@ async function insertWorkOrder(
     assigneeName: input.assigneeName ?? null,
     dueAt,
     refs: input.assetId ? [{ type: 'asset', id: input.assetId }] : [],
+    serviceDate: input.preventive?.dueOn ?? null,
     source: input.preventive ? 'preventive' : 'work_order',
     dedupeKey: input.dedupeKey ?? null,
   });
@@ -554,6 +557,7 @@ async function insertWorkOrder(
     type: 'operations.workOrder.created',
     propertyId: input.propertyId,
     aggregate: { type: 'work_order', id },
+    aggregateVersion: row.version,
     payload: {
       workOrderId: id,
       number: row.number,
@@ -1280,6 +1284,7 @@ export async function completeWorkOrder(
     type: 'operations.workOrder.completed',
     propertyId: wo.property_id,
     aggregate: { type: 'work_order', id },
+    aggregateVersion: row.version,
     payload: {
       workOrderId: id,
       number: wo.number,
@@ -1309,10 +1314,12 @@ export async function returnToService(
   const lastPass = wo.unit_id
     ? await db(tx)
         .selectFrom('operations.inspections')
-        .select('inspected_at')
+        // When the inspection was PERFORMED: an offline inspection synced after the repair but done before it
+        // does not count.
+        .select(sql<Date>`coalesce(client_inspected_at, inspected_at)`.as('inspected_at'))
         .where('unit_id', '=', wo.unit_id)
         .where('result', '=', 'passed')
-        .orderBy('inspected_at', 'desc')
+        .orderBy(sql`coalesce(client_inspected_at, inspected_at)`, 'desc')
         .executeTakeFirst()
     : undefined;
   const check = checkReturnToService({
@@ -1370,6 +1377,7 @@ export async function returnToService(
     type: 'operations.workOrder.returnedToService',
     propertyId: wo.property_id,
     aggregate: { type: 'work_order', id },
+    aggregateVersion: row.version,
     payload: {
       workOrderId: id,
       unitId: wo.unit_id,
@@ -1495,7 +1503,8 @@ export async function listPreventiveSchedules(
  */
 export async function runPreventiveSchedules(d: Deps, tx: TxContext, propertyId: string, asOf?: LocalDate) {
   requireAny(tx, [P.asset, P.manage], propertyId);
-  const day = asOf ?? (await propertyFacts(d, tx, propertyId)).businessDate;
+  const facts = await propertyFacts(d, tx, propertyId);
+  const day = asOf ?? facts.businessDate;
   const schedules = await db(tx)
     .selectFrom('operations.preventive_schedules')
     .selectAll()
@@ -1535,7 +1544,8 @@ export async function runPreventiveSchedules(d: Deps, tx: TxContext, propertyId:
           description: s.description,
           faultCategory: s.fault_category,
           urgency: s.urgency as Urgency,
-          dueAt: new Date(`${dueOn}T23:59:00Z`),
+          // End of the due day in PROPERTY time (not UTC); the acknowledgement clock starts that morning.
+          dueAt: zonedTimeToInstant(dueOn, '23:59', facts.timezone),
           reportedVia: 'preventive',
           preventive: { scheduleId: s.id, dueOn },
           dedupeKey: `preventive:${s.id}:${a.id}:${dueOn}`,

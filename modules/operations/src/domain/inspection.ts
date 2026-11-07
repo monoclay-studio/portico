@@ -100,9 +100,10 @@ export function evaluateInspection(input: {
 // ───────────────────────────── Return to service ─────────────────────────────
 
 export interface ReturnToServiceInput {
-  policy: { requireWorkOrderCompletion: boolean; requireInspection: boolean };
+  /** Completion of the work order is an invariant (OPS-I02), not a policy; only the inspection is configurable. */
+  policy: { requireInspection: boolean };
   workOrderCompletedAt: Date | null;
-  /** Most recent passed inspection of the unit. */
+  /** Most recent passed inspection of the unit, at the time it was PERFORMED (device time for offline records). */
   lastPassedInspectionAt: Date | null;
   blockActive: boolean;
 }
@@ -128,7 +129,7 @@ export function checkReturnToService(input: ReturnToServiceInput): ReturnToServi
       message: 'The unit has no active out-of-order or out-of-service block.',
     });
   }
-  if (input.policy.requireWorkOrderCompletion && !input.workOrderCompletedAt) {
+  if (!input.workOrderCompletedAt) {
     missing.push({
       code: 'work_order_not_completed',
       message: 'The work order is not completed. Record the repair (resolution note) first.',

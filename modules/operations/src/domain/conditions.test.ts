@@ -148,6 +148,20 @@ describe('readiness', () => {
     expect(r.expectedReadyAt).toBeNull();
   });
 
+  it('a "sleep" discrepancy (someone found in a vacant unit) makes it not ready', () => {
+    const r = assessReadiness({ ...base, discrepancy: 'sleep' });
+    expect(r.ready).toBe(false);
+    expect(r.reasons.map((x) => x.code)).toEqual(['reported_occupied']);
+  });
+
+  it('house-use blocks are reported as such', () => {
+    const r = assessReadiness({
+      ...base,
+      block: { kind: 'house_use', from: '2026-11-07', to: '2026-11-09', reason: 'Owner stay' },
+    });
+    expect(r.reasons[0]?.code).toBe('house_use');
+  });
+
   it('occupied unit is not ready and has no estimate', () => {
     const r = assessReadiness({ ...base, occupancy: 'occupied' });
     expect(r.ready).toBe(false);
