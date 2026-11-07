@@ -151,7 +151,7 @@ resource "aws_backup_selection" "this" {
 
 # Failed backup / copy jobs page on-call.
 resource "aws_backup_vault_notifications" "primary" {
-  count               = var.notification_topic_arn == null ? 0 : 1
+  count               = var.notifications_enabled ? 1 : 0
   backup_vault_name   = aws_backup_vault.primary.name
   sns_topic_arn       = var.notification_topic_arn
   backup_vault_events = ["BACKUP_JOB_FAILED", "COPY_JOB_FAILED", "RESTORE_JOB_FAILED"]

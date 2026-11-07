@@ -1,7 +1,7 @@
 resource "terraform_data" "guards" {
   lifecycle {
     precondition {
-      condition     = local.is_demo || var.domain_name != null
+      condition     = !local.run_managed || var.domain_name != null
       error_message = "lean/resilient tiers carry real hotel data and need HTTPS end to end: set domain_name and route53_zone_id (OPEN_QUESTIONS Q1)."
     }
     precondition {

@@ -33,3 +33,9 @@ variable "notification_topic_arn" {
   type    = string
   default = null
 }
+
+variable "notifications_enabled" {
+  description = "Static switch for vault failure notifications (the topic ARN is only known after apply)."
+  type        = bool
+  default     = true
+}

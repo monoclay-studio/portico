@@ -82,18 +82,17 @@ resource "aws_acm_certificate" "origin" {
   }
 }
 
+# Keyed by the configured hostname (known at plan time); record details come from the certificate at apply time.
+locals {
+  origin_dvo = { for o in aws_acm_certificate.origin.domain_validation_options : o.domain_name => o }
+}
+
 resource "aws_route53_record" "origin_validation" {
-  for_each = {
-    for o in aws_acm_certificate.origin.domain_validation_options : o.domain_name => {
-      name   = o.resource_record_name
-      type   = o.resource_record_type
-      record = o.resource_record_value
-    }
-  }
+  for_each        = toset([var.origin_fqdn])
   zone_id         = var.route53_zone_id
-  name            = each.value.name
-  type            = each.value.type
-  records         = [each.value.record]
+  name            = local.origin_dvo[each.key].resource_record_name
+  type            = local.origin_dvo[each.key].resource_record_type
+  records         = [local.origin_dvo[each.key].resource_record_value]
   ttl             = 300
   allow_overwrite = true
 }

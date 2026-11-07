@@ -177,18 +177,17 @@ resource "aws_acm_certificate" "this" {
   }
 }
 
+# Keyed by the configured hostnames (known at plan time); record details come from the certificate at apply time.
+locals {
+  dvo = local.custom_domain ? { for o in aws_acm_certificate.this[0].domain_validation_options : o.domain_name => o } : {}
+}
+
 resource "aws_route53_record" "validation" {
-  for_each = local.custom_domain ? {
-    for o in aws_acm_certificate.this[0].domain_validation_options : o.domain_name => {
-      name   = o.resource_record_name
-      type   = o.resource_record_type
-      record = o.resource_record_value
-    }
-  } : {}
+  for_each        = toset(var.aliases)
   zone_id         = var.route53_zone_id
-  name            = each.value.name
-  type            = each.value.type
-  records         = [each.value.record]
+  name            = local.dvo[each.key].resource_record_name
+  type            = local.dvo[each.key].resource_record_type
+  records         = [local.dvo[each.key].resource_record_value]
   ttl             = 300
   allow_overwrite = true
 }
