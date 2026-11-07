@@ -323,4 +323,12 @@ Each agent's brief and report are in `agents/`.
   LIVE defects: a generic error on an empty required field, and the property switcher picking the wrong hotel. No
   refiner run: the LIVE findings go to backoffice, and the SIM findings become acceptance checks for the real-data
   round.
+- **21:50 — Infra security review: merge after fixes** <!-- t: agent-a44b6c8e4ea2a81aa @ 2026-11-07T21:50:37.793Z (Steward security review: infra) --> (P1 3, P2 11, P3 12).
+  - The deploy role was effectively cell-admin, with a trust policy pinned only by repository name, and the runbook
+    claimed otherwise.
+  - The lean-tier default contradicted Q158 (resolved: NAT and private tasks is the default).
+  - The restore drill could silently never run.
+  - Clean: XFF spoofing through the deployed chain, SECURITY DEFINER hygiene, secrets kept out of plans, read-only
+    non-root images.
+  - The fix round goes back to the infra engineer. The quality steward's round 3 starts on the whole batch.
 
