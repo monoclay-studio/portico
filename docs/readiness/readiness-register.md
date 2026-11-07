@@ -77,7 +77,7 @@ External approval vocabulary: **Not required** · **Not started** · **Submitted
 | Staff PWA (offline housekeeping/maintenance) | R1 | Not required | Not started | — |
 | Continuity pack (internet-loss snapshot) | R1 | Not required | Not started | — |
 | Monoclay SaaS billing (separate from guest money) | R1 | Not required | N/A | — |
-| Backups with verified restore drills | R1 | Not required | N/A | — |
+| Backups with verified restore drills | R3 in code only: the restore drill, its freshness alarm (missing data counts as breaching) and the backup and DR-copy missing-job alarms pass `terraform test` with mocked providers, and their mutants are red. Never deployed or run on AWS | Not required | N/A | `infra/README.md`, `docs/runbooks/backup-restore-verification.md` (2026-11-07) |
 
 ## 3. Integrations
 
@@ -102,7 +102,7 @@ External approval vocabulary: **Not required** · **Not started** · **Submitted
 | Agoda YCS direct | R1 | Not started (later) | Not started | same |
 | GDS via CRS/switch | R1 | Not started (later) | Not started | same |
 | Google Hotel Center / free booking links | R1 | Not started | Not started | same |
-| AWS hosting (ap-south-1 default) | R1 | Not started (Q4 authorization) | N/A | `dependency-register.md` §4.1 |
+| AWS hosting (ap-south-1 default) | Infrastructure as code R3 (tested offline: `terraform test` 38/38, `verify-roles.sh` 53/53, deploy-script test 28/28, on 2026-11-07); on AWS R1, never applied | Not started (Q4 authorization) | N/A | `infra/README.md`; `dependency-register.md` §4.1 |
 | Amazon SES | R1 | Not started (production access) | Not started | §4.2 |
 | Twilio SMS | R1 | Not started | Not started | §4.3 |
 | Meta WhatsApp Cloud API | R1 | Not started (business verification, templates) | Not started | §4.4 |

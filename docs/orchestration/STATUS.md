@@ -145,6 +145,32 @@
   8. **Partner platform and open API (owner D14: yes)**, gap-plan M15, right after the Channex build. The gap
      strategist re-scans for further additions after each wave (capability scouting, vision-fit test).
 
+- **2026-11-07 22:55 UTC: window 3 state (5-hour 46%, seven-day 89%; the seven-day window resets 2026-11-11 17:00
+  UTC).** Rule: at seven-day ≥ 85%, only critical-path finishing work runs. At ≥ 95%, CHECKPOINT and resume at 17:03
+  UTC on 11-11 (`usage-guardrail.md`).
+  - **Merged this window:** parity evidence re-run; UX round 2a docs; quality rounds 3; infra (`a6733ca`, R3 code /
+    R1 AWS).
+  - **Running:**
+    - the integration-step fix round 4, from re-review #4: R4-P1-1 agreements name their bookings (ADR-0015
+      Amendment 3); R4-P1-2 locked limits; the P2s and P3s; E-114 mutant; self-check v6;
+    - the migration build (gap plan M8 increments 1–2, `feat/migration`, wt/migration).
+  - **Built, waiting for steward review** (both pushed):
+    - `feat/distribution-channex` @ a8bd950: R3 against the simulator; blocked on rates `termsFromChannelPrices`;
+    - `feat/day-close` @ cb0fbf3: 22 mutants red; 17 contract requests.
+  - **RESUME ORDER** (each from its latest playbook; every brief requires self-check v6):
+    1. If the integration-step fix round 4 reported: a focused re-review #5 (steward v2.1, re-review variant), then
+       merge if clean. Otherwise resume it with "your WIP was committed and pushed as `<sha>`; build on top of it".
+    2. Steward reviews of distribution and day-close (in parallel). Then fix rounds, then merge.
+    3. Migration: resume or review, depending on its report.
+    4. After integration-step merges:
+       - the backoffice real-data round (the pending-fixes UX 2a lines);
+       - payments collection plans with finance receipts (MIRA 3-day rule);
+       - rates `termsFromChannelPrices`, which unblocks Channex ingestion;
+       - wire the 2a SIM acceptance checks.
+    5. Partner platform and open API (M15, D14).
+    6. Quality steward round 4 after items 1–2 report. Then UX full round 2 (34 tasks) after the real-data round.
+    7. Channex R4 staging tests once the owner provides a staging key (`request_credential`, staging host only).
+
 ## 1. Owner, product and how to work with the owner
 
 - Owner: founder of **Monoclay LLC** (Delaware, Stripe Atlas), based in the Maldives. Product: **Portico** (final name).

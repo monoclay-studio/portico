@@ -610,7 +610,7 @@ Channex (Q23).
 - IAM Identity Center required before production.
 
 Nothing is deployed until you authorize spend.
-**Implemented by:** **pending**: the infra fix round (sent 2026-11-07, running) makes the NAT gateway the code default in `infra/terraform/envs/production`; this line gets the file:line at merge. Lean tier, ap-south-2, monthly drills and staging on demand are variables on `feat/infra-aws`.
+**Implemented by:** `infra/terraform/modules/cell/variables.tf:129` (`public_task_ips`, default false: private tasks behind one NAT gateway; true is a lean-only opt-in, validated at :138). Merged 2026-11-07. Lean is now ≈ $163/month (`docs/readiness/cost-model.md` §4 update). DR region, drills and staging are variables in `infra/terraform/envs/*`.
 **If the answer differs:** a variable change in `infra/terraform/envs/*`; no rework.
 **Blocks:** the hosted pilot only.
 **Raised by / date:** infrastructure workstream, 2026-11-07
@@ -627,3 +627,42 @@ direct vendor APIs only.
 **Blocks:** M16 only.
 **Raised by / date:** orchestrator (owner D14 follow-up), 2026-11-07
 
+
+### Q160 — May a saved card cover future stays booked by phone?      Status: open
+**Context:** Repeat and corporate guests often ask the hotel to "keep my card on file and charge it for my next stays".
+Re-review #4 showed that letting a general agreement cover "the cardholder's bookings" lets staff, by editing who is
+on a booking, charge a guest's card for someone else's stay (ADR-0015 Amendment 3). Portico now ties a card-on-file
+agreement to the bookings it names.
+**Question:** Should the first release offer a **future-stays mandate**: the cardholder agrees once (with evidence)
+that phone or email bookings for a payer account they control may be guaranteed or charged with their card, within
+stated purposes and limits?
+**Default we are proceeding with:** no. Each new booking needs new cardholder consent: a payment link, the terminal or
+hosted entry. A link is one click for the guest. The agreement data model leaves room for a named-payer-account scope.
+**Implemented by:** the pending-fixes line "integration-step fix round 4 (R4-P1-1)" (agreements cover only the
+bookings they name).
+**If the answer differs:** add a mandate scope bound to a payer account the cardholder controls, with its own consent
+capture and evidence. That is about a day of payments work; no rework.
+**Blocks:** nothing.
+**Raised by / date:** orchestrator, from integration-step re-review #4, 2026-11-07
+
+### Q161 — Before production: break-glass keys, backup lock, deploy reviewers, release tags      Status: open
+**Context:** The infrastructure security fix round left four decisions that only the owner can make. Each matters only
+before the first production deployment; nothing is deployed today (`infra/README.md` D17–D20).
+**Question:**
+- (a) Which **two people** may use the break-glass role for the irreplaceable encryption keys?
+- (b) Should production backups use **compliance-mode** vault lock? It can never be undone or shortened, even by
+  Monoclay; governance mode can be lifted by an administrator.
+- (c) Who are the **GitHub reviewers** for staging and production deployments? Nobody may approve their own deploy.
+- (d) May deployments run from **release tags**, or only from `main`?
+**Default we are proceeding with:**
+- (a) the role `portico-key-break-glass` is documented but not created by Terraform; it is created by hand once
+  two people are named;
+- (b) governance mode;
+- (c) a required input, so nothing deploys without reviewers;
+- (d) `main` only.
+**Implemented by:** `infra/README.md` D17–D20 table; `envs/github` (reviewers required input, no self-review);
+`ci-deploy-role` `allow_release_tags` (default false).
+**If the answer differs:** variable changes. Compliance mode is a one-way switch, so it is applied only on explicit
+instruction.
+**Blocks:** the first production deployment only.
+**Raised by / date:** infrastructure workstream (security fix round), 2026-11-07
