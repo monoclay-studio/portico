@@ -304,13 +304,16 @@ create table integration.inbound_messages (
   received_at           timestamptz not null,
   payload               jsonb not null,
   canonical             jsonb,
-  status                text not null check (status in ('applied', 'stale', 'held_mapping', 'held_validation', 'rejected')),
+  -- applied: the owning module applied it · accepted: stored in order, no module handles it yet · held/rejected/stale
+  status                text not null check (status in ('applied', 'accepted', 'stale', 'held_mapping', 'held_validation', 'rejected')),
   hold_reason           text,
   gap_detected          boolean not null default false,
   delayed               boolean not null default false,
   duplicate_count       int not null default 0,
   sync_run_id           uuid references integration.sync_runs(id),
   processed_at          timestamptz,
+  -- Personal data minimisation: raw payloads of settled messages are redacted after the retention period.
+  redacted_at           timestamptz,
   version               int not null default 1,
   -- Dedupe: the same (connection, workflow, external id, revision) is stored once, whatever the vendor resends.
   unique (tenant_id, connection_id, workflow, external_id, revision)
@@ -355,6 +358,9 @@ create table integration.outbound_commands (
   next_attempt_at      timestamptz not null,
   lease_until          timestamptz,
   verify_before_send   boolean not null default false,
+  -- Set when the connection was interrupted/disconnected WHILE this command was being sent: the in-flight result
+  -- must not resurrect it; a risky command is held for revalidation instead (F2).
+  hold_after_send      boolean not null default false,
   last_error           jsonb,
   external_ref         text,
   revalidation_reason  text,

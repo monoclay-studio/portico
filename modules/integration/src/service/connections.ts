@@ -9,6 +9,7 @@ import {
   BusinessRuleError,
   ConflictError,
   DomainError,
+  type EntityRef,
   NotFoundError,
   newId,
   type RequestContext,
@@ -53,7 +54,7 @@ import {
   writesWorkflow,
 } from './common';
 import { loadActiveCredential, revokeCredentials, storeCredential, validateCredential } from './credentials';
-import { autoResolveExceptions } from './exceptions';
+import { autoResolveExceptions, raiseException } from './exceptions';
 import { loadLookup, onReconnected, translateRecord } from './exchange';
 import { refreshHealth } from './health';
 import { fingerprintOf, issuesFor, mappingRows } from './mappings';
@@ -1197,9 +1198,24 @@ export async function previewLifecycle(
           `${conn.name} is the system of record for ${[...new Set(governed.map((g) => domainLabel(g.domain)))].join(', ')}. Move that responsibility first (replace the provider, or change the system of record through a data-authority transition — docs/adoption/source-of-truth-matrix.md §6), then disconnect.`,
         );
       }
-      if (backlog.queued + backlog.pendingVerification + backlog.needsRevalidation > 0) {
+      const split = splitOnDisconnect(
+        await db(tx)
+          .selectFrom('integration.outbound_commands')
+          .select(['id', 'status', 'lease_until', 'last_error'])
+          .where('connection_id', '=', id)
+          .where('status', 'in', ['queued', 'sending', 'pending_verification', 'needs_revalidation'])
+          .execute(),
+        tx.now,
+      );
+      if (split.cancel.length > 0) {
         warnings.push(
-          `${backlog.queued + backlog.pendingVerification + backlog.needsRevalidation} queued action(s) will be cancelled for review, never sent.`,
+          `${split.cancel.length} action(s) that never reached ${conn.name} will be cancelled, never sent.`,
+        );
+      }
+      const unsettled = split.uncertain.length + split.inFlight.length;
+      if (unsettled > 0) {
+        warnings.push(
+          `${unsettled} action(s) have an unknown outcome: ${conn.name} may already have applied them. They stay pending verification until a person checks ${conn.name}; they are not cancelled.`,
         );
       }
       warnings.push('The credential is revoked and destroyed. The exchange history is kept.');
@@ -1366,6 +1382,37 @@ export async function resume(
   return connectionView(tx, deps, await loadConnection(tx, id));
 }
 
+/** Which open outbound actions a disconnect may cancel, and which must stay pending verification (F4). */
+export function splitOnDisconnect<
+  C extends { id: string; status: string; lease_until: Date | string | null; last_error: unknown },
+>(rows: readonly C[], now: Date): { cancel: C[]; uncertain: C[]; inFlight: C[] } {
+  const out = { cancel: [] as C[], uncertain: [] as C[], inFlight: [] as C[] };
+  for (const c of rows) {
+    if (c.status === 'sending') {
+      if (c.lease_until && new Date(c.lease_until) > now) out.inFlight.push(c);
+      else out.uncertain.push(c); // the sender stopped mid-call: the outcome is unknown
+    } else if (c.status === 'pending_verification' || lastErrorKind(c.last_error) === 'timeout') {
+      out.uncertain.push(c);
+    } else {
+      out.cancel.push(c); // never sent, or definitely not applied
+    }
+  }
+  return out;
+}
+
+function lastErrorKind(raw: unknown): string | null {
+  let v: unknown = raw;
+  if (typeof raw === 'string') {
+    try {
+      v = JSON.parse(raw);
+    } catch {
+      return null;
+    }
+  }
+  const kind = v && typeof v === 'object' ? (v as { kind?: unknown }).kind : undefined;
+  return typeof kind === 'string' ? kind : null;
+}
+
 export async function disconnect(
   tx: TxContext,
   deps: IntegrationDeps,
@@ -1376,19 +1423,64 @@ export async function disconnect(
   const conn = await loadConnection(tx, id, { forUpdate: true });
   assertVersion(conn, expectedVersion);
   const preview = await confirmPreview(tx, deps, id, 'disconnect', input.previewHash);
-  const cancelled = await db(tx)
-    .updateTable('integration.outbound_commands')
-    .set({
-      status: 'cancelled',
-      completed_at: tx.now,
-      revalidation_reason: `Connection disconnected: ${input.reason}`,
-      lease_until: null,
-      version: sql`version + 1`,
-    })
+  // F4: only actions that certainly never reached the system are cancelled. An action whose outcome is unknown
+  // (the system may HAVE it, e.g. a charge on the guest's bill) stays pending verification for a person to settle;
+  // a send still in flight is left to its completion, which holds it the same way.
+  const open = await db(tx)
+    .selectFrom('integration.outbound_commands')
+    .select(['id', 'status', 'lease_until', 'last_error', 'workflow', 'property_id', 'source_ref'])
     .where('connection_id', '=', id)
     .where('status', 'in', ['queued', 'sending', 'pending_verification', 'needs_revalidation'])
-    .returning(['id', 'workflow', 'property_id', 'source_ref'])
+    .forUpdate()
     .execute();
+  const split = splitOnDisconnect(open, tx.now);
+  if (split.inFlight.length > 0) {
+    await db(tx)
+      .updateTable('integration.outbound_commands')
+      .set({ hold_after_send: true, version: sql`version + 1` })
+      .where(
+        'id',
+        'in',
+        split.inFlight.map((c) => c.id),
+      )
+      .execute();
+  }
+  if (split.uncertain.length > 0) {
+    await db(tx)
+      .updateTable('integration.outbound_commands')
+      .set({
+        status: 'pending_verification',
+        verify_before_send: true,
+        lease_until: null,
+        revalidation_reason: `${conn.name} was disconnected (${input.reason}) while the outcome of this action was unknown. Check whether ${conn.name} has it.`,
+        version: sql`version + 1`,
+      })
+      .where(
+        'id',
+        'in',
+        split.uncertain.map((c) => c.id),
+      )
+      .execute();
+  }
+  const cancelled =
+    split.cancel.length === 0
+      ? []
+      : await db(tx)
+          .updateTable('integration.outbound_commands')
+          .set({
+            status: 'cancelled',
+            completed_at: tx.now,
+            revalidation_reason: `Connection disconnected: ${input.reason}`,
+            lease_until: null,
+            version: sql`version + 1`,
+          })
+          .where(
+            'id',
+            'in',
+            split.cancel.map((c) => c.id),
+          )
+          .returning(['id', 'workflow', 'property_id', 'source_ref'])
+          .execute();
   for (const c of cancelled) {
     await tx.emit({
       type: 'integration.outbound.cancelled',
@@ -1415,15 +1507,37 @@ export async function disconnect(
       reason: input.reason,
       previewId: preview.id,
       cancelledActions: cancelled.length,
+      uncertainActions: split.uncertain.length + split.inFlight.length,
       revokedCredentials: revoked,
     },
   });
   await autoResolveExceptions(tx, id, [''], `Connection disconnected: ${input.reason}`);
+  const unsettled = [...split.uncertain, ...split.inFlight];
+  if (unsettled.length > 0) {
+    await raiseException(tx, {
+      connectionId: id,
+      workflow: null,
+      severity: 'urgent',
+      code: 'uncertain_after_disconnect',
+      dedupeKey: 'uncertain_after_disconnect',
+      problem: `${unsettled.length} action${unsettled.length === 1 ? '' : 's'} sent to ${conn.name} had an unknown outcome when it was disconnected.`,
+      businessImpact: `${conn.name} may have applied ${unsettled.length === 1 ? 'it' : 'them'} (for example a charge already on the guest's bill). ${unsettled.length === 1 ? 'It is' : 'They are'} shown as pending verification — never as done or cancelled — until a person checks.`,
+      responsibleParty: 'hotel',
+      nextStep: `Check each action in ${conn.name}: record it as applied if it is there, otherwise cancel it here and re-enter it in the system that now handles it.`,
+      relatedRefs: unsettled.map((c) =>
+        c.source_ref ? (c.source_ref as EntityRef) : { type: 'integration_outbound_command', id: c.id },
+      ),
+    });
+  }
   await tx.audit({
     action: 'integration.connection.disconnect',
     target: { type: 'integration_connection', id },
     reason: input.reason,
-    after: { cancelledActions: cancelled.map((c) => c.id), revokedCredentials: revoked },
+    after: {
+      cancelledActions: cancelled.map((c) => c.id),
+      pendingVerification: unsettled.map((c) => c.id),
+      revokedCredentials: revoked,
+    },
   });
   return connectionView(tx, deps, moved);
 }
@@ -1459,6 +1573,14 @@ export async function replace(
     { previewId: replPreview.id, previewHash: replPreview.content_hash },
     { replacing: conn },
   );
+  // A send still in flight (live lease) is left to its completion, which holds it the same way (F2).
+  await db(tx)
+    .updateTable('integration.outbound_commands')
+    .set({ hold_after_send: true, version: sql`version + 1` })
+    .where('connection_id', '=', id)
+    .where('status', '=', 'sending')
+    .where('lease_until', '>', tx.now)
+    .execute();
   const held = await db(tx)
     .updateTable('integration.outbound_commands')
     .set({
@@ -1469,7 +1591,15 @@ export async function replace(
       version: sql`version + 1`,
     })
     .where('connection_id', '=', id)
-    .where('status', 'in', ['queued', 'sending', 'pending_verification'])
+    .where((eb) =>
+      eb.or([
+        eb('status', 'in', ['queued', 'pending_verification']),
+        eb.and([
+          eb('status', '=', 'sending'),
+          eb.or([eb('lease_until', 'is', null), eb('lease_until', '<=', tx.now)]),
+        ]),
+      ]),
+    )
     .returning('id')
     .execute();
   let current = await loadConnection(tx, id);

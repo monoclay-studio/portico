@@ -178,6 +178,9 @@ export function compose(database: PorticoDatabase): Composition {
           return notYetBound.listCandidates(tx, input);
         },
       },
+      // Owning modules register inbound handlers here (operations → roomStatus, reservations → reservations) when
+      // they merge; until then received records are stored as `accepted` and applied in order once bound.
+      inbound: {},
       activationScope: unavailableActivationScope,
       transitions: noAuthorityTransitions,
     },

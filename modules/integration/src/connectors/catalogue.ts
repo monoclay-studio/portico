@@ -68,6 +68,7 @@ export const webhooksOutboundDefinition: ConnectorDefinition = {
   isSimulator: false,
   fileBased: false,
   setupPath: 'webhook_subscriptions',
+  ackSemantics: 'none',
   support: {
     vendor: 'The partner, for its endpoint.',
     escalation: 'Monoclay support for delivery problems.',
@@ -109,6 +110,7 @@ const PLANNED_COMMON = {
   isSimulator: false,
   fileBased: false,
   setupPath: 'not_available' as const,
+  ackSemantics: 'none' as const,
   provenance: 'external' as const,
   vendorNotices: [],
   implementation: { level: 'R1' as const, label: 'Planned — no code yet', evidence: [] },

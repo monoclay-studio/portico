@@ -234,13 +234,14 @@ export interface InboundMessagesTable {
   received_at: Ts;
   payload: Json;
   canonical: Json | null;
-  status: 'applied' | 'stale' | 'held_mapping' | 'held_validation' | 'rejected';
+  status: 'applied' | 'accepted' | 'stale' | 'held_mapping' | 'held_validation' | 'rejected';
   hold_reason: string | null;
   gap_detected: boolean;
   delayed: boolean;
   duplicate_count: Generated<number>;
   sync_run_id: string | null;
   processed_at: Ts | null;
+  redacted_at: Ts | null;
   version: Generated<number>;
 }
 
@@ -281,6 +282,7 @@ export interface OutboundCommandsTable {
   next_attempt_at: Ts;
   lease_until: Ts | null;
   verify_before_send: Generated<boolean>;
+  hold_after_send: Generated<boolean>;
   last_error: Json | null;
   external_ref: string | null;
   revalidation_reason: string | null;

@@ -79,9 +79,49 @@ export interface AuthorityTransitionPort {
   ): Promise<{ id: string; state: 'planned' | 'frozen' } | null>;
 }
 
+/** A translated external record handed to the module that owns its meaning (F6, spec proposal 1). */
+export interface InboundRecordForHandler {
+  connectionId: string;
+  /** Stable id of the stored message (use it to deduplicate). */
+  messageId: string;
+  propertyId: string;
+  workflow: string;
+  dataDomain: DataDomain | null;
+  externalId: string;
+  revision: string;
+  /** Monotonic order of revisions for this external record (newer is greater). */
+  revisionOrder: number;
+  occurredAt: string;
+  provenance: 'live' | 'sandbox' | 'simulated' | 'file';
+  /** External codes translated through confirmed mappings: field → { externalCode, internalId }. */
+  mapped: Record<string, { externalCode: string; internalId: string }>;
+  /** The record's values as received (may contain guest data: keep only what the owning module needs). */
+  values: Record<string, unknown>;
+}
+
+export type InboundHandlerResult =
+  | { outcome: 'applied'; ref?: { type: string; id: string } }
+  | {
+      outcome: 'rejected';
+      reason: string;
+      responsibleParty: 'hotel' | 'monoclay' | 'vendor';
+      nextStep: string;
+    }
+  | { outcome: 'held'; reason: string };
+
+/**
+ * Registered by the module that owns a workflow's data (e.g. operations for `roomStatus`, reservations for
+ * `reservations`). Called inside integration's transaction, in a savepoint: "applied" means applied.
+ */
+export interface InboundHandler {
+  applyInbound(tx: TxContext, record: InboundRecordForHandler): Promise<InboundHandlerResult>;
+}
+
 export interface IntegrationPorts {
   platform: PlatformPort;
   catalog: InternalCatalogPort;
+  /** Inbound handlers per workflow. Unbound workflows store records as `accepted` until a handler is bound. */
+  inbound: Partial<Record<string, InboundHandler>>;
   activationScope: ActivationScopePort;
   transitions: AuthorityTransitionPort;
 }

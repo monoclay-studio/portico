@@ -695,6 +695,7 @@ export const syncRun = z.object({
   counts: z.object({
     received: z.number().int(),
     applied: z.number().int(),
+    accepted: z.number().int(),
     duplicates: z.number().int(),
     stale: z.number().int(),
     held: z.number().int(),
@@ -766,7 +767,13 @@ export const outboundQuery = z.object({
   status: outboundCommand.shape.status.optional(),
 });
 export const revalidateInput = z.object({
-  decision: z.enum(['resend', 'cancel']),
+  /**
+   * resend: send again (Portico first asks the system whether it already has it).
+   * cancel: the system does not have it and it must not be sent.
+   * confirm_applied: a person checked the system and it HAS the action (used when Portico can no longer ask it,
+   * e.g. after a disconnect).
+   */
+  decision: z.enum(['resend', 'cancel', 'confirm_applied']),
   reason: z.string().min(1).max(500),
 });
 

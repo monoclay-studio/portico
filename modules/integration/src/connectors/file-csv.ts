@@ -314,6 +314,7 @@ export const fileCsvDefinition: ConnectorDefinition = {
   isSimulator: false,
   fileBased: true,
   setupPath: 'connection',
+  ackSemantics: 'none',
   support: { vendor: 'The other system’s vendor, for its export format.', escalation: 'Monoclay support.' },
   vendorNotices: [],
 };

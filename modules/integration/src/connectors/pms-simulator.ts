@@ -852,6 +852,7 @@ export const pmsSimulatorDefinition: ConnectorDefinition = {
   isSimulator: true,
   fileBased: false,
   setupPath: 'connection',
+  ackSemantics: 'per-client',
   support: { vendor: 'Not applicable (simulator).', escalation: 'Monoclay support.' },
   vendorNotices: [],
 };

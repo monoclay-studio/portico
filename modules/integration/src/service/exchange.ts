@@ -10,12 +10,14 @@ import {
   type Selectable,
   sql,
   type TxContext,
+  withSavepoint,
   withTenantTx,
 } from '@portico/db';
 import {
   BusinessRuleError,
   canonicalJson,
   type EntityRef,
+  effectMode,
   IdempotencyConflictError,
   NotFoundError,
   newId,
@@ -36,6 +38,7 @@ import type {
   ExchangeProvenance,
   MappingKind,
   OutboundCommand,
+  ResponsibleParty,
   SyncRun,
 } from '../contracts';
 import { buildImpact, workflowInfo } from '../domain/impact';
@@ -56,7 +59,7 @@ import {
 import { isOperational } from '../domain/setup-journey';
 import { MAPPING_KIND_LABELS } from '../domain/vocabulary';
 import { P } from '../manifest';
-import type { PropertyInfo } from '../ports';
+import type { InboundHandlerResult, PropertyInfo } from '../ports';
 import type { MappingsTable, OutboundCommandsTable, SyncRunsTable } from '../tables';
 import {
   actorKey,
@@ -92,6 +95,8 @@ import {
 export interface Counts {
   received: number;
   applied: number;
+  /** Stored in order but not applied: no module handles this workflow in this deployment yet. */
+  accepted: number;
   duplicates: number;
   stale: number;
   held: number;
@@ -102,6 +107,7 @@ export interface Counts {
 const emptyCounts = (): Counts => ({
   received: 0,
   applied: 0,
+  accepted: 0,
   duplicates: 0,
   stale: 0,
   held: 0,
@@ -401,23 +407,36 @@ async function upsertWorkflowState(
 
 const OUTCOME_OF_STATUS = {
   applied: 'succeeded',
+  accepted: 'succeeded',
   stale: 'stale',
   held_mapping: 'held',
   held_validation: 'held',
   rejected: 'rejected',
 } as const;
+type MessageStatus = keyof typeof OUTCOME_OF_STATUS;
 
-async function applyMessage(
+/** Thrown inside the apply savepoint to undo the watermark claim (and any handler effects) for a non-applied record. */
+class ApplyNotCompleted extends Error {
+  constructor(
+    readonly status: 'stale' | 'held_validation' | 'rejected',
+    readonly reason: string,
+    readonly exception: { party: ResponsibleParty; nextStep: string } | null,
+  ) {
+    super(reason);
+  }
+}
+
+/**
+ * Claim a revision as the newest for its record. Guarded: an older (or equal) revision never replaces a newer
+ * one, even when two ingestions race (the second blocks on the unique key, then the guard decides) — F5.
+ */
+async function claimRevision(
   tx: TxContext,
   conn: ConnectionRow,
-  wf: WorkflowDefinition,
   record: { workflow: string; externalId: string; revision: string; revisionOrder: number },
   messageId: string,
-  propertyId: string,
-  canonical: Record<string, unknown>,
-  provenance: ExchangeProvenance,
-): Promise<void> {
-  await db(tx)
+): Promise<boolean> {
+  const row = await db(tx)
     .insertInto('integration.external_records')
     .values({
       tenant_id: tx.tenantId,
@@ -430,19 +449,121 @@ async function applyMessage(
       updated_at: tx.now,
     })
     .onConflict((oc) =>
-      oc.columns(['connection_id', 'workflow', 'external_id']).doUpdateSet({
-        last_revision: record.revision,
-        last_revision_order: record.revisionOrder,
-        last_message_id: messageId,
-        updated_at: tx.now,
-      }),
+      oc
+        .columns(['connection_id', 'workflow', 'external_id'])
+        .doUpdateSet({
+          last_revision: record.revision,
+          last_revision_order: record.revisionOrder,
+          last_message_id: messageId,
+          updated_at: tx.now,
+        })
+        .where('integration.external_records.last_revision_order', '<', record.revisionOrder),
     )
-    .execute();
-  // Owning modules apply the change in their own transaction through the outbox (exactly once per event).
+    .returning('last_message_id')
+    .executeTakeFirst();
+  return row?.last_message_id === messageId;
+}
+
+/**
+ * Apply one translated record: claim the revision, then let the OWNING module apply it in this same transaction
+ * (handler port, F6). Runs in a savepoint so a refusal or failure leaves no partial effect and no watermark move.
+ * Without a bound handler the record is `accepted` (stored, in order, shown as "received — not yet applied").
+ */
+async function applyThroughHandler(
+  tx: TxContext,
+  deps: IntegrationDeps,
+  conn: ConnectionRow,
+  wf: WorkflowDefinition,
+  record: {
+    workflow: string;
+    externalId: string;
+    revision: string;
+    revisionOrder: number;
+    occurredAt: string;
+  },
+  messageId: string,
+  propertyId: string,
+  canonical: Record<string, unknown>,
+  provenance: ExchangeProvenance,
+): Promise<{ status: 'applied' | 'accepted' } | ApplyNotCompleted> {
+  const handler = deps.ports.inbound[wf.workflow];
+  try {
+    return await withSavepoint(tx, 'integration_apply', async () => {
+      if (!(await claimRevision(tx, conn, record, messageId))) {
+        throw new ApplyNotCompleted(
+          'stale',
+          'A newer version was already received; this older one is recorded and ignored.',
+          null,
+        );
+      }
+      if (!handler) return { status: 'accepted' as const };
+      let result: InboundHandlerResult;
+      try {
+        result = await handler.applyInbound(tx, {
+          connectionId: conn.id,
+          messageId,
+          propertyId,
+          workflow: wf.workflow,
+          dataDomain: wf.dataDomain,
+          externalId: record.externalId,
+          revision: record.revision,
+          revisionOrder: record.revisionOrder,
+          occurredAt: new Date(record.occurredAt).toISOString(),
+          provenance,
+          mapped: (canonical.mapped ?? {}) as Record<string, { externalCode: string; internalId: string }>,
+          values: (canonical.values ?? {}) as Record<string, unknown>,
+        });
+      } catch (err) {
+        throw new ApplyNotCompleted(
+          'held_validation',
+          `Portico could not apply it: ${err instanceof Error ? err.message : String(err)}`,
+          {
+            party: 'monoclay',
+            nextStep:
+              'Monoclay support investigates; the update stays saved and is retried when the cause is fixed.',
+          },
+        );
+      }
+      if (result.outcome === 'applied') return { status: 'applied' as const };
+      if (result.outcome === 'rejected') {
+        throw new ApplyNotCompleted('rejected', result.reason, {
+          party: result.responsibleParty,
+          nextStep: result.nextStep,
+        });
+      }
+      throw new ApplyNotCompleted('held_validation', result.reason, {
+        party: 'hotel',
+        nextStep: 'The update stays saved and is retried automatically with the next exchange.',
+      });
+    });
+  } catch (err) {
+    if (err instanceof ApplyNotCompleted) return err;
+    throw err;
+  }
+}
+
+/** Thin notification (no guest data) that a record was applied — for analytics, partner webhooks and audit trails. */
+async function notifyApplied(
+  tx: TxContext,
+  conn: ConnectionRow,
+  wf: WorkflowDefinition,
+  record: { workflow: string; externalId: string; revision: string; revisionOrder: number },
+  messageId: string,
+  propertyId: string,
+): Promise<void> {
   await tx.emit({
     type: 'integration.inbound.applied',
     propertyId,
-    aggregate: { type: 'integration_connection', id: conn.id },
+    aggregate: {
+      type: 'integration_external_record',
+      id: `${conn.id}:${record.workflow}:${record.externalId}`,
+    },
+    // aggregateVersion is a 32-bit column: set it for sequential revisions; timestamp revisions use revisionOrder.
+    ...(Number.isInteger(record.revisionOrder) &&
+    record.revisionOrder > 0 &&
+    record.revisionOrder <= 2_147_483_647
+      ? { aggregateVersion: record.revisionOrder }
+      : {}),
     payload: {
       connectionId: conn.id,
       messageId,
@@ -450,8 +571,7 @@ async function applyMessage(
       dataDomain: wf.dataDomain,
       externalId: record.externalId,
       revision: record.revision,
-      provenance,
-      canonical,
+      revisionOrder: record.revisionOrder,
     },
   });
 }
@@ -460,8 +580,15 @@ async function raiseHoldException(
   tx: TxContext,
   conn: ConnectionRow,
   wf: WorkflowDefinition,
-  record: InboundRecord,
-  t: Extract<Translation, { ok: false }>,
+  record: { externalId: string; revision: string; summary: string },
+  t: {
+    status: MessageStatus;
+    reason: string;
+    propertyId: string | null;
+    missing: MissingCode[];
+    party?: ResponsibleParty;
+    nextStep?: string;
+  },
 ): Promise<void> {
   const info = workflowInfo(wf.workflow);
   const critical = info.critical;
@@ -498,17 +625,26 @@ async function raiseHoldException(
       t.status === 'rejected'
         ? 'The update is recorded but not used in Portico.'
         : 'The update is saved and waits; Portico keeps the previous information meanwhile.',
-    responsibleParty: 'hotel',
+    responsibleParty: t.party ?? 'hotel',
     nextStep:
-      t.status === 'rejected'
+      t.nextStep ??
+      (t.status === 'rejected'
         ? 'Check the connection’s property scope. If the property should be included, update the scope.'
-        : `Correct the information in ${conn.name} (or the connection settings); the update is retried with the next exchange.`,
+        : `Correct the information in ${conn.name} (or the connection settings); the update is retried with the next exchange.`),
     relatedRefs: [{ type: `external.${wf.workflow}`, id: record.externalId }],
     technicalDetail: { externalId: record.externalId, revision: record.revision, reason: t.reason },
   });
 }
 
-/** Store and apply received records exactly once, in revision order, never overwriting newer information. */
+export interface IngestResult extends Counts {
+  /** Records stored (or recognised as duplicates) — the only ones that may be acknowledged to the vendor. */
+  acknowledge: Array<{ workflow: string; externalId: string; revision: string }>;
+}
+
+/**
+ * Store records exactly once and apply them in revision order through the owning module (same transaction),
+ * never overwriting newer information — under concurrency too (F5, F6).
+ */
 export async function ingestRecords(
   tx: TxContext,
   deps: IntegrationDeps,
@@ -516,8 +652,9 @@ export async function ingestRecords(
   def: ConnectorDefinition,
   records: readonly InboundRecord[],
   opts: { syncRunId: string | null; provenance: ExchangeProvenance },
-): Promise<Counts> {
+): Promise<IngestResult> {
   const counts = emptyCounts();
+  const acknowledge: IngestResult['acknowledge'] = [];
   const lookup = await loadLookup(tx, conn.id);
   const properties = await propertyInfos(tx, deps, conn);
   const scope = parseScope(conn.scope);
@@ -535,15 +672,17 @@ export async function ingestRecords(
       provenance: opts.provenance,
     };
     if (!wf || !scoped || !readsWorkflow(scoped.operations)) {
+      // Not stored, therefore NOT acknowledged: the vendor keeps it (F20).
       counts.rejected++;
       await recordExchange(tx, {
         ...base,
         outcome: 'rejected',
         errorClass: 'data',
-        summary: `${rec.summary}: not part of this connection's approved scope; ignored.`,
+        summary: `${rec.summary}: not part of this connection's approved scope; left with ${conn.name} (not acknowledged).`,
       });
       continue;
     }
+    const ack = { workflow: rec.workflow, externalId: rec.externalId, revision: rec.revision };
     const existing = await db(tx)
       .selectFrom('integration.inbound_messages')
       .select(['id'])
@@ -554,6 +693,7 @@ export async function ingestRecords(
       .executeTakeFirst();
     if (existing) {
       counts.duplicates++;
+      acknowledge.push(ack);
       await db(tx)
         .updateTable('integration.inbound_messages')
         .set({ duplicate_count: sql`duplicate_count + 1` })
@@ -586,22 +726,27 @@ export async function ingestRecords(
       rec.workflow,
       Math.max(latencyByWorkflow.get(rec.workflow) ?? 0, decision.latencySeconds),
     );
-    let status: keyof typeof OUTCOME_OF_STATUS;
+    const id = newId(tx.now.getTime());
+    let status: MessageStatus;
     let holdReason: string | null = null;
     let propertyId: string | null = null;
     let canonical: Record<string, unknown> | null = null;
-    let translation: Translation | null = null;
+    let missing: MissingCode[] = [];
+    let party: ResponsibleParty | undefined;
+    let nextStep: string | undefined;
     if (decision.action === 'stale') {
       status = 'stale';
-      holdReason = `A newer version (revision ${decision.newerRevision}) was already applied; this older one is recorded and ignored.`;
+      holdReason = `A newer version (revision ${decision.newerRevision}) was already received; this older one is recorded and ignored.`;
     } else {
-      translation = translateRecord(wf, rec, lookup, properties, opts.provenance);
-      if (!translation.ok) {
-        status = translation.status;
-        holdReason = translation.reason;
-        propertyId = translation.propertyId;
+      const t = translateRecord(wf, rec, lookup, properties, opts.provenance);
+      if (!t.ok) {
+        status = t.status;
+        holdReason = t.reason;
+        propertyId = t.propertyId;
+        missing = t.missing;
       } else {
-        propertyId = translation.propertyId;
+        propertyId = t.propertyId;
+        canonical = t.canonical;
         const frozen =
           wf.dataDomain !== null
             ? await deps.ports.transitions.activeTransition(tx, { propertyId, domain: wf.dataDomain })
@@ -611,12 +756,12 @@ export async function ingestRecords(
           holdReason =
             'The system of record for this information is being switched; the update is queued and applied after the switch.';
         } else {
-          status = 'applied';
-          canonical = translation.canonical;
+          // The message row must exist before a handler may reference it.
+          status = 'held_validation';
         }
       }
     }
-    const id = newId(tx.now.getTime());
+    // Store first (dedupe is enforced by the unique key), then apply.
     const inserted = await db(tx)
       .insertInto('integration.inbound_messages')
       .values({
@@ -646,6 +791,7 @@ export async function ingestRecords(
       .executeTakeFirst();
     if (!inserted) {
       counts.duplicates++;
+      acknowledge.push(ack);
       await recordExchange(tx, {
         ...base,
         outcome: 'duplicate',
@@ -653,24 +799,52 @@ export async function ingestRecords(
       });
       continue;
     }
-    if (status === 'applied' && canonical && propertyId) {
-      await applyMessage(tx, conn, wf, rec, id, propertyId, canonical, opts.provenance);
-      counts.applied++;
-      if (decision.action === 'apply' && decision.gapDetected) {
+    acknowledge.push(ack);
+    const readyToApply = canonical !== null && propertyId !== null && holdReason === null;
+    if (readyToApply && canonical && propertyId) {
+      const res = await applyThroughHandler(
+        tx,
+        deps,
+        conn,
+        wf,
+        rec,
+        id,
+        propertyId,
+        canonical,
+        opts.provenance,
+      );
+      if (res instanceof ApplyNotCompleted) {
+        status = res.status;
+        holdReason = res.reason;
+        party = res.exception?.party;
+        nextStep = res.exception?.nextStep;
+      } else {
+        status = res.status;
+      }
+      await db(tx)
+        .updateTable('integration.inbound_messages')
+        .set({ status, hold_reason: holdReason })
+        .where('id', '=', id)
+        .execute();
+      if (status === 'applied') await notifyApplied(tx, conn, wf, rec, id, propertyId);
+      if (
+        (status === 'applied' || status === 'accepted') &&
+        decision.action === 'apply' &&
+        decision.gapDetected
+      ) {
         await upsertWorkflowState(tx, conn.id, rec.workflow, {
           incomplete_since: sql`coalesce(incomplete_since, ${tx.now})`,
           incomplete_reason: `A missed update was detected for ${rec.externalId} (jumped to revision ${rec.revision} from ${watermark?.last_revision ?? 'none'}).`,
         });
       }
-    } else if (status === 'stale') {
-      counts.stale++;
-    } else if (status === 'rejected') {
-      counts.rejected++;
-    } else {
-      counts.held++;
     }
-    if (translation && !translation.ok) {
-      for (const mc of translation.missing) {
+    if (status === 'applied') counts.applied++;
+    else if (status === 'accepted') counts.accepted++;
+    else if (status === 'stale') counts.stale++;
+    else if (status === 'rejected') counts.rejected++;
+    else counts.held++;
+    if (status === 'held_mapping' || status === 'held_validation' || status === 'rejected') {
+      for (const mc of missing) {
         await ensureUnmappedRow(tx, conn, {
           kind: mc.kind,
           externalId: mc.externalId,
@@ -678,7 +852,14 @@ export async function ingestRecords(
           propertyId,
         });
       }
-      await raiseHoldException(tx, conn, wf, rec, translation);
+      await raiseHoldException(tx, conn, wf, rec, {
+        status,
+        reason: holdReason ?? 'unknown',
+        propertyId,
+        missing,
+        ...(party ? { party } : {}),
+        ...(nextStep ? { nextStep } : {}),
+      });
     }
     const delayedNote =
       decision.action === 'apply' && decision.delayed
@@ -697,9 +878,11 @@ export async function ingestRecords(
       summary:
         status === 'applied'
           ? `${rec.summary}: applied${delayedNote}.`
-          : status === 'stale'
-            ? `${rec.summary}: older than what Portico already has; ignored.`
-            : `${rec.summary}: held — ${holdReason}`,
+          : status === 'accepted'
+            ? `${rec.summary}: received${delayedNote}; not yet applied in Portico (no module handles ${wf.label.toLowerCase()} in this deployment).`
+            : status === 'stale'
+              ? `${rec.summary}: older than what Portico already has; ignored.`
+              : `${rec.summary}: held — ${holdReason}`,
       detail: {
         revision: rec.revision,
         revisionOrder: rec.revisionOrder,
@@ -713,10 +896,13 @@ export async function ingestRecords(
       last_applied_at: tx.now,
     });
   }
-  return counts;
+  return { ...counts, acknowledge };
 }
 
-/** Re-try held records after mappings changed; resolves the matching exceptions once codes are linked. */
+/**
+ * Re-try held records (after a mapping fix or an authority switch) and apply `accepted` records once a handler is
+ * bound. Rows are locked and status-guarded so concurrent calls never apply a record twice (F21).
+ */
 export async function reprocessHeld(
   tx: TxContext,
   deps: IntegrationDeps,
@@ -724,19 +910,29 @@ export async function reprocessHeld(
 ): Promise<{ applied: number; stillHeld: number; stale: number }> {
   const def = registered(deps, conn.connector_key).definition;
   const provenance = provenanceOf(def, tx);
-  const held = await db(tx)
+  const handled = Object.keys(deps.ports.inbound);
+  const candidates = await db(tx)
     .selectFrom('integration.inbound_messages')
     .selectAll()
     .where('connection_id', '=', conn.id)
-    .where('status', 'in', ['held_mapping', 'held_validation'])
+    .where((eb) =>
+      eb.or([
+        eb('status', 'in', ['held_mapping', 'held_validation']),
+        ...(handled.length > 0
+          ? [eb.and([eb('status', '=', 'accepted'), eb('workflow', 'in', handled)])]
+          : []),
+      ]),
+    )
     .orderBy('workflow')
     .orderBy('external_id')
     .orderBy('revision_order')
+    .forUpdate()
+    .skipLocked()
     .execute();
   const lookup = await loadLookup(tx, conn.id);
   const properties = await propertyInfos(tx, deps, conn);
   const result = { applied: 0, stillHeld: 0, stale: 0 };
-  for (const m of held) {
+  for (const m of candidates) {
     const wf = def.workflows.find((w) => w.workflow === m.workflow);
     if (!wf) continue;
     const payload = m.payload as Record<string, unknown>;
@@ -750,60 +946,108 @@ export async function reprocessHeld(
       payload,
       summary: `${workflowInfo(m.workflow).label} ${m.external_id}`,
     };
-    const watermark = await db(tx)
-      .selectFrom('integration.external_records')
-      .select(['last_revision_order'])
-      .where('connection_id', '=', conn.id)
-      .where('workflow', '=', m.workflow)
-      .where('external_id', '=', m.external_id)
-      .forUpdate()
-      .executeTakeFirst();
-    if (watermark && Number(watermark.last_revision_order) >= rec.revisionOrder) {
-      await db(tx)
+    const setStatus = async (status: MessageStatus, set: Record<string, unknown> = {}) =>
+      db(tx)
         .updateTable('integration.inbound_messages')
-        .set({
-          status: 'stale',
-          hold_reason: 'A newer version was applied meanwhile.',
-          processed_at: tx.now,
-          version: sql`version + 1`,
-        })
+        .set({ status, processed_at: tx.now, version: sql`version + 1`, ...set })
         .where('id', '=', m.id)
-        .execute();
-      result.stale++;
-      continue;
-    }
-    const t = translateRecord(wf, rec, lookup, properties, provenance);
-    const frozen =
-      t.ok && wf.dataDomain !== null
-        ? await deps.ports.transitions.activeTransition(tx, {
-            propertyId: t.propertyId,
-            domain: wf.dataDomain,
-          })
-        : null;
-    if (!t.ok || frozen?.state === 'frozen') {
-      result.stillHeld++;
-      continue;
-    }
-    await db(tx)
-      .updateTable('integration.inbound_messages')
-      .set({
-        status: 'applied',
+        .where('status', '=', m.status)
+        .executeTakeFirst();
+    let canonical = m.canonical as Record<string, unknown> | null;
+    let propertyId = m.property_id;
+    if (m.status !== 'accepted') {
+      const t = translateRecord(wf, rec, lookup, properties, provenance);
+      const frozen =
+        t.ok && wf.dataDomain !== null
+          ? await deps.ports.transitions.activeTransition(tx, {
+              propertyId: t.propertyId,
+              domain: wf.dataDomain,
+            })
+          : null;
+      if (!t.ok || frozen?.state === 'frozen') {
+        result.stillHeld++;
+        continue;
+      }
+      canonical = t.canonical;
+      propertyId = t.propertyId;
+      const res = await applyThroughHandler(
+        tx,
+        deps,
+        conn,
+        wf,
+        rec,
+        m.id,
+        t.propertyId,
+        t.canonical,
+        provenance,
+      );
+      if (res instanceof ApplyNotCompleted) {
+        if (res.status === 'stale') {
+          await setStatus('stale', { hold_reason: res.reason });
+          result.stale++;
+        } else {
+          await setStatus(res.status, {
+            hold_reason: res.reason,
+            canonical: JSON.stringify(t.canonical),
+            property_id: t.propertyId,
+          });
+          result.stillHeld++;
+        }
+        continue;
+      }
+      await setStatus(res.status, {
         canonical: JSON.stringify(t.canonical),
         property_id: t.propertyId,
         hold_reason: null,
-        processed_at: tx.now,
-        version: sql`version + 1`,
-      })
-      .where('id', '=', m.id)
-      .execute();
-    await applyMessage(tx, conn, wf, rec, m.id, t.propertyId, t.canonical, provenance);
+      });
+      if (res.status !== 'applied') continue;
+    } else {
+      // Accepted earlier (no handler then): apply only if it is still the newest received revision.
+      const wm = await db(tx)
+        .selectFrom('integration.external_records')
+        .select(['last_message_id'])
+        .where('connection_id', '=', conn.id)
+        .where('workflow', '=', m.workflow)
+        .where('external_id', '=', m.external_id)
+        .executeTakeFirst();
+      if (wm?.last_message_id !== m.id || !canonical || !propertyId) {
+        await setStatus('stale', { hold_reason: 'A newer version was received before it could be applied.' });
+        result.stale++;
+        continue;
+      }
+      const handler = deps.ports.inbound[m.workflow];
+      if (!handler) continue;
+      const out = await handler.applyInbound(tx, {
+        connectionId: conn.id,
+        messageId: m.id,
+        propertyId,
+        workflow: m.workflow,
+        dataDomain: wf.dataDomain,
+        externalId: m.external_id,
+        revision: m.revision,
+        revisionOrder: Number(m.revision_order),
+        occurredAt: rec.occurredAt,
+        provenance,
+        mapped: (canonical.mapped ?? {}) as Record<string, { externalCode: string; internalId: string }>,
+        values: (canonical.values ?? {}) as Record<string, unknown>,
+      });
+      if (out.outcome !== 'applied') {
+        await setStatus(out.outcome === 'rejected' ? 'rejected' : 'held_validation', {
+          hold_reason: out.reason,
+        });
+        result.stillHeld++;
+        continue;
+      }
+      await setStatus('applied');
+    }
+    await notifyApplied(tx, conn, wf, rec, m.id, propertyId as string);
     await recordExchange(tx, {
       connectionId: conn.id,
       workflow: m.workflow,
       direction: 'inbound',
       externalRef: `${m.external_id}#${m.revision}`,
       outcome: 'succeeded',
-      propertyId: t.propertyId,
+      propertyId,
       summary: `${rec.summary} (revision ${m.revision}): applied after the hold was cleared.`,
       provenance,
     });
@@ -875,11 +1119,24 @@ export async function recordWorkflowSuccess(
     if (failing.n === 0) current = await onReconnected(tx, deps, current, 'the connection recovered');
   }
   if (current.state === 'active') {
-    current = await transition(tx, current, 'confirmMonitoring', {
-      detail: { reason: 'First successful exchange after activation; health is now monitored.' },
-    });
+    current = await confirmMonitoringOnce(
+      tx,
+      conn.id,
+      'First successful exchange after activation; health is now monitored.',
+    );
   }
   return current;
+}
+
+/** The first successful exchange moves active → monitoring once, even when two exchanges finish together (F29). */
+async function confirmMonitoringOnce(
+  tx: TxContext,
+  connectionId: string,
+  reason: string,
+): Promise<ConnectionRow> {
+  const locked = await loadConnection(tx, connectionId, { forUpdate: true });
+  if (locked.state !== 'active') return locked;
+  return transition(tx, locked, 'confirmMonitoring', { detail: { reason } });
 }
 
 export async function recordWorkflowFailure(
@@ -1035,7 +1292,18 @@ export async function onReconnected(
       ),
   );
   const refs: EntityRef[] = [];
+  const held: string[] = [];
   for (const c of risky) {
+    if (c.status === 'sending' && c.lease_until && new Date(c.lease_until) > tx.now) {
+      // F2: a call is in flight. Do not take the row from under it: its completion decides, and a non-confirmed
+      // completion is held for revalidation instead of being retried.
+      await db(tx)
+        .updateTable('integration.outbound_commands')
+        .set({ hold_after_send: true, version: sql`version + 1` })
+        .where('id', '=', c.id)
+        .execute();
+      continue;
+    }
     const ageHours = (tx.now.getTime() - new Date(c.enqueued_at).getTime()) / 3_600_000;
     await db(tx)
       .updateTable('integration.outbound_commands')
@@ -1048,18 +1316,19 @@ export async function onReconnected(
       })
       .where('id', '=', c.id)
       .execute();
+    held.push(c.id);
     refs.push(
       c.source_ref ? (c.source_ref as EntityRef) : { type: 'integration_outbound_command', id: c.id },
     );
   }
-  if (risky.length > 0) {
+  if (held.length > 0) {
     await raiseException(tx, {
       connectionId: conn.id,
       workflow: null,
       severity: 'urgent',
       code: 'actions_need_revalidation',
       dedupeKey: 'actions_need_revalidation',
-      problem: `${risky.length} money or inventory action${risky.length === 1 ? '' : 's'} for ${conn.name} were held when the connection came back.`,
+      problem: `${held.length} money or inventory action${held.length === 1 ? '' : 's'} for ${conn.name} were held when the connection came back.`,
       businessImpact:
         'They were not sent automatically, so no guest is charged twice and no sold room is reopened. Until decided, the affected records show as pending in Portico.',
       responsibleParty: 'hotel',
@@ -1079,13 +1348,13 @@ export async function onReconnected(
     outcome: 'lifecycle',
     from: conn.state,
     to: updated.state,
-    detail: { reason, heldForRevalidation: risky.length, superseded: supersede.length, connector: def.key },
+    detail: { reason, heldForRevalidation: held.length, superseded: supersede.length, connector: def.key },
   });
   await tx.audit({
     action: 'integration.connection.reconnected',
     target: { type: 'integration_connection', id: conn.id },
     reason,
-    after: { heldForRevalidation: risky.map((c) => c.id), superseded: supersede },
+    after: { heldForRevalidation: held, superseded: supersede },
   });
   return updated;
 }
@@ -1193,7 +1462,10 @@ export async function runSync(
         actor_key: actorKey(tx),
       })
       .execute();
-    return { conn, def, call, workflows, runId, provenance: provenanceOf(def, tx) };
+    // Acknowledging a SHARED vendor queue removes messages other consumers may need: it counts as a write (F13).
+    const ackAllowed =
+      def.ackSemantics !== 'shared-queue' || effectMode(tx, 'integration.write') !== 'blocked';
+    return { conn, def, call, workflows, runId, provenance: provenanceOf(def, tx), ackAllowed };
   });
 
   const results: Array<{
@@ -1225,6 +1497,7 @@ export async function runSync(
     }
   }
 
+  const acks = new Map<string, IngestResult['acknowledge']>();
   const run = await withTenantTx(database, ctx, async (tx) => {
     let conn = await loadConnection(tx, connectionId);
     const total = emptyCounts();
@@ -1252,6 +1525,7 @@ export async function runSync(
         provenance: prep.provenance,
       });
       for (const k of Object.keys(total) as Array<keyof Counts>) total[k] += c[k];
+      acks.set(r.workflow, c.acknowledge);
       conn = await recordWorkflowSuccess(tx, deps, conn, r.workflow, { latencyMs: r.latencyMs });
       if (opts.trigger === 'reconciliation') {
         await upsertWorkflowState(tx, conn.id, r.workflow, {
@@ -1291,13 +1565,14 @@ export async function runSync(
     return row;
   });
 
-  if (prep.call.adapter.acknowledge) {
-    for (const r of results) {
-      if (r.error || r.records.length === 0) continue;
+  // Acknowledge only what Portico stored (committed above); a trial never consumes a shared vendor queue (F13).
+  if (prep.call.adapter.acknowledge && prep.ackAllowed) {
+    for (const [workflow, records] of acks) {
+      if (records.length === 0) continue;
       try {
         await prep.call.adapter.acknowledge(prep.call.actx, {
-          workflow: r.workflow,
-          records: r.records.map((x) => ({ externalId: x.externalId, revision: x.revision })),
+          workflow,
+          records: records.map((x) => ({ externalId: x.externalId, revision: x.revision })),
         });
       } catch {
         // Unacknowledged records are delivered again and deduplicated.
@@ -1422,9 +1697,7 @@ export async function importFile(
     .returningAll()
     .executeTakeFirstOrThrow();
   if (!error && conn.state === 'active') {
-    await transition(tx, conn, 'confirmMonitoring', {
-      detail: { reason: 'First file imported after activation.' },
-    });
+    await confirmMonitoringOnce(tx, conn.id, 'First file imported after activation.');
   }
   await refreshHealth(tx, deps, await loadConnection(tx, conn.id));
   return { fileId, storedAsSample: false, syncRun: toSyncRun(row) };
@@ -1710,6 +1983,35 @@ export async function enqueueOutbound(
   return { commandId: id, status: 'queued', effectClass, duplicate: false };
 }
 
+/** Claim lease for a command being sent; adapter calls must finish well within it (F2). */
+const SEND_LEASE_MS = 60_000;
+const SEND_BUDGET_MS = 45_000;
+
+function withDeadline<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const t = setTimeout(
+      () =>
+        reject(
+          new ConnectorError(
+            'timeout',
+            `No answer within ${Math.round(ms / 1000)} s (${what}); the outcome is unknown.`,
+          ),
+        ),
+      Math.max(1, ms),
+    );
+    p.then(
+      (v) => {
+        clearTimeout(t);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(t);
+        reject(e);
+      },
+    );
+  });
+}
+
 export interface DispatchResult {
   attempted: number;
   acknowledged: number;
@@ -1789,7 +2091,7 @@ export async function dispatchOutbound(
         .updateTable('integration.outbound_commands')
         .set({
           status: 'sending',
-          lease_until: new Date(tx.now.getTime() + 60_000),
+          lease_until: new Date(tx.now.getTime() + SEND_LEASE_MS),
           attempts: sql`attempts + 1`,
           version: sql`version + 1`,
         })
@@ -1844,6 +2146,9 @@ export async function dispatchOutbound(
       payload: c.payload as Record<string, unknown>,
     };
     const started = Date.now();
+    const budgetEnd = started + SEND_BUDGET_MS;
+    const left = () => budgetEnd - Date.now();
+    const actx = { ...claim.call.actx, deadline: new Date(claim.call.actx.now.getTime() + SEND_BUDGET_MS) };
     type Outcome =
       | { kind: 'ack'; externalRef: string; verified: boolean }
       | { kind: 'revalidate'; reason: string }
@@ -1853,7 +2158,7 @@ export async function dispatchOutbound(
       let send = true;
       if (c.verifyFirst) {
         if (claim.call.adapter.lookup) {
-          const found = await claim.call.adapter.lookup(claim.call.actx, req);
+          const found = await withDeadline(claim.call.adapter.lookup(actx, req), left(), 'verification');
           if (found.found) {
             outcome = { kind: 'ack', externalRef: found.externalRef ?? 'verified', verified: true };
             send = false;
@@ -1873,7 +2178,8 @@ export async function dispatchOutbound(
         }
       }
       if (send) {
-        const res = await claim.call.adapter.send?.(claim.call.actx, req);
+        const sending = claim.call.adapter.send?.(actx, req);
+        const res = sending ? await withDeadline(sending, left(), 'send') : undefined;
         outcome = { kind: 'ack', externalRef: res?.externalRef ?? 'sent', verified: false };
       }
     } catch (err) {
@@ -1896,6 +2202,89 @@ export async function dispatchOutbound(
         latencyMs,
         provenance: claim.provenance,
       };
+      // F2: the row may have changed while the call was in flight (reconnection, disconnect, lease takeover).
+      const cur = await db(tx)
+        .selectFrom('integration.outbound_commands')
+        .select(['status', 'hold_after_send'])
+        .where('id', '=', c.id)
+        .forUpdate()
+        .executeTakeFirstOrThrow();
+      if (final.kind !== 'ack' && cur.status !== 'sending') {
+        await recordExchange(tx, {
+          ...base,
+          outcome: 'unknown',
+          summary: `A late answer for this ${c.operation} was ignored: the action is now ${cur.status.replace(/_/g, ' ')} and is handled from there.`,
+        });
+        return;
+      }
+      const disconnected = conn.state === 'disconnected';
+      if (final.kind !== 'ack' && cur.hold_after_send && (isRisky(c.effect_class) || disconnected)) {
+        const uncertain = final.kind === 'revalidate' || final.err.kind === 'timeout';
+        const status = disconnected
+          ? uncertain
+            ? 'pending_verification'
+            : 'cancelled'
+          : 'needs_revalidation';
+        await db(tx)
+          .updateTable('integration.outbound_commands')
+          .set({
+            status,
+            verify_before_send: true,
+            lease_until: null,
+            hold_after_send: false,
+            ...(status === 'cancelled' ? { completed_at: tx.now } : {}),
+            last_error:
+              final.kind === 'error'
+                ? JSON.stringify({ kind: final.err.kind, message: final.err.message })
+                : null,
+            revalidation_reason: disconnected
+              ? uncertain
+                ? `${conn.name} was disconnected while this was being sent; the outcome is unknown. Check it in ${conn.name}.`
+                : `${conn.name} was disconnected; the action was not applied there.`
+              : `The connection was interrupted while this was being sent. Check it in ${conn.name} before resending.`,
+            version: sql`version + 1`,
+          })
+          .where('id', '=', c.id)
+          .execute();
+        await recordExchange(tx, {
+          ...base,
+          outcome: uncertain ? 'unknown' : 'failed',
+          summary: `Held for a person's decision: the connection was interrupted while this ${c.operation} was in flight.`,
+        });
+        if (status === 'cancelled') {
+          await tx.emit({
+            type: 'integration.outbound.cancelled',
+            propertyId: c.property_id,
+            aggregate: { type: 'integration_outbound_command', id: c.id },
+            payload: {
+              commandId: c.id,
+              connectionId: conn.id,
+              workflow: c.workflow,
+              sourceRef: c.source_ref,
+              reason: 'connection disconnected',
+            },
+          });
+        } else {
+          await raiseException(tx, {
+            connectionId: conn.id,
+            workflow: c.workflow,
+            severity: 'urgent',
+            code: disconnected ? 'uncertain_after_disconnect' : 'actions_need_revalidation',
+            dedupeKey: disconnected ? 'uncertain_after_disconnect' : 'actions_need_revalidation',
+            problem: disconnected
+              ? `An action for ${conn.name} has an unknown outcome and the connection is disconnected.`
+              : `An action for ${conn.name} was in flight when the connection was interrupted and was held.`,
+            businessImpact: 'It is shown as pending, never as done or cancelled, until a person checks it.',
+            responsibleParty: 'hotel',
+            nextStep: `Check ${conn.name}: if it has the action, record it there as done; otherwise re-enter it.`,
+            relatedRefs: [
+              c.source_ref ? (c.source_ref as EntityRef) : { type: 'integration_outbound_command', id: c.id },
+            ],
+          });
+        }
+        result.heldForRevalidation++;
+        return;
+      }
       if (final.kind === 'ack') {
         await db(tx)
           .updateTable('integration.outbound_commands')
@@ -2075,7 +2464,7 @@ export async function revalidateCommand(
   deps: IntegrationDeps,
   commandId: string,
   expectedVersion: number,
-  input: { decision: 'resend' | 'cancel'; reason: string },
+  input: { decision: 'resend' | 'cancel' | 'confirm_applied'; reason: string },
 ): Promise<OutboundCommand> {
   const cmd = await db(tx)
     .selectFrom('integration.outbound_commands')
@@ -2085,31 +2474,41 @@ export async function revalidateCommand(
   if (!cmd) throw new NotFoundError('outbound_command', commandId);
   const conn = await loadConnection(tx, cmd.connection_id);
   requireOnConnection(tx, conn, P.exceptionResolve);
-  if (cmd.status !== 'needs_revalidation') {
+  const disconnected = conn.state === 'disconnected';
+  // After a disconnect Portico can no longer ask the system, so uncertain actions wait for a person as well.
+  const decidable =
+    cmd.status === 'needs_revalidation' ||
+    (disconnected &&
+      (cmd.status === 'pending_verification' ||
+        // a sender that stopped mid-call after the disconnect: its outcome is unknown
+        (cmd.status === 'sending' && (!cmd.lease_until || new Date(cmd.lease_until) <= tx.now))));
+  if (!decidable) {
     throw new BusinessRuleError(
       'not_held',
       `This action is ${cmd.status.replace(/_/g, ' ')}, not waiting for a decision.`,
     );
   }
+  if (input.decision === 'resend' && disconnected) {
+    throw new BusinessRuleError(
+      'connection_disconnected',
+      `${conn.name} is disconnected, so nothing can be sent to it. Check it there: record the action as applied if it has it, or cancel it here and re-enter it in ${conn.name}.`,
+    );
+  }
+  const decided = { revalidated_by: actorKey(tx), revalidated_at: tx.now, version: sql<number>`version + 1` };
   const row = await db(tx)
     .updateTable('integration.outbound_commands')
     .set(
       input.decision === 'resend'
-        ? {
-            status: 'queued',
-            verify_before_send: true,
-            next_attempt_at: tx.now,
-            revalidated_by: actorKey(tx),
-            revalidated_at: tx.now,
-            version: sql`version + 1`,
-          }
-        : {
-            status: 'cancelled',
-            completed_at: tx.now,
-            revalidated_by: actorKey(tx),
-            revalidated_at: tx.now,
-            version: sql`version + 1`,
-          },
+        ? { status: 'queued', verify_before_send: true, next_attempt_at: tx.now, ...decided }
+        : input.decision === 'confirm_applied'
+          ? {
+              status: 'acknowledged',
+              external_ref: 'confirmed-by-person',
+              completed_at: tx.now,
+              lease_until: null,
+              ...decided,
+            }
+          : { status: 'cancelled', completed_at: tx.now, lease_until: null, ...decided },
     )
     .where('id', '=', cmd.id)
     .where('version', '=', expectedVersion)
@@ -2117,7 +2516,7 @@ export async function revalidateCommand(
     .executeTakeFirst();
   if (!row) return explainVersionMiss('outbound_command', cmd.id, expectedVersion, async () => cmd.version);
   await tx.audit({
-    action: `integration.outbound.${input.decision === 'resend' ? 'revalidate' : 'cancel'}`,
+    action: `integration.outbound.${input.decision === 'resend' ? 'revalidate' : input.decision === 'confirm_applied' ? 'confirm_applied' : 'cancel'}`,
     target: { type: 'integration_outbound_command', id: cmd.id },
     propertyId: cmd.property_id,
     reason: input.reason,
@@ -2142,6 +2541,20 @@ export async function revalidateCommand(
         reason: input.reason,
       },
     });
+  } else if (input.decision === 'confirm_applied') {
+    await tx.emit({
+      type: 'integration.outbound.acknowledged',
+      propertyId: cmd.property_id,
+      aggregate: { type: 'integration_outbound_command', id: cmd.id },
+      payload: {
+        commandId: cmd.id,
+        connectionId: conn.id,
+        workflow: cmd.workflow,
+        sourceRef: cmd.source_ref,
+        externalRef: 'confirmed-by-person',
+        verified: true,
+      },
+    });
   } else {
     await scheduleTenant(tx, tx.now);
   }
@@ -2149,10 +2562,19 @@ export async function revalidateCommand(
     .selectFrom('integration.outbound_commands')
     .select(sql<number>`count(*)::int`.as('n'))
     .where('connection_id', '=', conn.id)
-    .where('status', '=', 'needs_revalidation')
+    .where((eb) =>
+      disconnected
+        ? eb('status', 'in', ['needs_revalidation', 'pending_verification', 'sending'])
+        : eb('status', '=', 'needs_revalidation'),
+    )
     .executeTakeFirstOrThrow();
   if (remaining.n === 0) {
-    await autoResolveExceptions(tx, conn.id, ['actions_need_revalidation'], 'Every held action was decided.');
+    await autoResolveExceptions(
+      tx,
+      conn.id,
+      ['actions_need_revalidation', 'uncertain_after_disconnect'],
+      'Every held action was decided.',
+    );
   }
   await refreshHealth(tx, deps, conn);
   return toCommand(row);

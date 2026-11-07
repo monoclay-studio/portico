@@ -18,6 +18,7 @@ import {
   type ActivationScopePort,
   type AuthorityTransitionPort,
   createConnectorRegistry,
+  type InboundRecordForHandler,
   type IntegrationDeps,
   type InternalCatalogPort,
   integration,
@@ -39,6 +40,9 @@ export interface Harness {
   sent: WebhookRequest[];
   transport: { respond: (req: WebhookRequest) => Promise<{ status: number }> };
   scopeCalls: Array<{ propertyId: string; effect: string }>;
+  /** Records applied by the fake owning-module handlers (in order). */
+  applied: InboundRecordForHandler[];
+  handlerMode: Map<string, 'apply' | 'reject' | 'hold' | 'throw'>;
   transitions: Map<string, 'planned' | 'frozen'>;
   close(): Promise<void>;
 }
@@ -52,6 +56,8 @@ export async function startHarness(): Promise<Harness> {
   const sent: WebhookRequest[] = [];
   const transport = { respond: async (_req: WebhookRequest) => ({ status: 200 }) };
   const scopeCalls: Harness['scopeCalls'] = [];
+  const applied: InboundRecordForHandler[] = [];
+  const handlerMode = new Map<string, 'apply' | 'reject' | 'hold' | 'throw'>();
   const transitions = new Map<string, 'planned' | 'frozen'>();
   const recording: WebhookTransport = {
     async post(req) {
@@ -88,6 +94,28 @@ export async function startHarness(): Promise<Harness> {
         setDataAuthority: (tx, input) => platform.setDataAuthority(tx, input),
       },
       catalog: fakeCatalog,
+      inbound: Object.fromEntries(
+        ['reservations', 'roomStatus', 'charges'].map((wf) => [
+          wf,
+          {
+            async applyInbound(_tx: TxContext, record: InboundRecordForHandler) {
+              const mode = handlerMode.get(wf) ?? 'apply';
+              if (mode === 'throw') throw new Error('handler exploded');
+              if (mode === 'reject')
+                return {
+                  outcome: 'rejected' as const,
+                  reason: 'Not accepted by the owning module.',
+                  responsibleParty: 'hotel' as const,
+                  nextStep: 'Check the record in the other system.',
+                };
+              if (mode === 'hold')
+                return { outcome: 'held' as const, reason: 'Waiting for the stay to exist.' };
+              applied.push(record);
+              return { outcome: 'applied' as const, ref: { type: wf, id: record.externalId } };
+            },
+          },
+        ]),
+      ),
       activationScope,
       transitions: transitionsPort,
     },
@@ -113,6 +141,8 @@ export async function startHarness(): Promise<Harness> {
     sent,
     transport,
     scopeCalls,
+    applied,
+    handlerMode,
     transitions,
     async close() {
       await t.drop();

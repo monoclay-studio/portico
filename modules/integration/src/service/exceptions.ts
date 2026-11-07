@@ -4,7 +4,7 @@
  * and shown only to users with integration.technical.read. The same problem is raised once while open; repeats
  * increase its occurrence count.
  */
-import { explainVersionMiss, type Selectable, sql, type TxContext } from '@portico/db';
+import { explainVersionMiss, pgCode, type Selectable, sql, type TxContext, withSavepoint } from '@portico/db';
 import { BusinessRuleError, type EntityRef, NotFoundError, newId, sha256Hex } from '@portico/kernel';
 import type { IntegrationException, ResponsibleParty, Severity } from '../contracts';
 import { P } from '../manifest';
@@ -78,33 +78,36 @@ export async function raiseException(
     }
     const id = newId(tx.now.getTime());
     try {
-      await db(tx)
-        .insertInto('integration.exceptions')
-        .values({
-          id,
-          tenant_id: tx.tenantId,
-          connection_id: conn.id,
-          property_id:
-            input.propertyId ?? (conn.property_ids.length === 1 ? (conn.property_ids[0] ?? null) : null),
-          workflow: input.workflow,
-          severity: input.severity,
-          code,
-          dedupe_key: dedupeKey,
-          problem: input.problem,
-          business_impact: input.businessImpact,
-          responsible_party: input.responsibleParty,
-          next_step: input.nextStep,
-          related_refs: JSON.stringify(refs),
-          technical_detail: input.technicalDetail ? JSON.stringify(input.technicalDetail) : null,
-          owner_user_id: null,
-          owner_department_id: null,
-          status: 'open',
-          first_seen_at: tx.now,
-          last_seen_at: tx.now,
-        })
-        .execute();
+      // In a savepoint: a concurrent insert of the same open problem must not abort the caller's transaction (F11).
+      await withSavepoint(tx, 'integration_raise_exception', async () => {
+        await db(tx)
+          .insertInto('integration.exceptions')
+          .values({
+            id,
+            tenant_id: tx.tenantId,
+            connection_id: conn.id,
+            property_id:
+              input.propertyId ?? (conn.property_ids.length === 1 ? (conn.property_ids[0] ?? null) : null),
+            workflow: input.workflow,
+            severity: input.severity,
+            code,
+            dedupe_key: dedupeKey,
+            problem: input.problem,
+            business_impact: input.businessImpact,
+            responsible_party: input.responsibleParty,
+            next_step: input.nextStep,
+            related_refs: JSON.stringify(refs),
+            technical_detail: input.technicalDetail ? JSON.stringify(input.technicalDetail) : null,
+            owner_user_id: null,
+            owner_department_id: null,
+            status: 'open',
+            first_seen_at: tx.now,
+            last_seen_at: tx.now,
+          })
+          .execute();
+      });
     } catch (err) {
-      if ((err as { code?: string }).code === '23505' && attempt === 0) continue;
+      if (pgCode(err) === '23505' && attempt === 0) continue;
       throw err;
     }
     await tx.emit({

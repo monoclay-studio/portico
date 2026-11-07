@@ -96,6 +96,11 @@ export interface ConnectorDefinition {
   isSimulator: boolean;
   fileBased: boolean;
   setupPath: 'connection' | 'webhook_subscriptions' | 'not_available';
+  /**
+   * What acknowledging received records does at the vendor: nothing, a per-client cursor (safe in a trial), or
+   * removal from a queue other consumers share (a write: never done from a trial).
+   */
+  ackSemantics: 'none' | 'per-client' | 'shared-queue';
   support: { vendor: string; escalation: string };
   vendorNotices: Array<{
     title: string;
@@ -114,6 +119,8 @@ export interface AdapterContext {
   /** Mode granted by assertExternalEffectAllowed for this call. */
   mode: 'live' | 'sandbox' | 'simulate';
   now: Date;
+  /** Calls must finish before this instant (Portico stops waiting and treats the outcome as unknown). */
+  deadline?: Date;
   /** File connectors: most recent uploaded files per workflow (samples during setup). */
   files?: ReadonlyArray<{ workflow: string; name: string; content: string }>;
 }

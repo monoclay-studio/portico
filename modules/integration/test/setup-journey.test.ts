@@ -271,16 +271,17 @@ describe('connect alongside: the 9-step setup journey on the simulated PMS', () 
     expect(conn.state).toBe('monitoring');
     expect(conn.setup.steps.every((s) => s.status === 'done' && s.completedAt && s.completedBy)).toBe(true);
     expect(conn.status).toMatchObject({ setup: 'monitoring', health: 'healthy', integration: 'tested' });
-    const events = await sql<{
-      type: string;
-      payload: { workflow: string; canonical: { mapped: Record<string, { internalId: string }> } };
-    }>`
-      select type, payload from core.outbox where tenant_id = ${org.tenantId}::uuid and type = 'integration.inbound.applied'`.execute(
+    // The owning module applied each record in the same transaction (handler port); the outbox only carries a
+    // thin notification without guest data.
+    const forConn = h.applied.filter((r) => r.connectionId === conn.id);
+    expect(forConn.map((r) => r.workflow).sort()).toEqual(['reservations', 'reservations', 'roomStatus']);
+    expect(forConn.find((r) => r.workflow === 'reservations')?.mapped.roomTypeCode?.internalId).toBeDefined();
+    const events = await sql<{ payload: Record<string, unknown> }>`
+      select payload from core.outbox where tenant_id = ${org.tenantId}::uuid and type = 'integration.inbound.applied'`.execute(
       h.t.admin.kysely,
     );
     expect(events.rows).toHaveLength(3);
-    const res = events.rows.find((e) => e.payload.workflow === 'reservations');
-    expect(res?.payload.canonical.mapped.roomTypeCode?.internalId).toBeDefined();
+    expect(JSON.stringify(events.rows)).not.toContain('Sample'); // guest names never reach the outbox
     const health = await tx(h, ctx, (t) => integration.getConnectionHealth(t, h.deps, conn.id));
     expect(health).toMatchObject({ overall: 'healthy', urgent: [] });
     expect(health.workflows.find((w) => w.workflow === 'reservations')).toMatchObject({
