@@ -153,21 +153,21 @@ export function KpiTile({
       </div>
       {drill ? (
         href ? (
-          <a
-            href={href}
-            className="flex flex-col gap-3 after:absolute after:inset-0 after:rounded-lg"
-            aria-label={`${label}: ${value}${countsText ? `, ${countsText}` : ''}. ${fmt(s.openRecords, { metric: label })}`}
-          >
+          <a href={href} className="flex flex-col gap-3 after:absolute after:inset-0 after:rounded-lg">
+            {/* Name = visible content (WCAG 2.5.3 label in name), prefixed with the metric. */}
+            <span className="pt-sr-only">{label}: </span>
             {body}
+            <span className="pt-sr-only">. {fmt(s.openRecords, { metric: label })}</span>
           </a>
         ) : (
           <button
             type="button"
             onClick={onOpen}
             className="flex flex-col gap-3 text-start after:absolute after:inset-0 after:rounded-lg"
-            aria-label={`${label}: ${value}${countsText ? `, ${countsText}` : ''}. ${fmt(s.openRecords, { metric: label })}`}
           >
+            <span className="pt-sr-only">{label}: </span>
             {body}
+            <span className="pt-sr-only">. {fmt(s.openRecords, { metric: label })}</span>
           </button>
         )
       ) : (

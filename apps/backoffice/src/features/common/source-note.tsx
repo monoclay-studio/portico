@@ -1,34 +1,19 @@
-import { ProvenanceBadge } from '@portico/ui';
 import { useTranslation } from 'react-i18next';
 import type { SourceProvenance } from '../../data/sources';
 
 /**
- * One line saying where this screen's data comes from — driven by the provenance the source returned
- * (never hard-coded). Live data needs no note.
+ * One line saying where this screen's data comes from — driven by the provenance the source returned (never
+ * hard-coded). The page header carries the one provenance badge (C9.2); this is its plain-words explanation.
+ * Live data needs no note.
  */
-export function SourceNote({
-  provenance,
-  timeZone,
-}: {
-  provenance: SourceProvenance | undefined;
-  timeZone?: string;
-}) {
+export function SourceNote({ provenance }: { provenance: SourceProvenance | undefined; timeZone?: string }) {
   const { t } = useTranslation();
   if (!provenance || provenance.kind === 'live') return null;
+  const text = t(`provenanceNote.${provenance.kind}`, { defaultValue: '' });
+  if (!text) return null;
   return (
-    <p
-      className="mb-3 flex flex-wrap items-center gap-2 text-sm text-ink-muted"
-      data-source-note={provenance.kind}
-    >
-      <ProvenanceBadge
-        provenance={provenance.kind}
-        {...(provenance.generatedAt ? { generatedAt: provenance.generatedAt } : {})}
-        {...(provenance.lastSyncedAt ? { lastSyncedAt: provenance.lastSyncedAt } : {})}
-        {...(provenance.system ? { system: provenance.system } : {})}
-        {...(timeZone ? { timeZone } : {})}
-        compact
-      />
-      <span>{t(`provenanceNote.${provenance.kind}`, { defaultValue: '' })}</span>
+    <p className="mb-3 text-sm text-ink-muted" data-source-note={provenance.kind}>
+      {text}
     </p>
   );
 }

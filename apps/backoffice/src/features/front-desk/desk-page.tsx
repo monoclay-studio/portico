@@ -144,12 +144,9 @@ export function DeskPage({ kind }: { kind: DeskListKind }) {
                 </span>
               )}
               <bdi className="truncate">{r.guestName ?? t('desk.noName')}</bdi>
-              {kind === 'arrivals' && r.stayStatus !== 'expected' && (
-                <StatusBadge
-                  vocabulary="stay"
-                  value={r.stayStatus}
-                  {...(r.stayStatus === 'in_house' ? { label: t('desk.checkedIn') } : {})}
-                />
+              {/* The readiness cell already says "Checked in"; other stay states get a chip here. */}
+              {r.stayStatus !== 'expected' && r.stayStatus !== 'in_house' && (
+                <StatusBadge vocabulary="stay" value={r.stayStatus} />
               )}
             </span>
             <span className="truncate text-xs text-ink-muted">

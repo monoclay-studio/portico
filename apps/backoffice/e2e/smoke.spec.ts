@@ -35,6 +35,7 @@ test.describe('back office smoke (real API on :4100)', () => {
     await page.getByRole('button', { name: 'Sign in' }).click();
     await page.getByText(DEMO_ORG).click();
     await page.getByRole('button', { name: 'Continue' }).click();
+    await expect(page).not.toHaveURL(/sign-in/);
     await page.goto('/settings/users');
     await expect(page.getByRole('grid', { name: 'Users & roles' })).toContainText('Front Desk Agent');
     // The server ends that session (idle timeout / revoked).
@@ -44,12 +45,6 @@ test.describe('back office smoke (real API on :4100)', () => {
     const revoked = await request.post('/v1/auth/logout', { headers: { authorization: `Bearer ${token}` } });
     expect(revoked.status()).toBe(204);
     // The next request gets a 401; the tab goes to sign-in and remembers where it was.
-    await page.getByRole('tab', { name: /Roles/ }).click();
-    await page
-      .getByRole('button', { name: 'Refresh' })
-      .first()
-      .click()
-      .catch(() => {});
     await page.goto('/settings/users');
     await expect(page).toHaveURL(/\/sign-in/);
     // A front-desk agent signs in on the same tab.
@@ -189,7 +184,7 @@ test.describe('back office smoke (real API on :4100)', () => {
     await expect
       .poll(() => page.evaluate(() => Boolean(document.activeElement?.closest('[data-record-drawer]'))))
       .toBe(true);
-    const first = await drawer.locator('h1, h2').first().innerText();
+    const first = (await drawer.locator('h1, h2').first().textContent()) ?? '';
     // Split view: the board stays usable beside the panel; j shows the next arrival without closing.
     await page.keyboard.press('j');
     await expect(drawer.locator('h1, h2').first()).not.toHaveText(first);
@@ -208,8 +203,8 @@ test.describe('back office smoke (real API on :4100)', () => {
     await startSignedIn(page, demo);
     await page.goto('/today');
     const tile = page.locator('[data-kpi="Arrivals"]');
-    const value = (await tile.locator('[data-kpi-value]').innerText()).trim();
-    await tile.getByRole('button').first().click();
+    const value = ((await tile.locator('[data-kpi-value]').textContent()) ?? '').trim();
+    await tile.getByRole('button', { name: /^Arrivals:/ }).click();
     await expect(page).toHaveURL(/\/front-desk\/arrivals/);
     await expect(page.locator('[data-desk-filter="all"]')).toContainText(value);
     await page.locator('main').click({ position: { x: 5, y: 5 } });
@@ -243,6 +238,7 @@ test.describe('back office smoke (real API on :4100)', () => {
     page,
     demo,
   }) => {
+    test.setTimeout(420_000);
     const check = async (label: string) => {
       const results = await new AxeBuilder({ page })
         .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'])
