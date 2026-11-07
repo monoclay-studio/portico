@@ -10,7 +10,9 @@ import { join } from 'node:path';
 const root = new URL('..', import.meta.url).pathname;
 const dir = join(root, 'docs', 'parity');
 const files = existsSync(dir)
-  ? readdirSync(dir).filter((f) => f.endsWith('.md') && !['README.md', 'COVERAGE.md'].includes(f))
+  ? readdirSync(dir).filter(
+      (f) => f.endsWith('.md') && !['README.md', 'COVERAGE.md'].includes(f) && !f.startsWith('gaps-'),
+    )
   : [];
 const STATUSES = ['missing', 'specified', 'building', 'built', 'tested', 'deferred', 'different', 'n/a'];
 

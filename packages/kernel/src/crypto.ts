@@ -1,4 +1,11 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  createHmac,
+  randomBytes,
+  timingSafeEqual,
+} from 'node:crypto';
 
 /**
  * Field-level encryption for sensitive values (identity documents, bank details).
@@ -66,4 +73,52 @@ function sortKeys(value: unknown): unknown {
     );
   }
   return value;
+}
+
+/**
+ * Blind index: a keyed, deterministic fingerprint of a sensitive value (e.g. passport number, email) so it can be
+ * matched/deduplicated without storing or exposing the value. Uses a key SEPARATE from the encryption key.
+ */
+export function blindIndex(keyBase64: string, value: string): string {
+  const normalized = value.normalize('NFKC').trim().toLowerCase().replace(/\s+/g, '');
+  return createHmac('sha256', Buffer.from(keyBase64, 'base64')).update(normalized).digest('hex');
+}
+
+export interface FieldCrypto {
+  cipher: FieldCipher;
+  blindIndex(value: string): string;
+  /** 'local-dev' keys are never acceptable in production. */
+  keySource: 'env' | 'local-dev';
+}
+
+const DEV_FIELD_KEY = Buffer.from('portico-local-development-field-key-not-secret').toString('base64');
+const DEV_INDEX_KEY = Buffer.from('portico-local-development-blind-index-key-not-secret').toString('base64');
+
+/**
+ * The ONE place modules get field encryption and blind indexing from (bound in the composition root and passed to
+ * modules through their ports). Env: PORTICO_FIELD_KEY, PORTICO_BLIND_INDEX_KEY (base64, from AWS Secrets Manager
+ * in deployed environments), PORTICO_FIELD_KEY_ID. In production both keys are mandatory and must not be the
+ * development keys. KMS envelope encryption with key rotation is the next step (FOUNDATION_REQUESTS guests FR-3).
+ */
+export function fieldCryptoFromEnv(env: Record<string, string | undefined> = process.env): FieldCrypto {
+  const production = env.NODE_ENV === 'production';
+  const fieldKey = env.PORTICO_FIELD_KEY;
+  const indexKey = env.PORTICO_BLIND_INDEX_KEY;
+  if (production && (!fieldKey || !indexKey)) {
+    throw new Error(
+      'PORTICO_FIELD_KEY and PORTICO_BLIND_INDEX_KEY must be set in production (from the secrets manager).',
+    );
+  }
+  if (production && (fieldKey === DEV_FIELD_KEY || indexKey === DEV_INDEX_KEY || fieldKey === indexKey)) {
+    throw new Error(
+      'Production field-encryption and blind-index keys must be distinct, non-development keys.',
+    );
+  }
+  const fk = fieldKey ?? DEV_FIELD_KEY;
+  const ik = indexKey ?? DEV_INDEX_KEY;
+  return {
+    cipher: localFieldCipher(fk, env.PORTICO_FIELD_KEY_ID ?? (fieldKey ? 'env' : 'local-dev')),
+    blindIndex: (value) => blindIndex(ik, value),
+    keySource: fieldKey && indexKey ? 'env' : 'local-dev',
+  };
 }

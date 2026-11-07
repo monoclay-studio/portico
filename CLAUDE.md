@@ -22,6 +22,12 @@ Then read `docs/product/decisions.md`, `docs/product/glossary.md`, `docs/archite
 
 ---
 
+## 0. Operating model
+
+The orchestrator owns the vision and coherence; **each module agent owns making its module 3x–10x more powerful,
+seamless, friendly and well-rounded than anything on the market — measured against its 10x brief**
+(`docs/orchestration/operating-model.md`, `docs/strategy/modules/<module>.md`).
+
 ## 1. Autonomy rule (applies to every Claude session and agent)
 
 **Never stop working because you need an answer from the owner, as long as some other part of the work is unblocked.**

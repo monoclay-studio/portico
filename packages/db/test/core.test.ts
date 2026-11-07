@@ -221,3 +221,45 @@ describe('scheduled jobs', () => {
     expect(rows[0]?.n).toBeGreaterThanOrEqual(1);
   });
 });
+
+describe('idempotency is bound to the caller', () => {
+  it('never replays a stored response to a different user', async () => {
+    const owner = testContext();
+    const other = { ...testContext({ tenantId: owner.tenantId }), tenantId: owner.tenantId };
+    const run = (ctx: typeof owner) =>
+      runIdempotent(t.db, ctx, { scope: 'POST /guests', key: 'k-actor', request: { a: 1 } }, async () => ({
+        status: 201,
+        body: { secret: 'pii' },
+      }));
+    await run(owner);
+    expect((await run(owner)).replayed).toBe(true);
+    await expect(run(other)).rejects.toThrow(/different user or integration/);
+  });
+});
+
+describe('savepoints', () => {
+  it('rolls back only the failed part and keeps the transaction usable', async () => {
+    const { withSavepoint, pgCode } = await import('../src');
+    const ctx = testContext();
+    const keep = newId();
+    const dup = newId();
+    await withTenantTx(t.db, ctx, async (tx) => {
+      await tx.db
+        .insertInto('demo.notes')
+        .values({ id: keep, tenant_id: ctx.tenantId, body: 'kept' })
+        .execute();
+      await tx.db
+        .insertInto('demo.notes')
+        .values({ id: dup, tenant_id: ctx.tenantId, body: 'first' })
+        .execute();
+      const err = await withSavepoint(tx, 'sp_dup', () =>
+        tx.db.insertInto('demo.notes').values({ id: dup, tenant_id: ctx.tenantId, body: 'again' }).execute(),
+      ).catch((e: unknown) => e);
+      expect(pgCode(err)).toBe('23505');
+    });
+    const rows = await withTenantTx(t.db, ctx, (tx) =>
+      tx.db.selectFrom('demo.notes').select('id').where('id', 'in', [keep, dup]).execute(),
+    );
+    expect(rows).toHaveLength(2);
+  });
+});

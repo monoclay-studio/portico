@@ -11,6 +11,13 @@
   docs audits (journey, backofhouse); launched payments steward review. **Deferred to limit usage:** infra and the
   three parity researchers — resume them when the first builders finish (they keep their saved progress).
 
+- 2026-11-07 ~12:30 UTC owner direction: operating model (orchestrator = vision; module agents own 3–10x superiority,
+  `docs/orchestration/operating-model.md`); market deep dive launched with the owner's research prompt
+  (`docs/orchestration/research-prompt.md`) on branch `docs/market-deep-dive` (wt/market) → `docs/research/05-*`.
+  **Next after it finishes:** launch the gap strategist (reads 05-digest + all research + parity + specs + every
+  module's actual code on main/branches) → `docs/strategy/gap-plan.md` + `docs/strategy/modules/<module>.md` 10x briefs;
+  then hand each module agent its brief.
+
 ## 1. Owner, product and how to work with the owner
 
 - Owner: founder of **Monoclay LLC** (Delaware, Stripe Atlas), based in the Maldives. Product: **Portico** (final name).
@@ -79,6 +86,12 @@ Branch briefs: `docs/orchestration/module-agent-playbook.md` (shared module rule
 Steward reports, when written, go to `docs/orchestration/reviews/review-<module>.md`.
 
 ## 5. Merge procedure (per module branch)
+
+**Two gates:** a module **merges** when its steward review has no open P0/P1 and all checks are green; it is only
+called **complete** when it also passes the parity gate (`pnpm parity --gate <module>`). Merging partial modules is
+expected — the readiness register and README state exactly what is and isn't built.
+Pending cross-module fixes awaiting the next round for each author: `docs/orchestration/pending-fixes.md`.
+
 
 1. Branch reports done → launch steward review (brief above) → report in `docs/orchestration/reviews/`.
 2. Send P0/P1 (and cheap P2) findings back to the module author (resume the same agent if available, else a new

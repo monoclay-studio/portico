@@ -6,5 +6,6 @@ export * from './idempotency';
 export * from './jobs';
 export * from './migrate';
 export * from './outbox';
+export * from './pg';
 export * from './search';
 export * from './tx';
