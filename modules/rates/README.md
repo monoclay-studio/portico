@@ -158,6 +158,7 @@ interface ChargeLine {
   agreedRuleVersionIds?: Uuid[];                     // under agreed terms: commercial rules pinned to these versions
   adjustment?: 'supply' | 'reversal' | 'price_adjustment';   // default: supply (≥ 0) / price_adjustment (< 0)
   levyOnly?: boolean;                                // only quantity-based levies (Green Tax true-up)
+  valueOnly?: boolean;                               // only value-based rules (prepayments: no occupancy needed)
 }
 interface TaxLine {
   lineId; ruleId; ruleCode; ruleName; ruleVersionId;

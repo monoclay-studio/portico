@@ -197,9 +197,9 @@ stay's allowance periods). Payload read defensively: `stayId`, `propertyId`, `bu
 | Port | Needs | Binding in `composition.ts` |
 |---|---|---|
 | `PlatformPort` | getProperty (routing metadata; system authorizer), getBusinessDate, getLegalEntity, assertWritable | **real** platform |
-| `TaxPort` — rates' canonical contract (`computeTaxesDetailed`, `getRulePackStatus`; `taxCategory`, `taxInclusion`, `taxPointDate`, `agreedRuleVersionIds`) | taxes for charges and prepayments; live-invoice gate | **stub** (`unavailableFinancePorts`): taxable postings fail with 503 `module_not_available`; rule pack unverified (live invoices blocked). Binding to rates compiles (`bindFinanceTax`). |
-| `PaymentsPort.requestCollection` | late-charge collection follow-up (DB only), called inside a savepoint | **stub**: returns `unavailable`; the exception tells staff to collect manually |
-| `PayerDirectoryPort.describePayer` | payer names for folios and tax invoices when a caller gives only an id | **real**: guest profiles (`guestsService.getProfile`, system scope); companies/agencies → null until that module exists |
+| `TaxPort` — rates' canonical contract (`computeTaxesDetailed`, `getRulePackStatus`; `taxCategory`, `taxInclusion`, `taxPointDate`, `agreedRuleVersionIds`) | taxes for charges and prepayments; live-invoice gate | **bound (integration step)** via `bindFinanceTax(rates)`; deposits are taxed value-only (`valueOnly`, integration-step fix: per-guest levies need no occupancy at receipt). `apps/api/test/finance.test.ts` |
+| `PaymentsPort.requestCollection` | late-charge collection follow-up (DB only), called inside a savepoint | **bound (integration step)** to `paymentsCollectionsForFinance` (a payment request for the folio, intent only; business refusals → `not_possible`); `apps/api/test/bindings.test.ts` |
+| `PayerDirectoryPort.describePayer` | payer names for folios and tax invoices when a caller gives only an id | **real**: guest profiles, companies and agencies (guests, system scope) |
 
 Tax mapping (ADR-0016, F-08): rates' `category`/`basis` → finance's invoice treatment (quantity-based → levy outside
 the GST base, value-based `fee` → service charge inside it, else tax); `ledgerMappingKey` `tax.tgst` → account

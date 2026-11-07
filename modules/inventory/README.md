@@ -312,3 +312,8 @@ built in wave 1.
 
 None. Product decisions taken from the spec: composites are sold assignment-first; out of order is never refused
 for sold-out nights; lowering an allowance below what is sold into it is refused.
+
+
+## Port surface for other modules (ADR-0015, integration step)
+
+`inventoryProvider(service)` (`src/provider.ts`) is what the composition root binds for reservations and operations: every function takes the property the caller authorized; inventory grants its own read/assignment/block keys at that property only (kernel `delegateAtProperty`), verifies that every referenced unit, block, hold, unit type and ref belongs to it (`scope_mismatch`), keeps overbooking explicit (the `overbooking` argument) and never delegates house-use blocks or lock overrides. Inventory's HTTP routes keep its own permissions. Proven in `test/provider-port.test.ts`. Unit and unit-type events now carry `aggregateVersion`.

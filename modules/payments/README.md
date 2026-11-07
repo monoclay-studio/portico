@@ -151,7 +151,7 @@ carry card data or tokens. Consumed: own operation events only (wave 1).
 
 | Port | Provider | Binding in `apps/api/src/composition.ts` |
 |---|---|---|
-| `LedgerPort` (`describeTarget`, `recordPayment`, `recordDeposit`, `recordRefund`, `recordPayout`, `recordPaymentAdjustment`, `recordDisputeMovement`, `markPaymentVerified`, `recordSettlementFees` — types in § Ledger contract) | finance (wave 1, parallel) | **stub until finance merges**: `describeTarget` refuses folios (503 `module_unavailable` — nobody can place the folio) and returns `null` for bookings; every posting throws `module_unavailable`, so booking deposits show `ledger: failed` + urgent exception and are re-posted by reconciliation with the same key once finance is bound. |
+| `LedgerPort` (`describeTarget`, `recordPayment`, `recordDeposit`, `recordRefund`, `recordPayout`, `recordPaymentAdjustment`, `recordDisputeMovement`, `markPaymentVerified`, `recordSettlementFees` — types in § Ledger contract) | finance | **bound (integration step)** to `financeLedgerForPayments(finance)`; `apps/api/test/payments.test.ts`, scenarios S05/S06. Previously: stub until finance merges: `describeTarget` refuses folios (503 `module_unavailable` — nobody can place the folio) and returns `null` for bookings; every posting throws `module_unavailable`, so booking deposits show `ledger: failed` + urgent exception and are re-posted by reconciliation with the same key once finance is bound. |
 | `PlatformPort` (`getProperty`, `getLegalEntity`, `assertWritable`, `resolvePolicy`) | platform (main) | bound to `platform` service (`getProperty` with system authz after payments' own permission check) |
 | `ProviderSecretsPort` | env / Secrets Manager | `envProviderSecrets(process.env)` — `PAYMENTS_STRIPE_SECRET_KEY_TEST/LIVE`, `PAYMENTS_STRIPE_WEBHOOK_SECRETS_TEST/LIVE`; none set → nothing is ever sent to Stripe |
 
@@ -161,6 +161,8 @@ Also contributed: `paymentsSearch` (search providers), `payments.http`, `payment
 account and a recorded-only "own terminal" account per legal entity; refuses live.
 
 ## Provider contract (for reservations, finance and front desk — domain map § payments)
+
+**ADR-0015 (integration step):** provider functions taking `propertyId` (and `getPaymentStatus(tx, ref, { propertyId })`, `capture({ …, propertyId })`, `listUnresolved`) grant payments' own read/collect/request keys at that property only (kernel `delegateAtProperty`) and refuse records of another property with `scope_mismatch`; `refund` keeps requiring `payments.payment.refund` (sensitive, §5). HTTP routes keep every check. Finance's late-charge collection requests are served by `paymentsCollectionsForFinance` (a payment request, intent only).
 
 `createPaymentsModule(...).service.provider` — every function runs **inside the caller's transaction** (`tx`), checks
 payments' own permissions and data authority, and takes an `idempotencyKey` derived from business identity
