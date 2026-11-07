@@ -2,6 +2,6 @@
 
 Status: work in progress (checkpoint 2026-11-07).
 
-- Done: `inventory.md`, `rates.md`, `reservations.md`, `groups.md`
-- Remaining: `distribution.md`, `platform.md`, then the spec change requests and "beat the market"
+- Done: `inventory.md`, `rates.md`, `reservations.md`, `groups.md`, `distribution.md`
+- Remaining: `platform.md`, then the spec change requests and "beat the market"
   list in this file.
