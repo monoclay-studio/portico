@@ -143,7 +143,7 @@ resource "aws_cloudwatch_log_metric_filter" "this" {
 
 # ── Single-metric alarms ──────────────────────────────────────────────────────────────────────────────────────
 locals {
-  db_dims = var.db_engine == "aurora" ? { DBClusterIdentifier = var.db_identifier, Role = "WRITER" } : { DBInstanceIdentifier = var.db_identifier }
+  db_dims  = var.db_engine == "aurora" ? { DBClusterIdentifier = var.db_identifier, Role = "WRITER" } : { DBInstanceIdentifier = var.db_identifier }
   alb_dims = { LoadBalancer = var.alb_arn_suffix }
   tg_dims  = { LoadBalancer = var.alb_arn_suffix, TargetGroup = var.target_group_arn_suffix }
 
@@ -151,108 +151,108 @@ locals {
   alarm_defs = merge(
     var.enable_alb_alarms ? {
       "api-elb-5xx" = {
-        ns = "AWS/ApplicationELB", metric = "HTTPCode_ELB_5XX_Count", dims = local.alb_dims, stat = "Sum", ext = null
+        ns     = "AWS/ApplicationELB", metric = "HTTPCode_ELB_5XX_Count", dims = local.alb_dims, stat = "Sum", ext = null
         period = 60, evals = 5, dta = 3, op = "GreaterThanThreshold", threshold = 10, missing = "notBreaching"
-        desc = "Load balancer generated 5xx (no healthy target, timeouts). Runbook: docs/runbooks/incident-response.md"
+        desc   = "Load balancer generated 5xx (no healthy target, timeouts). Runbook: docs/runbooks/incident-response.md"
       }
       "api-latency-p95" = {
-        ns = "AWS/ApplicationELB", metric = "TargetResponseTime", dims = local.tg_dims, stat = null, ext = "p95"
+        ns     = "AWS/ApplicationELB", metric = "TargetResponseTime", dims = local.tg_dims, stat = null, ext = "p95"
         period = 60, evals = 10, dta = 8, op = "GreaterThanThreshold", threshold = var.latency_p95_seconds, missing = "notBreaching"
-        desc = "API p95 latency above the TARGET (support-recovery-plan §1)."
+        desc   = "API p95 latency above the TARGET (support-recovery-plan §1)."
       }
       "api-latency-p99" = {
-        ns = "AWS/ApplicationELB", metric = "TargetResponseTime", dims = local.tg_dims, stat = null, ext = "p99"
+        ns     = "AWS/ApplicationELB", metric = "TargetResponseTime", dims = local.tg_dims, stat = null, ext = "p99"
         period = 60, evals = 10, dta = 8, op = "GreaterThanThreshold", threshold = var.latency_p99_seconds, missing = "notBreaching"
-        desc = "API p99 latency high."
+        desc   = "API p99 latency high."
       }
       "api-unhealthy-targets" = {
-        ns = "AWS/ApplicationELB", metric = "UnHealthyHostCount", dims = local.tg_dims, stat = "Maximum", ext = null
+        ns     = "AWS/ApplicationELB", metric = "UnHealthyHostCount", dims = local.tg_dims, stat = "Maximum", ext = null
         period = 60, evals = 3, dta = 3, op = "GreaterThanThreshold", threshold = 0, missing = "notBreaching"
-        desc = "At least one API task fails /health/ready (database unreachable or app not ready)."
+        desc   = "At least one API task fails /health/ready (database unreachable or app not ready)."
       }
       "api-no-healthy-targets" = {
-        ns = "AWS/ApplicationELB", metric = "HealthyHostCount", dims = local.tg_dims, stat = "Minimum", ext = null
+        ns     = "AWS/ApplicationELB", metric = "HealthyHostCount", dims = local.tg_dims, stat = "Minimum", ext = null
         period = 60, evals = 2, dta = 2, op = "LessThanThreshold", threshold = 1, missing = "breaching"
-        desc = "SEV1 candidate: no healthy API task. Hotels cannot work."
+        desc   = "SEV1 candidate: no healthy API task. Hotels cannot work."
       }
     } : {},
     var.enable_db_alarms ? {
       "db-cpu" = {
-        ns = "AWS/RDS", metric = "CPUUtilization", dims = local.db_dims, stat = "Average", ext = null
+        ns     = "AWS/RDS", metric = "CPUUtilization", dims = local.db_dims, stat = "Average", ext = null
         period = 300, evals = 3, dta = 3, op = "GreaterThanThreshold", threshold = var.db_cpu_percent, missing = "missing"
-        desc = "Database CPU high for 15 minutes."
+        desc   = "Database CPU high for 15 minutes."
       }
       "db-connections" = {
-        ns = "AWS/RDS", metric = "DatabaseConnections", dims = local.db_dims, stat = "Maximum", ext = null
+        ns     = "AWS/RDS", metric = "DatabaseConnections", dims = local.db_dims, stat = "Maximum", ext = null
         period = 300, evals = 2, dta = 2, op = "GreaterThanThreshold", threshold = var.db_connections_threshold, missing = "missing"
-        desc = "Database connections near the limit (pool leak or too many tasks x DB_POOL_MAX)."
+        desc   = "Database connections near the limit (pool leak or too many tasks x DB_POOL_MAX)."
       }
       "db-freeable-memory" = {
-        ns = "AWS/RDS", metric = "FreeableMemory", dims = local.db_dims, stat = "Minimum", ext = null
+        ns     = "AWS/RDS", metric = "FreeableMemory", dims = local.db_dims, stat = "Minimum", ext = null
         period = 300, evals = 3, dta = 3, op = "LessThanThreshold", threshold = 134217728, missing = "missing"
-        desc = "Database free memory below 128 MiB."
+        desc   = "Database free memory below 128 MiB."
       }
     } : {},
     var.enable_db_alarms && var.db_engine == "rds" ? {
       "db-free-storage" = {
-        ns = "AWS/RDS", metric = "FreeStorageSpace", dims = local.db_dims, stat = "Minimum", ext = null
+        ns     = "AWS/RDS", metric = "FreeStorageSpace", dims = local.db_dims, stat = "Minimum", ext = null
         period = 300, evals = 1, dta = 1, op = "LessThanThreshold", threshold = 2147483648, missing = "missing"
-        desc = "Less than 2 GiB free storage (storage autoscaling should act first)."
+        desc   = "Less than 2 GiB free storage (storage autoscaling should act first)."
       }
     } : {},
     var.enable_db_alarms && var.db_engine == "aurora" && var.db_has_replicas ? {
       "db-replica-lag" = {
-        ns = "AWS/RDS", metric = "AuroraReplicaLagMaximum", dims = { DBClusterIdentifier = var.db_identifier }, stat = "Maximum", ext = null
+        ns     = "AWS/RDS", metric = "AuroraReplicaLagMaximum", dims = { DBClusterIdentifier = var.db_identifier }, stat = "Maximum", ext = null
         period = 60, evals = 5, dta = 5, op = "GreaterThanThreshold", threshold = 1000, missing = "missing"
-        desc = "Aurora replica lag above 1 s for 5 minutes: failover would lose recent writes' visibility."
+        desc   = "Aurora replica lag above 1 s for 5 minutes: failover would lose recent writes' visibility."
       }
     } : {},
     var.enable_db_alarms && var.db_serverless ? {
       "db-acu-saturation" = {
-        ns = "AWS/RDS", metric = "ACUUtilization", dims = { DBClusterIdentifier = var.db_identifier }, stat = "Average", ext = null
+        ns     = "AWS/RDS", metric = "ACUUtilization", dims = { DBClusterIdentifier = var.db_identifier }, stat = "Average", ext = null
         period = 300, evals = 3, dta = 3, op = "GreaterThanThreshold", threshold = 90, missing = "missing"
-        desc = "Serverless capacity near its maximum ACU."
+        desc   = "Serverless capacity near its maximum ACU."
       }
     } : {},
     var.enable_outbox_alarms ? {
       "outbox-delivery-failures" = {
-        ns = local.namespace, metric = "DeliveryFailures", dims = {}, stat = "Sum", ext = null
+        ns     = local.namespace, metric = "DeliveryFailures", dims = {}, stat = "Sum", ext = null
         period = 300, evals = 1, dta = 1, op = "GreaterThanThreshold", threshold = 10, missing = "notBreaching"
-        desc = "Event deliveries failing (retrying with backoff). Check consumer errors in the worker log."
+        desc   = "Event deliveries failing (retrying with backoff). Check consumer errors in the worker log."
       }
       "outbox-dead-deliveries" = {
-        ns = local.namespace, metric = "DeadDeliveries", dims = {}, stat = "Sum", ext = null
+        ns     = local.namespace, metric = "DeadDeliveries", dims = {}, stat = "Sum", ext = null
         period = 300, evals = 1, dta = 1, op = "GreaterThanThreshold", threshold = 0, missing = "notBreaching"
-        desc = "A delivery exhausted its retries and is dead: a reaction (e.g. dirty room after checkout) did NOT happen."
+        desc   = "A delivery exhausted its retries and is dead: a reaction (e.g. dirty room after checkout) did NOT happen."
       }
       "outbox-backlog-age" = {
-        ns = local.namespace, metric = "OutboxOldestAge", dims = {}, stat = "Maximum", ext = null
+        ns     = local.namespace, metric = "OutboxOldestAge", dims = {}, stat = "Maximum", ext = null
         period = 60, evals = 5, dta = 5, op = "GreaterThanThreshold", threshold = var.outbox_oldest_age_seconds, missing = "missing"
-        desc = "Oldest pending event older than the TARGET: background work is delayed."
+        desc   = "Oldest pending event older than the TARGET: background work is delayed."
       }
       "worker-loop-errors" = {
-        ns = local.namespace, metric = "WorkerLoopErrors", dims = {}, stat = "Sum", ext = null
+        ns     = local.namespace, metric = "WorkerLoopErrors", dims = {}, stat = "Sum", ext = null
         period = 300, evals = 1, dta = 1, op = "GreaterThanThreshold", threshold = 3, missing = "notBreaching"
-        desc = "Worker main loop failing (database unreachable?)."
+        desc   = "Worker main loop failing (database unreachable?)."
       }
       "api-error-logs" = {
-        ns = local.namespace, metric = "ApiErrorLogs", dims = {}, stat = "Sum", ext = null
+        ns     = local.namespace, metric = "ApiErrorLogs", dims = {}, stat = "Sum", ext = null
         period = 300, evals = 1, dta = 1, op = "GreaterThanThreshold", threshold = 20, missing = "notBreaching"
-        desc = "API logged more than 20 error/fatal lines in 5 minutes."
+        desc   = "API logged more than 20 error/fatal lines in 5 minutes."
       }
     } : {},
     var.enable_outbox_alarms && var.outbox_stats_contract_live ? {
       "outbox-stats-missing" = {
-        ns = local.namespace, metric = "OutboxPending", dims = {}, stat = "SampleCount", ext = null
+        ns     = local.namespace, metric = "OutboxPending", dims = {}, stat = "SampleCount", ext = null
         period = 300, evals = 2, dta = 2, op = "LessThanThreshold", threshold = 1, missing = "breaching"
-        desc = "No 'outbox stats' line for 10 minutes: the worker is down or stuck."
+        desc   = "No 'outbox stats' line for 10 minutes: the worker is down or stuck."
       }
     } : {},
     var.enable_worker_task_alarm ? {
       "worker-not-running" = {
-        ns = "ECS/ContainerInsights", metric = "RunningTaskCount", dims = { ClusterName = var.ecs_cluster_name, ServiceName = var.worker_service_name }, stat = "Minimum", ext = null
+        ns     = "ECS/ContainerInsights", metric = "RunningTaskCount", dims = { ClusterName = var.ecs_cluster_name, ServiceName = var.worker_service_name }, stat = "Minimum", ext = null
         period = 60, evals = 3, dta = 3, op = "LessThanThreshold", threshold = 1, missing = "breaching"
-        desc = "No worker task running: outbox, schedules and integrations are stopped."
+        desc   = "No worker task running: outbox, schedules and integrations are stopped."
       }
     } : {},
   )

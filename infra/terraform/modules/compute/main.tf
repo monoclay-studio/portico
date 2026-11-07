@@ -20,19 +20,43 @@ locals {
     worker = "${var.repository_urls["worker"]}:${var.image_tag}"
   }
 
+  # Non-secret configuration shared by api and worker (both run the full composition root, so both need the same
+  # keys and settings; apps/api/src/config.ts and the module READMEs list them).
   base_environment = concat([
     { name = "NODE_ENV", value = "production" },
     { name = "LOG_LEVEL", value = var.log_level },
     { name = "PORTICO_CELL", value = var.name_prefix },
     { name = "PORTICO_DEPLOYMENT", value = var.deployment_name },
+    # Key id recorded with every field ciphertext (kernel localFieldCipher). Stable for the life of the key.
+    { name = "PORTICO_FIELD_KEY_ID", value = "${var.name_prefix}-field-v1" },
     { name = "PORTICO_FIELD_KMS_KEY_ID", value = var.field_encryption_key_arn },
     { name = "PORTICO_DOCUMENTS_BUCKET", value = var.bucket_names["documents"] },
     { name = "PORTICO_EXPORTS_BUCKET", value = var.bucket_names["exports"] },
     { name = "AWS_REGION", value = local.region },
-    ], [for k, v in var.extra_environment : { name = k, value = v }]
+    ],
+    var.app_base_url == null ? [] : [{ name = "PORTICO_APP_BASE_URL", value = var.app_base_url }],
+    var.ses_enabled ? [
+      { name = "PORTICO_EMAIL_DOMAIN", value = coalesce(var.ses_domain, "unset.invalid") },
+      { name = "PORTICO_SES_CONFIGURATION_SET", value = coalesce(var.ses_configuration_set_name, "unset") },
+    ] : [],
+    [for k, v in var.extra_environment : { name = k, value = v }]
   )
 
+  app_key_secrets     = [for env_name in sort(keys(var.app_key_secret_arns)) : { name = env_name, valueFrom = var.app_key_secret_arns[env_name] }]
   integration_secrets = [for env_name, key in var.injected_integration_secrets : { name = env_name, valueFrom = var.integration_secret_arns[key] }]
+
+  api_secrets = concat(
+    [{ name = "APP_DATABASE_URL", valueFrom = "${var.db_app_secret_arn}:url::" }],
+    var.api_holds_worker_credentials ? [{ name = "WORKER_DATABASE_URL", valueFrom = "${var.db_worker_secret_arn}:url::" }] : [],
+    local.app_key_secrets,
+    local.integration_secrets,
+  )
+  # The worker connects as portico_worker (app privileges + the job-routing functions, infra/db/bootstrap-roles.mjs).
+  worker_secrets = concat(
+    [{ name = "APP_DATABASE_URL", valueFrom = "${var.db_worker_secret_arn}:url::" }],
+    local.app_key_secrets,
+    local.integration_secrets,
+  )
 
   hardening = {
     readonlyRootFilesystem = true
@@ -206,8 +230,9 @@ resource "aws_ecs_task_definition" "api" {
       { name = "PORT", value = tostring(var.app_port) },
       { name = "DB_POOL_MAX", value = tostring(var.api.db_pool_max) },
       { name = "CORS_ORIGINS", value = join(",", var.cors_origins) },
+      { name = "TRUSTED_PROXY_CIDRS", value = join(",", var.trusted_proxy_cidrs) },
     ])
-    secrets          = concat([{ name = "APP_DATABASE_URL", valueFrom = "${var.db_app_secret_arn}:url::" }], local.integration_secrets)
+    secrets          = local.api_secrets
     logConfiguration = local.log_options["api"]
   })])
 }
@@ -229,12 +254,15 @@ resource "aws_ecs_task_definition" "worker" {
     image            = local.images.worker
     essential        = true
     environment      = local.base_environment
-    secrets          = concat([{ name = "APP_DATABASE_URL", valueFrom = "${var.db_app_secret_arn}:url::" }], local.integration_secrets)
+    secrets          = local.worker_secrets
     logConfiguration = local.log_options["worker"]
   })])
 }
 
-# Migrations run as portico_owner. No task role: the migration needs no AWS API access.
+# Migrations run as portico_owner. No task role: the migration needs no AWS API access. The pipeline runs this task
+# twice per deploy: the migrations (default command), then the routing grants with a command override
+#   ["node", "/app/ops/bootstrap-roles.mjs", "grants"]
+# which, as the owner of the functions, grants the job-routing functions to portico_worker only (database-roles.md).
 resource "aws_ecs_task_definition" "migrate" {
   family                   = "${var.name_prefix}-migrate"
   requires_compatibilities = ["FARGATE"]
@@ -288,6 +316,7 @@ resource "aws_ecs_task_definition" "db_bootstrap" {
       { name = "MASTER_PASSWORD", valueFrom = "${var.db_master_secret_arn}:password::" },
       { name = "OWNER_SECRET_JSON", valueFrom = var.db_owner_secret_arn },
       { name = "APP_SECRET_JSON", valueFrom = var.db_app_secret_arn },
+      { name = "WORKER_SECRET_JSON", valueFrom = var.db_worker_secret_arn },
     ]
     logConfiguration = local.log_options["db-bootstrap"]
   })])

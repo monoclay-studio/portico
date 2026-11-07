@@ -38,4 +38,5 @@ module "cell" {
   email_domain                 = var.email_domain
   email_sending_enabled        = var.email_sending_enabled
   injected_integration_secrets = var.injected_integration_secrets
+  api_holds_worker_credentials = var.api_holds_worker_credentials
 }

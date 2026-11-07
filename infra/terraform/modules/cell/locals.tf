@@ -8,7 +8,7 @@ locals {
   region = data.aws_region.current.region
   region_codes = {
     "ap-south-1" = "aps1", "ap-south-2" = "aps2", "ap-southeast-1" = "apse1", "me-central-1" = "mec1",
-    "eu-west-1" = "euw1", "eu-central-1" = "euc1", "us-east-1" = "use1", "us-west-2" = "usw2",
+    "eu-west-1"  = "euw1", "eu-central-1" = "euc1", "us-east-1" = "use1", "us-west-2" = "usw2",
   }
   region_code = lookup(local.region_codes, local.region, replace(local.region, "-", ""))
   env_code    = { demo = "demo", staging = "stg", production = "prod" }[var.deployment]
@@ -28,9 +28,14 @@ locals {
   o = var.overrides
 
   preset = {
-    az_count            = { demo = 2, lean = 2, resilient = 3 }[local.t]
-    nat_mode            = { demo = "none", lean = "none", resilient = "per_az" }[local.t]
-    interface_endpoints = { demo = [], lean = ["ecr.api", "ecr.dkr", "logs", "secretsmanager"], resilient = ["ecr.api", "ecr.dkr", "logs", "secretsmanager"] }[local.t]
+    az_count = { demo = 2, lean = 2, resilient = 3 }[local.t]
+    nat_mode = { demo = "none", lean = "none", resilient = "per_az" }[local.t]
+    # Egress (lean): tasks run in public subnets with a public IP and NO inbound rule except the API port from the
+    # ALB's security group. That reaches AWS APIs AND the third parties the app calls (Stripe Connect, OIDC
+    # identity providers, outbound webhooks, Channex) for ≈ $3.65/month per task. Interface endpoints (≈ $9.49 each
+    # per AZ) reach AWS APIs only, so the app's payment/SSO/webhook calls would fail. Fixed egress IP or private
+    # tasks: overrides = { nat_mode = "single" } (≈ +$45/month). README § Egress.
+    interface_endpoints = { demo = [], lean = [], resilient = ["ecr.api", "ecr.dkr", "logs", "secretsmanager"] }[local.t]
     endpoint_az_count   = { demo = 1, lean = 1, resilient = 3 }[local.t]
     flow_logs           = { demo = null, lean = null, resilient = "ALL" }[local.t]
     db_engine           = { demo = "rds", lean = "rds", resilient = "aurora" }[local.t]
@@ -87,6 +92,20 @@ locals {
   origin_fqdn   = local.env_domain == null ? null : "origin-${local.region_code}-${var.cell}.${local.env_domain}"
   cors_origins  = [for a in local.aliases : "https://${a}"]
   external_fqdn = local.env_domain == null ? null : "api.${local.env_domain}"
+  # Staff web app base URL for links in invitations and password resets (identity: PORTICO_APP_BASE_URL). Without a
+  # domain (demo only) the deploy passes the CloudFront URL at deploy time instead (single-host portico.sh).
+  app_base_url = local.env_domain == null ? null : "https://app.${local.env_domain}"
+
+  # Who may set the client IP through X-Forwarded-For (API: TRUSTED_PROXY_CIDRS). The chain is
+  #   viewer → CloudFront (appends the viewer IP) → ALB (appends the CloudFront edge IP) → task.
+  # Trusting only the ALB subnets would make the CloudFront EDGE the "client", so every viewer behind one edge
+  # location would share a per-IP rate limit (e.g. sign-in: 20/min). Trusting the CloudFront origin-facing ranges as
+  # well yields the real viewer IP; a viewer cannot spoof it because CloudFront always appends the address it saw.
+  # The demo host is reached by CloudFront directly (no ALB). Never 0.0.0.0/0 (guard in main.tf).
+  trusted_proxy_cidrs = concat(
+    local.is_demo ? [] : module.network.public_subnet_cidrs,
+    module.network.cloudfront_origin_cidrs,
+  )
 
   # Non-live demo: provider domains that must never be reachable (defense in depth behind ADR-0010).
   demo_blocked_domains = [

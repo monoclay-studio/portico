@@ -10,7 +10,7 @@
 # NOTHING HERE HAS BEEN APPLIED. Requires the owner's authorization (OPEN_QUESTIONS Q4/Q22).
 
 terraform {
-  required_version = ">= 1.9.0"
+  required_version = ">= 1.11.0"
   required_providers {
     aws = {
       source  = "hashicorp/aws"

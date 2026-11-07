@@ -63,3 +63,17 @@ output "web_bucket_name" {
 output "distribution_id" {
   value = one(module.edge[*].distribution_id)
 }
+
+output "trusted_proxy_cidrs" {
+  description = "TRUSTED_PROXY_CIDRS given to the API (ALB subnets + CloudFront origin-facing ranges; demo: CloudFront only)."
+  value       = local.trusted_proxy_cidrs
+}
+
+output "runtime_contract" {
+  description = "Environment and secret NAMES per container (managed tiers). No values."
+  value       = one(module.compute[*].runtime_contract)
+}
+
+output "app_key_replica_region" {
+  value = one(module.secrets[*].app_key_replica_region)
+}

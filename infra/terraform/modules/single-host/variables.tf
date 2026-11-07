@@ -58,6 +58,21 @@ variable "cors_origins" {
   default = []
 }
 
+variable "app_base_url" {
+  description = "Staff web app URL for invitation/reset links when a custom domain exists; otherwise the deploy passes the CloudFront URL (portico.sh deploy <tag> <base-url>)."
+  type        = string
+  default     = null
+}
+
+variable "trusted_proxies" {
+  description = "TRUSTED_PROXY_CIDRS for the API on the host: CloudFront's origin-facing ranges (CloudFront connects to the host directly)."
+  type        = list(string)
+  validation {
+    condition     = length(var.trusted_proxies) > 0 && alltrue([for c in var.trusted_proxies : can(cidrhost(c, 0)) && !endswith(c, "/0")])
+    error_message = "trusted_proxies must be non-empty, valid CIDRs and never a /0."
+  }
+}
+
 variable "seed_demo" {
   description = "Seed the Maldives sample organizations on first deploy."
   type        = bool

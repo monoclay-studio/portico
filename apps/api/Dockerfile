@@ -1,13 +1,14 @@
 # syntax=docker/dockerfile:1.10
 #
-# Portico API image. Also runs the one-off MIGRATION task and the DB ROLE BOOTSTRAP task (same image, different
-# command — see infra/terraform/modules/compute). Build from the repository root:
+# Portico API image. Also runs the one-off MIGRATION task, the DB ROLE BOOTSTRAP task and the ROUTING GRANTS step
+# (same image, different command — see infra/terraform/modules/compute). Build from the repository root:
 #
 #   docker build -f apps/api/Dockerfile -t portico-api:$(git rev-parse --short HEAD) .
 #
 # STATUS: written and reviewed, NOT built — no Docker daemon was available when this was authored. The runtime
-# layout (pnpm deploy output + tsx loader, migrations as a non-superuser owner, API as an app login role) was
-# exercised outside Docker against Postgres 16; see infra/README.md "Validation status".
+# layout (pnpm deploy output + tsx loader, read-only files, no writable TMPDIR; migrations as a non-superuser owner,
+# API as portico_app_blue, worker as portico_worker_blue) is exercised outside Docker by infra/db/verify-roles.sh
+# against a SCRAM-auth Postgres 16; see infra/README.md "Validation status".
 #
 # Why tsx at runtime (not an esbuild bundle): workspace packages export TypeScript sources with extensionless
 # imports, and every module manifest resolves its migrations directory relative to its own source file
@@ -84,5 +85,6 @@ STOPSIGNAL SIGTERM
 
 # Exec form: node is the process that receives SIGTERM (ECS initProcessEnabled adds an init for zombie reaping).
 #   migrations:      ["node", "--import", "/opt/tsx/register.mjs", "src/migrate-cli.ts"]
-#   role bootstrap:  ["node", "/app/ops/bootstrap-roles.mjs"]
+#   role bootstrap:  ["node", "/app/ops/bootstrap-roles.mjs"]            (RDS master; before the first migration)
+#   routing grants:  ["node", "/app/ops/bootstrap-roles.mjs", "grants"]  (portico_owner; after every migration)
 CMD ["node", "--import", "/opt/tsx/register.mjs", "src/main.ts"]

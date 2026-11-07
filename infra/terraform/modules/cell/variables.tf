@@ -17,6 +17,10 @@ variable "tier" {
     condition     = contains(["demo", "lean", "resilient"], var.tier)
     error_message = "tier must be demo, lean or resilient."
   }
+  validation {
+    condition     = !(var.tier == "demo" && var.deployment == "production")
+    error_message = "The demo tier (Postgres on a single host, sample data only) cannot be used for production."
+  }
 }
 
 variable "deployment" {
@@ -54,6 +58,10 @@ variable "domain_name" {
   description = "Base domain (OPEN_QUESTIONS Q1). null = no custom domain: allowed for the demo tier only."
   type        = string
   default     = null
+  validation {
+    condition     = var.domain_name != null || var.tier == "demo" || !var.active
+    error_message = "lean/resilient tiers carry real hotel data and need HTTPS end to end: set domain_name and route53_zone_id (OPEN_QUESTIONS Q1)."
+  }
 }
 
 variable "subdomain" {
@@ -66,6 +74,10 @@ variable "route53_zone_id" {
   description = "Hosted zone of domain_name."
   type        = string
   default     = null
+  validation {
+    condition     = var.domain_name == null || var.route53_zone_id != null
+    error_message = "domain_name requires route53_zone_id."
+  }
 }
 
 # ── People and money ─────────────────────────────────────────────────────────────────────────────────────────
@@ -163,20 +175,47 @@ variable "restore_drill_enabled" {
 }
 
 variable "integration_secrets" {
-  description = "Placeholder secrets (no values) to create for this cell."
+  description = "Placeholder secrets (no values) to create for this cell: key => purpose."
   type        = map(string)
   default = {
+    # Payments (hotel guest money): Monoclay's Stripe Connect PLATFORM keys. The hotel's own merchant account is a
+    # connected account; no guest funds move through Monoclay (CLAUDE.md §4.14). OPEN_QUESTIONS Q2/Q3.
+    "payments-stripe-connect-secret-key-test"      = "Stripe Connect platform secret key, TEST mode (PAYMENTS_STRIPE_SECRET_KEY_TEST)"
+    "payments-stripe-connect-webhook-secrets-test" = "Stripe Connect endpoint signing secrets, TEST mode, comma-separated (PAYMENTS_STRIPE_WEBHOOK_SECRETS_TEST)"
+    "payments-stripe-connect-secret-key-live"      = "Stripe Connect platform secret key, LIVE mode — production deployment only (PAYMENTS_STRIPE_SECRET_KEY_LIVE)"
+    "payments-stripe-connect-webhook-secrets-live" = "Stripe Connect endpoint signing secrets, LIVE mode — production only (PAYMENTS_STRIPE_WEBHOOK_SECRETS_LIVE)"
+    # Monoclay SaaS billing: Monoclay's OWN Stripe account (billing module, not built). Never injected as PAYMENTS_*.
     "stripe-billing-secret-key"     = "Monoclay SaaS billing — Monoclay's own Stripe account (never hotel guest money)"
     "stripe-billing-webhook-secret" = "Monoclay SaaS billing webhook signing secret"
     "channex-api-key"               = "Channex channel manager API key (production activation is OPEN_QUESTIONS Q23)"
-    "operator-token"                = "Operator provisioning endpoint token (endpoint disabled while unset)"
+    # Operator console (identity): static tokens are refused in production until IAM Identity Center replaces them.
+    "operator-token"    = "OPERATOR_TOKEN for the internal provisioning endpoint (endpoint disabled while unset; never in production)"
+    "portico-operators" = "PORTICO_OPERATORS JSON [{id,name,email,tokenSha256}] for the operator console (non-production only)"
   }
 }
 
 variable "injected_integration_secrets" {
-  description = "ENV_VAR => integration secret key, ONLY for secrets that already have a value."
+  description = "ENV_VAR => integration secret key, ONLY for secrets that already have a value (ECS refuses to start otherwise)."
   type        = map(string)
   default     = {}
+  validation {
+    condition     = alltrue([for k in values(var.injected_integration_secrets) : contains(keys(var.integration_secrets), k)])
+    error_message = "Every injected secret must be one of integration_secrets."
+  }
+  validation {
+    # Static operator tokens have no expiry and no MFA (identity review P2-17): never in a production deployment.
+    condition     = var.deployment != "production" || length(setintersection(keys(var.injected_integration_secrets), ["OPERATOR_TOKEN", "PORTICO_OPERATORS"])) == 0
+    error_message = "OPERATOR_TOKEN / PORTICO_OPERATORS must not be injected into production (operator console is disabled there until IAM Identity Center)."
+  }
+  validation {
+    condition     = var.deployment == "production" || length([for k in keys(var.injected_integration_secrets) : k if endswith(k, "_LIVE")]) == 0
+    error_message = "LIVE-mode provider keys may only be injected into the production deployment."
+  }
+  validation {
+    # Two money worlds never mix (CLAUDE.md §4.14): Monoclay's billing account never feeds the guest-payments module.
+    condition     = alltrue([for env, key in var.injected_integration_secrets : !(startswith(env, "PAYMENTS_") && startswith(key, "stripe-billing"))])
+    error_message = "Monoclay SaaS-billing secrets must never be injected as PAYMENTS_* (hotel guest money)."
+  }
 }
 
 variable "email_domain" {
@@ -188,6 +227,16 @@ variable "email_domain" {
 variable "email_sending_enabled" {
   type    = bool
   default = false
+}
+
+variable "api_holds_worker_credentials" {
+  description = <<-EOF2
+    Inject the portico_worker login into the API as WORKER_DATABASE_URL. Turn on only when the API serves the public
+    payments webhook route through a worker-role pool (payments FOUNDATION_REQUESTS §4); until then the API does not
+    need it (least privilege) and payments.route_webhook stays executable by portico_app.
+  EOF2
+  type        = bool
+  default     = false
 }
 
 # ── Per-tier overrides (null = tier default) ─────────────────────────────────────────────────────────────────

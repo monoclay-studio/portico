@@ -32,3 +32,9 @@ variable "integration_secrets" {
   type        = map(string)
   default     = {}
 }
+
+variable "replica_region" {
+  description = "Region that keeps a replica of the irreplaceable application keys (resilient tier: the DR region of the cross-region backups). null = no replica."
+  type        = string
+  default     = null
+}

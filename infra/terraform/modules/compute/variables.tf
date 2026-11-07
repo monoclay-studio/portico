@@ -161,6 +161,21 @@ variable "cors_origins" {
   default = []
 }
 
+variable "trusted_proxy_cidrs" {
+  description = "API TRUSTED_PROXY_CIDRS: the ALB subnets plus CloudFront's origin-facing ranges. Never 0.0.0.0/0."
+  type        = list(string)
+  validation {
+    condition     = length(var.trusted_proxy_cidrs) > 0 && alltrue([for c in var.trusted_proxy_cidrs : can(cidrhost(c, 0)) && !endswith(c, "/0")])
+    error_message = "trusted_proxy_cidrs must be non-empty, valid CIDRs and never a /0 (that would let anyone set the client IP)."
+  }
+}
+
+variable "app_base_url" {
+  description = "Staff web app base URL (identity: PORTICO_APP_BASE_URL) for invitation and password-reset links."
+  type        = string
+  default     = null
+}
+
 variable "extra_environment" {
   description = "Additional non-secret environment variables for api and worker."
   type        = map(string)
@@ -187,6 +202,26 @@ variable "db_owner_secret_arn" {
 
 variable "db_app_secret_arn" {
   type = string
+}
+
+variable "db_worker_secret_arn" {
+  description = "portico_worker login secret (worker task's APP_DATABASE_URL)."
+  type        = string
+}
+
+variable "api_holds_worker_credentials" {
+  description = "Also inject the worker login into the API as WORKER_DATABASE_URL (public webhook route; see cell variable)."
+  type        = bool
+  default     = false
+}
+
+variable "app_key_secret_arns" {
+  description = "ENV_VAR_NAME => secret ARN of the generated application keys (field, blind index, terms seal, simulator)."
+  type        = map(string)
+  validation {
+    condition     = alltrue([for k in ["PORTICO_FIELD_KEY", "PORTICO_BLIND_INDEX_KEY", "PORTICO_TERMS_SEAL_KEY", "PAYMENTS_SIMULATOR_SIGNING_SECRET"] : contains(keys(var.app_key_secret_arns), k)])
+    error_message = "The API refuses to start in production without PORTICO_FIELD_KEY, PORTICO_BLIND_INDEX_KEY and PORTICO_TERMS_SEAL_KEY; every task needs the shared PAYMENTS_SIMULATOR_SIGNING_SECRET."
+  }
 }
 
 variable "db_iam_readonly_role" {
@@ -238,6 +273,17 @@ variable "ses_enabled" {
   description = "Static switch: grant ses:SendEmail on the identity/configuration set below."
   type        = bool
   default     = false
+}
+
+variable "ses_domain" {
+  description = "SES sending domain (PORTICO_EMAIL_DOMAIN for the email adapter; null = none)."
+  type        = string
+  default     = null
+}
+
+variable "ses_configuration_set_name" {
+  type    = string
+  default = null
 }
 
 variable "ses_identity_arn" {

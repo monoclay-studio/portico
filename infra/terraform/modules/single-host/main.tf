@@ -27,6 +27,9 @@ locals {
     postgres_image  = var.postgres_image
     app_port        = var.app_port
     cors_origins    = join(",", var.cors_origins)
+    app_base_url    = var.app_base_url == null ? "" : var.app_base_url
+    cell            = var.name_prefix
+    trusted_proxies = join(",", var.trusted_proxies)
     seed_demo       = tostring(var.seed_demo)
     image_tag       = var.image_tag
     portico_sh_b64  = filebase64("${path.module}/files/portico.sh")

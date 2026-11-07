@@ -1,15 +1,19 @@
 #!/bin/bash
 # Portico demo host control script (tier "demo": api + worker + Postgres on one instance).
 #
-#   portico.sh deploy <image-tag>   pull images, bootstrap DB roles, migrate, seed (first time), replace api/worker,
-#                                   health-gate, roll back to the previous tag if /health/ready fails
+#   portico.sh deploy <image-tag> [app-base-url]
+#                                   pull images, bootstrap DB roles, migrate, grant job-routing functions to the
+#                                   worker role, seed (first time), replace api/worker, health-gate, roll back to the
+#                                   previous tag if /health/ready fails. app-base-url: the CloudFront URL when the
+#                                   demo has no custom domain (links in staff invitations / password resets)
 #   portico.sh status               containers, current tag, readiness
 #   portico.sh reseed               wipe the demo database and seed it again (demo data only — never real data)
 #
 # Invoked by cloud-init on first boot and by the deploy pipeline through SSM Run Command. Runs as root.
 # Database credentials are generated on this host at first boot (/opt/portico/secrets.env, 0600) and never leave
-# it. The same role model as AWS-managed tiers applies: the app connects as portico_app_blue (RLS enforced), never
-# as a superuser; migrations run as portico_owner.
+# it, and so are the application keys (field encryption, blind index, terms seal, payment-simulator signing). The
+# same role model as AWS-managed tiers applies: the API connects as portico_app_blue and the worker as
+# portico_worker_blue (RLS enforced for both), never as a superuser; migrations run as portico_owner.
 set -euo pipefail
 
 source /opt/portico/portico.env
@@ -17,6 +21,7 @@ source /opt/portico/secrets.env
 
 CMD="${1:-}"
 TAG="${2:-}"
+APP_BASE_URL="${3:-${APP_BASE_URL:-}}"
 NET=portico
 REGISTRY="${API_REPO%%/*}"
 STATE=/var/lib/portico
@@ -31,6 +36,7 @@ logs_for() {
 }
 
 app_url() { echo "postgres://portico_app_blue:${APP_BLUE_PASSWORD}@portico-postgres:5432/portico?sslmode=disable"; }
+worker_url() { echo "postgres://portico_worker_blue:${WORKER_BLUE_PASSWORD}@portico-postgres:5432/portico?sslmode=disable"; }
 owner_url() { echo "postgres://portico_owner:${OWNER_PASSWORD}@portico-postgres:5432/portico?sslmode=disable"; }
 
 write_env_files() {
@@ -44,18 +50,37 @@ MASTER_USERNAME=postgres
 MASTER_PASSWORD=${PG_SUPERUSER_PASSWORD}
 OWNER_SECRET_JSON={"username":"portico_owner","password":"${OWNER_PASSWORD}"}
 APP_SECRET_JSON={"username":"portico_app_blue","password":"${APP_BLUE_PASSWORD}","standby_username":"portico_app_green","standby_password":"${APP_GREEN_PASSWORD}"}
+WORKER_SECRET_JSON={"username":"portico_worker_blue","password":"${WORKER_BLUE_PASSWORD}","standby_username":"portico_worker_green","standby_password":"${WORKER_GREEN_PASSWORD}"}
 EOF
   cat > "$RUN/migrate.env" <<EOF
 NODE_ENV=production
 DATABASE_URL=$(owner_url)
 EOF
-  cat > "$RUN/app.env" <<EOF
-NODE_ENV=production
-PORT=${APP_PORT}
+  # Settings and keys both processes need (both run the full composition root).
+  local common
+  common="NODE_ENV=production
 LOG_LEVEL=info
-CORS_ORIGINS=${CORS_ORIGINS}
 PORTICO_DEPLOYMENT=demo
+PORTICO_CELL=${CELL}
+PORTICO_FIELD_KEY_ID=${CELL}-field-v1
+PORTICO_FIELD_KEY=${PORTICO_FIELD_KEY}
+PORTICO_BLIND_INDEX_KEY=${PORTICO_BLIND_INDEX_KEY}
+PORTICO_TERMS_SEAL_KEY=${PORTICO_TERMS_SEAL_KEY}
+PAYMENTS_SIMULATOR_SIGNING_SECRET=${PAYMENTS_SIMULATOR_SIGNING_SECRET}"
+  if [ -n "$APP_BASE_URL" ]; then
+    common="$common
+PORTICO_APP_BASE_URL=${APP_BASE_URL}"
+  fi
+  cat > "$RUN/app.env" <<EOF
+$common
+PORT=${APP_PORT}
+CORS_ORIGINS=${CORS_ORIGINS}
+TRUSTED_PROXY_CIDRS=${TRUSTED_PROXY_CIDRS}
 APP_DATABASE_URL=$(app_url)
+EOF
+  cat > "$RUN/worker.env" <<EOF
+$common
+APP_DATABASE_URL=$(worker_url)
 EOF
 }
 
@@ -96,7 +121,7 @@ start_services() { # <tag>
     --env-file "$RUN/app.env" -p "${APP_PORT}:${APP_PORT}" $(logs_for api) "$API_REPO:$tag" >/dev/null
   # shellcheck disable=SC2046
   docker run -d --name portico-worker --network "$NET" --restart unless-stopped "${HARDENING[@]}" \
-    --env-file "$RUN/app.env" $(logs_for worker) "$WORKER_REPO:$tag" >/dev/null
+    --env-file "$RUN/worker.env" $(logs_for worker) "$WORKER_REPO:$tag" >/dev/null
 }
 
 ready() {
@@ -119,6 +144,7 @@ deploy() {
 
   one_off db-bootstrap "$RUN/bootstrap.env" "$API_REPO:$TAG" node /app/ops/bootstrap-roles.mjs
   one_off migrate "$RUN/migrate.env" "$API_REPO:$TAG" node --import /opt/tsx/register.mjs src/migrate-cli.ts
+  one_off db-grants "$RUN/migrate.env" "$API_REPO:$TAG" node /app/ops/bootstrap-roles.mjs grants
   if [ "$SEED_DEMO" = "true" ] && [ ! -f "$STATE/seeded" ]; then
     one_off seed "$RUN/app.env" "$API_REPO:$TAG" node --import /opt/tsx/register.mjs src/seed/demo-cli.ts
     touch "$STATE/seeded"
@@ -160,5 +186,5 @@ case "$CMD" in
   deploy) deploy ;;
   status) status ;;
   reseed) reseed ;;
-  *) echo "usage: portico.sh deploy <tag> | status | reseed"; exit 2 ;;
+  *) echo "usage: portico.sh deploy <tag> [app-base-url] | status | reseed"; exit 2 ;;
 esac

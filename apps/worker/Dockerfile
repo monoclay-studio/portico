@@ -5,7 +5,8 @@
 #   docker build -f apps/worker/Dockerfile -t portico-worker:$(git rev-parse --short HEAD) .
 #
 # STATUS: written and reviewed, NOT built — no Docker daemon was available when this was authored. The same
-# deploy + tsx runtime layout was exercised outside Docker; see infra/README.md "Validation status".
+# deploy + tsx runtime layout is exercised outside Docker by infra/db/verify-roles.sh (the worker runs every job as
+# portico_worker_blue); see infra/README.md "Validation status".
 #
 # Why tsx at runtime and why no HEALTHCHECK: see apps/api/Dockerfile. The worker has no HTTP port; ECS restarts
 # it if the process exits, and stalls are caught by the outbox backlog / worker-error alarms (observability

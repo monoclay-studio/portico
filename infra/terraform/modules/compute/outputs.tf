@@ -50,3 +50,20 @@ output "task_definition_families" {
 output "deploy_config_parameter" {
   value = aws_ssm_parameter.deploy_config.name
 }
+
+output "runtime_contract" {
+  description = "Names (never values) of the environment variables and injected secrets per container, plus the secret each DB URL comes from. Used by tests and the runbooks."
+  value = {
+    api = {
+      environment = sort([for e in concat(local.base_environment, [{ name = "PORT" }, { name = "DB_POOL_MAX" }, { name = "CORS_ORIGINS" }, { name = "TRUSTED_PROXY_CIDRS" }]) : e.name])
+      secrets     = sort([for e in local.api_secrets : e.name])
+      database    = var.db_app_secret_arn
+    }
+    worker = {
+      environment = sort([for e in local.base_environment : e.name])
+      secrets     = sort([for e in local.worker_secrets : e.name])
+      database    = var.db_worker_secret_arn
+    }
+    trusted_proxy_cidrs = var.trusted_proxy_cidrs
+  }
+}

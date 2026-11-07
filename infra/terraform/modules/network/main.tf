@@ -1,9 +1,11 @@
 # VPC for one Portico cell: public subnets (load balancer, NAT, demo host), private "app" subnets (ECS tasks) and
 # isolated "data" subnets (databases; no route to the internet). Egress strategy is chosen per tier:
 #
-#   nat_mode = "none"    no NAT gateway. Tasks reach AWS APIs through VPC endpoints (lean) or run in public
-#                        subnets with a public IP (demo host). Third-party APIs (Channex, PSPs) are NOT reachable
-#                        from private subnets in this mode.
+#   nat_mode = "none"    no NAT gateway. Workloads run in public subnets with a public IP and no inbound rule
+#                        except from the load balancer / CloudFront (lean tasks, demo host) and reach AWS APIs and
+#                        third parties through the internet gateway. Private subnets have no internet egress in
+#                        this mode; interface endpoints (if configured) reach AWS APIs only — never Stripe,
+#                        Channex, identity providers or webhook targets.
 #   nat_mode = "single"  one NAT gateway (≈ $41/month + $0.056/GB in ap-south-1). If its AZ fails, private tasks in
 #                        other AZs lose internet egress (inbound traffic and AWS-endpoint traffic keep working).
 #   nat_mode = "per_az"  one NAT gateway per AZ (≈ $41/month each). No cross-AZ dependency for egress.

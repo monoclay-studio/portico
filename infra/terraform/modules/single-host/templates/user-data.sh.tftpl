@@ -16,18 +16,28 @@ LOG_GROUP=${log_group}
 POSTGRES_IMAGE=${postgres_image}
 APP_PORT=${app_port}
 CORS_ORIGINS=${cors_origins}
+APP_BASE_URL=${app_base_url}
+TRUSTED_PROXY_CIDRS=${trusted_proxies}
+CELL=${cell}
 SEED_DEMO=${seed_demo}
 EOF
 
-if [ ! -f /opt/portico/secrets.env ]; then
-  umask 077
-  {
-    echo "PG_SUPERUSER_PASSWORD=$(openssl rand -hex 24)"
-    echo "OWNER_PASSWORD=$(openssl rand -hex 24)"
-    echo "APP_BLUE_PASSWORD=$(openssl rand -hex 24)"
-    echo "APP_GREEN_PASSWORD=$(openssl rand -hex 24)"
-  } > /opt/portico/secrets.env
-fi
+# Database passwords and application keys are generated on the host and never leave it. Each value is created only
+# when missing, so a re-run never replaces a key (the field-encryption, blind-index and terms-seal keys are
+# irreplaceable for the data they protect — on the demo host that data is sample data, reseedable).
+umask 077
+touch /opt/portico/secrets.env
+ensure_secret() { # <NAME> <command producing the value>
+  grep -q "^$1=" /opt/portico/secrets.env || echo "$1=$(eval "$2")" >> /opt/portico/secrets.env
+}
+for name in PG_SUPERUSER_PASSWORD OWNER_PASSWORD APP_BLUE_PASSWORD APP_GREEN_PASSWORD WORKER_BLUE_PASSWORD WORKER_GREEN_PASSWORD; do
+  ensure_secret "$name" "openssl rand -hex 24"
+done
+for name in PORTICO_FIELD_KEY PORTICO_BLIND_INDEX_KEY PORTICO_TERMS_SEAL_KEY; do
+  ensure_secret "$name" "openssl rand -base64 48"
+done
+ensure_secret PAYMENTS_SIMULATOR_SIGNING_SECRET "openssl rand -hex 32"
+umask 022
 
 echo '${portico_sh_b64}' | base64 -d > /opt/portico/portico.sh
 chmod 0700 /opt/portico/portico.sh

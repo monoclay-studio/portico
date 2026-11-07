@@ -1,20 +1,14 @@
+# Guard rails that depend on derived settings (input-only rules are variable validations in variables.tf).
 resource "terraform_data" "guards" {
   lifecycle {
     precondition {
-      condition     = !local.run_managed || var.domain_name != null
-      error_message = "lean/resilient tiers carry real hotel data and need HTTPS end to end: set domain_name and route53_zone_id (OPEN_QUESTIONS Q1)."
-    }
-    precondition {
-      condition     = var.domain_name == null || var.route53_zone_id != null
-      error_message = "domain_name requires route53_zone_id."
-    }
-    precondition {
-      condition     = !(local.production && local.is_demo)
-      error_message = "The demo tier (Postgres on a single host, sample data only) cannot be used for production."
-    }
-    precondition {
       condition     = local.s.db_engine != "aurora" || local.s.db_instance_count >= 1
       error_message = "Aurora needs at least one instance."
+    }
+    precondition {
+      # Never trust every address to set the client IP: per-IP rate limits would then trust spoofed headers.
+      condition     = alltrue([for c in local.trusted_proxy_cidrs : can(cidrhost(c, 0)) && !endswith(c, "/0")])
+      error_message = "TRUSTED_PROXY_CIDRS must be specific CIDRs (ALB subnets and CloudFront origin-facing ranges), never 0.0.0.0/0."
     }
   }
 }
@@ -103,6 +97,8 @@ module "single_host" {
   repository_arns   = module.registry.repository_arns
   image_tag         = var.image_tag
   cors_origins      = local.cors_origins
+  app_base_url      = local.app_base_url
+  trusted_proxies   = local.trusted_proxy_cidrs
   log_group_name    = module.observability[0].log_group_names["host"]
   log_group_arn     = module.observability[0].log_group_arns["host"]
   schedule          = local.schedule
@@ -118,6 +114,8 @@ module "secrets" {
   db_host              = module.database[0].writer_endpoint
   recovery_window_days = local.ephemeral ? 0 : 30
   integration_secrets  = var.integration_secrets
+  # Keys travel with the cross-region backup copies: a restored database is useless without them.
+  replica_region = local.s.aws_backup ? var.dr_region : null
 }
 
 module "database" {
@@ -194,10 +192,15 @@ module "compute" {
   alb_access_logs_bucket       = local.production ? module.storage[0].logs_bucket_name : null
   deployment_alarm_names       = ["${local.name_prefix}-api-5xx-rate", "${local.name_prefix}-api-no-healthy-targets"]
   cors_origins                 = local.cors_origins
+  trusted_proxy_cidrs          = local.trusted_proxy_cidrs
+  app_base_url                 = local.app_base_url
   db_writer_endpoint           = module.database[0].writer_endpoint
   db_master_secret_arn         = module.database[0].master_user_secret_arn
   db_owner_secret_arn          = module.secrets[0].db_owner_secret_arn
   db_app_secret_arn            = module.secrets[0].db_app_secret_arn
+  db_worker_secret_arn         = module.secrets[0].db_worker_secret_arn
+  api_holds_worker_credentials = var.api_holds_worker_credentials
+  app_key_secret_arns          = module.secrets[0].app_key_secret_arns
   db_iam_readonly_role         = local.t == "resilient"
   secrets_kms_key_arn          = module.secrets[0].secrets_kms_key_arn
   integration_secret_arns      = module.secrets[0].integration_secret_arns
@@ -208,6 +211,8 @@ module "compute" {
   bucket_arns                  = module.storage[0].bucket_arns
   metric_namespace             = module.observability[0].metric_namespace
   ses_enabled                  = var.email_domain != null
+  ses_domain                   = var.email_domain
+  ses_configuration_set_name   = one(module.email[*].configuration_set_name)
   ses_identity_arn             = one(module.email[*].identity_arn)
   ses_configuration_set_arn    = one(module.email[*].configuration_set_arn)
   smoke_base_url               = module.edge[0].public_base_url

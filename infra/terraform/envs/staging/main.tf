@@ -34,4 +34,7 @@ module "cell" {
   github_environments   = ["staging"]
   restore_drill_enabled = false
   email_domain          = var.email_domain
+
+  # TEST-mode provider keys only (the cell refuses *_LIVE outside production).
+  injected_integration_secrets = var.injected_integration_secrets
 }

@@ -93,3 +93,9 @@ variable "injected_integration_secrets" {
   type        = map(string)
   default     = {}
 }
+
+variable "api_holds_worker_credentials" {
+  description = "true once the API serves the payments webhook route through a portico_worker pool (payments FOUNDATION_REQUESTS §4)."
+  type        = bool
+  default     = false
+}

@@ -75,3 +75,9 @@ variable "email_domain" {
   type    = string
   default = null
 }
+
+variable "injected_integration_secrets" {
+  description = "TEST-mode provider secrets that already have a value, e.g. { PAYMENTS_STRIPE_SECRET_KEY_TEST = \"payments-stripe-connect-secret-key-test\" }."
+  type        = map(string)
+  default     = {}
+}
