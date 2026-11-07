@@ -1,0 +1,8 @@
+# PoC: database module parameters (modules/database/main.tf:83-93) log statements slower than log_min_duration_statement
+# (default 1000 ms) and leave log_parameter_max_length at its default (-1 = full). node-postgres uses the extended
+# protocol, so a slow parameterized query logs its bind values (PII) to the CloudWatch log group. Reproduced on PG 16.15
+# with the threshold lowered to 0 ms for the probe database only:
+2026-11-07 21:39:51.083 UTC [24826] LOG:  duration: 0.382 ms  parse <unnamed>: select $1::text as guest_email, $2::text as passport_note, pg_sleep(0.01)
+2026-11-07 21:39:51.083 UTC [24826] LOG:  duration: 0.096 ms  bind <unnamed>: select $1::text as guest_email, $2::text as passport_note, pg_sleep(0.01)
+2026-11-07 21:39:51.083 UTC [24826] DETAIL:  parameters: $1 = 'jane.guest@example.com', $2 = 'Passport X1234567'
+2026-11-07 21:39:51.094 UTC [24826] LOG:  duration: 10.178 ms  execute <unnamed>: select $1::text as guest_email, $2::text as passport_note, pg_sleep(0.01)
