@@ -38,13 +38,27 @@ export interface LedgerScope {
   legalEntityId: string;
 }
 
+/**
+ * What finance knows about a ledger target beyond its scope (re-review #3): for a folio, whose folio it is (the stay or
+ * booking that owns it) and who pays it — payments resolves a folio's booking family (double-collection guard) and the
+ * people the cardholder's consent may cover (ADR-0015 Amendment 2).
+ */
+export interface LedgerTargetInfo extends LedgerScope {
+  owner?: { type: string; id: string } | null;
+  /** Finance's payer type (`guest` | `company` | `agency` | `house` | `other`) and id. */
+  payer?: { type: string; id: string | null } | null;
+}
+
 export interface LedgerPort {
   /**
    * Owner of a ledger target, BEFORE any money moves: payments refuses a collection whose folio/booking belongs to
    * another property or legal entity. `null` = finance does not know the target (a folio must exist; a booking may
    * receive its first deposit, which then binds it to `propertyId`).
    */
-  describeTarget(tx: TxContext, ref: { type: 'folio' | 'booking'; id: string }): Promise<LedgerScope | null>;
+  describeTarget(
+    tx: TxContext,
+    ref: { type: 'folio' | 'booking'; id: string },
+  ): Promise<LedgerTargetInfo | null>;
   /**
    * Review R2-P1-3 (AP-44): finance's own posting predicate for new money on this target at this scope, asked BEFORE
    * any card is charged, so pre-check and posting can never disagree (e.g. a booking whose deposits are held at
@@ -185,6 +199,13 @@ export interface ReferenceOwner {
   /** Bookings only: how the booking was made (`channel` for OTA/GDS bookings) and the channel connection. */
   source?: string;
   channelConnectionId?: string | null;
+  /** Stays and bookings: the booking (a stay's booking; a booking's own id) — its collection family. */
+  bookingId?: string;
+  /**
+   * Stays and bookings: the booking's people as payments owner keys (`guest_profile:<id>`, `company:<id>`,
+   * `agency:<id>`, `booking:<id>`) — a standing card-on-file consent covers only its cardholder's own bookings.
+   */
+  people?: string[];
 }
 
 export interface PropertyInfo {

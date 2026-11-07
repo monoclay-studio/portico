@@ -839,7 +839,7 @@ async function applyLinkEvent(
   if (!target) return 'no_match';
   // SW-PAY-1: the same per-reference collection lock as desk charges, holds and captures (taken before the row lock,
   // in the same order as every other path).
-  await lockCollectionRefs(tx, [{ type: target.ref_type, id: target.ref_id }]);
+  await lockCollectionRefs(d, tx, [{ type: target.ref_type, id: target.ref_id }]);
   const r = await db(tx)
     .selectFrom('payments.payment_requests')
     .selectAll()

@@ -8,6 +8,7 @@ import { sql, withTenantTx } from '@portico/db';
 import { newId } from '@portico/kernel';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
+  ALL_PURPOSES,
   addMethod,
   DEFAULT_CHANNEL_CONNECTION,
   drain,
@@ -214,26 +215,32 @@ describe('SW-PAY-1 — every collection path respects a link that owns the colle
 });
 
 describe("SW-PAY-2 — purpose 'custom' is not a way around the guard", () => {
-  it('PoC flipped: a custom desk charge on a booking with a paid deposit link needs a reason', async () => {
+  it('PoC flipped: a custom desk charge on a booking with a paid deposit link is refused; another label needs a reason', async () => {
     const org = await setupOrg(h);
     const svc = h.module.service;
     const booking = { type: 'booking' as const, id: newId() };
     await paidDepositLink(org, booking);
     const methodId = await addMethod(h, org);
-    const charge = (reason?: string) =>
+    const charge = (purpose: 'custom' | 'incidentals', reason?: string) =>
       svc.chargeNow(org.ctx, {
         propertyId: org.propertyId,
         methodId,
         amount: usd(50_000),
         ref: booking,
-        purpose: 'custom',
+        purpose,
         businessKey: newId(),
         ...(reason ? { separateCollection: { reason } } : {}),
       });
-    await expect(charge()).rejects.toMatchObject({ code: 'collection_owned_by_payment_request' });
+    // `custom` is never inside a cardholder's agreement (R3-P1-2) — with or without a reason.
+    await expect(charge('custom')).rejects.toMatchObject({ code: 'mandate_purpose_not_covered' });
+    await expect(charge('custom', 'separate')).rejects.toMatchObject({ code: 'mandate_purpose_not_covered' });
+    // Any other label for the same money needs the stated reason (R3-P2-1), audited.
+    await expect(charge('incidentals')).rejects.toMatchObject({
+      code: 'collection_owned_by_payment_request',
+    });
     expect(await postings(h, org, 'deposit')).toHaveLength(1);
     const before = await audits(org, 'payments.collection.ownershipOverride');
-    await charge('Minibar for the other room, paid separately');
+    await charge('incidentals', 'Minibar for the other room, paid separately');
     expect(await audits(org, 'payments.collection.ownershipOverride')).toBe(before + 1);
   });
 
@@ -271,9 +278,9 @@ describe('SW-PAY-3 — a card is a parameter only at the property it was saved a
         providerToken: 'pm_card_visa',
         brand: 'visa',
         last4: '4242',
-        owner: { type: 'guest_profile', id: newId() },
+        owner: { type: 'guest_profile', id: org.payerId },
         mitAgreement: true,
-        mandate: mandate(),
+        mandate: mandate({ scope: { legalEntityId: org.legalEntityId, purposes: [...ALL_PURPOSES] } }),
       }),
     );
 
@@ -722,34 +729,29 @@ describe('R2-P1-2 (payments side) — one balance request per departed folio, eq
     expect(rows.filter((r) => r.status === 'open')).toEqual([]);
   });
 
-  it('amends in place before the link exists; a paid part is never asked again or undercut', async () => {
+  it('a paid part is never asked again or undercut; a closed request stops taking money at the provider', async () => {
     const org = await setupOrg(h);
     const svc = h.module.service;
     const folio = newId();
-    const first = await org.tx((tx) =>
-      svc.tx.createPaymentRequest(tx, {
-        propertyId: org.propertyId,
-        payer: { type: 'other', name: 'Guest' },
-        amount: usd(10_000),
-        purpose: 'balance',
-        ref: { type: 'folio', id: folio },
-        expiresAt: new Date(h.clock.now().getTime() + 86_400_000).toISOString(),
-        businessKey: newId(),
-      }),
-    );
-    expect(await sync(org, folio, 25_000)).toMatchObject({ status: 'amended', openMinor: 25_000 });
-    expect((await requests(folio))[0]).toMatchObject({ amount_minor: 25_000 });
+    expect(await sync(org, folio, 10_000)).toMatchObject({ status: 'requested', openMinor: 10_000 });
+    const firstId = (
+      await sql<{ id: string }>`select id from payments.payment_requests where ref_id = ${folio}`.execute(
+        h.t.admin.kysely,
+      )
+    ).rows[0]?.id as string;
     // The guest pays 5,000 of it through the link…
-    await svc.ensurePaymentLink(org.ctx, first.id);
-    await svc.simulateRequestPayment(org.ctx, first.id, 5_000);
+    await svc.ensurePaymentLink(org.ctx, firstId);
+    await svc.simulateRequestPayment(org.ctx, firstId, 5_000);
     await svc.deliverSimulatorWebhooks(org.ctx, org.simAccountId);
-    // …then the folio is corrected to owe nothing: the request closes at what was paid, never below it.
+    // …then the folio is corrected to owe nothing: the request closes at what was paid, never below it…
     expect(await sync(org, folio, 0)).toMatchObject({ status: 'cancelled', openMinor: 0 });
     expect((await requests(folio))[0]).toMatchObject({
       amount_minor: 5_000,
       paid_minor: 5_000,
       status: 'paid',
     });
+    // …and its link no longer takes money at the provider (Amendment 2).
+    await expect(svc.simulateRequestPayment(org.ctx, firstId, 1_000)).rejects.toThrow(/no longer active/);
   });
 
   it('a payment still being confirmed on the folio defers the change (never asks twice)', async () => {

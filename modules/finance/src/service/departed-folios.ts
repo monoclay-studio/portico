@@ -6,21 +6,32 @@
  * one open `late_charge` exception says what is owed and what was ACTUALLY requested (severity recomputed every time).
  *
  * A folio counts as departed once a charge was posted to it after its owner left (`post_departure`); payments made
- * through payments' own paths (cards, links) keep the request in step themselves (a paid link credits its request).
+ * through payments' own paths are posted through finance too, so they re-sync like any other change; a payment still being
+ * confirmed DEFERS the change, and the end of that payment (succeeded or failed) re-runs the sync
+ * (`financeSubscriptions`, re-review #3 R3-P1-1(ii)).
  */
 import { type TxContext, withSavepoint } from '@portico/db';
 import { DomainError, formatMoney, type LocalDate, money } from '@portico/kernel';
 import type { BalanceSyncResult } from '../ports';
-import { type Deps, db, folioBalance, loadFolio, ownerDeparture, raiseException } from './support';
+import {
+  type Deps,
+  db,
+  folioBalance,
+  loadFolio,
+  lockMoneyFolios,
+  ownerDeparture,
+  raiseException,
+} from './support';
 
 export interface FolioBalanceChange {
   /** What changed, in words staff recognise ("Late charge \"Spa\"", "Reversal of …", "Transfer to …"). */
   reason: string;
-  entryId: string;
+  /** The journal entry that changed the balance (none when a deferral ends because a payment failed). */
+  entryId: string | null;
   businessDate: LocalDate;
 }
 
-const REQUESTED = new Set(['requested', 'amended', 'reissued', 'unchanged']);
+const REQUESTED = new Set(['requested', 'reissued', 'unchanged']);
 
 export async function syncDepartedFolios(
   tx: TxContext,
@@ -59,7 +70,7 @@ export async function syncDepartedFolios(
     const fmt = (n: number) => formatMoney(money(n, f.currency));
     const departure = await ownerDeparture(tx, { type: f.owner_type, id: f.owner_id });
     const details = {
-      entryId: change.entryId,
+      ...(change.entryId ? { entryId: change.entryId } : {}),
       ...(departure ? { departedOn: departure.departedOn } : {}),
       balanceMinor: balance,
       owedMinor: owed,
@@ -68,6 +79,21 @@ export async function syncDepartedFolios(
       ...(sync.requestId ? { paymentRequestId: sync.requestId } : {}),
       ...(sync.detail ? { collectionDetail: sync.detail } : {}),
     };
+    if (sync.status === 'deferred') {
+      // Re-review #3 R3-P1-1(ii): a deferral is never "resolved". The item stays open, says what the link still asks
+      // for, and is urgent when that is more than the folio owes; the sync re-runs when the payment succeeds or fails.
+      const asksMore = sync.openMinor > owed;
+      await raiseException(tx, {
+        propertyId: f.property_id,
+        kind: 'late_charge',
+        severity: asksMore || owed > 0 ? 'urgent' : 'routine',
+        ref: { type: 'folio', id: folioId },
+        message: `${change.reason}: ${f.payer_name}'s folio, after departure, owes ${fmt(owed)}. Deferred — a payment on it is still being confirmed${sync.openMinor > 0 ? `, and the open payment link still asks for ${fmt(sync.openMinor)}` : ''}. Portico brings the link in line as soon as the payment succeeds or fails; do not send the link meanwhile.`,
+        details,
+        businessDate: change.businessDate,
+      });
+      continue;
+    }
     if (owed > 0) {
       const ask =
         requested === owed
@@ -114,4 +140,25 @@ export async function syncDepartedFolios(
       .where('status', '=', 'open')
       .execute();
   }
+}
+
+/**
+ * Re-review #3 R3-P1-1(ii): the end of a deferral. When a payment on a departed folio that was still being confirmed
+ * succeeds or fails, the balance request is brought in line (under the collection and folio locks). Idempotent: a
+ * second delivery finds the request already equal to the debt.
+ */
+export async function resyncDepartedFolio(
+  tx: TxContext,
+  deps: Deps,
+  input: { folioId: string; reason: string },
+): Promise<void> {
+  const f0 = await db(tx)
+    .selectFrom('finance.folios')
+    .select(['id', 'property_id', 'post_departure'])
+    .where('id', '=', input.folioId)
+    .executeTakeFirst();
+  if (!f0?.post_departure) return;
+  await lockMoneyFolios(tx, deps, [f0.id]);
+  const businessDate = await deps.ports.platform.getBusinessDate(tx, f0.property_id);
+  await syncDepartedFolios(tx, deps, [f0.id], { reason: input.reason, entryId: null, businessDate });
 }

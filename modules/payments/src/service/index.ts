@@ -18,7 +18,7 @@ import { executeOperation, verifyOperation } from './operations';
 import * as queries from './queries';
 import * as reconcile from './reconcile';
 import * as requests from './requests';
-import { db, type PaymentsDeps, requestContextOf, requireRead } from './shared';
+import { db, lockCollectionRefs, type PaymentsDeps, requestContextOf, requireRead } from './shared';
 import * as webhooks from './webhooks';
 
 export interface PaymentsServiceDeps {
@@ -277,6 +277,13 @@ export function createPaymentsService(input: PaymentsServiceDeps) {
         },
       ) => accounts.assessGuaranteeCard(d, tx, i),
       /**
+       * Re-review #3 (R3-P3-3): the collection lock of these references (one key per booking family), taken by finance
+       * BEFORE it locks a folio whose balance it changes — the same lock every payments collection path takes first,
+       * so finance and payments always lock in one order: collection → folio → request.
+       */
+      lockCollections: (tx: TxContext, refs: ReadonlyArray<{ type: string; id: string }>) =>
+        lockCollectionRefs(d, tx, refs),
+      /**
        * Review R2-P1-2: keep the ONE open balance request of a departed folio equal to what the folio owes (finance
        * calls it under its folio lock after every balance change). Intent only; links are made after commit.
        */
@@ -286,11 +293,15 @@ export function createPaymentsService(input: PaymentsServiceDeps) {
       ): Promise<requests.BalanceSyncResult> {
         tx = delegateAtProperty(tx, PORT_DELEGATION, i.propertyId);
         const r = await requests.syncBalanceRequest(d, tx, i);
-        if (r.requestId && (r.status === 'requested' || r.status === 'reissued' || r.status === 'amended')) {
-          const ctx = requestContextOf(tx);
-          const id = r.requestId;
-          tx.afterCommit(() => requests.ensurePaymentLink(d, ctx, id));
-        }
+        const ctx = requestContextOf(tx);
+        // After commit: deactivate the retired link first (its confirmation releases the replacement's link), else
+        // create the new request's link.
+        const retired = r.retiredRequestId;
+        const created = r.status === 'requested' || r.status === 'reissued' ? r.requestId : null;
+        tx.afterCommit(async () => {
+          if (retired) await requests.ensureLinkDeactivated(d, ctx, retired);
+          if (created) await requests.ensurePaymentLink(d, ctx, created);
+        });
         return r;
       },
       listUnresolved: (tx: TxContext, i: { propertyId: string }) =>

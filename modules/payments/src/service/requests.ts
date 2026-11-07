@@ -28,6 +28,7 @@ import { decideAttempt } from '../domain/circuit-breaker';
 import { explainDecline } from '../domain/declines';
 import { vccIsActive } from '../domain/schedule';
 import { PaymentsEvents } from '../events';
+import type { LinkDeactivationOutcome } from '../providers/provider';
 import { isSimulatorTestToken } from '../providers/simulator';
 import { charge } from './collect';
 import { executeOperation, loadBreaker } from './operations';
@@ -45,6 +46,8 @@ import {
   lockCollectionRefs,
   type PaymentsDeps,
   type RequestRow,
+  referenceContext,
+  requestContextOf,
   requestHash,
   requireRead,
   toProviderAccount,
@@ -59,6 +62,7 @@ const REQUEST_TO_PAYMENT_PURPOSE: Record<string, string> = {
 
 /** P1-2: a new link must not ask again for money already collected (or being collected) for the same purpose. */
 async function assertNoCompetingCollection(
+  d: PaymentsDeps,
   tx: TxContext,
   ref: { type: 'folio' | 'booking'; id: string },
   purpose: string,
@@ -80,11 +84,17 @@ async function assertNoCompetingCollection(
       'recorded_verified',
     ])
     .executeTakeFirst();
+  // R3-P2-1: an open link for the same purpose anywhere in the booking family (booking, stays, folios) competes too.
+  const { bookingId } = await referenceContext(d, tx, ref);
   const openRequest = await db(tx)
     .selectFrom('payments.payment_requests')
     .select(['id', 'status'])
-    .where('ref_type', '=', ref.type)
-    .where('ref_id', '=', ref.id)
+    .where((eb) =>
+      eb.or([
+        eb.and([eb('ref_type', '=', ref.type), eb('ref_id', '=', ref.id)]),
+        ...(bookingId ? [eb('family_booking_id', '=', bookingId)] : []),
+      ]),
+    )
     .where('purpose', '=', purpose as 'deposit')
     .where('status', 'in', ['open', 'partially_paid'])
     .executeTakeFirst();
@@ -132,11 +142,11 @@ export async function createPaymentRequest(
   const property = await loadProperty(d, tx, input.propertyId);
   await assertLedgerTarget(d, tx, input.ref, property);
   // SW-PAY-1: the same per-reference lock as every collection path, so a link and a desk charge never both pass.
-  await lockCollectionRefs(tx, [input.ref]);
+  await lockCollectionRefs(d, tx, [input.ref]);
   // A balance request kept in line with the folio (late charges) asks for what the ledger says is owed, which
   // already counts every payment collected; its caller refused while one is still in flight.
   if (!opts.ledgerSynced) {
-    await assertNoCompetingCollection(tx, input.ref, input.purpose, input.separateCollection);
+    await assertNoCompetingCollection(d, tx, input.ref, input.purpose, input.separateCollection);
   }
   const expiresAt = new Date(input.expiresAt);
   if (expiresAt.getTime() <= tx.now.getTime() + 15 * 60_000) {
@@ -175,11 +185,13 @@ export async function createPaymentRequest(
   }
   const mode = d.registry.modeFor(tx, account);
   const id = newId(tx.now.getTime());
+  const { bookingId: familyBookingId } = await referenceContext(d, tx, input.ref);
   await db(tx)
     .insertInto('payments.payment_requests')
     .values({
       id,
       tenant_id: tx.tenantId,
+      family_booking_id: familyBookingId,
       property_id: input.propertyId,
       legal_entity_id: property.legalEntityId,
       account_id: account.id,
@@ -236,6 +248,17 @@ export async function ensurePaymentLink(
       .where('id', '=', requestId)
       .executeTakeFirst();
     if (r?.status !== 'open' || r.link_status === 'created' || r.link_status === 'failed') return null;
+    // Re-review #3 (Amendment 2): a replacement link is sent only once the provider confirmed the old link of the
+    // same reference no longer takes payments (`deactivating` → `deactivated`); until then the guest has one link.
+    const retiring = await db(tx)
+      .selectFrom('payments.payment_requests')
+      .select('id')
+      .where('ref_type', '=', r.ref_type)
+      .where('ref_id', '=', r.ref_id)
+      .where('link_status', '=', 'deactivating')
+      .where('id', '!=', r.id)
+      .executeTakeFirst();
+    if (retiring) return null;
     const account = await loadAccount(tx, r.account_id);
     // P1-11: a link recorded for one effect mode is never created in another (e.g. simulated → live).
     let modeNow: string;
@@ -275,22 +298,139 @@ export async function ensurePaymentLink(
   } catch (err) {
     outcome = { kind: 'unknown', reason: err instanceof Error ? err.message : String(err) };
   }
-  await withTenantTx(d.database, ctx, async (tx) => {
+  const retire = await withTenantTx(d.database, ctx, async (tx) => {
+    const now = await db(tx)
+      .selectFrom('payments.payment_requests')
+      .select(['status', 'version'])
+      .where('id', '=', r.id)
+      .forUpdate()
+      .executeTakeFirstOrThrow();
+    // The request was closed or replaced while its link was being created: the new link must not stay payable.
+    const closed = now.status !== 'open' && now.status !== 'partially_paid';
     await db(tx)
       .updateTable('payments.payment_requests')
       .set(
         outcome.kind === 'created'
           ? {
-              link_status: 'created',
+              link_status: closed ? 'deactivating' : 'created',
               provider_link_ref: outcome.linkRef,
-              link_url: outcome.url,
-              version: r.version + 1,
+              link_url: closed ? null : outcome.url,
+              version: now.version + 1,
             }
-          : { link_status: outcome.kind === 'failed' ? 'failed' : 'unknown', version: r.version + 1 },
+          : {
+              link_status: outcome.kind === 'failed' ? 'failed' : closed ? 'deactivating' : 'unknown',
+              version: now.version + 1,
+            },
       )
       .where('id', '=', r.id)
       .execute();
+    return closed && outcome.kind !== 'failed';
   });
+  if (retire) await ensureLinkDeactivated(d, ctx, r.id);
+}
+
+/**
+ * Re-review #3 (ADR-0015 Amendment 2): payment links are externally writable — the provider takes payments on a link
+ * until it confirms the link is deactivated. Inside the transaction that closes, replaces or cancels a request, its
+ * link is marked `deactivating`; after commit `ensureLinkDeactivated` tells the provider. Until the provider confirms,
+ * the old link counts as possibly payable (a payment on it is credited to the closed request and raised as an URGENT
+ * refund exception), and no replacement link is sent.
+ */
+export async function retireRequestLink(tx: TxContext, r: RequestRow): Promise<boolean> {
+  const possiblyLive = r.provider_link_ref !== null || r.link_status === 'unknown';
+  if (!possiblyLive || r.link_status === 'deactivated') return false;
+  await db(tx)
+    .updateTable('payments.payment_requests')
+    .set({ link_status: 'deactivating', link_url: null })
+    .where('id', '=', r.id)
+    .execute();
+  return true;
+}
+
+/** After commit: deactivate a retired link at the provider, then release any replacement waiting for it. */
+export async function ensureLinkDeactivated(
+  d: PaymentsDeps,
+  ctx: RequestContext,
+  requestId: string,
+): Promise<'deactivated' | 'pending'> {
+  const loaded = await withTenantTx(d.database, ctx, async (tx) => {
+    const r = await db(tx)
+      .selectFrom('payments.payment_requests')
+      .selectAll()
+      .where('id', '=', requestId)
+      .executeTakeFirst();
+    if (r?.link_status !== 'deactivating') return null;
+    return { r, account: await loadAccount(tx, r.account_id) };
+  });
+  if (!loaded) return 'deactivated';
+  const { r, account } = loaded;
+  const pa = toProviderAccount(account);
+  let outcome: LinkDeactivationOutcome;
+  try {
+    const resolved = d.registry.forAccount(ctx, pa);
+    if (!resolved.ok) {
+      outcome = { kind: 'unknown', reason: 'provider not available' };
+    } else {
+      let linkRef = r.provider_link_ref;
+      if (!linkRef) {
+        // The link's creation outcome was unknown: recover its reference (same idempotency key — never a second link).
+        const created = await resolved.provider.createPaymentLink(pa, {
+          operationId: r.id,
+          idempotencyKey: `portico-link-${r.id}`,
+          amount: { amountMinor: Math.max(1, r.amount_minor - r.paid_minor), currency: r.currency },
+          description: r.description ?? `Payment ${r.purpose}`,
+          expiresAt: new Date(r.expires_at),
+          requestId: r.id,
+        });
+        linkRef = created.kind === 'created' ? created.linkRef : null;
+      }
+      outcome = linkRef
+        ? await resolved.provider.deactivatePaymentLink(pa, {
+            operationId: r.id,
+            idempotencyKey: `portico-link-off-${r.id}`,
+            linkRef,
+          })
+        : { kind: 'unknown', reason: 'link reference not recovered' };
+      if (linkRef && !r.provider_link_ref) {
+        await withTenantTx(d.database, ctx, (tx) =>
+          db(tx)
+            .updateTable('payments.payment_requests')
+            .set({ provider_link_ref: linkRef })
+            .where('id', '=', r.id)
+            .execute(),
+        );
+      }
+    }
+  } catch (err) {
+    outcome = { kind: 'unknown', reason: err instanceof Error ? err.message : String(err) };
+  }
+  // `already_completed`: the provider took a payment on it; that payment arrives by webhook and is credited to the
+  // closed request (urgent refund exception). Either way the link takes no further payment.
+  if (outcome.kind !== 'deactivated' && outcome.kind !== 'already_completed') return 'pending';
+  const waiting = await withTenantTx(d.database, ctx, async (tx) => {
+    await db(tx)
+      .updateTable('payments.payment_requests')
+      .set((eb) => ({ link_status: 'deactivated', version: eb('version', '+', 1) }))
+      .where('id', '=', r.id)
+      .where('link_status', '=', 'deactivating')
+      .execute();
+    await tx.audit({
+      action: 'payments.request.linkDeactivated',
+      target: { type: 'payment_request', id: r.id },
+      propertyId: r.property_id,
+      after: { outcome: outcome.kind },
+    });
+    return db(tx)
+      .selectFrom('payments.payment_requests')
+      .select('id')
+      .where('ref_type', '=', r.ref_type)
+      .where('ref_id', '=', r.ref_id)
+      .where('status', '=', 'open')
+      .where('link_status', '=', 'pending')
+      .execute();
+  });
+  for (const w of waiting) await ensurePaymentLink(d, ctx, w.id);
+  return 'deactivated';
 }
 
 export async function getPaymentRequest(tx: TxContext, id: string): Promise<PaymentRequest> {
@@ -354,6 +494,11 @@ export async function cancelPaymentRequest(
     .returningAll()
     .executeTakeFirst();
   if (!row) return explainVersionMiss('payment_request', id, expectedVersion, async () => r.version);
+  // Re-review #3: a cancelled request's link stops taking payments at the provider (after commit).
+  if (await retireRequestLink(tx, row)) {
+    const ctx = requestContextOf(tx);
+    tx.afterCommit(() => ensureLinkDeactivated(d, ctx, id).then(() => undefined));
+  }
   await tx.audit({
     action: 'payments.request.cancel',
     target: { type: 'payment_request', id },
@@ -415,11 +560,16 @@ export interface BalanceSyncInput {
 }
 
 export interface BalanceSyncResult {
-  status: 'requested' | 'amended' | 'reissued' | 'cancelled' | 'unchanged' | 'none' | 'deferred';
+  status: 'requested' | 'reissued' | 'cancelled' | 'unchanged' | 'none' | 'deferred';
   /** The open balance request after the sync, if any. */
   requestId: string | null;
   /** What the open request still asks the payer for (0 when none). Never more than the folio owes. */
   openMinor: number;
+  /**
+   * The request this sync closed or replaced, whose provider link is being deactivated (after commit). Until the
+   * provider confirms, that link may still be paid; the replacement link is sent only after the confirmation.
+   */
+  retiredRequestId?: string;
   detail: string;
 }
 
@@ -427,12 +577,21 @@ export interface BalanceSyncResult {
 const BALANCE_REQUEST_DAYS = 7;
 
 /**
- * Review R2-P1-2: after departure a folio has at most ONE open balance request, and it always asks for what the
- * folio owes now. Finance calls this under its folio lock after every change to a departed folio's balance (late
- * charge, reversal, adjustment, transfer, desk payment, deposit application): payments creates the request, amends
- * it up or down (never below what was already paid through it), re-issues it when the provider link cannot be changed,
- * or closes it when nothing is owed. While a payment on the folio is still being confirmed nothing changes (the
- * folio's balance does not show it yet), and the result says so — never "requested" for an amount that was not.
+ * Review R2-P1-2 / re-review #3 R3-P1-1: after departure a folio has at most ONE open balance request, and it always asks
+ * for what the folio owes now. Finance calls this under the collection lock and its folio lock after every change to a
+ * departed folio's balance (late charge, reversal, adjustment, transfer, settlement to receivables, payment, refund,
+ * payment adjustment, deposit application, and the end of a deferral when an in-flight payment fails or succeeds).
+ *
+ * The request is a small state machine with the provider as an external writer (ADR-0015 Amendment 2):
+ *  - none + debt → `requested` (a new request; its link is created after commit);
+ *  - open + same debt → `unchanged`;
+ *  - open + other debt → `reissued`: the old request is cancelled and its link deactivated at the provider; the new
+ *    request's link is created only once the provider confirmed (until then the old link may still be paid — such a
+ *    payment is credited to the cancelled request and raised as an URGENT refund exception);
+ *  - open + no debt → `cancelled` (or closed as paid at what was already paid through it), link deactivated;
+ *  - a payment on the folio still being confirmed → `deferred`: nothing changes (the balance does not show it yet);
+ *    finance keeps an open item and re-runs the sync when that payment fails or succeeds.
+ * Amounts never change in place: a provider link's amount cannot change, and a request's amount is what was sent.
  */
 export async function syncBalanceRequest(
   d: PaymentsDeps,
@@ -444,7 +603,7 @@ export async function syncBalanceRequest(
   await assertPaymentsWritable(d, tx, input.propertyId);
   const property = await loadProperty(d, tx, input.propertyId);
   await assertLedgerTarget(d, tx, ref, property);
-  await lockCollectionRefs(tx, [ref]);
+  await lockCollectionRefs(d, tx, [ref]);
   const open = await db(tx)
     .selectFrom('payments.payment_requests')
     .selectAll()
@@ -470,7 +629,7 @@ export async function syncBalanceRequest(
       requestId: current?.id ?? null,
       openMinor: openMinor(current),
       detail:
-        'A payment on this folio is still being confirmed, so the balance request was not changed (asking now could ask twice). Check the folio once the payment is confirmed.',
+        'A payment on this folio is still being confirmed, so the balance request was not changed (asking now could ask twice). It is brought in line as soon as that payment succeeds or fails.',
     };
   }
   const want = Math.max(0, input.outstanding.amountMinor);
@@ -537,77 +696,52 @@ export async function syncBalanceRequest(
       detail: `The open payment request already asks for ${fmt(want)}.`,
     };
   }
-  if (want === 0) {
-    // Nothing owed any more: close the request. Never below what was already paid through it.
-    const paidInFull = current.paid_minor > 0;
-    await db(tx)
-      .updateTable('payments.payment_requests')
-      .set(
-        paidInFull
-          ? { amount_minor: current.paid_minor, status: 'paid', version: current.version + 1 }
-          : {
-              status: 'cancelled',
-              cancelled_reason: `The folio no longer owes anything (${input.reason}).`,
-              version: current.version + 1,
-            },
-      )
-      .where('id', '=', current.id)
-      .execute();
-    await audit(current.id, before, 0, paidInFull ? 'closed_as_paid' : 'cancelled');
-    if (!paidInFull) {
-      await tx.emit({
-        type: PaymentsEvents.requestCancelled,
-        propertyId: current.property_id,
-        aggregate: { type: 'payment_request', id: current.id },
-        payload: { paymentRequestId: current.id, reason: 'balance_settled' },
-      });
-    }
-    return {
-      status: 'cancelled',
-      requestId: null,
-      openMinor: 0,
-      detail: `The folio no longer owes anything, so the payment request for ${fmt(before)} was ${paidInFull ? 'closed' : 'cancelled'}.`,
-    };
-  }
-  if (!current.provider_link_ref) {
-    // No provider link yet: amend in place (the link is created for the new amount).
-    await db(tx)
-      .updateTable('payments.payment_requests')
-      .set({ amount_minor: current.paid_minor + want, version: current.version + 1 })
-      .where('id', '=', current.id)
-      .execute();
-    await audit(current.id, before, want, 'amended');
-    return {
-      status: 'amended',
-      requestId: current.id,
-      openMinor: want,
-      detail: `The open payment request now asks for ${fmt(want)} (was ${fmt(before)}).`,
-    };
-  }
-  // A provider link cannot change its amount: cancel it and issue a new one. A payment that still arrives on the old
-  // link is credited to the cancelled request and raised for a refund or credit (never lost).
+  // Close the current request (never below what was already paid through it) and stop its link at the provider.
+  const paidSome = current.paid_minor > 0;
   await db(tx)
     .updateTable('payments.payment_requests')
-    .set({
-      status: 'cancelled',
-      cancelled_reason: `Replaced by a request for ${fmt(want)}: the folio balance changed (${input.reason}).`,
-      version: current.version + 1,
-    })
+    .set(
+      paidSome && want === 0
+        ? { amount_minor: current.paid_minor, status: 'paid', version: current.version + 1 }
+        : {
+            status: 'cancelled',
+            cancelled_reason:
+              want === 0
+                ? `The folio no longer owes anything (${input.reason}).`
+                : `Replaced by a request for ${fmt(want)}: the folio balance changed (${input.reason}).`,
+            version: current.version + 1,
+          },
+    )
     .where('id', '=', current.id)
     .execute();
+  const retiring = await retireRequestLink(tx, current);
   await tx.emit({
     type: PaymentsEvents.requestCancelled,
     propertyId: current.property_id,
     aggregate: { type: 'payment_request', id: current.id },
-    payload: { paymentRequestId: current.id, reason: 'balance_changed' },
+    payload: { paymentRequestId: current.id, reason: want === 0 ? 'balance_settled' : 'balance_changed' },
   });
+  const linkNote = retiring
+    ? ' Its link is being deactivated at the provider; until the provider confirms, a payment on it is refunded as an urgent item.'
+    : '';
+  if (want === 0) {
+    await audit(current.id, before, 0, paidSome ? 'closed_as_paid' : 'cancelled');
+    return {
+      status: 'cancelled',
+      requestId: null,
+      openMinor: 0,
+      ...(retiring ? { retiredRequestId: current.id } : {}),
+      detail: `The folio no longer owes anything, so the payment request for ${fmt(before)} was closed.${linkNote}`,
+    };
+  }
   const id = await create(want);
   await audit(id, before, want, `reissued (replaces ${current.id})`);
   return {
     status: 'reissued',
     requestId: id,
     openMinor: want,
-    detail: `The folio now owes ${fmt(want)}: the earlier link for ${fmt(before)} was cancelled and a new payment link created. Send the new link.`,
+    ...(retiring ? { retiredRequestId: current.id } : {}),
+    detail: `The folio now owes ${fmt(want)}: the request for ${fmt(before)} was replaced.${linkNote} The new link is sent once the old one is confirmed inactive.`,
   };
 }
 
@@ -861,7 +995,9 @@ export async function runDueVirtualCards(
             methodId: card.method_id,
             amount: { amountMinor: card.amount_minor, currency: card.currency },
             ref: { type: card.ref_type, id: card.ref_id },
-            purpose: 'custom', // the channel's card pays the channel's booking: not owned by a guest link
+            // The channel's card pays the channel's booking: a deposit on the booking (or the balance of a folio),
+            // inside the channel card's agreement (R3-P1-2: `custom` is never a covered purpose).
+            purpose: card.ref_type === 'booking' ? 'deposit' : 'balance',
             businessKey: `vcc:${card.id}:attempt:${attempt}`,
           },
           { virtualCardId: card.id, method: 'virtual_card' },

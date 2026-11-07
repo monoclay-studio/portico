@@ -280,9 +280,12 @@ describe('payments → finance LedgerPort', () => {
     const s = await openStay(h, org);
     const sister = await addProperty(h, org);
     const otherEntity = await addProperty(h, org, { newLegalEntity: true });
-    expect(await org.run((tx) => ledger.describeTarget(tx, { type: 'folio', id: s.guestFolioId }))).toEqual(
-      scope(org),
-    );
+    // Re-review #3: a folio's description also says whose folio it is and who pays it (payments' family and consent).
+    expect(await org.run((tx) => ledger.describeTarget(tx, { type: 'folio', id: s.guestFolioId }))).toEqual({
+      ...scope(org),
+      owner: { type: 'stay', id: s.stayId },
+      payer: expect.objectContaining({ type: 'guest' }),
+    });
     expect(await org.run((tx) => ledger.describeTarget(tx, { type: 'booking', id: newId() }))).toBeNull();
     const pay = (sc: { propertyId: string; legalEntityId: string }) =>
       org.run((tx) =>

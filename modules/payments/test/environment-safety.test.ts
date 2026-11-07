@@ -7,7 +7,7 @@ import { sql } from '@portico/db';
 import { newId } from '@portico/kernel';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { seedPaymentsDemo } from '../src';
-import { type Harness, setupOrg, startHarness, stripeAccount } from './harness';
+import { type Harness, setupOrg, standingMandate, startHarness, stripeAccount } from './harness';
 
 let h: Harness;
 beforeAll(async () => {
@@ -34,13 +34,9 @@ describe('environment safety', () => {
             propertyId: org.propertyId,
             kind: 'card',
             providerToken: 'pm_1Pq9ZzRealLookingToken',
-            owner: { type: 'guest_profile', id: newId() },
+            owner: { type: 'guest_profile', id: org.payerId },
             mitAgreement: true,
-            mandate: {
-              termsVersion: 'T-2026-1',
-              acceptedAt: '2026-11-07T08:00:00.000Z',
-              channel: 'front_desk',
-            },
+            mandate: standingMandate(org, '2026-11-07T08:00:00.000Z'),
           }),
         ),
       ).rejects.toThrow(/simulator test tokens/);
@@ -50,13 +46,9 @@ describe('environment safety', () => {
           propertyId: org.propertyId,
           kind: 'card',
           providerToken: 'pm_card_visa',
-          owner: { type: 'guest_profile', id: newId() },
+          owner: { type: 'guest_profile', id: org.payerId },
           mitAgreement: true,
-          mandate: {
-            termsVersion: 'T-2026-1',
-            acceptedAt: '2026-11-07T08:00:00.000Z',
-            channel: 'front_desk',
-          },
+          mandate: standingMandate(org, '2026-11-07T08:00:00.000Z'),
         }),
       );
       const p = await svc.chargeNow(org.ctx, {
@@ -90,9 +82,9 @@ describe('environment safety', () => {
         propertyId: org.propertyId,
         kind: 'card',
         providerToken: 'pm_card_visa',
-        owner: { type: 'guest_profile', id: newId() },
+        owner: { type: 'guest_profile', id: org.payerId },
         mitAgreement: true,
-        mandate: { termsVersion: 'T-2026-1', acceptedAt: '2026-11-07T08:00:00.000Z', channel: 'front_desk' },
+        mandate: standingMandate(org, '2026-11-07T08:00:00.000Z'),
       }),
     );
     const charge = () =>
@@ -145,13 +137,9 @@ describe('environment safety', () => {
           propertyId: org.propertyId,
           kind: 'card',
           providerToken: 'pm_card_visa',
-          owner: { type: 'guest_profile', id: newId() },
+          owner: { type: 'guest_profile', id: org.payerId },
           mitAgreement: true,
-          mandate: {
-            termsVersion: 'T-2026-1',
-            acceptedAt: '2026-11-07T08:00:00.000Z',
-            channel: 'front_desk',
-          },
+          mandate: standingMandate(org, '2026-11-07T08:00:00.000Z'),
         }),
       ),
     ).resolves.toBeTruthy();

@@ -125,7 +125,6 @@ export interface BalanceSyncResult {
    */
   status:
     | 'requested'
-    | 'amended'
     | 'reissued'
     | 'cancelled'
     | 'unchanged'
@@ -146,6 +145,11 @@ export interface PaymentsPort {
    * refusal: returns `not_possible` with the reason (the posting is never lost).
    */
   syncBalanceRequest(tx: TxContext, input: BalanceSyncRequest): Promise<BalanceSyncResult>;
+  /**
+   * Re-review #3 (R3-P3-3): take payments' collection lock for these folios. Finance calls it BEFORE it locks a folio
+   * whose balance it changes, so finance and payments always lock in the same order (collection → folio → request).
+   */
+  lockCollections(tx: TxContext, input: { folioIds: readonly string[] }): Promise<void>;
 }
 
 /** Payer particulars for folios and tax invoices (guests for people; companies/agencies when that module exists). */

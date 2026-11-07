@@ -276,7 +276,9 @@ export interface PaymentRequestsTable {
   mode: 'live' | 'sandbox' | 'simulate';
   provider_link_ref: string | null;
   link_url: string | null;
-  link_status: 'pending' | 'created' | 'failed' | 'unknown';
+  link_status: 'pending' | 'created' | 'failed' | 'unknown' | 'deactivating' | 'deactivated';
+  /** R3-P2-1: the booking the request's reference belongs to (booking, stay or folio of it). */
+  family_booking_id: string | null;
   cancelled_reason: string | null;
   created_by: string;
   created_at: Generated<Ts>;

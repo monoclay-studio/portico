@@ -12,6 +12,7 @@ import type { FinancePorts } from '../ports';
 import * as allowances from './allowances';
 import * as billingRules from './billing-rules';
 import * as cashier from './cashier';
+import * as departedFolios from './departed-folios';
 import * as deposits from './deposits';
 import * as fiscal from './fiscal';
 import * as folios from './folios';
@@ -46,6 +47,7 @@ export function createFinance(ports: FinancePorts) {
     recordRefund: bind(deps, postings.recordRefund),
     recordDeposit: bind(deps, deposits.recordDeposit),
     applyDeposits: bind(deps, deposits.applyDeposits),
+    resyncDepartedFolio: bind(deps, departedFolios.resyncDepartedFolio),
     recordPayout: bind(deps, payouts.recordPayout),
     recordPaymentAdjustment: bind(deps, ledgerPort.recordPaymentAdjustment),
     recordDisputeMovement: bind(deps, ledgerPort.recordDisputeMovement),
@@ -743,6 +745,23 @@ export function financeSubscriptions(service: FinanceService, ports: FinancePort
           : await ports.platform.getBusinessDate(tx, propertyId);
         await service.markOwnerDeparted(tx, { propertyId, owner: { type: 'stay', id: stayId }, departedOn });
         await service.closeAllowances(tx, { stayId, upTo: '9999-12-31' });
+      },
+    },
+    {
+      // Re-review #3 R3-P1-1(ii): a payment on a departed folio that was being confirmed has ended (succeeded or
+      // failed): the deferred balance request is brought in line with what the folio owes.
+      consumer: 'finance.departed-folio-payment-ended',
+      types: ['payments.payment.succeeded', 'payments.payment.failed'],
+      async handle(tx, event) {
+        const p = event.payload as { ref?: { type?: unknown; id?: unknown } };
+        if (p.ref?.type !== 'folio' || typeof p.ref.id !== 'string') return;
+        await service.resyncDepartedFolio(tx, {
+          folioId: p.ref.id,
+          reason:
+            event.type === 'payments.payment.failed'
+              ? 'A payment on the folio failed'
+              : 'A payment on the folio was confirmed',
+        });
       },
     },
   ];

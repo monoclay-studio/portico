@@ -21,6 +21,7 @@ import type {
 import { ageItems } from '../domain/aging';
 import type { PaymentMethodKind } from '../domain/types';
 import type { ReceivablesAccountsTable } from '../tables';
+import { syncDepartedFolios } from './departed-folios';
 import { issueInvoice } from './fiscal';
 import { settleLocked } from './folios';
 import { receivablesRecord } from './records';
@@ -35,7 +36,7 @@ import {
   folioBalance,
   isUniqueViolation,
   loadFolio,
-  lockFolios,
+  lockMoneyFolios,
   raiseException,
   requestHash,
   writeEntryBody,
@@ -325,7 +326,7 @@ export async function transferToReceivables(
       `The receivables account is kept in ${acct0.currency}; the folio is in ${f0.currency}.`,
     );
   }
-  const folio = (await lockFolios(tx, [f0.id])).get(f0.id) as FolioRow;
+  const folio = (await lockMoneyFolios(tx, deps, [f0.id])).get(f0.id) as FolioRow;
   if (folio.status !== 'open')
     throw new BusinessRuleError(
       'folio_not_open',
@@ -455,6 +456,12 @@ export async function transferToReceivables(
     })
     .execute();
   await settleLocked(tx, await loadFolio(tx, folio.id));
+  // Re-review #3 R3-P1-1(i): the company now owes it; a guest link for the same money is closed (and deactivated).
+  await syncDepartedFolios(tx, deps, [folio.id], {
+    reason: 'Settled to the company account (direct bill)',
+    entryId: claim.entryId,
+    businessDate,
+  });
   if (creditWarning) {
     await raiseException(tx, {
       propertyId: folio.property_id,

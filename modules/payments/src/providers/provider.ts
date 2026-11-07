@@ -117,6 +117,17 @@ export type PaymentLinkOutcome =
   | { kind: 'failed'; code: string; message: string }
   | { kind: 'unknown'; reason: string };
 
+/**
+ * Re-review #3 (ADR-0015 Amendment 2): a payment link is externally writable — the guest can pay it at the provider
+ * until the provider confirms it no longer takes payments.
+ */
+export type LinkDeactivationOutcome =
+  | { kind: 'deactivated' }
+  /** The link was already paid (or is being paid): the payment arrives by webhook and is resolved as an exception. */
+  | { kind: 'already_completed' }
+  | { kind: 'failed'; code: string; message: string }
+  | { kind: 'unknown'; reason: string };
+
 /** Normalized provider object carried by a verified webhook. */
 export type WebhookObject =
   | {
@@ -216,6 +227,11 @@ export interface PaymentProvider {
   ): Promise<ProviderOutcome>;
   lookup(account: ProviderAccount, call: LookupCall): Promise<LookupResult>;
   createPaymentLink(account: ProviderAccount, call: PaymentLinkCall): Promise<PaymentLinkOutcome>;
+  /** Stop a link from taking payments (idempotent). Until it answers `deactivated`, the link may still be paid. */
+  deactivatePaymentLink(
+    account: ProviderAccount,
+    call: CallBase & { linkRef: string },
+  ): Promise<LinkDeactivationOutcome>;
   /** Verify the signature and normalize. Throws WebhookSignatureError on any doubt. */
   parseWebhook(rawBody: string, headers: Record<string, string | undefined>, now: Date): VerifiedWebhook;
   /**

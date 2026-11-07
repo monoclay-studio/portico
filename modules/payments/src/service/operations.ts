@@ -1015,13 +1015,16 @@ export async function creditPaymentRequest(tx: TxContext, requestId: string, amo
     });
   }
   if (r.status === 'cancelled' || r.status === 'expired' || paid > r.amount_minor) {
+    // Re-review #3 (Amendment 2): money taken on a link Portico had closed or replaced (or beyond what it asked) is
+    // money the guest may not owe — an URGENT refund item with the amount to refund, never a routine note.
+    const excess = r.status === 'cancelled' || r.status === 'expired' ? amountMinor : paid - r.amount_minor;
     await raiseException(tx, {
       propertyId: r.property_id,
       kind: 'payment_request_overpaid',
-      severity: 'routine',
-      problem: `A payment arrived on a ${r.status} payment request (paid ${formatMoney(money(paid, r.currency))} of ${formatMoney(money(r.amount_minor, r.currency))}).`,
-      businessImpact: 'The guest may have paid more than requested or after cancellation.',
-      nextStep: 'Keep it as a credit on the bill or refund the difference.',
+      severity: 'urgent',
+      problem: `A payment of ${formatMoney(money(amountMinor, r.currency))} arrived on a ${r.status === 'cancelled' ? 'cancelled (replaced or withdrawn)' : r.status} payment request (paid ${formatMoney(money(paid, r.currency))} of ${formatMoney(money(r.amount_minor, r.currency))}).`,
+      businessImpact: `The guest has probably paid ${formatMoney(money(excess, r.currency))} they do not owe.`,
+      nextStep: `Refund ${formatMoney(money(excess, r.currency))} to the guest (or keep it as a credit only if the guest agrees in writing).`,
       ownerRole: 'finance',
       responsibleParty: 'hotel',
       ref: { type: 'payment_request', id: r.id },

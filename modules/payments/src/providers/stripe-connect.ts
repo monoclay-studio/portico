@@ -15,6 +15,7 @@ import { type HttpClient, type HttpResponse, HttpTransportError } from './http-c
 import type {
   CallBase,
   Capability,
+  LinkDeactivationOutcome,
   LookupCall,
   LookupResult,
   PaymentCall,
@@ -427,6 +428,43 @@ export class StripeConnectProvider implements PaymentProvider {
     }
     if (!r.body.url) return { kind: 'failed', code: 'no_url', message: 'Stripe returned no hosted URL.' };
     return { kind: 'created', linkRef: r.body.id, url: r.body.url };
+  }
+
+  /**
+   * Payment links are Checkout Sessions: deactivating one expires the session (`POST …/expire`). A session already
+   * completed cannot be expired — its payment arrives by webhook.
+   */
+  async deactivatePaymentLink(
+    account: ProviderAccount,
+    call: CallBase & { linkRef: string },
+  ): Promise<LinkDeactivationOutcome> {
+    const r = await this.request<{ id: string; status: string | null }>(
+      account,
+      'POST',
+      `/v1/checkout/sessions/${encodeURIComponent(call.linkRef)}/expire`,
+      {},
+      call.idempotencyKey,
+    );
+    if (r.ok) return r.body.status === 'complete' ? { kind: 'already_completed' } : { kind: 'deactivated' };
+    const o = r.outcome;
+    if (o.kind === 'failed' || o.kind === 'declined') {
+      // Stripe refuses to expire a session that is complete (or already expired): read it to tell which.
+      const read = await this.request<{ status: string | null }>(
+        account,
+        'GET',
+        `/v1/checkout/sessions/${encodeURIComponent(call.linkRef)}`,
+        {},
+      );
+      if (read.ok && read.body.status === 'expired') return { kind: 'deactivated' };
+      if (read.ok && read.body.status === 'complete') return { kind: 'already_completed' };
+      return o.kind === 'failed'
+        ? { kind: 'failed', code: o.code, message: o.message }
+        : { kind: 'failed', code: o.decline.code, message: 'Link deactivation declined.' };
+    }
+    return {
+      kind: 'unknown',
+      reason: o.kind === 'unknown' || o.kind === 'unavailable' ? o.reason : 'unknown',
+    };
   }
 
   /** Event backstop over the authenticated API (events of the connected account, oldest first). */

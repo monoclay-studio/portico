@@ -35,7 +35,7 @@ import { PaymentsEvents } from '../events';
 import { markBankTransferReceived } from './collect';
 import { ledgerKey, postPaymentLedger, postRefundLedger, postVerification, tryLedger } from './ledger';
 import { executeOperation, verifyOperation } from './operations';
-import { ensurePaymentLink } from './requests';
+import { ensureLinkDeactivated, ensurePaymentLink } from './requests';
 import {
   actorKey,
   db,
@@ -117,6 +117,13 @@ export async function runReconciliation(
       .where('link_status', 'in', ['pending', 'unknown'])
       .limit(limit);
     if (opts.propertyId) links = links.where('property_id', '=', opts.propertyId);
+    // Re-review #3: retired links whose deactivation the provider has not confirmed yet are retried.
+    let retiring = db(tx)
+      .selectFrom('payments.payment_requests')
+      .select('id')
+      .where('link_status', '=', 'deactivating')
+      .limit(limit);
+    if (opts.propertyId) retiring = retiring.where('property_id', '=', opts.propertyId);
     return {
       ops,
       ledgerPayments: await lp.execute(),
@@ -125,6 +132,7 @@ export async function runReconciliation(
       verifyRefunds: await vr.execute(),
       payouts,
       links: await links.execute(),
+      retiring: await retiring.execute(),
     };
   });
 
@@ -162,6 +170,7 @@ export async function runReconciliation(
     await withTenantTx(d.database, ctx, (tx) => postPayoutLedger(d, tx, po.id));
     result.ledgerRetried++;
   }
+  for (const l of work.retiring) await ensureLinkDeactivated(d, ctx, l.id);
   for (const l of work.links) await ensurePaymentLink(d, ctx, l.id);
 
   await withTenantTx(d.database, ctx, async (tx) => {

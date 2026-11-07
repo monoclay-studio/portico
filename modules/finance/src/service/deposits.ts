@@ -29,7 +29,7 @@ import {
   findEntryByKey,
   functionalCurrencyOf,
   loadFolio,
-  lockFolios,
+  lockMoneyFolios,
   type PostingDraft,
   postingIdsOfEntry,
   raiseException,
@@ -65,6 +65,7 @@ async function resolveDepositProperty(
   bookingId: string,
   propertyId?: string,
 ): Promise<string> {
+  await lockBookingDeposits(tx, bookingId);
   const owner = await describeTarget(tx, deps, { type: 'booking', id: bookingId });
   const at = propertyId ?? owner?.propertyId;
   if (!at) {
@@ -83,6 +84,15 @@ async function resolveDepositProperty(
     'inflow',
   );
   return property.id;
+}
+
+/**
+ * Re-review #3 R3-P2-3: one writer at a time per booking's deposits — every path that may create or add to a booking's
+ * deposit account (desk or link deposit, opening import, migration) takes this lock BEFORE checking where the deposits
+ * are held, so two concurrent imports (or an import and a deposit) cannot both pass the check.
+ */
+async function lockBookingDeposits(tx: TxContext, bookingId: string): Promise<void> {
+  await sql`select pg_advisory_xact_lock(hashtext(${`finance:deposit:${bookingId}`}))`.execute(tx.db);
 }
 
 async function lockDepositAccount(
@@ -113,6 +123,14 @@ async function lockDepositAccount(
     throw new BusinessRuleError(
       'deposit_currency_mismatch',
       `Deposits for this booking are held in ${row.currency}. Record the deposit in ${row.currency}.`,
+    );
+  }
+  // R3-P2-3 (defence in depth): the locked account must be held where this money is booked.
+  if (row && (row.property_id !== input.propertyId || row.legal_entity_id !== input.legalEntityId)) {
+    throw new BusinessRuleError(
+      'deposit_account_conflict',
+      "This booking's deposits are held at another property or hotel company. Finance must move them before more is added. Nothing was posted.",
+      { bookingId: input.bookingId },
     );
   }
   return row ?? null;
@@ -497,7 +515,7 @@ export async function applyDeposits(
       replayed: true,
     };
   }
-  const locked = (await lockFolios(tx, [f0.id])).get(f0.id) as FolioRow;
+  const locked = (await lockMoneyFolios(tx, deps, [f0.id])).get(f0.id) as FolioRow;
   const { folio } = await prepareDestination(tx, locked, 'payment');
   const cur = acct.currency;
   const sub = { type: 'booking_deposit' as const, id: input.bookingId };
@@ -991,6 +1009,10 @@ export async function importOpeningDeposits(
         .execute()
     ).map((a) => a.system_key),
   );
+  // R3-P2-3: every booking of the file is locked (in one order) before any "held elsewhere" check.
+  for (const id of [...new Set(input.items.map((it) => it.bookingId))].sort()) {
+    await lockBookingDeposits(tx, id);
+  }
   let legacyCount = 0;
   for (const [i, it] of input.items.entries()) {
     if (seen.has(it.bookingId)) {

@@ -40,6 +40,7 @@ import type {
 import { capturableMinor, refundableMinor } from '../domain/states';
 import { PaymentsEvents } from '../events';
 import type { PropertyInfo } from '../ports';
+import { assertWithinConsent } from './consent';
 import {
   clearingOf,
   ledgerKey,
@@ -66,6 +67,7 @@ import {
   type PaymentRow,
   type PaymentsDeps,
   PendingVerificationBlockError,
+  referenceContext,
   requestHash,
   resolveExceptionsByKey,
 } from './shared';
@@ -135,38 +137,6 @@ export function deriveInitiator(tx: TxContext): 'customer' | 'merchant' {
   return tx.actor.kind === 'guest' ? 'customer' : 'merchant';
 }
 
-function assertMitAllowed(
-  method: MethodRow,
-  initiator: 'customer' | 'merchant',
-  property: PropertyInfo,
-): void {
-  if (initiator !== 'merchant') return;
-  const mandate = (method.mandate ?? {}) as {
-    termsVersion?: string;
-    acceptedAt?: string;
-    scope?: { legalEntityId?: string; propertyIds?: string[] };
-  };
-  if (!method.mit_agreement || !mandate.termsVersion || !mandate.acceptedAt) {
-    throw new BusinessRuleError(
-      'mit_not_agreed',
-      'This saved card has no recorded agreement from the cardholder (terms and acceptance) to charges the hotel makes, so staff cannot charge or hold it. Send a payment link, take the card on the terminal with the guest, or save the card again with the cardholder’s recorded agreement.',
-      { methodId: method.id },
-    );
-  }
-  const scope = mandate.scope;
-  if (
-    scope &&
-    (scope.legalEntityId !== property.legalEntityId ||
-      (scope.propertyIds !== undefined && !scope.propertyIds.includes(property.id)))
-  ) {
-    throw new BusinessRuleError(
-      'mandate_out_of_scope',
-      'The cardholder’s agreement to later charges covers another hotel or property, not this one. Send a payment link or ask the guest for a card here.',
-      { methodId: method.id },
-    );
-  }
-}
-
 function defaultPurpose(ref: { type: 'folio' | 'booking' }): CollectionPurpose {
   return ref.type === 'booking' ? 'deposit' : 'balance';
 }
@@ -182,45 +152,64 @@ const isLedgerRef = (ref: { type: string; id: string }): ref is { type: 'folio' 
   ref.type === 'folio' || ref.type === 'booking';
 
 /**
- * P1-2 (until collection plans exist): a payment request owns its purpose on a reference. A desk charge, hold,
- * capture, recorded payment or virtual-card charge for the same purpose while that request is open or paid would
- * collect the same money twice — refused unless staff state why this is a separate collection (audited).
- *
- * Fix sweep SW-PAY-1/2: every collection path calls this (charge, authorize, capture, recorded payment, VCC through
- * charge) under the per-reference collection lock (link creation and the link-payment webhook take the same lock),
- * and the purpose `custom` is no way around it: on a reference with ANY open or paid link it needs the same stated
- * reason and audit.
+ * P1-2 (until collection plans exist): a payment link owns the money it asks for. Fix sweep SW-PAY-1/2 and re-review #3
+ * R3-P2-1: every collection path calls this (charge, capture, recorded payment, VCC through charge; holds warn early)
+ * under the family collection lock, and neither the purpose label nor the exact reference decides it. A booking, its
+ * stays and their folios are ONE family. A new collection needs the stated separate-collection reason (audited) when:
+ *  - any link is open or paid on the very same reference, whatever its purpose and whatever the new label;
+ *  - a link in the family is still open (the guest may still pay it);
+ *  - a paid link in the family has the same purpose, or the new collection is labelled `custom` or `incidentals`
+ *    (labels that can stand for anything).
+ * A balance collected on a folio after a paid deposit link on its booking is the normal flow (the deposit is applied
+ * to the folio) and needs no reason.
  */
 async function assertCollectionOwnership(
+  d: PaymentsDeps,
   tx: TxContext,
   ref: { type: 'folio' | 'booking'; id: string },
   purpose: CollectionPurpose,
   override: { reason: string } | undefined,
 ): Promise<void> {
-  await lockCollectionRefs(tx, [ref]);
+  await lockCollectionRefs(d, tx, [ref]);
+  const { bookingId } = await referenceContext(d, tx, ref);
   const owners = await db(tx)
     .selectFrom('payments.payment_requests')
-    .select(['id', 'purpose', 'status', 'amount_minor', 'paid_minor', 'currency'])
-    .where('ref_type', '=', ref.type)
-    .where('ref_id', '=', ref.id)
+    .select(['id', 'purpose', 'status', 'amount_minor', 'paid_minor', 'currency', 'ref_type', 'ref_id'])
     .where('status', 'in', ['open', 'partially_paid', 'paid'])
+    .where((eb) =>
+      eb.or([
+        eb.and([eb('ref_type', '=', ref.type), eb('ref_id', '=', ref.id)]),
+        ...(bookingId ? [eb('family_booking_id', '=', bookingId)] : []),
+      ]),
+    )
     .orderBy('created_at')
     .execute();
-  const owner = purpose === 'custom' ? owners[0] : owners.find((r) => REQUEST_PURPOSE[r.purpose] === purpose);
+  const owner = owners.find(
+    (r) =>
+      (r.ref_type === ref.type && r.ref_id === ref.id) ||
+      r.status !== 'paid' ||
+      REQUEST_PURPOSE[r.purpose] === purpose ||
+      purpose === 'custom' ||
+      purpose === 'incidentals',
+  );
   if (!owner) return;
   if (override?.reason) {
     await tx.audit({
       action: 'payments.collection.ownershipOverride',
       target: { type: 'payment_request', id: owner.id },
       reason: override.reason,
-      after: { ref, purpose },
+      after: { ref, purpose, linkRef: { type: owner.ref_type, id: owner.ref_id } },
     });
     return;
   }
   const what = REQUEST_PURPOSE[owner.purpose] ?? owner.purpose;
+  const where =
+    owner.ref_type === ref.type && owner.ref_id === ref.id
+      ? `this ${ref.type}`
+      : `this booking (its ${owner.ref_type})`;
   throw new BusinessRuleError(
     'collection_owned_by_payment_request',
-    `A payment link for the ${what} of this ${ref.type} is ${owner.status.replace('_', ' ')} (${formatMoney(money(owner.paid_minor, owner.currency))} paid of ${formatMoney(money(owner.amount_minor, owner.currency))}). Collecting ${purpose === 'custom' ? `on the same ${ref.type}` : `the ${purpose}`} again could charge the guest twice. Cancel the link first, or confirm this is a separate collection by giving a reason.`,
+    `A payment link for the ${what} of ${where} is ${owner.status.replace('_', ' ')} (${formatMoney(money(owner.paid_minor, owner.currency))} paid of ${formatMoney(money(owner.amount_minor, owner.currency))}). Collecting again — whatever it is called — could charge the guest twice. Cancel the link first, or confirm this is a separate collection by giving a reason.`,
     { paymentRequestId: owner.id, purpose },
   );
 }
@@ -318,12 +307,18 @@ export async function authorize(
   assertAccountUsable(account, property, input.amount.currency);
   requireCapability(account, 'authorize', 'Pre-authorization');
   const initiator = deriveInitiator(tx);
-  assertMitAllowed(method, initiator, property);
+  // ADR-0015 Amendment 2 / R3-P1-2: inside the cardholder's consent (purpose, bookings, amount), whoever acts.
+  await assertWithinConsent(d, tx, method, property, initiator, {
+    kind: 'hold',
+    purpose: 'guarantee',
+    amount: input.amount,
+    ref: input.ref,
+  });
   // SW-PAY-1: a hold is the first half of hold-then-capture — refuse it early when a link owns this collection.
   if (isLedgerRef(input.ref)) {
-    await assertCollectionOwnership(tx, input.ref, defaultPurpose(input.ref), input.separateCollection);
+    await assertCollectionOwnership(d, tx, input.ref, defaultPurpose(input.ref), input.separateCollection);
   } else {
-    await lockCollectionRefs(tx, [input.ref]);
+    await lockCollectionRefs(d, tx, [input.ref]);
   }
   const mode = d.registry.modeFor(tx, account);
   await assertBreakerAllows(d, tx, account);
@@ -455,6 +450,27 @@ export async function incrementAuthorization(
   }
   const account = await loadAccount(tx, a.account_id);
   requireCapability(account, 'incrementalAuthorize', 'Increasing a hold');
+  // R3-P1-2: the increased hold, as a whole, stays inside the cardholder's consent.
+  if (a.method_id) {
+    const method = await db(tx)
+      .selectFrom('payments.payment_methods')
+      .selectAll()
+      .where('id', '=', a.method_id)
+      .executeTakeFirstOrThrow();
+    await assertWithinConsent(
+      d,
+      tx,
+      method,
+      await loadProperty(d, tx, a.property_id),
+      a.initiator === 'customer' ? 'customer' : 'merchant',
+      {
+        kind: 'hold',
+        purpose: 'guarantee',
+        amount: { amountMinor: a.amount_minor + input.additionalAmount.amountMinor, currency: a.currency },
+        ref: { type: a.ref_type, id: a.ref_id },
+      },
+    );
+  }
   const inflight = await db(tx)
     .selectFrom('payments.provider_operations')
     .select('id')
@@ -560,9 +576,24 @@ export async function capture(
   const holdRef = { type: a.ref_type, id: a.ref_id };
   const refs =
     isLedgerRef(holdRef) && (holdRef.type !== ref.type || holdRef.id !== ref.id) ? [ref, holdRef] : [ref];
-  await lockCollectionRefs(tx, refs);
+  await lockCollectionRefs(d, tx, refs);
   for (const r of refs) {
-    await assertCollectionOwnership(tx, r, defaultPurpose(r), input.separateCollection);
+    await assertCollectionOwnership(d, tx, r, defaultPurpose(r), input.separateCollection);
+  }
+  // R3-P1-2: a merchant-initiated capture stays inside the cardholder's consent: the bill it pays must be covered and
+  // the total taken on the card must stay within the agreed amount.
+  if (a.initiator === 'merchant' && a.method_id) {
+    const method = await db(tx)
+      .selectFrom('payments.payment_methods')
+      .selectAll()
+      .where('id', '=', a.method_id)
+      .executeTakeFirstOrThrow();
+    await assertWithinConsent(d, tx, method, property, 'merchant', {
+      kind: 'capture',
+      purpose: 'guarantee',
+      amount: { amountMinor, currency: a.currency },
+      ref,
+    });
   }
   await assertBreakerAllows(d, tx, account);
   const id = newId(tx.now.getTime());
@@ -732,8 +763,13 @@ export async function charge(
   assertAccountUsable(account, property, input.amount.currency);
   requireCapability(account, 'charge', 'Charging a card');
   const initiator = deriveInitiator(tx);
-  assertMitAllowed(method, initiator, property);
-  await assertCollectionOwnership(tx, input.ref, purpose, input.separateCollection);
+  await assertWithinConsent(d, tx, method, property, initiator, {
+    kind: 'charge',
+    purpose,
+    amount: input.amount,
+    ref: input.ref,
+  });
+  await assertCollectionOwnership(d, tx, input.ref, purpose, input.separateCollection);
   const mode = d.registry.modeFor(tx, account);
   await assertBreakerAllows(d, tx, account);
   const id = newId(tx.now.getTime());
@@ -1013,7 +1049,7 @@ export async function recordPayment(
   if (receivedAt.getTime() > tx.now.getTime() + 5 * 60_000) {
     throw new ValidationError('received_in_future', 'The payment time cannot be in the future.');
   }
-  await assertCollectionOwnership(tx, input.ref, purpose, input.separateCollection);
+  await assertCollectionOwnership(d, tx, input.ref, purpose, input.separateCollection);
   let authorization: AuthorizationRow | null = null;
   if (input.authorizationId) {
     authorization = await loadAuthorization(tx, input.authorizationId);

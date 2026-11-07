@@ -192,6 +192,11 @@ export const paymentMethodInput = z
     message:
       'A saved card with an agreement to later charges needs the mandate (terms version and acceptance time).',
     path: ['mandate'],
+  })
+  .refine((m) => !m.mandate || m.mandate.scope !== undefined, {
+    message:
+      'Record what the cardholder agreed to (ADR-0015 Amendment 2): the hotel company, the purposes, and optionally the amount limit and the bookings it covers.',
+    path: ['mandate', 'scope'],
   });
 export const paymentMethod = z.object({
   id: z.uuid(),

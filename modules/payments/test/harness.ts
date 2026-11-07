@@ -45,6 +45,13 @@ export interface LedgerControls {
   unknown: Set<string>;
   /** Booking ids that were booked directly (not through a channel). */
   directBookings: Set<string>;
+  /**
+   * The guest profile that pays every folio/booking of a tenant (set by setupOrg; `addMethod` saves cards for them), so a
+   * standing card-on-file consent covers the tenant's references (ADR-0015 Amendment 2: the cardholder's own bills).
+   */
+  defaultPayer: Map<string, string>;
+  /** Folio → its owner (stay or booking), for the booking family of a folio. */
+  folioOwners: Map<string, { type: string; id: string }>;
 }
 
 /**
@@ -59,13 +66,17 @@ export function fakeReferences(controls: LedgerControls): ReferenceDirectoryPort
       if (controls.unknown.has(ref.id)) return null;
       const owner = controls.owners.get(ref.id) ?? controls.defaultOwner.get(tx.tenantId);
       if (!owner) return null;
+      const payer = controls.defaultPayer.get(tx.tenantId);
+      const people = payer ? [`guest_profile:${payer}`] : [];
       return ref.type === 'booking'
         ? {
             propertyId: owner.propertyId,
             source: controls.directBookings.has(ref.id) ? 'direct' : 'channel',
             channelConnectionId: controls.directBookings.has(ref.id) ? null : DEFAULT_CHANNEL_CONNECTION,
+            bookingId: ref.id,
+            people: [...people, `booking:${ref.id}`],
           }
-        : { propertyId: owner.propertyId };
+        : { propertyId: owner.propertyId, people };
     },
   };
 }
@@ -115,7 +126,14 @@ export function fakeLedger(controls: LedgerControls): LedgerPort {
   };
   return {
     async describeTarget(tx, ref) {
-      return ownerOf(tx.tenantId, ref.id);
+      const owner = ownerOf(tx.tenantId, ref.id);
+      if (!owner || ref.type !== 'folio') return owner;
+      const payer = controls.defaultPayer.get(tx.tenantId);
+      return {
+        ...owner,
+        owner: controls.folioOwners.get(ref.id) ?? null,
+        payer: payer ? { type: 'guest', id: payer } : null,
+      };
     },
     // The same predicate the fake uses when posting (review R2-P1-3): unknown → refused; other scope → refused.
     async assertTargetUsable(tx, ref, scope) {
@@ -290,6 +308,8 @@ export async function startHarness(): Promise<Harness> {
     owners: new Map(),
     unknown: new Set(),
     directBookings: new Set(),
+    defaultPayer: new Map(),
+    folioOwners: new Map(),
   };
   const http = {
     calls: 0,
@@ -340,6 +360,8 @@ export interface Org {
   otherPropertyId: string;
   simAccountId: string;
   terminalAccountId: string;
+  /** The guest who pays this org's folios and bookings (owner of `addMethod` cards by default). */
+  payerId: string;
   tx<T>(fn: (tx: TxContext) => Promise<T>): Promise<T>;
   /** A context with only these grants (property-scoped to the main property unless 'all'). */
   as(permissions: string[], propertyIds?: string[] | 'all'): RequestContext;
@@ -380,6 +402,8 @@ export async function setupOrg(h: Harness, environment: TenantEnvironment = 'dem
   const p2 = await mkProperty('AZH');
   // Any folio/booking used by a test belongs to the main property unless a test says otherwise.
   h.ledger.defaultOwner.set(ctx.tenantId, { propertyId: p1.id, legalEntityId: le.id });
+  const payerId = newId();
+  h.ledger.defaultPayer.set(ctx.tenantId, payerId);
   const svc = h.module.service;
   const sim =
     environment === 'live'
@@ -409,6 +433,7 @@ export async function setupOrg(h: Harness, environment: TenantEnvironment = 'dem
     otherPropertyId: p2.id,
     simAccountId: sim?.id ?? '',
     terminalAccountId: terminal.id,
+    payerId,
     tx: (fn) => withTenantTx(h.db, ctx, fn),
     as(permissions, propertyIds) {
       return {
@@ -422,12 +447,25 @@ export async function setupOrg(h: Harness, environment: TenantEnvironment = 'dem
   };
 }
 
+/** Every purpose a card-on-file agreement can cover (test fixtures: a broad standing agreement). */
+export const ALL_PURPOSES = ['guarantee', 'deposit', 'balance', 'incidentals', 'no_show'] as const;
+
+/** A standing card-on-file agreement for this org's hotel company (test fixtures). */
+export function standingMandate(org: Org, at: string, extra: Record<string, unknown> = {}) {
+  return {
+    termsVersion: 'T-2026-1',
+    acceptedAt: at,
+    channel: 'front_desk',
+    scope: { legalEntityId: org.legalEntityId, purposes: [...ALL_PURPOSES], ...extra },
+  };
+}
+
 export async function addMethod(
   h: Harness,
   org: Org,
   token = 'pm_card_visa',
   mitAgreement = true,
-  ownerId: string = newId(),
+  ownerId: string = org.payerId,
 ): Promise<string> {
   const m = await org.tx((tx) =>
     h.module.service.tx.createMethod(tx, {
@@ -449,6 +487,7 @@ export async function addMethod(
               termsVersion: 'T-2026-1',
               acceptedAt: h.clock.now().toISOString(),
               channel: 'booking_engine',
+              scope: { legalEntityId: org.legalEntityId, purposes: [...ALL_PURPOSES] },
             },
           }
         : {}),

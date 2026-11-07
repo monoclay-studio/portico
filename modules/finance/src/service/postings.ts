@@ -34,7 +34,7 @@ import {
   folioBalance,
   isUniqueViolation,
   loadFolio,
-  lockFolios,
+  lockMoneyFolios,
   ownerDeparture,
   type PostingDraft,
   postingIdsOfEntry,
@@ -436,8 +436,9 @@ export async function postCharge(
 
   // Prepare destination folios (reopen settled / supplementary for invoiced), flag post-departure.
   const departure = await ownerDeparture(tx, owner);
-  const locked = await lockFolios(
+  const locked = await lockMoneyFolios(
     tx,
+    deps,
     allocations.map((a) => a.folioId),
   );
   const destination = new Map<string, FolioRow>();
@@ -863,7 +864,7 @@ export async function recordPayment(
     const r = await entryResult(tx, claim.entryId, true);
     return { ...r, postingId: r.postingIds[0] as string };
   }
-  const locked = (await lockFolios(tx, [f0.id])).get(f0.id) as FolioRow;
+  const locked = (await lockMoneyFolios(tx, deps, [f0.id])).get(f0.id) as FolioRow;
   const { folio } = await prepareDestination(tx, locked, 'payment');
   const bridge = await bridgeLines(
     tx,
@@ -1042,7 +1043,7 @@ export async function recordRefund(
     const r = await entryResult(tx, claim.entryId, true);
     return { ...r, postingId: r.postingIds[0] as string };
   }
-  const locked = (await lockFolios(tx, [f0.id])).get(f0.id) as FolioRow;
+  const locked = (await lockMoneyFolios(tx, deps, [f0.id])).get(f0.id) as FolioRow;
   const { folio } = await prepareDestination(tx, locked, 'payment');
   const side = clearingSide(method, provider, sessionId);
   const bridge = await bridgeLines(
@@ -1289,7 +1290,7 @@ export async function transferPostings(
     reasonCode: 'transfer',
   });
   if (!claim.claimed) return entryResult(tx, claim.entryId, true);
-  const locked = await lockFolios(tx, [from0.id, to0.id]);
+  const locked = await lockMoneyFolios(tx, deps, [from0.id, to0.id]);
   const prepared: FolioRow[] = [];
   for (const id of [from0.id, to0.id]) {
     const f = locked.get(id) as FolioRow;
@@ -1534,7 +1535,7 @@ export async function adjustPosting(
   }
   // Lock the folio BEFORE measuring what is left to correct: concurrent corrections (different keys) serialize
   // here and each sees the previous one's effect, so the total corrected can never exceed the original.
-  const locked = (await lockFolios(tx, [p.folio_id])).get(p.folio_id) as FolioRow;
+  const locked = (await lockMoneyFolios(tx, deps, [p.folio_id])).get(p.folio_id) as FolioRow;
   const raced = await findEntryByKey(tx, idempotencyKey, hash);
   if (raced) return entryResult(tx, raced, true);
   const family = [
@@ -1796,8 +1797,9 @@ export async function reverseEntry(
     .select('folio_id')
     .where('entry_id', '=', entry.id)
     .execute();
-  const locked = await lockFolios(
+  const locked = await lockMoneyFolios(
     tx,
+    deps,
     entryFolios.map((f) => f.folio_id),
   );
   const raced = await findEntryByKey(tx, idempotencyKey, hash);

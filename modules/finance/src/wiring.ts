@@ -37,6 +37,9 @@ export function unavailableFinancePorts(): {
       },
     },
     payments: {
+      async lockCollections() {
+        // No payments module: nothing collects in parallel with finance.
+      },
       async syncBalanceRequest() {
         return {
           status: 'unavailable',

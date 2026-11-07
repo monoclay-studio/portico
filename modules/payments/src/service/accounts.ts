@@ -26,6 +26,7 @@ import { containsPossiblePan } from '../domain/pci';
 import { PaymentsEvents } from '../events';
 import type { Capability } from '../providers/provider';
 import { isSimulatorTestToken } from '../providers/simulator';
+import { consentProblem } from './consent';
 import { loadBreaker } from './operations';
 import {
   assertPaymentsWritable,
@@ -411,6 +412,12 @@ export async function createMethod(
       'In this environment payments are simulated: use one of the simulator test tokens (see GET /v1/payments/simulator/test-tokens). Real card tokens are never used here.',
     );
   }
+  if (input.mandate && !input.mandate.scope) {
+    throw new ValidationError(
+      'mandate_scope_required',
+      'Record what the cardholder agreed to: the hotel company, the purposes, and optionally the amount limit and the bookings it covers. An agreement without its scope is not used for any charge.',
+    );
+  }
   if (input.mitAgreement && (!input.mandate?.termsVersion || !input.mandate?.acceptedAt)) {
     throw new ValidationError(
       'mandate_required',
@@ -590,6 +597,12 @@ export interface GuaranteeCardAssessment {
   card: { brand: string | null; last4: string | null } | null;
   /** Who the card belongs to (the calling module checks a payment user's choice against the booking's people). */
   owner: { type: string; id: string } | null;
+  /**
+   * ADR-0015 Amendment 2: whether a guarantee hold on this booking (for `amount`, when given) lies inside the
+   * cardholder's consent — required for every hotel-initiated use, also when a payment user chooses the card.
+   */
+  withinConsent: boolean;
+  consentReason: string | null;
   /** Plain-language explanation (shown when the card cannot be used). */
   reason: string;
 }
@@ -618,6 +631,8 @@ export async function assessGuaranteeCard(
     basis: null,
     card: null,
     owner: null,
+    withinConsent: false,
+    consentReason: null,
     reason:
       "This payment method is not a saved card of this property (unknown, removed, or saved at another property or hotel company). Save the guest's card here first.",
   };
@@ -627,12 +642,19 @@ export async function assessGuaranteeCard(
     .selectAll()
     .where('id', '=', input.methodId)
     .executeTakeFirst();
-  if (!m || m.status !== 'active' || m.property_id !== input.propertyId) return notHere;
+  if (m?.status !== 'active' || m.property_id !== input.propertyId) return notHere;
   const property = await loadProperty(d, tx, input.propertyId);
   const account = await loadAccount(tx, m.account_id);
   if (account.legal_entity_id !== property.legalEntityId) return notHere;
   const card = { brand: m.brand, last4: m.last4 };
   const owner = { type: m.owner_type, id: m.owner_id };
+  const problem = await consentProblem(d, tx, m, property, 'merchant', {
+    kind: 'hold',
+    purpose: 'guarantee',
+    ...(input.amount ? { amount: input.amount } : {}),
+    ref: { type: 'booking', id: input.bookingId },
+  });
+  const consent = { withinConsent: problem === null, consentReason: problem?.message ?? null };
   const mandate = (m.mandate ?? {}) as {
     kind?: string;
     termsVersion?: string;
@@ -657,6 +679,7 @@ export async function assessGuaranteeCard(
     basis: null,
     card,
     owner,
+    ...consent,
     reason: `The cardholder agreed to holds of at most ${formatMoney(money(scope?.maxAmount?.amountMinor ?? 0, scope?.maxAmount?.currency ?? 'USD'))} on this card. Hold that amount, or ask a colleague with payment rights.`,
   });
   const forThisBooking = m.owner_type === 'booking' && m.owner_id === input.bookingId;
@@ -666,6 +689,8 @@ export async function assessGuaranteeCard(
       basis: 'cardholder_supplied',
       card,
       owner,
+      ...consent,
+      ...consent,
       reason: 'The cardholder entered this card for this booking.',
     };
   }
@@ -682,6 +707,8 @@ export async function assessGuaranteeCard(
         basis: 'channel_card',
         card,
         owner,
+        ...consent,
+        ...consent,
         reason: "The booking's channel issued this virtual card for it.",
       };
     }
@@ -703,6 +730,8 @@ export async function assessGuaranteeCard(
       basis: 'mandate',
       card,
       owner,
+      ...consent,
+      ...consent,
       reason: "The cardholder's recorded agreement names this booking.",
     };
   }
@@ -711,6 +740,7 @@ export async function assessGuaranteeCard(
     basis: null,
     card,
     owner,
+    ...consent,
     reason:
       "This card was not supplied by its cardholder for this booking, and no recorded agreement of the cardholder names this booking. Linking a person to a booking does not let staff use that person's saved card: send the guest a card link for this booking, or ask a colleague with payment rights to choose the card.",
   };

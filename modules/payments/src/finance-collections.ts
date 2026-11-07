@@ -26,7 +26,6 @@ export interface FinanceBalanceSync {
 
 export type FinanceBalanceSyncStatus =
   | 'requested'
-  | 'amended'
   | 'reissued'
   | 'cancelled'
   | 'unchanged'
@@ -49,6 +48,13 @@ function payerOf(input: FinanceBalanceSync): {
 
 export function paymentsCollectionsForFinance(service: Pick<PaymentsService, 'provider'>) {
   return {
+    /** R3-P3-3: finance takes payments' collection lock for these folios before locking them. */
+    async lockCollections(tx: TxContext, input: { folioIds: readonly string[] }): Promise<void> {
+      await service.provider.lockCollections(
+        tx,
+        input.folioIds.map((id) => ({ type: 'folio', id })),
+      );
+    },
     async syncBalanceRequest(
       tx: TxContext,
       input: FinanceBalanceSync,

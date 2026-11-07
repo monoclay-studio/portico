@@ -224,18 +224,61 @@ export async function assertReferenceAt(
   }
 }
 
+// ───────────────────────── reference families, collection locks, consent coverage ─────────────────────────
+
+/** Finance's payer type → payments' owner type (glossary § Payer: finance `guest` = payments `guest_profile`). */
+function ownerKeyOfPayer(p: { type: string; id: string | null } | null | undefined): string | null {
+  if (!p?.id) return null;
+  const t = p.type === 'guest' ? 'guest_profile' : p.type;
+  return t === 'guest_profile' || t === 'company' || t === 'agency' ? `${t}:${p.id}` : null;
+}
+
 /**
- * Fix sweep SW-PAY-1 (AP-36): every path that collects, holds, links or receives money for a reference takes this
- * transaction lock before reading the guards that protect it (desk charge, hold, capture, recorded payment, link
- * creation, the link-payment webhook, VCC charges, late-charge balance requests). Several references are locked in
- * a fixed order, so two paths can never wait on each other.
+ * Re-review #3: what a reference belongs to — its booking (the collection family: a booking, its stays and their
+ * folios, R3-P2-1) and the people of that booking or folio (whose cards a standing card-on-file consent covers,
+ * ADR-0015 Amendment 2). Reads only (no locks).
+ */
+export async function referenceContext(
+  d: PaymentsDeps,
+  tx: TxContext,
+  ref: { type: string; id: string },
+): Promise<{ bookingId: string | null; people: Set<string> }> {
+  const people = new Set<string>();
+  const fromDirectory = async (r: { type: string; id: string }) => {
+    const o = await d.references.describeReference(tx, r);
+    for (const p of o?.people ?? []) people.add(p);
+    return o?.bookingId ?? (r.type === 'booking' && o ? r.id : null);
+  };
+  if (ref.type === 'booking' || ref.type === 'stay') return { bookingId: await fromDirectory(ref), people };
+  if (ref.type !== 'folio') return { bookingId: null, people };
+  const f = await d.ledger.describeTarget(tx, { type: 'folio', id: ref.id });
+  const payer = ownerKeyOfPayer(f?.payer);
+  if (payer) people.add(payer);
+  const owner = f?.owner;
+  const bookingId =
+    owner && (owner.type === 'stay' || owner.type === 'booking') ? await fromDirectory(owner) : null;
+  return { bookingId, people };
+}
+
+/**
+ * Fix sweep SW-PAY-1 (AP-36) and re-review #3 (R3-P3-3): every path that collects, holds, links or receives money for a
+ * reference takes this transaction lock before reading the guards that protect it — desk charge, hold, capture,
+ * recorded payment, link creation, the link-payment webhook, VCC charges and the late-charge balance request — and
+ * finance takes the SAME lock (through its payments port) before it locks a folio whose balance it changes. One key
+ * per booking family (a booking, its stays and their folios), else per reference; several keys in a fixed order. So the
+ * cross-module order is always: collection lock → folio row → request row, whichever module starts.
  */
 export async function lockCollectionRefs(
+  d: PaymentsDeps,
   tx: TxContext,
   refs: ReadonlyArray<{ type: string; id: string }>,
 ): Promise<void> {
-  const keys = [...new Set(refs.map((r) => `payments:collect:${r.type}:${r.id}`))].sort();
-  for (const key of keys) {
+  const keys = new Set<string>();
+  for (const r of refs) {
+    const { bookingId } = await referenceContext(d, tx, r);
+    keys.add(bookingId ? `payments:collect:family:${bookingId}` : `payments:collect:${r.type}:${r.id}`);
+  }
+  for (const key of [...keys].sort()) {
     await sql`select pg_advisory_xact_lock(hashtext(${key}))`.execute(tx.db);
   }
 }

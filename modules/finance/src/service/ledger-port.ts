@@ -8,6 +8,7 @@ import {
   ValidationError,
 } from '@portico/kernel';
 import type { LineDraft } from '../domain/ledger';
+import { syncDepartedFolios } from './departed-folios';
 import { recordDeposit, refundDeposit } from './deposits';
 import { prepareDestination } from './folios';
 import { findOriginalPayment } from './postings';
@@ -19,7 +20,7 @@ import {
   type FolioRow,
   findEntryByKey,
   loadFolio,
-  lockFolios,
+  lockMoneyFolios,
   postingIdsOfEntry,
   requestHash,
   writeEntryBody,
@@ -115,7 +116,7 @@ export async function recordPaymentAdjustment(
     const ids = await postingIdsOfEntry(tx, claim.entryId);
     return { postingId: ids[0] as string, entryId: claim.entryId, replayed: true };
   }
-  const locked = (await lockFolios(tx, [f0.id])).get(f0.id) as FolioRow;
+  const locked = (await lockMoneyFolios(tx, deps, [f0.id])).get(f0.id) as FolioRow;
   const { folio } = await prepareDestination(tx, locked, 'payment');
   const { method, provider } = decodeMethod(original.paymentMethod);
   const bridge = await bridgeLines(
@@ -184,6 +185,12 @@ export async function recordPaymentAdjustment(
       amount: input.amount,
       businessDate,
     },
+  });
+  // Re-review #3 R3-P1-1(i) sibling: a corrected payment changes what a departed folio owes.
+  await syncDepartedFolios(tx, deps, [folio.id], {
+    reason: 'Payment corrected after reconciliation',
+    entryId: claim.entryId,
+    businessDate,
   });
   return { postingId: postingId as string, entryId: claim.entryId, replayed: false };
 }
@@ -281,7 +288,12 @@ export async function describeTarget(
   tx: TxContext,
   deps: Deps,
   ref: { type: 'folio' | 'booking'; id: string },
-): Promise<{ propertyId: string; legalEntityId: string } | null> {
+): Promise<{
+  propertyId: string;
+  legalEntityId: string;
+  owner?: { type: string; id: string };
+  payer?: { type: string; id: string | null };
+} | null> {
   if (ref.type === 'booking') {
     const booking = await deps.ports.bookings.describeBooking(tx, ref.id);
     if (booking) {
@@ -292,10 +304,19 @@ export async function describeTarget(
   if (ref.type === 'folio') {
     const f = await db(tx)
       .selectFrom('finance.folios')
-      .select(['property_id', 'legal_entity_id'])
+      .select(['property_id', 'legal_entity_id', 'owner_type', 'owner_id', 'payer_type', 'payer_id'])
       .where('id', '=', ref.id)
       .executeTakeFirst();
-    return f ? { propertyId: f.property_id, legalEntityId: f.legal_entity_id } : null;
+    // Re-review #3: who owns the folio (its stay or booking) and who pays it — payments resolves the folio's booking
+    // family (double-collection guard) and whether a card's consent covers it.
+    return f
+      ? {
+          propertyId: f.property_id,
+          legalEntityId: f.legal_entity_id,
+          owner: { type: f.owner_type, id: f.owner_id },
+          payer: { type: f.payer_type, id: f.payer_id },
+        }
+      : null;
   }
   const acct = await db(tx)
     .selectFrom('finance.deposit_accounts')

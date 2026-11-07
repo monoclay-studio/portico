@@ -475,6 +475,20 @@ export async function lockFolios(tx: TxContext, folioIds: readonly string[]): Pr
   return out;
 }
 
+/**
+ * Re-review #3 (R3-P3-3): lock folios whose balance changes in a way payments may follow (late-charge balance
+ * requests): payments' collection lock first (through the port), then the folio rows. Payments' own paths take the
+ * collection lock first too, so the cross-module order is always collection → folio → request.
+ */
+export async function lockMoneyFolios(
+  tx: TxContext,
+  deps: Deps,
+  folioIds: readonly string[],
+): Promise<Map<string, FolioRow>> {
+  await deps.ports.payments.lockCollections(tx, { folioIds: [...new Set(folioIds)].sort() });
+  return lockFolios(tx, folioIds);
+}
+
 export async function folioBalance(tx: TxContext, folioId: string): Promise<number> {
   const row = await db(tx)
     .selectFrom('finance.postings')

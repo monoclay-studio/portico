@@ -20,6 +20,7 @@ export interface Harness {
   /** Every balance sync finance asked for (review R2-P1-2), and the fake's open request per folio. */
   collections: BalanceSyncRequest[];
   openRequests: Map<string, number>;
+  inflight: Set<string>;
   tax: FakeTax;
   /** Fake payer directory (guests): payer id → name. */
   payerNames: Map<string, string>;
@@ -127,6 +128,8 @@ export async function startHarness(): Promise<Harness> {
   const collections: BalanceSyncRequest[] = [];
   /** Fake payments: one open balance request per folio, kept equal to the outstanding amount. */
   const openRequests = new Map<string, number>();
+  /** Folios with a payment still being confirmed (the fake defers like payments does). */
+  const inflight = new Set<string>();
   const payerNames = new Map<string, string>();
   /** Fake booking directory (reservations): tests register the bookings they take deposits for. */
   const bookings = new Map<string, { propertyId: string; status: string }>();
@@ -174,9 +177,12 @@ export async function startHarness(): Promise<Harness> {
       },
     },
     payments: {
+      async lockCollections() {},
       async syncBalanceRequest(_tx, input) {
         collections.push(input);
         const before = openRequests.get(input.folioId) ?? 0;
+        // Like payments: a payment on the folio still being confirmed defers any change.
+        if (inflight.has(input.folioId)) return { status: 'deferred', openMinor: before };
         const want = input.outstanding.amountMinor;
         if (want === before) return { status: before ? 'unchanged' : 'none', openMinor: before };
         if (want === 0) {
@@ -184,7 +190,7 @@ export async function startHarness(): Promise<Harness> {
           return { status: 'cancelled', openMinor: 0 };
         }
         openRequests.set(input.folioId, want);
-        return { status: before ? 'amended' : 'requested', openMinor: want };
+        return { status: before ? 'reissued' : 'requested', openMinor: want };
       },
     },
     payers: {
@@ -194,7 +200,17 @@ export async function startHarness(): Promise<Harness> {
       },
     },
   };
-  return { t, finance: createFinance(ports), ports, collections, openRequests, tax, payerNames, bookings };
+  return {
+    t,
+    finance: createFinance(ports),
+    ports,
+    collections,
+    openRequests,
+    inflight,
+    tax,
+    payerNames,
+    bookings,
+  };
 }
 
 export interface Org {

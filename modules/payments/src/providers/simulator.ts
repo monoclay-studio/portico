@@ -16,6 +16,7 @@ import type { PaymentsDB } from '../tables';
 import {
   type CallBase,
   type Capability,
+  type LinkDeactivationOutcome,
   type LookupCall,
   type LookupResult,
   type PaymentCall,
@@ -678,6 +679,32 @@ export class SimulatorProvider implements PaymentProvider {
     });
   }
 
+  /** The simulated provider stops taking payments on a link (a deactivated link refuses payment). */
+  async deactivatePaymentLink(
+    account: ProviderAccount,
+    call: CallBase & { linkRef: string },
+  ): Promise<LinkDeactivationOutcome> {
+    const down = this.outage(account);
+    if (down) return { kind: 'unknown', reason: 'simulated provider outage' };
+    return this.tx(account, async (tx) => {
+      const link = await this.findById(tx, call.linkRef);
+      if (link?.kind !== 'link') {
+        return {
+          kind: 'failed',
+          code: 'no_such_link',
+          message: `No simulated payment link ${call.linkRef}.`,
+        };
+      }
+      if (link.status !== 'deactivated') {
+        await this.update(tx, call.linkRef, 'deactivated', {
+          ...link.data,
+          deactivatedAt: this.now().toISOString(),
+        });
+      }
+      return { kind: 'deactivated' };
+    });
+  }
+
   parseWebhook(rawBody: string, headers: Record<string, string | undefined>, now: Date): VerifiedWebhook {
     verifySignature(headers[SIMULATOR_SIGNATURE_HEADER], rawBody, [this.signingSecret], now);
     let parsed: {
@@ -812,6 +839,8 @@ export class SimulatorProvider implements PaymentProvider {
     return this.tx(account, async (tx) => {
       const link = await this.findById(tx, linkRef);
       if (link?.kind !== 'link') throw new Error(`No simulated payment link ${linkRef}`);
+      // A deactivated link takes no payment (re-review #3: the old link of a replaced request).
+      if (link.status === 'deactivated') throw new Error(`The payment link ${linkRef} is no longer active.`);
       const amount = amountMinor ?? link.amount_minor;
       const piId = `sim_pi_${randomToken(12).replace(/[^A-Za-z0-9]/g, 'x')}`;
       await this.insert(tx, account, `link-payment:${linkRef}:${newId()}`, {
