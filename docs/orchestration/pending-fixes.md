@@ -48,3 +48,6 @@
 - finance (fix sweep SW-FIN-1, P2; next finance round): editing a billing rule's codes or target folio must not reset its spending limit
 - backoffice (fix sweep SW-BO-1, P2; next backoffice round): the shared-tab cache-leak e2e test reloads the page, so it passes even without the fix — rewrite it so it fails when query keys/cache clearing are removed
 - quality (fix sweep lesson): builders' regression tests replay only the reviewer's exact path — the self-check must require one test per SIBLING entry point of each fixed P0/P1
+- backoffice (next round): users page still offers "Initial password" (server refuses `password_not_allowed`); add in-app step-up prompt and a security settings page (MFA, recovery codes, sessions); SSO callback route in router.tsx; 409 conflict flow can render "Your changes were re-applied…" twice under load (flaky e2e strict-mode failure at smoke.spec.ts:209) — render once
+- ux lab: `tools/ux-lab.sh` / UX lab instructions need the demo authenticator secret (identity rule 16) for tester sign-in
+- identity (P3): refuse inviting `*.portico.invalid` addresses into live organizations
