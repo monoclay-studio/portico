@@ -47,6 +47,7 @@ import {
   policy,
   propertyInfo,
 } from './context';
+import { resolveGuest } from './guests';
 import { raiseIssue } from './issues';
 import { keyOperation } from './keys';
 import { bookingRecord } from './record';
@@ -188,7 +189,6 @@ export async function createBookingInternal(
   input: NewBookingInput,
   opts: CreateOptions = {},
 ): Promise<CreateOutcome> {
-  const { guests } = deps.ports;
   const property = await propertyInfo(deps, tx, input.propertyId);
   const businessDate = property.businessDate;
   for (const s of input.stays) {
@@ -224,11 +224,16 @@ export async function createBookingInternal(
 
   let bookerProfileId = input.booker.profileId ?? null;
   if (!bookerProfileId && input.booker.profile) {
-    bookerProfileId = (
-      await guests.resolveProfile(tx, input.booker.profile, {
-        matchStrategy: input.source === 'channel' ? 'exact_only' : 'suggest',
-      })
-    ).profileId;
+    bookerProfileId = await resolveGuest(
+      deps,
+      tx,
+      input.propertyId,
+      input.booker.profile,
+      input.source === 'channel'
+        ? { kind: 'channel', ...(opts.channel ? { ref: opts.channel.connectionId } : {}) }
+        : { kind: 'booking' },
+      input.source === 'channel' ? 'exact_only' : 'suggest',
+    );
   }
 
   const status: BookingStatus =
@@ -435,7 +440,7 @@ export async function insertStayWithInventory(
       unitId: null,
     },
   ]);
-  await insertOccupants(deps, tx, stayId, s, input.exactProfileMatch);
+  await insertOccupants(deps, tx, input.propertyId, stayId, s, input.exactProfileMatch);
 
   const ref: EntityRef = { type: 'stay', id: stayId };
   const nights = { from: s.arrival, to: s.departure };
@@ -479,6 +484,7 @@ export async function insertStayWithInventory(
 async function insertOccupants(
   deps: Deps,
   tx: TxContext,
+  propertyId: string,
   stayId: string,
   s: StayInput,
   exactOnly: boolean,
@@ -487,11 +493,14 @@ async function insertOccupants(
   for (const [i, o] of (s.occupants ?? []).entries()) {
     let profileId = o.profileId ?? null;
     if (!profileId && o.profile) {
-      profileId = (
-        await deps.ports.guests.resolveProfile(tx, o.profile, {
-          matchStrategy: exactOnly ? 'exact_only' : 'suggest',
-        })
-      ).profileId;
+      profileId = await resolveGuest(
+        deps,
+        tx,
+        propertyId,
+        o.profile,
+        { kind: exactOnly ? 'channel' : 'booking' },
+        exactOnly ? 'exact_only' : 'suggest',
+      );
     }
     const primary = !primarySeen && (o.primary || (i === 0 && !(s.occupants ?? []).some((x) => x.primary)));
     if (primary) primarySeen = true;

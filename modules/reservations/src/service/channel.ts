@@ -24,6 +24,7 @@ import type { TermsSnapshot } from '../ports';
 import { createBookingInternal, insertStayWithInventory, type PricedStay, priceStay } from './bookings';
 import { applyChangeDirect } from './changes';
 import { type Deps, db, json, propertyInfo } from './context';
+import { resolveGuest } from './guests';
 import { openRelocationCase, raiseIssue } from './issues';
 import {
   bumpBooking,
@@ -315,9 +316,9 @@ async function replaceStayFromChannel(
   ]);
   await db(tx).deleteFrom('reservations.occupants').where('stay_id', '=', stay.row.id).execute();
   for (const [i, o] of s.occupants.entries()) {
-    const { profileId } = o.profile
-      ? await deps.ports.guests.resolveProfile(tx, o.profile, { matchStrategy: 'exact_only' })
-      : { profileId: null };
+    const profileId = o.profile
+      ? await resolveGuest(deps, tx, propertyId, o.profile, { kind: 'channel' }, 'exact_only')
+      : null;
     await db(tx)
       .insertInto('reservations.occupants')
       .values({

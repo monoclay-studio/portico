@@ -1,5 +1,5 @@
 import type { TxContext, TxEventSubscription } from '@portico/db';
-import { type DateRange, type DomainEvent, eachNight } from '@portico/kernel';
+import { type DateRange, DomainError, type DomainEvent, eachNight } from '@portico/kernel';
 import { CONSUMED_EVENTS as C, RESERVATIONS_EVENTS as E } from '../events';
 import { type Deps, db, parseNights } from './context';
 import { openRelocationCase, raiseIssue } from './issues';
@@ -48,51 +48,20 @@ export function reservationsSubscriptions(deps: Deps): TxEventSubscription[] {
       handle: async (tx, event) => waitlistMatches(deps, tx, event),
     },
     {
-      // Profile merges re-point booker and occupant references (guests spec GUE-R11/R12).
-      consumer: 'reservations.profile-merge',
-      types: [C.guestsProfileMerged, C.guestsProfileUnmerged],
-      handle: async (tx, event) => {
-        const p = event.payload as {
-          survivorId?: string;
-          mergedId?: string;
-          restored?: Array<{ module: string; type: string; id: string }>;
-        };
-        if (event.type === C.guestsProfileMerged && p.survivorId && p.mergedId) {
-          await db(tx)
-            .updateTable('reservations.bookings')
-            .set({ booker_profile_id: p.survivorId })
-            .where('booker_profile_id', '=', p.mergedId)
-            .execute();
-          await db(tx)
-            .updateTable('reservations.occupants')
-            .set({ profile_id: p.survivorId })
-            .where('profile_id', '=', p.mergedId)
-            .execute();
-          await tx.audit({
-            action: 'reservations.profile.repoint',
-            target: { type: 'guest_profile', id: p.mergedId },
-            after: { survivorId: p.survivorId, eventId: event.id },
-          });
-        }
-        if (event.type === C.guestsProfileUnmerged && p.mergedId) {
-          for (const r of (p.restored ?? []).filter((x) => x.module === 'reservations')) {
-            if (r.type === 'booking') {
-              await db(tx)
-                .updateTable('reservations.bookings')
-                .set({ booker_profile_id: p.mergedId })
-                .where('id', '=', r.id)
-                .execute();
-            }
-            if (r.type === 'occupant') {
-              await db(tx)
-                .updateTable('reservations.occupants')
-                .set({ profile_id: p.mergedId })
-                .where('id', '=', r.id)
-                .execute();
-            }
-          }
-        }
-      },
+      // guests.profile.merged → re-point booker/occupant references to the survivor and report exactly what was
+      // re-pointed (GUE-I03) so an unmerge restores those references and nothing else.
+      consumer: 'reservations.profile-merged',
+      types: [C.guestsProfileMerged],
+      handle: async (tx, event) =>
+        repointOnMerge(deps, tx, event.payload as unknown as GuestsProfileMergedPayload, event.id),
+    },
+    {
+      // guests.profile.unmerged → restore the references guests lists for this module, and re-point records staff
+      // reassigned to the restored profile during unmerge review.
+      consumer: 'reservations.profile-unmerged',
+      types: [C.guestsProfileUnmerged],
+      handle: async (tx, event) =>
+        restoreOnUnmerge(tx, event.payload as unknown as GuestsProfileUnmergedPayload, event.id),
     },
   ];
 }
@@ -175,4 +144,152 @@ async function waitlistMatches(deps: Deps, tx: TxContext, event: DomainEvent): P
       ownerId: ext.owner_id,
     });
   }
+}
+
+/** guests.profile.merged payload (modules/guests/src/events.ts — kept structurally, modules never import each other). */
+export interface GuestsProfileMergedPayload {
+  mergeId: string;
+  survivorId: string;
+  mergedId: string;
+}
+
+/** guests.profile.unmerged payload. */
+export interface GuestsProfileUnmergedPayload {
+  mergeId: string;
+  restoredId: string;
+  survivorId: string;
+  referencesToRestore: Record<string, Array<{ type: string; id: string; field?: string | null }>>;
+  reassigned: Array<{ type: string; id: string }>;
+}
+
+const MODULE = 'reservations';
+
+export async function repointOnMerge(
+  deps: Deps,
+  tx: TxContext,
+  p: GuestsProfileMergedPayload,
+  eventId: string,
+): Promise<void> {
+  if (!p.mergeId || !p.survivorId || !p.mergedId) return;
+  const bookings = await db(tx)
+    .selectFrom('reservations.bookings')
+    .select('id')
+    .where('booker_profile_id', '=', p.mergedId)
+    .execute();
+  const occupants = await db(tx)
+    .selectFrom('reservations.occupants')
+    .select('id')
+    .where('profile_id', '=', p.mergedId)
+    .execute();
+  const references = [
+    ...bookings.map((b) => ({ type: 'booking', id: b.id, field: 'booker_profile_id' })),
+    ...occupants.map((o) => ({ type: 'occupant', id: o.id, field: 'profile_id' })),
+  ];
+  if (references.length === 0) return; // idempotent: a re-delivery finds nothing left to re-point
+  try {
+    // Report first: if the merge was already undone, nothing must be re-pointed.
+    await deps.ports.guests.recordReferenceRepoints(tx, { mergeId: p.mergeId, module: MODULE, references });
+  } catch (err) {
+    if (err instanceof DomainError && err.code === 'merge_not_active') return;
+    throw err;
+  }
+  if (bookings.length) {
+    await db(tx)
+      .updateTable('reservations.bookings')
+      .set({ booker_profile_id: p.survivorId })
+      .where(
+        'id',
+        'in',
+        bookings.map((b) => b.id),
+      )
+      .execute();
+  }
+  if (occupants.length) {
+    await db(tx)
+      .updateTable('reservations.occupants')
+      .set({ profile_id: p.survivorId })
+      .where(
+        'id',
+        'in',
+        occupants.map((o) => o.id),
+      )
+      .execute();
+  }
+  await tx.audit({
+    action: 'reservations.profile.repoint',
+    target: { type: 'guest_profile', id: p.mergedId },
+    after: {
+      mergeId: p.mergeId,
+      survivorId: p.survivorId,
+      bookings: bookings.length,
+      occupants: occupants.length,
+      eventId,
+    },
+  });
+}
+
+export async function restoreOnUnmerge(
+  tx: TxContext,
+  p: GuestsProfileUnmergedPayload,
+  eventId: string,
+): Promise<void> {
+  if (!p.mergeId || !p.restoredId || !p.survivorId) return;
+  const mine = p.referencesToRestore?.[MODULE] ?? [];
+  const bookingIds = mine.filter((r) => r.type === 'booking').map((r) => r.id);
+  const occupantIds = mine.filter((r) => r.type === 'occupant').map((r) => r.id);
+  // Only references still pointing at the survivor are restored (a later edit is never overwritten).
+  if (bookingIds.length) {
+    await db(tx)
+      .updateTable('reservations.bookings')
+      .set({ booker_profile_id: p.restoredId })
+      .where('id', 'in', bookingIds)
+      .where('booker_profile_id', '=', p.survivorId)
+      .execute();
+  }
+  if (occupantIds.length) {
+    await db(tx)
+      .updateTable('reservations.occupants')
+      .set({ profile_id: p.restoredId })
+      .where('id', 'in', occupantIds)
+      .where('profile_id', '=', p.survivorId)
+      .execute();
+  }
+  // Records created after the merge that staff assigned to the restored profile (stays, bookings, occupants).
+  const reassignedStays = (p.reassigned ?? []).filter((r) => r.type === 'stay').map((r) => r.id);
+  const reassignedBookings = (p.reassigned ?? []).filter((r) => r.type === 'booking').map((r) => r.id);
+  const reassignedOccupants = (p.reassigned ?? []).filter((r) => r.type === 'occupant').map((r) => r.id);
+  if (reassignedStays.length) {
+    await db(tx)
+      .updateTable('reservations.occupants')
+      .set({ profile_id: p.restoredId })
+      .where('stay_id', 'in', reassignedStays)
+      .where('profile_id', '=', p.survivorId)
+      .execute();
+  }
+  if (reassignedBookings.length) {
+    await db(tx)
+      .updateTable('reservations.bookings')
+      .set({ booker_profile_id: p.restoredId })
+      .where('id', 'in', reassignedBookings)
+      .where('booker_profile_id', '=', p.survivorId)
+      .execute();
+  }
+  if (reassignedOccupants.length) {
+    await db(tx)
+      .updateTable('reservations.occupants')
+      .set({ profile_id: p.restoredId })
+      .where('id', 'in', reassignedOccupants)
+      .where('profile_id', '=', p.survivorId)
+      .execute();
+  }
+  await tx.audit({
+    action: 'reservations.profile.restore',
+    target: { type: 'guest_profile', id: p.restoredId },
+    after: {
+      mergeId: p.mergeId,
+      restored: bookingIds.length + occupantIds.length,
+      reassigned: reassignedStays.length + reassignedBookings.length + reassignedOccupants.length,
+      eventId,
+    },
+  });
 }

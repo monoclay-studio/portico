@@ -1,15 +1,18 @@
 import type { TxContext } from '@portico/db';
 import {
   assertExternalEffectAllowed,
+  BusinessRuleError,
   type EntityRef,
   ExternalServiceError,
   type Money,
+  NotFoundError,
   newId,
   systemAuthorizer,
 } from '@portico/kernel';
 import { platform } from '@portico/platform';
 import type {
   AccessPort,
+  GuestProfileInput,
   GuestsPort,
   KeyOperationResult,
   OperationsPort,
@@ -17,23 +20,79 @@ import type {
   PaymentStatusView,
   PaymentsPort,
   PlatformPort,
-  ProfileInput,
   UnitCondition,
 } from '../../src/ports';
 
-/** Fake guests: exact match on email, otherwise a new profile (never silently merges). */
+/**
+ * Fake guests (GuestsPort) with the guests provider's shapes: ProfileInput carries propertyId and contact points;
+ * exact match on a non-channel email only (channel proxy addresses are never match keys); never merges silently.
+ * Records reference re-points per merge like guests does (refuses for a merge that is no longer active).
+ */
 export class FakeGuests implements GuestsPort {
-  profiles = new Map<string, ProfileInput & { id: string }>();
-  history: Array<{ profileId: string; stayRef: EntityRef; status: string }> = [];
-  async resolveProfile(_tx: TxContext, input: ProfileInput) {
-    const match = input.email ? [...this.profiles.values()].find((p) => p.email === input.email) : undefined;
+  profiles = new Map<string, GuestProfileInput & { id: string }>();
+  history: Array<{
+    profileId: string;
+    stayRef: EntityRef;
+    status: string;
+    role?: string;
+    bookingId?: string | null;
+  }> = [];
+  merges = new Map<
+    string,
+    {
+      status: 'active' | 'reverted';
+      repoints: Array<{ module: string; type: string; id: string; field?: string | null }>;
+    }
+  >();
+  async resolveProfile(_tx: TxContext, input: GuestProfileInput) {
+    if (!input.propertyId) throw new Error('guests.resolveProfile requires propertyId');
+    const email = input.contactPoints?.find((c) => c.kind === 'email' && c.source !== 'channel')?.value;
+    const match = email
+      ? [...this.profiles.values()].find((p) =>
+          p.contactPoints?.some((c) => c.kind === 'email' && c.value === email),
+        )
+      : undefined;
     if (match) return { profileId: match.id, created: false, possibleDuplicates: [] };
     const id = newId();
     this.profiles.set(id, { ...input, id });
     return { profileId: id, created: true, possibleDuplicates: [] };
   }
-  async recordStayHistory(_tx: TxContext, input: { profileId: string; stayRef: EntityRef; status: string }) {
-    this.history.push({ profileId: input.profileId, stayRef: input.stayRef, status: input.status });
+  async recordStayHistory(
+    _tx: TxContext,
+    input: {
+      profileId: string;
+      stayRef: EntityRef;
+      status: string;
+      role?: string;
+      bookingId?: string | null;
+    },
+  ) {
+    this.history.push({
+      profileId: input.profileId,
+      stayRef: input.stayRef,
+      status: input.status,
+      role: input.role,
+      bookingId: input.bookingId ?? null,
+    });
+  }
+  async recordReferenceRepoints(
+    _tx: TxContext,
+    input: { mergeId: string; module: string; references: Array<EntityRef & { field?: string | null }> },
+  ) {
+    const merge = this.merges.get(input.mergeId);
+    if (!merge) throw new NotFoundError('merge', input.mergeId);
+    if (merge.status !== 'active') {
+      throw new BusinessRuleError('merge_not_active', `Merge ${input.mergeId} is ${merge.status}.`);
+    }
+    for (const r of input.references) merge.repoints.push({ module: input.module, ...r });
+    return { recorded: input.references.length };
+  }
+  /** Test helper: what an unmerge would send back to this module. */
+  referencesToRestore(mergeId: string): Record<string, Array<EntityRef & { field?: string | null }>> {
+    const out: Record<string, Array<EntityRef & { field?: string | null }>> = {};
+    for (const r of this.merges.get(mergeId)?.repoints ?? [])
+      (out[r.module] ??= []).push({ type: r.type, id: r.id, field: r.field ?? null });
+    return out;
   }
 }
 

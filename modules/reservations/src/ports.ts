@@ -263,20 +263,42 @@ export interface RatesPort {
 
 // ───────────────────────────── guests ─────────────────────────────
 
-export interface ProfileInput {
-  firstName?: string;
-  lastName: string;
-  email?: string;
-  phone?: string;
-  nationality?: string;
-  birthDate?: LocalDate;
+/**
+ * Guests provider's `ProfileInput` (modules/guests: createProfileInput minus matchStrategy, + documentHash).
+ * `propertyId` = where the guest is being recorded (data authority + visibility). Reservations maps its own simple
+ * booking-form fields to this shape in `service/guests.ts`.
+ */
+export interface GuestProfileInput {
+  propertyId: string;
+  title?: string;
+  givenName?: string;
+  middleName?: string;
+  familyName?: string;
+  nativeGivenName?: string;
+  nativeFamilyName?: string;
+  preferredName?: string;
   language?: string;
+  nationality?: string;
+  dateOfBirth?: LocalDate;
+  contactPoints?: Array<{
+    kind: 'email' | 'phone' | 'whatsapp' | 'address';
+    value: string;
+    isPrimary?: boolean;
+    verified?: boolean;
+    /** e.g. 'channel' — channel proxy addresses are stored as low-confidence by guests. */
+    source?: string;
+  }>;
+  source?: { kind: string; ref?: string };
+  documentHash?: string;
 }
+
+/** Reference re-pointed by a consumer of guests.profile.merged (reported back for an exact unmerge). */
+export type RepointedReference = EntityRef & { field?: string | null };
 
 export interface GuestsPort {
   resolveProfile(
     tx: TxContext,
-    input: ProfileInput,
+    input: GuestProfileInput,
     opts?: { matchStrategy?: 'exact_only' | 'suggest' | 'create_new' },
   ): Promise<{ profileId: string; created: boolean; possibleDuplicates: string[] }>;
   recordStayHistory(
@@ -285,13 +307,21 @@ export interface GuestsPort {
       profileId: string;
       stayRef: EntityRef;
       propertyId: string;
+      bookingId?: string | null;
+      role?: 'occupant' | 'booker' | 'payer';
       arrival: LocalDate;
       departure: LocalDate;
-      unitTypeId: string;
-      ratePlanId: string;
       status: string;
+      unitTypeId?: string | null;
+      ratePlanId?: string | null;
+      companyId?: string | null;
     },
   ): Promise<void>;
+  /** GUE-I03: report which references this module re-pointed for a merge, so an unmerge restores exactly those. */
+  recordReferenceRepoints(
+    tx: TxContext,
+    input: { mergeId: string; module: string; references: RepointedReference[] },
+  ): Promise<{ recorded: number }>;
 }
 
 // ───────────────────────────── finance ─────────────────────────────

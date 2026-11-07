@@ -36,6 +36,7 @@ import { RESERVATIONS_PERMISSIONS as P } from '../manifest';
 import type { GuaranteeKind, KeyKind, KeyOperationResult, UnitCondition } from '../ports';
 import { guardAuthority } from './authority';
 import { actorKey, actorName, type Deps, db, isModuleUnavailable, json, policy } from './context';
+import { resolveGuest } from './guests';
 import { raiseIssue } from './issues';
 import {
   bumpBooking,
@@ -223,9 +224,14 @@ async function stepRegistration(
   input: CheckInInputs['registration'],
 ): Promise<Outcome> {
   if (input?.primaryOccupant) {
-    const { profileId } = await deps.ports.guests.resolveProfile(tx, input.primaryOccupant, {
-      matchStrategy: 'suggest',
-    });
+    const profileId = await resolveGuest(
+      deps,
+      tx,
+      stay.row.property_id,
+      input.primaryOccupant,
+      { kind: 'registration', ref: stay.row.id },
+      'suggest',
+    );
     const name = [input.primaryOccupant.firstName, input.primaryOccupant.lastName].filter(Boolean).join(' ');
     const primary = stay.occupants.find((o) => o.is_primary);
     if (primary) {
@@ -703,6 +709,8 @@ async function confirmCheckIn(
       profileId: primary.profile_id,
       stayRef: { type: 'stay', id: stay.row.id },
       propertyId: stay.row.property_id,
+      bookingId: stay.row.booking_id,
+      role: 'occupant',
       arrival: fresh.row.arrival,
       departure: fresh.row.departure,
       unitTypeId: seg.unitTypeId,
@@ -822,6 +830,8 @@ async function confirmCheckOut(
       profileId: primary.profile_id,
       stayRef: ref,
       propertyId: stay.row.property_id,
+      bookingId: stay.row.booking_id,
+      role: 'occupant',
       arrival: fresh.row.arrival,
       departure: early?.releasedFrom ?? fresh.row.departure,
       unitTypeId: seg.unitTypeId,

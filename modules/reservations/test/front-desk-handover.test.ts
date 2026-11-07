@@ -337,6 +337,98 @@ describe('event consumers', () => {
   });
 });
 
+describe('guest profile merges (guests.profile.merged / unmerged)', () => {
+  const ev = (
+    org: { tenantId: string; propertyId: string },
+    type: string,
+    payload: Record<string, unknown>,
+  ) => ({
+    id: newId(),
+    type,
+    tenantId: org.tenantId,
+    propertyId: null,
+    aggregate: { type: 'guest_profile', id: String(payload.mergeId) },
+    occurredAt: new Date().toISOString(),
+    actor: { kind: 'system' as const, process: 'test' },
+    correlationId: newId(),
+    version: 1,
+    payload,
+  });
+
+  it('re-points booker and occupant references, reports them to guests, and an unmerge restores exactly those', async () => {
+    const org = await setupOrg(t);
+    const b = created<Booking>(await org.run((tx) => org.svc.createBooking(tx, org.booking())));
+    const mergedId = b.booker.profileId as string;
+    const occupantProfile = b.stays[0]?.occupants[0]?.profileId as string;
+    // Profiles for the booker and the occupant were resolved through guests with the provider's input shape.
+    expect(
+      [...org.fakes.guests.profiles.values()].every((p) => p.propertyId === org.propertyId && p.familyName),
+    ).toBe(true);
+    const survivorId = newId();
+    const mergeId = newId();
+    org.fakes.guests.merges.set(mergeId, { status: 'active', repoints: [] });
+    const merged = org.svc.subscriptions().find((s) => s.consumer === 'reservations.profile-merged');
+    const unmerged = org.svc.subscriptions().find((s) => s.consumer === 'reservations.profile-unmerged');
+    const mergeEvent = ev(org, 'guests.profile.merged', { mergeId, survivorId, mergedId });
+    await org.run((tx) => merged?.handle(tx, mergeEvent) ?? Promise.resolve());
+    await org.run((tx) => merged?.handle(tx, { ...mergeEvent, id: newId() }) ?? Promise.resolve()); // re-delivery
+    let now = await org.run((tx) => org.svc.getBooking(tx, b.id));
+    expect(now.booker.profileId).toBe(survivorId);
+    expect(now.stays[0]?.occupants[0]?.profileId).toBe(occupantProfile); // a different profile: untouched
+    const reported = org.fakes.guests.referencesToRestore(mergeId);
+    expect(reported).toEqual({ reservations: [{ type: 'booking', id: b.id, field: 'booker_profile_id' }] });
+
+    // A booking created AFTER the merge for the survivor must stay with the survivor on unmerge.
+    const later = created<Booking>(
+      await org.run((tx) =>
+        org.svc.createBooking(
+          tx,
+          org.booking(
+            { booker: { kind: 'profile', profileId: survivorId } },
+            { arrival: '2026-12-20', departure: '2026-12-22' },
+          ),
+        ),
+      ),
+    );
+    org.fakes.guests.merges.set(mergeId, {
+      status: 'reverted',
+      repoints: org.fakes.guests.merges.get(mergeId)?.repoints ?? [],
+    });
+    await org.run(
+      (tx) =>
+        unmerged?.handle(
+          tx,
+          ev(org, 'guests.profile.unmerged', {
+            mergeId,
+            restoredId: mergedId,
+            survivorId,
+            referencesToRestore: reported,
+            reassigned: [],
+          }),
+        ) ?? Promise.resolve(),
+    );
+    now = await org.run((tx) => org.svc.getBooking(tx, b.id));
+    expect(now.booker.profileId).toBe(mergedId);
+    expect((await org.run((tx) => org.svc.getBooking(tx, later.id))).booker.profileId).toBe(survivorId);
+  });
+
+  it('does not re-point anything for a merge that was already undone', async () => {
+    const org = await setupOrg(t);
+    const b = created<Booking>(await org.run((tx) => org.svc.createBooking(tx, org.booking())));
+    const mergeId = newId();
+    org.fakes.guests.merges.set(mergeId, { status: 'reverted', repoints: [] });
+    const merged = org.svc.subscriptions().find((s) => s.consumer === 'reservations.profile-merged');
+    await org.run(
+      (tx) =>
+        merged?.handle(
+          tx,
+          ev(org, 'guests.profile.merged', { mergeId, survivorId: newId(), mergedId: b.booker.profileId }),
+        ) ?? Promise.resolve(),
+    );
+    expect((await org.run((tx) => org.svc.getBooking(tx, b.id))).booker.profileId).toBe(b.booker.profileId);
+  });
+});
+
 describe('global search (universal record contract)', () => {
   it('finds bookings by confirmation code, guest name, channel id and unit number, and summarizes them', async () => {
     const org = await setupOrg(t);
