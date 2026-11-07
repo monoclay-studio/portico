@@ -73,6 +73,8 @@ specified but unbuilt.
 - **Sixteen modules have no parity file**: guests and operations exist only as drafts on `docs/parity-ops`; identity,
   integration, migration, comms, resort, access, guest-experience, guest-services, crm, contracting, ai, billing,
   workforce, concessions, utilities have none. No baseline → no measurable "better".
+- **The committed `docs/parity/COVERAGE.md` is itself stale** (it shows rates at 2% tested and payments at 54%; a fresh
+  `node tools/parity-report.mjs` gives 61% and 50%). Regenerate it at every merge; this plan uses fresh numbers.
 - **A stale build cache reported a passing typecheck** that failed when forced (REV-identity-plus-2 R2-P2-6). Gates
   must run `--force` in CI for merges.
 - **UX scorecard row R1 is empty** (`docs/ux/scorecard.md`). Baseline from UX1: 5/34 tasks done fully, 14 blockers.
