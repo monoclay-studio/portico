@@ -66,6 +66,17 @@
   **Still queued:** gap strategist → `docs/strategy/`; infra + parity-ops resume. UX lab not restarted (only the
   tester needs it). Seven-day pacing rule added to `usage-guardrail.md`.
 
+- **2026-11-07 18:00 UTC — next-wave plan.** The 10x briefs are on main (`docs/strategy/`). After
+  integration-step and identity-plus merge, start module round 2 from each module's brief, in gap-plan order:
+  1. "make it real": backoffice wired to real APIs + reservations front-desk flows (FD-01/FD-09/FD-06);
+  2. payments collection plans + finance receipts (MIRA 3-day rule);
+  3. day-close (new module);
+  4. the remaining modules' first increments (including their parity-file corrections).
+
+  Max 3–4 module agents at once while seven-day usage is ≥ 60%.
+  **Q-number collision to resolve at merge:** identity-plus adds Q146–Q149, and integration-step also adds a Q146
+  (late-charge auto card). Renumber integration-step's question to the next free number (≥ Q156) when merging.
+
 ## 1. Owner, product and how to work with the owner
 
 - Owner: founder of **Monoclay LLC** (Delaware, Stripe Atlas), based in the Maldives. Product: **Portico** (final name).
@@ -126,7 +137,7 @@ direction, experience architecture, parity framework, this orchestration folder.
 | `feat/integration-step` | wt/integration-step | bind every port for real; ADR-0015 delegation; S01–S20 scenarios | **done** (pushed): all ports bound; 12/20 scenarios pass; 5 contract bugs fixed | **steward review running** → merge → tell identity-plus/backoffice to merge main |
 | `docs/parity-ops` | wt/parity-ops | parity: operations, guests, comms, resort, access, guest-experience, crm, identity, integration, ai | **running** (new agent from the original brief; first agent's log lost in the 11:11 container restart) — operations/guests done, statuses updated to real code | merge → feed gap strategist and module rounds |
 | journey, back-of-house, parity-front, parity-finance, readiness, product, adoption docs | — | docs | **MERGED** to main | spec change requests folded in at integration step |
-| market deep dive | wt/market | owner's research prompt + one-button migration | **MERGED** to main (`docs/research/05-*`; Q140–Q145) | **gap strategist queued for after usage reset** |
+| market deep dive → gap strategist | wt/market, wt/strategy | research + 10x briefs | **MERGED** (`docs/research/05-*`, `docs/strategy/`: gap plan + 32 module briefs; Q140–Q145, Q150–Q155) | module round 2 from briefs |
 | UX loop round 1 | wt/ux-round-1 | tester → refiner | **refinements MERGED** (`docs/ux/round-1/`: 83 refinements, C1–C12) → backoffice (22 shell items, next round), integration step (API surface for 44 wiring items), module owners record decisions | round 2 after modules are bound to the UI |
 
 Branch briefs: `docs/orchestration/module-agent-playbook.md` (shared module rules), `workstream-briefs.md`

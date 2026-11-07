@@ -165,4 +165,11 @@ Each agent's brief and report are in `agents/`.
     Maldives tax rules were installed, because Green Tax needs occupancy and the deposit has none.
   - 17:40: an independent steward review launches before merge, because authorization moved across module
     boundaries.
+- **17:55 — Identity fix round 3 done:** ADR-0017 Amendment 1 is implemented (no org ever sets a password; first
+  email verification wipes earlier credentials). All 9 new and all 11 original attacks are refused; identity has
+  135 tests. A short third review launches.
+- **17:58 — Gap strategist done:** `docs/strategy/gap-plan.md` (14 platform moves; "make it real" first) and 32 module
+  10x briefs, each with targets and the next 3 increments. Owner questions Q150–Q155 are added. Merged to main.
+  - It also flagged measurement problems: stale parity coverage, parity files under-reporting tested rows, and a
+    requirement-prefix collision. The orchestrator fixed the coverage and the collision (`ACS-R` for access).
 
