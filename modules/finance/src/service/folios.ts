@@ -153,6 +153,7 @@ export async function openFolio(
     type: 'finance.folio.opened',
     propertyId: input.propertyId,
     aggregate: { type: 'folio', id },
+    aggregateVersion: 1,
     payload: { folioId: id, owner: input.owner, payer: input.payer, currency, isDefault },
   });
   return { folioId: id };
@@ -316,6 +317,7 @@ export async function settleFolio(tx: TxContext, folioId: string, expectedVersio
     type: 'finance.folio.settled',
     propertyId: f.property_id,
     aggregate: { type: 'folio', id: folioId },
+    aggregateVersion: row.version,
     payload: { folioId, owner: { type: f.owner_type, id: f.owner_id } },
   });
   return folioView(tx, row, balance);
@@ -326,11 +328,12 @@ export async function settleLocked(tx: TxContext, f: FolioRow): Promise<void> {
   const balance = await folioBalance(tx, f.id);
   assertCanSettle(f.status === 'settled' ? 'open' : f.status, balance, f.currency);
   if (f.status === 'settled') return;
-  await changeStatus(tx, f, f.version, { status: 'settled', settled_at: tx.now }, 'finance.folio.settle');
+  const row = await changeStatus(tx, f, f.version, { status: 'settled', settled_at: tx.now }, 'finance.folio.settle');
   await tx.emit({
     type: 'finance.folio.settled',
     propertyId: f.property_id,
     aggregate: { type: 'folio', id: f.id },
+    aggregateVersion: row.version,
     payload: { folioId: f.id, owner: { type: f.owner_type, id: f.owner_id } },
   });
 }
@@ -416,6 +419,7 @@ export async function prepareDestination(
       type: 'finance.folio.reopened',
       propertyId: f.property_id,
       aggregate: { type: 'folio', id: f.id },
+      aggregateVersion: row.version,
       payload: { folioId: f.id, reason },
     });
     return { folio: row, action };
@@ -441,6 +445,7 @@ export async function prepareDestination(
       payer_type: f.payer_type,
       payer_id: f.payer_id,
       payer_name: f.payer_name,
+      payer_name_unresolved: f.payer_name_unresolved,
       label: `${f.label ? `${f.label} — ` : ''}supplementary (${reason.replace('_', ' ')})`,
       currency: f.currency,
       is_default: false,
@@ -462,6 +467,7 @@ export async function prepareDestination(
     type: 'finance.folio.opened',
     propertyId: f.property_id,
     aggregate: { type: 'folio', id },
+    aggregateVersion: 1,
     payload: { folioId: id, supplementaryOf: f.id, reason },
   });
   return { folio: row, action };
@@ -497,6 +503,7 @@ export async function reopenInPlace(tx: TxContext, f: FolioRow, reason: string):
     type: 'finance.folio.reopened',
     propertyId: f.property_id,
     aggregate: { type: 'folio', id: f.id },
+    aggregateVersion: row.version,
     payload: { folioId: f.id, reason },
   });
   return row;

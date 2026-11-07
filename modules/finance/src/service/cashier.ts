@@ -289,6 +289,7 @@ export async function closeCashierSession(
     type: 'finance.cashierSession.closed',
     propertyId: s.property_id,
     aggregate: { type: 'cashier_session', id: s.id },
+    aggregateVersion: row.version,
     payload: { sessionId: s.id, variance },
   });
   return summary(tx, row);

@@ -1,3 +1,4 @@
+import { sql } from '@portico/db';
 import { newId } from '@portico/kernel';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { financeSubscriptions } from '../src';
@@ -132,6 +133,32 @@ describe('S10: late restaurant charge after check-out', () => {
     expect(checks.map((c) => c.code)).toEqual(
       expect.arrayContaining(['departed_with_balance', 'exception:late_charge']),
     );
+    await assertLedgerIntegrity(h, org);
+  });
+
+  it('a failing collection request never loses the late charge (savepoint, ADR-0015 §6)', async () => {
+    const org = await setupOrg(h);
+    const s = await checkedOutStay(org, false);
+    await advanceBusinessDate(org, '2026-11-07');
+    const original = h.ports.payments.requestCollection;
+    // A database error inside payments aborts the statement; without a savepoint the whole charge would be lost.
+    h.ports.payments.requestCollection = async (tx) => {
+      await sql`select 1 / 0`.execute(tx.db);
+      return { status: 'requested' };
+    };
+    try {
+      const res = await lateDinner(org, s.stayId);
+      expect(res.folioId).toBe(s.guestFolioId);
+    } finally {
+      h.ports.payments.requestCollection = original;
+    }
+    const f = await org.run((tx) => h.finance.getFolio(tx, s.guestFolioId));
+    expect(f.balance.amountMinor).toBe(7722);
+    const exceptions = await org.run((tx) => h.finance.listExceptions(tx, { propertyId: org.propertyId }));
+    expect(exceptions.find((e) => e.kind === 'late_charge')?.details).toMatchObject({
+      collection: 'failed',
+      collectionDetail: expect.stringMatching(/Arrange collection manually/),
+    });
     await assertLedgerIntegrity(h, org);
   });
 

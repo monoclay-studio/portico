@@ -1,9 +1,10 @@
-import { type Selectable, sql, type TxContext } from '@portico/db';
+import { type Selectable, sql, type TxContext, withSavepoint } from '@portico/db';
 import {
   BusinessRuleError,
   ConflictError,
   convert,
   Decimal,
+  DomainError,
   type EntityRef,
   type LocalDate,
   type Money,
@@ -740,17 +741,26 @@ export async function postCharge(
     for (const folioId of folioIds) {
       const share = postings.filter((p) => p.folioId === folioId).reduce((s, p) => s + p.amountMinor, 0);
       const f = await loadFolio(tx, folioId);
-      const collection =
+      // A refused or failed collection request never loses the late charge (ADR-0015 §6): it is listed instead.
+      const collection: { status: string; detail?: string } =
         share > 0
-          ? await deps.ports.payments.requestCollection(tx, {
-              propertyId: input.propertyId,
-              folioId,
-              amount: money(share, currency),
-              reason: 'late_charge',
-              ref: { type: 'journal_entry', id: claim.entryId },
-              idempotencyKey: `${idempotencyKey}:collect:${folioId}`,
-            })
-          : { status: 'not_possible' as const, detail: 'Nothing to collect' };
+          ? await withSavepoint(tx, 'finance_collection', () =>
+              deps.ports.payments.requestCollection(tx, {
+                propertyId: input.propertyId,
+                folioId,
+                amount: money(share, currency),
+                reason: 'late_charge',
+                ref: { type: 'journal_entry', id: claim.entryId },
+                idempotencyKey: `${idempotencyKey}:collect:${folioId}`,
+              }),
+            ).catch((err: unknown) => ({
+              status: 'failed',
+              detail:
+                err instanceof DomainError
+                  ? err.message
+                  : 'Payments could not record the collection request. Arrange collection manually.',
+            }))
+          : { status: 'not_possible', detail: 'Nothing to collect' };
       await raiseException(tx, {
         propertyId: input.propertyId,
         kind: 'late_charge',

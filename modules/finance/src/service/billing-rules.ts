@@ -196,6 +196,7 @@ export async function createBillingRule(
     type: 'finance.billingRule.changed',
     propertyId: input.propertyId,
     aggregate: { type: 'billing_rule', id },
+    aggregateVersion: row.version,
     payload: { ruleId: id, owner: input.owner, change: 'created' },
   });
   return rule;
@@ -261,6 +262,7 @@ export async function updateBillingRule(
     type: 'finance.billingRule.changed',
     propertyId: current.property_id,
     aggregate: { type: 'billing_rule', id },
+    aggregateVersion: row.version,
     payload: { ruleId: id, owner, change: 'updated' },
   });
   return after;
@@ -297,6 +299,7 @@ export async function deactivateBillingRule(
     type: 'finance.billingRule.changed',
     propertyId: current.property_id,
     aggregate: { type: 'billing_rule', id },
+    aggregateVersion: row.version,
     payload: { ruleId: id, owner: { type: current.owner_type, id: current.owner_id }, change: 'deactivated' },
   });
   return toRule(tx, row);
