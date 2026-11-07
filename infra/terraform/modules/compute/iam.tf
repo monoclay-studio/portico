@@ -14,25 +14,27 @@ locals {
   app_keys = values(var.app_key_secret_arns)
 
   execution_roles = {
+    # The api task's init containers (migrate, grants) run as portico_owner, so its execution role also fetches the
+    # owner secret; ECS injects each secret only into the container that names it.
     api = {
-      secrets   = concat([var.db_app_secret_arn], var.api_holds_worker_credentials ? [var.db_worker_secret_arn] : [], local.app_keys, local.injected)
-      log_group = var.log_group_arns["api"]
-      repos     = [var.repository_arns["api"]]
+      secrets    = concat([var.db_app_secret_arn, var.db_owner_secret_arn], var.api_holds_worker_credentials ? [var.db_worker_secret_arn] : [], local.app_keys, local.injected)
+      log_groups = [var.log_group_arns["api"], var.log_group_arns["migrate"]]
+      repos      = [var.repository_arns["api"]]
     }
     worker = {
-      secrets   = concat([var.db_worker_secret_arn], local.app_keys, local.injected)
-      log_group = var.log_group_arns["worker"]
-      repos     = [var.repository_arns["worker"]]
+      secrets    = concat([var.db_worker_secret_arn], local.app_keys, local.injected)
+      log_groups = [var.log_group_arns["worker"]]
+      repos      = [var.repository_arns["worker"]]
     }
     migrate = {
-      secrets   = [var.db_owner_secret_arn]
-      log_group = var.log_group_arns["migrate"]
-      repos     = [var.repository_arns["api"]]
+      secrets    = [var.db_owner_secret_arn]
+      log_groups = [var.log_group_arns["migrate"]]
+      repos      = [var.repository_arns["api"]]
     }
     db-bootstrap = {
-      secrets   = [var.db_master_secret_arn, var.db_owner_secret_arn, var.db_app_secret_arn, var.db_worker_secret_arn]
-      log_group = var.log_group_arns["db-bootstrap"]
-      repos     = [var.repository_arns["api"]]
+      secrets    = [var.db_master_secret_arn, var.db_owner_secret_arn, var.db_app_secret_arn, var.db_worker_secret_arn]
+      log_groups = [var.log_group_arns["db-bootstrap"]]
+      repos      = [var.repository_arns["api"]]
     }
   }
 }
@@ -74,7 +76,7 @@ data "aws_iam_policy_document" "execution" {
   statement {
     sid       = "Logs"
     actions   = ["logs:CreateLogStream", "logs:PutLogEvents"]
-    resources = ["${each.value.log_group}:*"]
+    resources = [for g in each.value.log_groups : "${g}:*"]
   }
   statement {
     sid       = "InjectedSecrets"

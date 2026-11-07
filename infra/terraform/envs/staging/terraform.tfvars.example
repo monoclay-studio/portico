@@ -7,4 +7,6 @@ route53_zone_id     = "Z0000000000000000000"
 budget_monthly_usd  = 40                    # OWNER (Q22)
 budget_alert_emails = ["owner@example.invalid"]
 oncall_emails       = ["owner@example.invalid"]
-# github_repository = "monoclay/portico"
+# github_repository    = "monoclay-studio/portico"
+# github_repository_id = 000000000   # immutable id (envs/github output repository_ids)
+# github_owner_id      = 000000000

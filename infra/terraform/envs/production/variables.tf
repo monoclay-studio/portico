@@ -74,8 +74,21 @@ variable "image_tag" {
 }
 
 variable "github_repository" {
-  type    = string
-  default = null
+  description = "Repository allowed to deploy through OIDC: monoclay-studio/portico. null = no CI role."
+  type        = string
+  default     = null
+}
+
+variable "github_repository_id" {
+  description = "Immutable numeric repository id (envs/github output repository_ids, or the GitHub API)."
+  type        = number
+  default     = null
+}
+
+variable "github_owner_id" {
+  description = "Immutable numeric id of the monoclay-studio organization."
+  type        = number
+  default     = null
 }
 
 variable "email_domain" {
@@ -98,4 +111,28 @@ variable "api_holds_worker_credentials" {
   description = "true once the API serves the payments webhook route through a portico_worker pool (payments FOUNDATION_REQUESTS §4)."
   type        = bool
   default     = false
+}
+
+variable "public_task_ips" {
+  description = "Lean only, explicit opt-in: public task IPs instead of the NAT gateway (Security Hub ECS.2 flags it; Q158)."
+  type        = bool
+  default     = false
+}
+
+variable "key_break_glass_role_arns" {
+  description = "Break-glass role(s) for the irreplaceable keys (default role/portico-key-break-glass)."
+  type        = list(string)
+  default     = []
+}
+
+variable "terraform_principal_arns" {
+  description = "Role(s) that run terraform apply (default role/portico-infra-admin)."
+  type        = list(string)
+  default     = []
+}
+
+variable "existing_app_key_secret_arns" {
+  description = "DR cell only: replicated key secrets to reuse (docs/runbooks/disaster-recovery.md)."
+  type        = map(string)
+  default     = null
 }

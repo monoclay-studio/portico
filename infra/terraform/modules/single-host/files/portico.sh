@@ -43,6 +43,8 @@ write_env_files() {
   install -d -m 0700 "$RUN"
   umask 077
   cat > "$RUN/bootstrap.env" <<EOF
+PORTICO_DEPLOYMENT=demo
+PORTICO_PROCESS=db-bootstrap
 PGHOST=portico-postgres
 PGDATABASE=portico
 PGSSLMODE=disable
@@ -54,11 +56,15 @@ WORKER_SECRET_JSON={"username":"portico_worker_blue","password":"${WORKER_BLUE_P
 EOF
   cat > "$RUN/migrate.env" <<EOF
 NODE_ENV=production
+PORTICO_DEPLOYMENT=demo
+PORTICO_PROCESS=migrate
 DATABASE_URL=$(owner_url)
 EOF
   # Settings and keys both processes need (both run the full composition root).
   local common
-  common="NODE_ENV=production
+  # NODE_ENV=development: the demo is not production (operator console and trials work); keys and live-key refusal
+  # are enforced by /app/ops/env-guard.mjs from PORTICO_DEPLOYMENT, whatever NODE_ENV says.
+  common="NODE_ENV=development
 LOG_LEVEL=info
 PORTICO_DEPLOYMENT=demo
 PORTICO_CELL=${CELL}
@@ -73,6 +79,7 @@ PORTICO_APP_BASE_URL=${APP_BASE_URL}"
   fi
   cat > "$RUN/app.env" <<EOF
 $common
+PORTICO_PROCESS=api
 PORT=${APP_PORT}
 CORS_ORIGINS=${CORS_ORIGINS}
 TRUSTED_PROXY_CIDRS=${TRUSTED_PROXY_CIDRS}
@@ -80,6 +87,7 @@ APP_DATABASE_URL=$(app_url)
 EOF
   cat > "$RUN/worker.env" <<EOF
 $common
+PORTICO_PROCESS=worker
 APP_DATABASE_URL=$(worker_url)
 EOF
 }
@@ -97,7 +105,8 @@ ensure_postgres() {
       -e POSTGRES_PASSWORD="$PG_SUPERUSER_PASSWORD" -e POSTGRES_DB=portico \
       -v "$STATE/pg:/var/lib/postgresql/data" --shm-size 256m \
       $(logs_for postgres) \
-      "$POSTGRES_IMAGE" -c max_connections=100 -c shared_buffers=256MB -c log_statement=ddl >/dev/null
+      "$POSTGRES_IMAGE" -c max_connections=100 -c shared_buffers=256MB -c log_statement=ddl \
+      -c log_parameter_max_length=0 -c log_parameter_max_length_on_error=0 -c log_error_verbosity=terse >/dev/null
   fi
   for _ in $(seq 1 60); do
     docker exec portico-postgres pg_isready -U postgres -d portico >/dev/null 2>&1 && return 0
@@ -142,11 +151,12 @@ deploy() {
   ensure_postgres
   write_env_files
 
-  one_off db-bootstrap "$RUN/bootstrap.env" "$API_REPO:$TAG" node /app/ops/bootstrap-roles.mjs
-  one_off migrate "$RUN/migrate.env" "$API_REPO:$TAG" node --import /opt/tsx/register.mjs src/migrate-cli.ts
-  one_off db-grants "$RUN/migrate.env" "$API_REPO:$TAG" node /app/ops/bootstrap-roles.mjs grants
+  local guard=(node --import /app/ops/env-guard.mjs)
+  one_off db-bootstrap "$RUN/bootstrap.env" "$API_REPO:$TAG" "${guard[@]}" /app/ops/bootstrap-roles.mjs
+  one_off migrate "$RUN/migrate.env" "$API_REPO:$TAG" "${guard[@]}" --import /opt/tsx/register.mjs src/migrate-cli.ts
+  one_off db-grants "$RUN/migrate.env" "$API_REPO:$TAG" "${guard[@]}" /app/ops/bootstrap-roles.mjs grants
   if [ "$SEED_DEMO" = "true" ] && [ ! -f "$STATE/seeded" ]; then
-    one_off seed "$RUN/app.env" "$API_REPO:$TAG" node --import /opt/tsx/register.mjs src/seed/demo-cli.ts
+    one_off seed "$RUN/app.env" "$API_REPO:$TAG" node --import /app/ops/env-guard.mjs --import /opt/tsx/register.mjs src/seed/demo-cli.ts
     touch "$STATE/seeded"
   fi
 

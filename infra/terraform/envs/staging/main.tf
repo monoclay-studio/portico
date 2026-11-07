@@ -31,6 +31,8 @@ module "cell" {
   engine_version        = var.engine_version
   image_tag             = var.image_tag
   github_repository     = var.github_repository
+  github_repository_id  = var.github_repository_id
+  github_owner_id       = var.github_owner_id
   github_environments   = ["staging"]
   restore_drill_enabled = false
   email_domain          = var.email_domain

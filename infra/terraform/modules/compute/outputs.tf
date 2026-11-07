@@ -52,18 +52,31 @@ output "deploy_config_parameter" {
 }
 
 output "runtime_contract" {
-  description = "Names (never values) of the environment variables and injected secrets per container, plus the secret each DB URL comes from. Used by tests and the runbooks."
+  description = "Names and safe values (never secret values) per container: env, secret names, DB secret, commands, ordering. Used by tests and the runbooks."
   value = {
     api = {
-      environment = sort([for e in concat(local.base_environment, [{ name = "PORT" }, { name = "DB_POOL_MAX" }, { name = "CORS_ORIGINS" }, { name = "TRUSTED_PROXY_CIDRS" }]) : e.name])
+      environment = sort([for e in local.api_containers[2].environment : e.name])
+      values      = { for e in local.api_containers[2].environment : e.name => e.value if contains(["NODE_ENV", "PORTICO_DEPLOYMENT", "PORTICO_PROCESS"], e.name) }
       secrets     = sort([for e in local.api_secrets : e.name])
       database    = var.db_app_secret_arn
+      image_tag   = var.release_tag
     }
     worker = {
-      environment = sort([for e in local.base_environment : e.name])
+      environment = sort([for e in local.worker_containers[0].environment : e.name])
+      values      = { for e in local.worker_containers[0].environment : e.name => e.value if contains(["NODE_ENV", "PORTICO_DEPLOYMENT", "PORTICO_PROCESS"], e.name) }
       secrets     = sort([for e in local.worker_secrets : e.name])
       database    = var.db_worker_secret_arn
+      image_tag   = var.release_tag
     }
+    api_task_containers = [for c in local.api_containers : {
+      name       = c.name
+      essential  = c.essential
+      depends_on = [for d in lookup(c, "dependsOn", []) : "${d.containerName}:${d.condition}"]
+      command    = c.command
+      node_env   = one([for e in c.environment : e.value if e.name == "NODE_ENV"])
+      secrets    = sort([for e in c.secrets : e.name])
+    }]
+    every_command       = concat([for c in local.api_containers : c.command], [for c in local.worker_containers : c.command])
     trusted_proxy_cidrs = var.trusted_proxy_cidrs
   }
 }

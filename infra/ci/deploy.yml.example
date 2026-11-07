@@ -3,18 +3,23 @@
 # Copy to .github/workflows/deploy.yml only after the owner authorizes AWS spend (OPEN_QUESTIONS Q4/Q22) and the cells
 # exist (docs/runbooks/deploy.md § First-time setup). Until then this file deploys nothing.
 #
-# Flow: verify (lint, typecheck, tests against Postgres 16) → build the api/worker images ONCE (OCI archives, arm64)
-# and the staff web app → per cell: push the same bytes (digests preserved) → infra/ci/deploy-cell.sh:
-# [role bootstrap] → migrations → routing grants → worker → api → smoke test → automatic rollback on failure →
-# publish the web app. The script is tested offline: infra/ci/test/deploy-cell.test.sh.
+# Flow: verify (lint, typecheck, tests against Postgres 16) → build the api, worker and restore-drill images ONCE
+# (OCI archives, arm64) and the staff web app → per cell: push the same bytes (index digests preserved) →
+# infra/ci/deploy-cell.sh: move the `release` tag → api (init containers: migrations, routing grants) → worker →
+# drill image → smoke test → automatic rollback on failure → web app. Tested offline: infra/ci/test/deploy-cell.test.sh.
+# The role bootstrap (RDS master) is never part of a release: it is a human break-glass step (database-roles.md).
 #
 # Security:
-#   - No long-lived AWS keys. Each job assumes its cell's deploy role through GitHub OIDC; the role trusts only this
-#     repository AND the job's GitHub Environment (modules/ci-deploy-role). The role can push images, register task
-#     definitions, run the one-off tasks, update the two services and publish the web app — not change
-#     infrastructure (Terraform is applied by a person, docs/runbooks/deploy.md).
-#   - GitHub Environments `demo`, `staging`, `production`; `production` has required reviewers (the owner) and a
-#     wait timer. Environment variables (not secrets — none are needed): AWS_DEPLOY_ROLE_ARN, AWS_REGION, CELL_PREFIX.
+#   - No long-lived AWS keys. Each job assumes its cell's deploy role through GitHub OIDC. The trust matches EXACTLY
+#     the customized subject: repository owner id + repository id (monoclay-studio/portico), environment, ref
+#     refs/heads/main and this workflow file (`job_workflow_ref` = monoclay-studio/portico/.github/workflows/deploy.yml)
+#     — so this file must live at .github/workflows/deploy.yml and run from main (envs/github sets the subject
+#     template, the main-only environments and branch protection).
+#   - The role pushes images, moves the `release` tag, forces new deployments of Terraform's task definitions and
+#     publishes the web app. It cannot read secrets, pass roles, register task definitions or run tasks. It is still
+#     as powerful as the code it deploys (that code runs with the app's secrets): only reviewed code on main reaches it.
+#   - GitHub Environments `demo`, `staging`, `production`; staging/production need a reviewer who did not start the
+#     run. Environment variables (not secrets — none are needed): AWS_DEPLOY_ROLE_ARN, AWS_REGION, CELL_PREFIX.
 #   - Every third-party action is pinned to a full commit SHA (resolved 2026-11-07 with `git ls-remote`; tag dates
 #     checked to be at least two weeks old). Dependabot/renovate should propose updates.
 #   - permissions default to read; only deploy jobs get id-token: write.
@@ -33,10 +38,6 @@ on:
         type: choice
         options: [demo, staging, production, staging-then-production]
         default: staging-then-production
-      bootstrap_roles:
-        description: Run the database role bootstrap first (first deploy of a cell; after a credential rotation)
-        type: boolean
-        default: false
   push:
     branches: [main] # main deploys to the demo cell only
 
@@ -92,8 +93,9 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p oci
-          for app in api worker; do
-            docker buildx build --platform linux/arm64 -f "apps/$app/Dockerfile" \
+          for app in api worker restore-drill; do
+            file="apps/$app/Dockerfile"; [ "$app" = restore-drill ] && file=infra/restore-drill/Dockerfile
+            docker buildx build --platform linux/arm64 -f "$file" \
               --build-arg GIT_SHA="$GITHUB_SHA" --provenance=mode=max --sbom=true \
               --output "type=oci,dest=oci/$app.oci.tar" .
           done
@@ -133,14 +135,13 @@ jobs:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
           role-session-name: deploy-${{ github.run_id }}
-      - name: Ensure skopeo (digest-preserving image copy)
+      - name: Ensure skopeo (digest-preserving, all-platform image copy)
         run: command -v skopeo || (sudo apt-get update -q && sudo apt-get install -y -q skopeo)
-      - name: Deploy (push → [bootstrap] → migrate → grants → worker → api → smoke → rollback on failure → web)
+      - name: Deploy (push → release tag → api with migrations + grants → worker → smoke → rollback on failure → web)
         run: |
           set -euo pipefail
-          args=(--push-oci release/oci --web-dist release/apps/backoffice/dist)
-          if [ "${{ inputs.bootstrap_roles }}" = "true" ]; then args+=(--bootstrap-roles); fi
-          infra/ci/deploy-cell.sh "${{ vars.CELL_PREFIX }}" "${{ needs.build.outputs.tag }}" "${args[@]}"
+          infra/ci/deploy-cell.sh "${{ vars.CELL_PREFIX }}" "${{ needs.build.outputs.tag }}" \
+            --push-oci release/oci --web-dist release/apps/backoffice/dist
 
   deploy-staging:
     needs: build

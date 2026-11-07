@@ -6,4 +6,6 @@ budget_alert_emails = ["owner@example.invalid"]
 oncall_emails       = ["owner@example.invalid"]
 # domain_name       = "portico.example"    # OWNER (Q1) — optional for the demo
 # route53_zone_id   = "Z0000000000000000000"
-# github_repository = "monoclay/portico"   # OWNER: confirm the repository allowed to deploy
+# github_repository    = "monoclay-studio/portico"
+# github_repository_id = 000000000   # immutable id (envs/github output repository_ids)
+# github_owner_id      = 000000000   # OWNER: confirm the repository allowed to deploy

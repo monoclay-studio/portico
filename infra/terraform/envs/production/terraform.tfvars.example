@@ -9,5 +9,7 @@ budget_alert_emails = ["owner@example.invalid"]
 oncall_emails       = ["owner@example.invalid"]
 dr_region           = "ap-south-2"          # OWNER: backup copy region (data residency)
 # email_domain      = "mail.portico.example"
-# github_repository = "monoclay/portico"
+# github_repository    = "monoclay-studio/portico"
+# github_repository_id = 000000000   # immutable id (envs/github output repository_ids)
+# github_owner_id      = 000000000
 # overrides         = { db_multi_az = true }  # lean + synchronous standby (online change, ≈ +$33/month incl. storage)

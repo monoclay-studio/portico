@@ -1,4 +1,5 @@
-# One-time, per AWS account: remote-state bucket (S3-native locking), and the GitHub OIDC identity provider.
+# One-time, per AWS account: remote-state bucket (S3-native locking), the GitHub OIDC identity provider, and the
+# account's detective controls (CloudTrail, GuardDuty, pages on destructive calls — modules/account-security).
 #
 #   cd infra/terraform/envs/bootstrap
 #   terraform init && terraform apply -var 'state_bucket_name=portico-tfstate-<account id>'
@@ -57,6 +58,23 @@ variable "create_github_oidc_provider" {
 module "state" {
   source      = "../../modules/state-bootstrap"
   bucket_name = var.state_bucket_name
+}
+
+variable "security_emails" {
+  description = "Paged for destructive/security account events (owner decision D11)."
+  type        = list(string)
+  default     = []
+}
+
+variable "trail_bucket_name" {
+  description = "Globally unique, e.g. portico-cloudtrail-<account id>."
+  type        = string
+}
+
+module "account_security" {
+  source            = "../../modules/account-security"
+  security_emails   = var.security_emails
+  trail_bucket_name = var.trail_bucket_name
 }
 
 resource "aws_iam_openid_connect_provider" "github" {

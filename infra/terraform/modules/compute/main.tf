@@ -4,26 +4,38 @@
 #             that CloudFront adds, and its security group only admits CloudFront's origin-facing ranges, so the
 #             WAF in front of CloudFront cannot be bypassed. Target health = /health/ready (DB ping).
 #   worker    outbox dispatcher; no inbound traffic.
-#   migrate   one-off task definition run by the deploy pipeline BEFORE new api/worker revisions roll out.
-#   db-bootstrap  one-off task (master credentials) that makes DB roles match Secrets Manager.
+#   migrate, grants   INIT containers of every api task, as portico_owner: all migrations (expand/contract), then
+#             the routing grants (bootstrap-roles.mjs grants). The api container starts only after both SUCCEED, so a
+#             failed migration fails the rollout (circuit breaker) and the previous tasks keep serving.
+#   migrate / db-bootstrap   one-off task definitions for HUMANS only (break-glass, rotation; database-roles.md).
 #
-# Terraform owns the task definitions' shape (roles, secrets, env, sizes); the deploy pipeline owns the IMAGE.
-# The pipeline renders a new revision from the latest one with a new image tag and updates the service, so
-# services ignore task_definition/desired_count drift here (docs/runbooks/deploy.md).
+# Terraform owns every task definition completely (roles, secrets, env, sizes, commands AND the image reference
+# `<repo>:release`). A release only moves the `release` tag (the only mutable tag in the repositories) to an
+# immutable SHA-tagged image and forces a new deployment; ECS resolves the tag to a digest once per deployment, so
+# every task of a deployment runs the same bytes. The pipeline never registers task definitions, runs tasks or passes
+# roles (modules/ci-deploy-role), and nothing it can change survives a `terraform apply`.
 #
 # Deployment safety: rolling deploys keep 100% healthy capacity; the ECS deployment circuit breaker and the
 # 5xx-rate / no-healthy-target CloudWatch alarms roll a bad revision back automatically.
 
 locals {
   images = {
-    api    = "${var.repository_urls["api"]}:${var.image_tag}"
-    worker = "${var.repository_urls["worker"]}:${var.image_tag}"
+    api    = "${var.repository_urls["api"]}:${var.release_tag}"
+    worker = "${var.repository_urls["worker"]}:${var.release_tag}"
   }
+
+  # The app reads NODE_ENV for production-only behaviour (operator console off, no local identity provider, keys
+  # mandatory). Production gets "production"; demo and staging get "development" so the operator console and trial
+  # provisioning work there. Key presence and live-key refusal do NOT depend on it: /app/ops/env-guard.mjs enforces
+  # them from PORTICO_DEPLOYMENT in every process. Migrations always run with NODE_ENV=production (the CLI's
+  # development conveniences would try to create databases and set role passwords).
+  node_env = var.deployment_name == "production" ? "production" : "development"
+  guarded  = ["node", "--import", "/app/ops/env-guard.mjs", "--import", "/opt/tsx/register.mjs"]
 
   # Non-secret configuration shared by api and worker (both run the full composition root, so both need the same
   # keys and settings; apps/api/src/config.ts and the module READMEs list them).
   base_environment = concat([
-    { name = "NODE_ENV", value = "production" },
+    { name = "NODE_ENV", value = local.node_env },
     { name = "LOG_LEVEL", value = var.log_level },
     { name = "PORTICO_CELL", value = var.name_prefix },
     { name = "PORTICO_DEPLOYMENT", value = var.deployment_name },
@@ -85,6 +97,17 @@ resource "aws_ecs_cluster" "this" {
   setting {
     name  = "containerInsights"
     value = var.container_insights ? "enabled" : "disabled"
+  }
+  # ECS Exec (off unless enable_execute_command) is a shell with every key of the task: when used, every session is
+  # recorded to the api log group, encrypted.
+  configuration {
+    execute_command_configuration {
+      logging = "OVERRIDE"
+      log_configuration {
+        cloud_watch_log_group_name     = var.log_group_names["api"]
+        cloud_watch_encryption_enabled = true
+      }
+    }
   }
 }
 
@@ -208,7 +231,63 @@ resource "aws_lb_listener_rule" "from_cloudfront" {
   }
 }
 
-# ── Task definitions ──────────────────────────────────────────────────────────────────────────────────────────
+# ── Task definitions (Terraform-owned; the pipeline never registers revisions) ─────────────────────────────────
+locals {
+  owner_url = [{ name = "DATABASE_URL", valueFrom = "${var.db_owner_secret_arn}:url::" }]
+  init_env = [
+    { name = "NODE_ENV", value = "production" },
+    { name = "PORTICO_DEPLOYMENT", value = var.deployment_name },
+    { name = "PORTICO_PROCESS", value = "migrate" },
+  ]
+  api_containers = [
+    merge(local.hardening, {
+      name             = "migrate"
+      image            = local.images.api
+      essential        = false
+      command          = concat(local.guarded, ["src/migrate-cli.ts"])
+      environment      = local.init_env
+      secrets          = local.owner_url
+      logConfiguration = local.log_options["migrate"]
+    }),
+    merge(local.hardening, {
+      name             = "grants"
+      image            = local.images.api
+      essential        = false
+      dependsOn        = [{ containerName = "migrate", condition = "SUCCESS" }]
+      command          = ["node", "--import", "/app/ops/env-guard.mjs", "/app/ops/bootstrap-roles.mjs", "grants"]
+      environment      = local.init_env
+      secrets          = local.owner_url
+      logConfiguration = local.log_options["migrate"]
+    }),
+    merge(local.hardening, {
+      name         = "api"
+      image        = local.images.api
+      essential    = true
+      dependsOn    = [{ containerName = "grants", condition = "SUCCESS" }]
+      command      = concat(local.guarded, ["src/main.ts"])
+      portMappings = [{ containerPort = var.app_port, protocol = "tcp", name = "http", appProtocol = "http" }]
+      environment = concat(local.base_environment, [
+        { name = "PORTICO_PROCESS", value = "api" },
+        { name = "PORT", value = tostring(var.app_port) },
+        { name = "DB_POOL_MAX", value = tostring(var.api.db_pool_max) },
+        { name = "CORS_ORIGINS", value = join(",", var.cors_origins) },
+        { name = "TRUSTED_PROXY_CIDRS", value = join(",", var.trusted_proxy_cidrs) },
+      ])
+      secrets          = local.api_secrets
+      logConfiguration = local.log_options["api"]
+    }),
+  ]
+  worker_containers = [merge(local.hardening, {
+    name             = "worker"
+    image            = local.images.worker
+    essential        = true
+    command          = concat(local.guarded, ["src/main.ts"])
+    environment      = concat(local.base_environment, [{ name = "PORTICO_PROCESS", value = "worker" }])
+    secrets          = local.worker_secrets
+    logConfiguration = local.log_options["worker"]
+  })]
+}
+
 resource "aws_ecs_task_definition" "api" {
   family                   = "${var.name_prefix}-api"
   requires_compatibilities = ["FARGATE"]
@@ -221,20 +300,7 @@ resource "aws_ecs_task_definition" "api" {
     operating_system_family = "LINUX"
     cpu_architecture        = var.cpu_architecture
   }
-  container_definitions = jsonencode([merge(local.hardening, {
-    name         = "api"
-    image        = local.images.api
-    essential    = true
-    portMappings = [{ containerPort = var.app_port, protocol = "tcp", name = "http", appProtocol = "http" }]
-    environment = concat(local.base_environment, [
-      { name = "PORT", value = tostring(var.app_port) },
-      { name = "DB_POOL_MAX", value = tostring(var.api.db_pool_max) },
-      { name = "CORS_ORIGINS", value = join(",", var.cors_origins) },
-      { name = "TRUSTED_PROXY_CIDRS", value = join(",", var.trusted_proxy_cidrs) },
-    ])
-    secrets          = local.api_secrets
-    logConfiguration = local.log_options["api"]
-  })])
+  container_definitions = jsonencode(local.api_containers)
 }
 
 resource "aws_ecs_task_definition" "worker" {
@@ -249,20 +315,10 @@ resource "aws_ecs_task_definition" "worker" {
     operating_system_family = "LINUX"
     cpu_architecture        = var.cpu_architecture
   }
-  container_definitions = jsonencode([merge(local.hardening, {
-    name             = "worker"
-    image            = local.images.worker
-    essential        = true
-    environment      = local.base_environment
-    secrets          = local.worker_secrets
-    logConfiguration = local.log_options["worker"]
-  })])
+  container_definitions = jsonencode(local.worker_containers)
 }
 
-# Migrations run as portico_owner. No task role: the migration needs no AWS API access. The pipeline runs this task
-# twice per deploy: the migrations (default command), then the routing grants with a command override
-#   ["node", "/app/ops/bootstrap-roles.mjs", "grants"]
-# which, as the owner of the functions, grants the job-routing functions to portico_worker only (database-roles.md).
+# HUMANS ONLY (break-glass): migrations outside a release. No task role: the migration needs no AWS API access.
 resource "aws_ecs_task_definition" "migrate" {
   family                   = "${var.name_prefix}-migrate"
   requires_compatibilities = ["FARGATE"]
@@ -278,15 +334,15 @@ resource "aws_ecs_task_definition" "migrate" {
     name             = "migrate"
     image            = local.images.api
     essential        = true
-    command          = ["node", "--import", "/opt/tsx/register.mjs", "src/migrate-cli.ts"]
-    environment      = [{ name = "NODE_ENV", value = "production" }]
-    secrets          = [{ name = "DATABASE_URL", valueFrom = "${var.db_owner_secret_arn}:url::" }]
+    command          = concat(local.guarded, ["src/migrate-cli.ts"])
+    environment      = local.init_env
+    secrets          = local.owner_url
     logConfiguration = local.log_options["migrate"]
   })])
 }
 
-# Role bootstrap/rotation as the RDS-managed master user. Run once before the first migration and after every
-# credential rotation (docs/runbooks/database-roles.md).
+# HUMANS ONLY: role bootstrap/rotation as the RDS-managed master user. Run once before the first deploy and after
+# every credential rotation (docs/runbooks/database-roles.md). No CI principal can pass its execution role.
 resource "aws_ecs_task_definition" "db_bootstrap" {
   family                   = "${var.name_prefix}-db-bootstrap"
   requires_compatibilities = ["FARGATE"]
@@ -302,8 +358,10 @@ resource "aws_ecs_task_definition" "db_bootstrap" {
     name      = "db-bootstrap"
     image     = local.images.api
     essential = true
-    command   = ["node", "/app/ops/bootstrap-roles.mjs"]
+    command   = ["node", "--import", "/app/ops/env-guard.mjs", "/app/ops/bootstrap-roles.mjs"]
     environment = [
+      { name = "PORTICO_DEPLOYMENT", value = var.deployment_name },
+      { name = "PORTICO_PROCESS", value = "db-bootstrap" },
       { name = "PGHOST", value = var.db_writer_endpoint },
       { name = "PGPORT", value = "5432" },
       { name = "PGDATABASE", value = var.db_name },
@@ -364,7 +422,8 @@ resource "aws_ecs_service" "api" {
   }
 
   lifecycle {
-    ignore_changes = [task_definition, desired_count]
+    # Autoscaling owns the count. The task definition is NOT ignored: Terraform's revision is the only one deployed.
+    ignore_changes = [desired_count]
   }
 
   depends_on = [aws_lb_listener_rule.from_cloudfront]
@@ -395,7 +454,8 @@ resource "aws_ecs_service" "worker" {
   }
 
   lifecycle {
-    ignore_changes = [task_definition, desired_count]
+    # Autoscaling owns the count. The task definition is NOT ignored: Terraform's revision is the only one deployed.
+    ignore_changes = [desired_count]
   }
 }
 
@@ -479,19 +539,15 @@ resource "aws_ssm_parameter" "deploy_config" {
   description = "Read by the deploy pipeline (infra/ci/deploy.yml.example). Contains no secrets."
   type        = "String"
   value = jsonencode({
-    runtime          = "fargate"
-    region           = local.region
-    cluster          = aws_ecs_cluster.this.name
-    services         = { api = aws_ecs_service.api.name, worker = aws_ecs_service.worker.name }
-    task_families    = { api = aws_ecs_task_definition.api.family, worker = aws_ecs_task_definition.worker.family, migrate = aws_ecs_task_definition.migrate.family, db_bootstrap = aws_ecs_task_definition.db_bootstrap.family }
-    repositories     = var.repository_urls
-    ops_subnets      = var.task_subnet_ids
-    ops_security     = var.security_group_ids["ops"]
-    assign_public_ip = var.assign_public_ip
-    log_groups       = var.log_group_names
-    smoke_base_url   = var.smoke_base_url
-    web              = var.web
-    # Routing grants run with the migrate task definition and this command (infra/db/bootstrap-roles.mjs).
-    grants_command = ["node", "/app/ops/bootstrap-roles.mjs", "grants"]
+    runtime        = "fargate"
+    region         = local.region
+    cluster        = aws_ecs_cluster.this.name
+    services       = { api = aws_ecs_service.api.name, worker = aws_ecs_service.worker.name }
+    task_families  = { api = aws_ecs_task_definition.api.family, worker = aws_ecs_task_definition.worker.family }
+    repositories   = var.repository_urls
+    release_tag    = var.release_tag
+    log_groups     = var.log_group_names
+    smoke_base_url = var.smoke_base_url
+    web            = var.web
   })
 }

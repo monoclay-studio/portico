@@ -23,3 +23,7 @@ output "scheduler_role_name" {
 output "deploy_config_parameter" {
   value = aws_ssm_parameter.deploy_config.name
 }
+
+output "deploy_document_arn" {
+  value = aws_ssm_document.deploy.arn
+}

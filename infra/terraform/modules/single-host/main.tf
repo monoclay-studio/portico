@@ -10,6 +10,8 @@
 #   - Office-hours schedule stops the instance (compute billing stops; EBS + Elastic IP keep billing).
 #   - Budget actions (budgets module) can stop it and block restarts when the demo ceiling is reached.
 
+data "aws_caller_identity" "current" {}
+
 data "aws_region" "current" {}
 data "aws_partition" "current" {}
 
@@ -138,6 +140,12 @@ data "aws_iam_policy_document" "scheduler_assume" {
       type        = "Service"
       identifiers = ["scheduler.amazonaws.com"]
     }
+    # Confused-deputy guard (review P3-4): only this account's use of the service may assume the role.
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceAccount"
+      values   = [data.aws_caller_identity.current.account_id]
+    }
   }
 }
 
@@ -180,6 +188,27 @@ resource "aws_scheduler_schedule" "host" {
 }
 
 # ── Deploy metadata for the pipeline ──────────────────────────────────────────────────────────────────────────
+# The ONLY command the deploy pipeline may send to the host (modules/ci-deploy-role): `portico deploy <sha> <url>`
+# with both parameters validated by SSM before anything runs. Never AWS-RunShellScript (root shell on the host).
+resource "aws_ssm_document" "deploy" {
+  name            = "${var.name_prefix}-deploy"
+  document_type   = "Command"
+  document_format = "JSON"
+  content = jsonencode({
+    schemaVersion = "2.2"
+    description   = "Deploy a Portico release (immutable git SHA) to the demo host."
+    parameters = {
+      tag     = { type = "String", description = "git SHA", allowedPattern = "^[0-9a-f]{7,40}$" }
+      baseUrl = { type = "String", description = "public base URL", allowedPattern = "^https://[A-Za-z0-9.-]{1,253}$" }
+    }
+    mainSteps = [{
+      action = "aws:runShellScript"
+      name   = "deploy"
+      inputs = { runCommand = ["/usr/local/sbin/portico deploy '{{ tag }}' '{{ baseUrl }}'"], timeoutSeconds = "1800" }
+    }]
+  })
+}
+
 resource "aws_ssm_parameter" "deploy_config" {
   name        = "/portico/${var.name_prefix}/deploy-config"
   description = "Read by the deploy pipeline (infra/ci/deploy.yml.example). Contains no secrets."
@@ -188,6 +217,7 @@ resource "aws_ssm_parameter" "deploy_config" {
     runtime        = "single_host"
     region         = local.region
     instance_id    = aws_instance.host.id
+    document       = aws_ssm_document.deploy.name
     repositories   = var.repository_urls
     smoke_base_url = var.smoke_base_url
     log_group      = var.log_group_name

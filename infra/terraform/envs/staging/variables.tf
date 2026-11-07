@@ -67,8 +67,21 @@ variable "image_tag" {
 }
 
 variable "github_repository" {
-  type    = string
-  default = null
+  description = "Repository allowed to deploy through OIDC: monoclay-studio/portico. null = no CI role."
+  type        = string
+  default     = null
+}
+
+variable "github_repository_id" {
+  description = "Immutable numeric repository id (envs/github output repository_ids, or the GitHub API)."
+  type        = number
+  default     = null
+}
+
+variable "github_owner_id" {
+  description = "Immutable numeric id of the monoclay-studio organization."
+  type        = number
+  default     = null
 }
 
 variable "email_domain" {

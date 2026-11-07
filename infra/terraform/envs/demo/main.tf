@@ -22,7 +22,9 @@ module "cell" {
   budget_stop_actions = true
   office_hours        = var.office_hours
 
-  image_tag           = var.image_tag
-  github_repository   = var.github_repository
-  github_environments = ["demo"]
+  image_tag            = var.image_tag
+  github_repository    = var.github_repository
+  github_repository_id = var.github_repository_id
+  github_owner_id      = var.github_owner_id
+  github_environments  = ["demo"]
 }

@@ -35,9 +35,15 @@ module "cell" {
   dr_region                    = var.dr_region
   image_tag                    = var.image_tag
   github_repository            = var.github_repository
+  github_repository_id         = var.github_repository_id
+  github_owner_id              = var.github_owner_id
   github_environments          = ["production"]
   email_domain                 = var.email_domain
   email_sending_enabled        = var.email_sending_enabled
   injected_integration_secrets = var.injected_integration_secrets
   api_holds_worker_credentials = var.api_holds_worker_credentials
+  public_task_ips              = var.public_task_ips
+  key_break_glass_role_arns    = var.key_break_glass_role_arns
+  terraform_principal_arns     = var.terraform_principal_arns
+  existing_app_key_secret_arns = var.existing_app_key_secret_arns
 }

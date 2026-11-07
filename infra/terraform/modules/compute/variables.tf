@@ -55,10 +55,10 @@ variable "repository_arns" {
   type = map(string)
 }
 
-variable "image_tag" {
-  description = "Initial image tag for the Terraform-registered task definitions. The pipeline sets the real one."
+variable "release_tag" {
+  description = "The one mutable tag of each repository; task definitions reference <repo>:<release_tag> and a release moves it."
   type        = string
-  default     = "bootstrap"
+  default     = "release"
 }
 
 variable "api" {
@@ -165,8 +165,8 @@ variable "trusted_proxy_cidrs" {
   description = "API TRUSTED_PROXY_CIDRS: the ALB subnets plus CloudFront's origin-facing ranges. Never 0.0.0.0/0."
   type        = list(string)
   validation {
-    condition     = length(var.trusted_proxy_cidrs) > 0 && alltrue([for c in var.trusted_proxy_cidrs : can(cidrhost(c, 0)) && !endswith(c, "/0")])
-    error_message = "trusted_proxy_cidrs must be non-empty, valid CIDRs and never a /0 (that would let anyone set the client IP)."
+    condition     = length(var.trusted_proxy_cidrs) > 0 && alltrue([for c in var.trusted_proxy_cidrs : can(cidrhost(c, 0)) && try(tonumber(split("/", c)[1]) >= 8, false)])
+    error_message = "trusted_proxy_cidrs must be non-empty, valid CIDRs and never shorter than /8 (that would let almost anyone set the client IP)."
   }
 }
 

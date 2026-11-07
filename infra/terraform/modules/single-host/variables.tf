@@ -43,9 +43,13 @@ variable "image_tag" {
 }
 
 variable "postgres_image" {
-  description = "Pin by digest before use (docker buildx imagetools inspect …)."
+  description = "Pinned by digest (resolved 2026-11-07 from public.ecr.aws; dependabot cannot see this — bump it with the Dockerfiles)."
   type        = string
-  default     = "public.ecr.aws/docker/library/postgres:16-bookworm"
+  default     = "public.ecr.aws/docker/library/postgres:16-bookworm@sha256:5264710be20f409750ac6dc4e5706dcef929c87e241605463f0f9aefa932a8d9"
+  validation {
+    condition     = can(regex("@sha256:[0-9a-f]{64}$", var.postgres_image))
+    error_message = "postgres_image must be pinned by digest."
+  }
 }
 
 variable "app_port" {
@@ -68,8 +72,8 @@ variable "trusted_proxies" {
   description = "TRUSTED_PROXY_CIDRS for the API on the host: CloudFront's origin-facing ranges (CloudFront connects to the host directly)."
   type        = list(string)
   validation {
-    condition     = length(var.trusted_proxies) > 0 && alltrue([for c in var.trusted_proxies : can(cidrhost(c, 0)) && !endswith(c, "/0")])
-    error_message = "trusted_proxies must be non-empty, valid CIDRs and never a /0."
+    condition     = length(var.trusted_proxies) > 0 && alltrue([for c in var.trusted_proxies : can(cidrhost(c, 0)) && try(tonumber(split("/", c)[1]) >= 8, false)])
+    error_message = "trusted_proxies must be non-empty, valid CIDRs and never shorter than /8."
   }
 }
 
