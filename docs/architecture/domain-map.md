@@ -30,6 +30,16 @@ All functions are async. Dates are `LocalDate` strings (`YYYY-MM-DD`). Night ran
 | `integration` | `integration` | **Connector framework** (catalogue of connectors with workflow-level capabilities, connection lifecycle with the 9-step setup journey, encrypted credentials, mappings with suggestions + review, exchange log, sync runs, health, exceptions), webhook subscriptions & deliveries, partner apps; later: import/migration jobs & reconciliation, data export | 1 (framework) / 2 (migration) |
 | `ai` | `ai` | Assistant sessions, permission-aware retrieval, cited answers, action proposals requiring approval | 3 |
 | `billing` | `billing` | Monoclay's own SaaS subscriptions & invoices to organizations (Stripe Billing on the platform account) — never mixed with hotel money | 3 |
+| `access` | `access` | Door locks, key encoders, RFID wristbands, mobile keys: issue/duplicate/extend/cancel on move & checkout, lock-vendor connectors (often via local connector), manual fallback, key audit | 2 (spec: docs/specs/access.md) |
+| `guest-experience` | `guest_experience` | Guest web portal & kiosk: pre-arrival, online check-in (registration card, ID, e-signature, authorization), upsells, itinerary, requests, chat, digital folio, express checkout, feedback | 3 |
+| `crm` | `crm` | Segments, consented campaigns, abandoned-booking recovery, surveys/NPS, reputation (reviews & replies), loyalty/recognition, gift vouchers | 3 |
+| `contracting` | `contracting` | Tour operator / DMC / wholesale contracts: seasons, net rates, allotments & release, stop-sale, combinable offers, statements (Maldives-critical) | 2 |
+| `accounting` | `accounting` | Back-office accounting on the finance ledger: GL journals, period close, AP, bank reconciliation, fixed assets, budgets, consolidation, owner statements, financial statements, tax-return data, ERP exports | 3 |
+| `fnb-pos` | `fnb_pos` | Outlet point of sale: menus, tables, orders, kitchen tickets/KDS, split checks, room charge with posting privileges, meal-plan consumption, voids/comps, offline tablets | 3 |
+| `procurement` | `procurement` | Suppliers, requisitions, approvals, purchase orders, receiving, three-way match → AP, import/landed cost | 3 |
+| `stock` | `stock` | Goods inventory (not accommodation): items, stores, issues/transfers, par levels, counts, costing, recipes & menu costing, minibar & amenity consumption | 3 |
+| `workforce` | `workforce` | Staff records, rosters from forecast, time & attendance, leave, staff housing, certifications, work permits, service-charge distribution; payroll export (computation is a boundary) | 4 |
+| `concessions` | `concessions` | Third-party operators inside resorts (dive, spa, boutique): room charges on their behalf, revenue share, settlements; utilities & sustainability metering | 4 |
 
 Dependency direction (who calls whom synchronously). Arrows point at the provider. No cycles allowed.
 
