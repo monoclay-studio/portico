@@ -323,4 +323,70 @@ Each agent's brief and report are in `agents/`.
   LIVE defects: a generic error on an empty required field, and the property switcher picking the wrong hotel. No
   refiner run: the LIVE findings go to backoffice, and the SIM findings become acceptance checks for the real-data
   round.
+- **21:50 — Infra security review: merge after fixes** <!-- t: agent-a44b6c8e4ea2a81aa @ 2026-11-07T21:50:37.793Z (Steward security review: infra) --> (P1 3, P2 11, P3 12).
+  - The deploy role was effectively cell-admin, with a trust policy pinned only by repository name, and the runbook
+    claimed otherwise.
+  - The lean-tier default contradicted Q158 (resolved: NAT and private tasks is the default).
+  - The restore drill could silently never run.
+  - Clean: XFF spoofing through the deployed chain, SECURITY DEFINER hygiene, secrets kept out of plans, read-only
+    non-root images.
+  - The fix round goes back to the infra engineer. The quality steward's round 3 starts on the whole batch.
+- **22:00 — Migration module build launched** <!-- t: now @ 2026-11-07T22:00:37Z -->: gap-plan M8 increments 1–2, the guesthouse same-day path. CSV and
+  SMB sources, a rehearsal in a trial org, reconciliation, freeze and cutover through data-authority transitions,
+  rollback, and a guided checklist of the unavoidable human steps. Money-module rounds and the staff-app real-data
+  wiring wait for the integration-step merge.
+- **22:07 — Integration-step fix round 3 done** <!-- t: agent-a29fdf2e9c7d0e9dc @ 2026-11-07T22:07:37.353Z (Integration step: bind module ports) -->.
+  - Consent is enforced on every money movement, and mandate amounts are running totals.
+  - The payment request is rebuilt as a state machine with the provider as an external writer: deactivate first,
+    then replace.
+  - New tests on the pre-fix commit: r3 11/12 failed (the 12th is a lock probe that also passed pre-fix), lifecycle
+    5/5 failed.
+  - Focused re-review #4 launched.
 
+- **22:21 — Usage check: 5-hour window 36%, seven-day 86%** <!-- t: trigger:4f98af2a @ 2026-11-07T22:21:20.575Z -->. Per the owner, pacing follows the 5-hour
+  window, but the seven-day allowance is a hard stop that would leave work half-finished. Decision: launch nothing
+  new while seven-day is ≥ 85%. The five running items finish. A data-safety checkpoint runs at seven-day ≥ 95%.
+- **22:25 — Quality steward round 3 reported** <!-- t: agent-ae7e0c581d1429f84 @ 2026-11-07T22:25:27.857Z (Quality steward (meta loop) round 0) -->; merged to main as `6d18714` <!-- t: commit:6d18714 @ 2026-11-07T22:25:46Z -->.
+  - Builder self-check v5 and v6 were published together. v5 covers external writers, the full lifecycle state
+    machine and a mutation proof for every P0/P1 fix. v6 adds a claim ledger: every capability statement points to
+    the test or code that makes it true.
+  - Orchestrator v4: recorded defaults must cite the code that implements them, every finding gets a disposition,
+    and chronicle times come from the event, not the moment of writing. Refiner v2.1 adds a triage-only variant.
+  - 32 new escapes (117 in total). One was the orchestrator's own: Q158's recorded default disagreed with the code.
+    A canary showed that payments' collection lock has no test that fails without it.
+  - The cost recount found that the extractor counted multi-block API messages more than once.
+- **22:30 — Orchestrator applied round 3's exact edits** <!-- t: now @ 2026-11-07T22:30:05Z -->.
+  - The extractor counts each API message once, and the agent records were refreshed (55 runs, 72 reports).
+  - `when.py owner` and `when.py trigger` were installed, and `verify-times.py` now refuses `now` on owner
+    and resume entries.
+  - UX round 2a: all 49 findings routed, checked by `tools/quality/dispositions.py`.
+  - Lint now treats warnings as errors.
+  - The question template has an "Implemented by" line.
+  - Every build and fix brief requires self-check v6. It was sent to the running infra fix round together with the
+    restore-drill state machine and the CI infra job.
+- **22:33 — Distribution + Channex adapter build done** <!-- t: agent-a7e54633dbf24e059 @ 2026-11-07T22:33:51.080Z (Build distribution + Channex adapter) -->; readiness R3 against a Channex simulator, never the real Channex. Branch `feat/distribution-channex` was pushed.
+  - All four owner requirements work end to end:
+    - **ARI engine:** an event-driven record of changed nights, with no table polling.
+    - **Queue:** a sliding-window budget of 10 + 10 requests per minute, so never more than 20 in any 60 s; 429 pauses
+      the budget; 50 edits became 1 call.
+    - **Webhook:** each revision is stored unchangeable before the 200 is returned; orphans are parked; a 15-minute
+      pull recovers missed deliveries.
+    - **Acknowledgement:** only after a committed final outcome, enforced by a database check.
+  - 91 module tests and 3 API tests. Each guard was disabled in turn to prove its test fails.
+  - The channel/OTA coverage gate rose from 0% to 31% of rows.
+  - Blocker: rates cannot yet price a channel booking (`termsFromChannelPrices`), so real bookings are stored but not
+    acknowledged. This went to rates.
+  - Channex facts that could not be verified from its docs (blocked to automated fetches) are listed for the R4
+    staging test, which needs the owner's staging key.
+  - Next: steward review, subject to the usage rule.
+- **22:37 — Integration-step re-review #4: merge after fixes** <!-- t: agent-acec0dc12726b7ec8 @ 2026-11-07T22:37:10.903Z (Focused re-review #4: integration-step) --> (P0 0 · P1 2 · P2 2 · P3 6).
+  - Every r3 attack, re-run inverted, is now refused. The state-machine brief closed the payment-request exits.
+  - Two P1s remain:
+    - Staff could still put a guest's saved card within reach of another booking by editing who is on it. Review 3's
+      suggested "payer directory" fix had not asked who edits that directory.
+    - Parallel charges beat an agreement's spending limit: 5 × USD 100 against a USD 100 cap.
+  - The orchestrator decided ADR-0015 Amendment 3: an agreement covers only the bookings it names, and limits are
+    locked. Q160 asks whether to offer a future-stays mandate (default: no).
+- **22:38 — Usage 41% of 5 h, 88% of the week; fix round 4 sent** <!-- t: now @ 2026-11-07T22:38:28Z -->. The rule was narrowed: at seven-day ≥ 85%
+  only critical-path finishing work runs (fix rounds, merges). New modules and new reviews, including distribution's,
+  wait. The round includes self-check v6 and the E-114 collection-lock mutant.

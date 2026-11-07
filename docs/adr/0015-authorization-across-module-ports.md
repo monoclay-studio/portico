@@ -69,3 +69,22 @@ until the provider confirms it is deactivated. Replacing, amending or cancelling
 the provider first. Until that is confirmed, the old link counts as possibly payable, and any resulting
 over-collection is detected and resolved as an urgent refund exception, never left as routine.
 
+
+## Amendment 3 — a general card-on-file agreement names its bookings (2026-11-07, integration-step re-review #4)
+
+Re-review #4 (R4-P1-1) showed that "the cardholder's own bookings" is not a cardholder fact: staff decide who is named
+on a booking. A desk agent named a guest as booker on someone else's booking (or added a stay that put her on it) and
+her saved card then paid for it. Consent cannot depend on data that staff can edit. Therefore:
+- A card-on-file agreement covers **only the bookings and folios it names** (recorded when the cardholder gave
+  consent, with evidence), plus the purposes and limits it states. No agreement covers "any booking where this person
+  appears", and no relationship that staff can create (booker, occupant, payer, profile merge) extends one.
+- Anything else needs new cardholder consent for that booking: a payment link, the terminal, hosted entry or the
+  guest's own self-service.
+- A future-stays mandate (for example a corporate or repeat guest who wants phone bookings charged to a saved card) is
+  an explicit scope that the cardholder grants and that names a payer account the cardholder controls, never staff
+  data. Whether to offer it in the first release is Q160; the default is not to offer it.
+- **Limits hold under concurrency.** The running total against an agreement's amount limit is read and written under a
+  lock on the saved card (or the agreement), on charge, authorization, hold increase and capture (R4-P1-2). Holds
+  count against the limit while they are open.
+- Lock order across modules stays: the shared collection lock, then the folio, then the payment request; modules
+  that touch deposits take the shared lock first (R4-P3-2).

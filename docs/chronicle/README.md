@@ -50,6 +50,11 @@ Related permanent records the chronicle points to rather than copies:
 4. Nothing is deleted or rewritten after the fact. Corrections are appended with a date.
 5. **Times come only from `tools/chronicle/when.py`** (`agent "<title>"`, `commit <sha>` or `now`). Each timeline entry
    carries the printed `<!-- t: … -->` token; `tools/commit-checked.sh` runs `verify-times.py` and refuses typed times.
+   Owner directions use `when.py owner "<phrase>"`; resumes use `when.py trigger`, run first after the resume; `now`
+   only for the orchestrator's own act (quality round 3, E-115). `verify-times.py` refuses `now` on entries that begin
+   "Owner" or "Resumed".
+6. **When the timeline records an agent's report, run `extract.py` in the same commit**, so the agent's brief and
+   report are never missing from `agents/` (quality round 3, E-116). Agent cost rows count each API message once.
 
 **Known gaps in the record:**
 - Full logs of agent runs from the first container (before 11:11 UTC on 2026-11-07) are not preserved. For those

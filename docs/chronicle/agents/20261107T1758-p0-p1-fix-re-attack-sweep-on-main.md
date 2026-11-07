@@ -1,7 +1,7 @@
 # Agent run: P0/P1 fix re-attack sweep on main
 
 - Started: 2026-11-07T17:58:35.237Z · last activity: 2026-11-07T18:15:28.682Z
-- Turns: 294 · tool uses: 180 · output tokens: 187,470
+- Turns: 174 · tool uses: 180 · output tokens: 89,091
 - Type: general-purpose
 
 ## Brief (2026-11-07T17:58:35.237Z)
