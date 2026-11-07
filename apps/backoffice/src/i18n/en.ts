@@ -506,7 +506,7 @@ export const en = {
       status: 'Status',
     },
     statuses: { setup: 'Setup', pilot: 'Pilot', active: 'Active', inactive: 'Inactive' },
-    localTime: 'Property local time (24-hour)',
+    localTime: 'Property local time',
     propertyCount: '{{count}} properties',
     whatIsLive: 'What is live in this build',
     whatIsLiveHelp:

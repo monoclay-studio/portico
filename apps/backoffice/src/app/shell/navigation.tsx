@@ -21,7 +21,7 @@ export function WorkspaceRail({
   return (
     <nav
       aria-label={t('nav.workspaces')}
-      className="flex h-full w-20 flex-col items-center gap-1 border-e border-line bg-surface-muted py-3"
+      className="flex h-full w-[5.75rem] flex-col items-center gap-1 border-e border-line bg-surface-muted py-3"
     >
       <span
         aria-hidden
@@ -41,7 +41,7 @@ export function WorkspaceRail({
                 to={first.to}
                 aria-current={current ? 'true' : undefined}
                 className={cn(
-                  'flex w-[4.5rem] flex-col items-center gap-0.5 rounded-md px-0.5 py-1.5 text-[0.625rem] font-medium text-ink-muted hover:bg-surface-hover hover:text-ink',
+                  'flex w-[5.25rem] flex-col items-center gap-0.5 rounded-md px-0.5 py-1.5 text-[0.625rem] font-medium text-ink-muted hover:bg-surface-hover hover:text-ink',
                   current && 'bg-surface text-accent shadow-[inset_0_0_0_1px_var(--pt-line)]',
                 )}
               >

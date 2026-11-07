@@ -1,5 +1,5 @@
 import AxeBuilder from '@axe-core/playwright';
-import { apiGet, DEMO_ORG, DIRECTOR, expect, PASSWORD, test, useSession } from './fixtures';
+import { apiGet, DEMO_ORG, DIRECTOR, expect, PASSWORD, startSignedIn, test } from './fixtures';
 
 interface Property {
   id: string;
@@ -35,7 +35,7 @@ test.describe('back office smoke (real API on :4100)', () => {
   });
 
   test('switches property from the top bar', async ({ page, demo }) => {
-    await useSession(page, demo);
+    await startSignedIn(page, demo);
     await page.goto('/front-desk/arrivals');
     const switcher = page.getByTestId('property-switcher');
     await expect(switcher).toContainText('Azure Atoll Resort');
@@ -49,7 +49,7 @@ test.describe('back office smoke (real API on :4100)', () => {
     page,
     demo,
   }) => {
-    await useSession(page, demo);
+    await startSignedIn(page, demo);
     await page.goto('/today');
     await expect(page.getByRole('heading', { name: 'Today' })).toBeVisible();
     await page.keyboard.press('Control+k');
@@ -80,7 +80,7 @@ test.describe('back office smoke (real API on :4100)', () => {
     page,
     demo,
   }) => {
-    await useSession(page, demo);
+    await startSignedIn(page, demo);
     await page.goto('/front-desk/arrivals');
     const grid = page.getByRole('grid', { name: /arrivals for/ });
     await expect(grid).toBeVisible();
@@ -103,7 +103,7 @@ test.describe('back office smoke (real API on :4100)', () => {
     demo,
     request,
   }) => {
-    await useSession(page, demo);
+    await startSignedIn(page, demo);
     const { body: list } = await apiGet<{ items: Property[] }>(request, demo, '/properties');
     const target = list.items.find((p) => p.code === 'AZA') as Property;
     await page.goto(`/settings/properties/${target.id}`);
@@ -138,7 +138,7 @@ test.describe('back office smoke (real API on :4100)', () => {
     demo,
   }) => {
     for (const theme of ['light', 'dark'] as const) {
-      await useSession(page, demo, { theme });
+      await startSignedIn(page, demo, { theme });
       for (const path of ['/today', '/front-desk/arrivals', '/housekeeping', '/settings/users']) {
         await page.goto(path);
         await page.locator('main h1').first().waitFor();

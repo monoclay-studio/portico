@@ -84,7 +84,10 @@ export function RecordHost() {
         loading={record.isPending}
         trail={nav.trail.map((e) => ({
           key: `${e.type}:${e.id}`,
-          title: titles.get(`${e.type}:${e.id}`) ?? t(`records.types.${e.type}`, { defaultValue: e.type }),
+          title:
+            (model && model.type === e.type && model.id === e.id
+              ? model.title
+              : titles.get(`${e.type}:${e.id}`)) ?? t(`records.types.${e.type}`, { defaultValue: e.type }),
         }))}
         onNavigateTrail={nav.jump}
         onBack={nav.back}

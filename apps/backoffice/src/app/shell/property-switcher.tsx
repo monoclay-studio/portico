@@ -22,14 +22,14 @@ export function PropertySwitcher({
       <DropdownMenu.Trigger asChild>
         <Button
           variant="ghost"
-          className="max-w-full justify-start gap-2 px-2"
+          className="w-full min-w-0 max-w-full justify-start gap-2 overflow-hidden px-2"
           aria-label={`${t('app.switchProperty')}: ${property?.name ?? ''}`}
           data-testid="property-switcher"
         >
           <Hotel aria-hidden className="size-4 shrink-0 text-ink-muted" />
-          <span className="flex min-w-0 flex-col items-start leading-tight">
-            <span className="truncate text-sm font-semibold">{property?.name}</span>
-            <span className="text-[0.6875rem] font-normal text-ink-muted">
+          <span className="flex min-w-0 flex-1 flex-col items-start leading-tight">
+            <span className="max-w-full truncate text-sm font-semibold">{property?.name}</span>
+            <span className="max-w-full truncate text-[0.6875rem] font-normal text-ink-muted">
               {property?.code} · {t('app.businessDate')} {property?.businessDate}
             </span>
           </span>

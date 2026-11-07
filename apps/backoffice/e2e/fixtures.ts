@@ -28,7 +28,7 @@ export async function apiSignIn(request: APIRequestContext, orgName = DEMO_ORG):
 }
 
 /** Start the page already signed in (sessionStorage is per tab, so it is injected before the app loads). */
-export async function useSession(
+export async function startSignedIn(
   page: Page,
   s: ApiSession,
   prefs: { theme?: 'light' | 'dark'; locale?: string } = {},

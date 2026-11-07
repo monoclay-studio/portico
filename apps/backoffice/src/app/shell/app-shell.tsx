@@ -227,7 +227,7 @@ function ShellBody(p: {
   const mod = isApplePlatform() ? '⌘' : 'Ctrl';
   return (
     <div className="flex min-h-0 flex-1">
-      <aside className="hidden shrink-0 md:flex">
+      <aside className="hidden shrink-0 bg-surface-muted md:flex lg:bg-[linear-gradient(to_right,var(--pt-surface-muted)_5.75rem,var(--pt-surface)_5.75rem)]">
         <div className="sticky top-0 flex h-dvh">
           <WorkspaceRail workspaces={workspaces} active={active?.id ?? null} />
           <div className="hidden w-56 border-e border-line bg-surface lg:block">
