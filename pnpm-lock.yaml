@@ -89,6 +89,9 @@ importers:
       '@portico/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@portico/distribution':
+        specifier: workspace:*
+        version: link:../../modules/distribution
       '@portico/finance':
         specifier: workspace:*
         version: link:../../modules/finance

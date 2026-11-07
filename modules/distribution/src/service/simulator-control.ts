@@ -29,7 +29,18 @@ export async function readSimulator(
   connectionId: string,
 ): Promise<SimState> {
   const conn = await simConnection(tx, connectionId);
-  return deps.simulator.read(tx.tenantId, conn.external_property_id, tx);
+  const state = await deps.simulator.read(tx.tenantId, conn.external_property_id, tx);
+  // The simulated key and the webhook token are secrets of this connection: never returned.
+  return {
+    ...state,
+    apiKey: '***',
+    webhook: state.webhook
+      ? {
+          ...state.webhook,
+          headers: Object.fromEntries(Object.keys(state.webhook.headers).map((k) => [k, '***'])),
+        }
+      : null,
+  };
 }
 
 export async function simulateBooking(

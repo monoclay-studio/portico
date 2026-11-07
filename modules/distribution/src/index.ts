@@ -6,6 +6,7 @@ export {
   requestInstants,
   type SimBookingInput,
   type SimState,
+  webhookDeliveries,
 } from './adapters/channex/simulator';
 export { ChannexSimulatorHub, type WebhookSink } from './adapters/channex/simulator-hub';
 export { CHANNEX_HOSTS, WEBHOOK_TOKEN_HEADER, WIRE_FACTS } from './adapters/channex/wire';

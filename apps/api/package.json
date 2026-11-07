@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@portico/db": "workspace:*",
+    "@portico/distribution": "workspace:*",
     "@portico/finance": "workspace:*",
     "@portico/guests": "workspace:*",
     "@portico/http": "workspace:*",
@@ -28,8 +29,8 @@
     "@portico/operations": "workspace:*",
     "@portico/payments": "workspace:*",
     "@portico/platform": "workspace:*",
-    "@portico/reservations": "workspace:*",
     "@portico/rates": "workspace:*",
+    "@portico/reservations": "workspace:*",
     "pg": "catalog:",
     "zod": "catalog:"
   },

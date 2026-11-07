@@ -11,6 +11,13 @@ import {
   type TxEventSubscription,
 } from '@portico/db';
 import {
+  createDistribution,
+  type DistributionModule,
+  type DistributionPorts,
+  distributionManifest,
+  seedDistributionDemo,
+} from '@portico/distribution';
+import {
   createFinance,
   type FinancePorts,
   financeDemoSeed,
@@ -70,6 +77,7 @@ import {
   inventorySearch,
 } from '@portico/inventory';
 import {
+  addDays,
   DomainError,
   fieldCryptoFromEnv,
   type ModuleManifest,
@@ -147,6 +155,7 @@ export const MANIFESTS: readonly ModuleManifest[] = [
   integrationManifest,
   // wave-1 modules register here
   paymentsManifest,
+  distributionManifest,
 ];
 
 /**
@@ -212,6 +221,7 @@ export interface Composition {
     operations: OperationsService;
     rates: RatesService;
     payments: PaymentsService;
+    distribution: DistributionModule;
   };
   /** Demo data contributed by each module, run in order inside each demo organization (apps/api/src/seed). */
   demoSeedSteps: DemoSeedStep[];
@@ -561,6 +571,114 @@ export function compose(database: PorticoDatabase, options: CompositionOptions =
     simulatorSigningSecret: process.env.PAYMENTS_SIMULATOR_SIGNING_SECRET ?? randomToken(),
   });
 
+  // ── distribution (channel hub: Channex first; simulator outside live) ──
+  // Real providers: platform, inventory (sellable availability, provisional holds), rates (prices and effective
+  // restrictions; distribution never computes them), reservations (channel ingestion) and the integration module's
+  // encrypted secret store. ADR-0015: distribution authorizes the user's intent; providers are called with system
+  // scope for the property distribution authorized and still enforce integrity (the hold and the rate plan must
+  // belong to that property). Live publication needs platform's activation scope, not on main yet: refused.
+  const distributionPorts: DistributionPorts = {
+    platform: {
+      async getProperty(tx, propertyId) {
+        const p = await platform.getProperty(asSystem(tx), propertyId);
+        return { id: p.id, timezone: p.timezone, baseCurrency: p.baseCurrency, businessDate: p.businessDate };
+      },
+      async getDataAuthority(tx, propertyId, domain) {
+        const a = await platform.getDataAuthority(asSystem(tx), propertyId, domain);
+        return { authority: a.authority, systemName: a.systemName };
+      },
+    },
+    inventory: {
+      listUnitTypes: async (tx, propertyId) =>
+        (await inventoryService.listUnitTypes(asSystem(tx), propertyId)).map((t) => ({
+          id: t.id,
+          code: t.code,
+          name: t.name,
+          sellable: t.sellable && t.status === 'active',
+        })),
+      sellable: async (tx, input) =>
+        (await inventoryService.getAvailability(asSystem(tx), input)).map((c) => ({
+          unitTypeId: c.unitTypeId,
+          date: c.date,
+          sellable: c.sellable,
+        })),
+      createHold: async (tx, input) => ({
+        holdId: (await inventoryService.createHold(asSystem(tx), input)).holdId,
+      }),
+      async releaseHold(tx, input) {
+        const hold = await inventoryService.getHold(asSystem(tx), input.holdId);
+        if (hold.propertyId !== input.propertyId) throw new NotFoundError('inventory_hold', input.holdId);
+        await inventoryService.releaseHold(asSystem(tx), { holdId: input.holdId, reason: input.reason });
+      },
+    },
+    rates: {
+      listRatePlans: async (tx, propertyId) =>
+        (await rates.listRatePlans(asSystem(tx), { propertyId })).map((r) => ({
+          id: r.id,
+          code: r.code,
+          name: r.name,
+          currency: r.currency,
+          status: r.status,
+          channels: r.eligibility.channels ?? null,
+        })),
+      async ariValues(tx, input) {
+        const plan = await rates.getRatePlan(asSystem(tx), input.ratePlanId);
+        if (plan.propertyId !== input.propertyId) throw new NotFoundError('rate_plan', input.ratePlanId);
+        const q = {
+          ratePlanId: input.ratePlanId,
+          unitTypeId: input.unitTypeId,
+          from: input.range.from,
+          to: input.range.to,
+        };
+        const [cal, restr] = await Promise.all([
+          rates.getPriceCalendar(asSystem(tx), q),
+          rates.getEffectiveRestrictions(asSystem(tx), q),
+        ]);
+        const prices = new Map(
+          cal.cells.map((c) => [c.date, { amountMinor: c.baseAmountMinor, currency: c.currency }]),
+        );
+        const restrictions = new Map(
+          restr.map((r) => [
+            r.date,
+            Object.fromEntries(Object.entries(r.values).map(([k, v]) => [k, v.value])),
+          ]),
+        );
+        const out = [];
+        for (let d = input.range.from; d < input.range.to; d = addDays(d, 1)) {
+          out.push({ date: d, price: prices.get(d) ?? null, restrictions: restrictions.get(d) ?? {} });
+        }
+        return out;
+      },
+    },
+    reservations: {
+      ingestChannelBooking: (tx, input) => reservations.ingestChannelBooking(asSystem(tx), input),
+    },
+    secrets: {
+      put: (tx, value) => integrationDeps.secrets.put(tx, { purpose: 'connection_credential', value }),
+      get: (tx, ref) => integrationDeps.secrets.get(tx, ref),
+      destroy: (tx, ref) => integrationDeps.secrets.destroy(tx, ref),
+    },
+    liveScope: {
+      async assertLiveChannelAllowed() {
+        throw new ModuleUnavailableError('platform (activation scope)', 'publishing to a live channel');
+      },
+    },
+  };
+  const distribution = createDistribution({
+    database,
+    ports: distributionPorts,
+    config: { publicApiBaseUrl: env.PORTICO_PUBLIC_API_URL ?? 'http://localhost:4000' },
+    onJobError: (tenantId, err) =>
+      console.error(
+        JSON.stringify({
+          level: 'error',
+          msg: 'distribution work failed',
+          tenantId,
+          err: err instanceof Error ? err.name : 'unknown',
+        }),
+      ),
+  });
+
   // ── cross-module experience: global search, summaries, record history ──
   const searchProviders: SearchProvider[] = [
     platformSearch,
@@ -572,6 +690,7 @@ export function compose(database: PorticoDatabase, options: CompositionOptions =
     ratesSearch,
     integrationSearch,
     paymentsSearch,
+    distribution.search,
   ];
   const recordsModule = recordsHttp({ database, manifests: MANIFESTS, searchProviders });
 
@@ -589,6 +708,7 @@ export function compose(database: PorticoDatabase, options: CompositionOptions =
       ratesModule,
       integrationModule,
       payments.http,
+      distribution.http,
       recordsModule,
     ],
     subscriptions: [
@@ -597,6 +717,7 @@ export function compose(database: PorticoDatabase, options: CompositionOptions =
       ...operationsSubscriptions(operationsPorts),
       ...integrationSubscriptions(integrationDeps),
       ...payments.subscriptions,
+      ...distribution.subscriptions,
     ],
     searchProviders,
     jobs: [
@@ -620,6 +741,7 @@ export function compose(database: PorticoDatabase, options: CompositionOptions =
           ),
       }),
       ...integrationJobs(integrationDeps),
+      ...distribution.jobs,
     ],
     services: {
       guests: guestsService,
@@ -627,6 +749,7 @@ export function compose(database: PorticoDatabase, options: CompositionOptions =
       operations: operationsService,
       rates,
       payments: payments.service,
+      distribution,
     },
     demoSeedSteps: [
       { name: 'inventory', run: inventoryDemoSeed },
@@ -636,6 +759,8 @@ export function compose(database: PorticoDatabase, options: CompositionOptions =
       { name: 'rates', run: createRatesDemoSeed(rates, ratesPorts) },
       { name: 'payments', run: seedPaymentsDemo },
       { name: 'finance', run: (tx, org) => financeDemoSeed(tx, org) },
+      // After inventory and rates: a SIMULATED Channex connection per demo resort, fully mapped and active.
+      { name: 'distribution', run: (tx, org) => seedDistributionDemo(tx, distribution.deps, org) },
     ],
     identityPorts,
     platformPorts,
