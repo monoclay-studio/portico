@@ -126,3 +126,9 @@ Each agent's brief and report are in `agents/`.
 - **16:20 — A seven-day usage pacing rule is added** alongside the 5-hour guardrail.
 - **16:34 — Owner asks for this chronicle**, "so I can keep it for posterity and use as case study, success story,
   origin story". The chronicle is reconstructed from the session transcript, git history and agent transcripts.
+- **16:42 — Second identity review (in progress) says "do not merge" again.** Every attack from the first review is
+  closed. But a new P0 takeover path exists: any organization can create a brand-new global identity, with a
+  password it chooses, for an email address it does not own.
+- **16:45 — Gap strategist launches** on branch `docs/strategy`: 10x briefs per module and a platform gap plan.
+  Usage: 5-hour 12%, seven-day 57%. The seven-day allowance is now the binding constraint, at about 6–7 points per
+  hour with 6 agents running.
