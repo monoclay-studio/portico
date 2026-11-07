@@ -59,9 +59,9 @@ Before reclassification, round 0 read L1-gate 9 / L1-BSC 7 / L2 11 / L3 0 / L4 5
 | L3 scenario proof | 0 | 1 | 0 | **0** | 1 | — |
 | L4 UX loop | 3 | 0 | 0 | **0** | 3 | — |
 | L5 market, parity and research | 5 | 1 | 0 | **0** | 6 | — |
-| L-orch (orchestrator process) | 5 | 3 | 2 | **2** | 12 | E-104 (Q158 default ≠ code), E-105 (UX 2a dispositions) |
-| L8 meta loop | 0 | 1 | 0 | **1** | 2 | E-115 (timeline `now` tokens) |
-| **Total** | **38** | **24** | **23** | **30** | **115** | |
+| L-orch (orchestrator process) | 5 | 3 | 2 | **3** | 13 | E-104 (Q158 default ≠ code), E-105 (UX 2a dispositions), E-117 (agent records not extracted since 18:45) |
+| L8 meta loop | 0 | 1 | 0 | **2** | 3 | E-115 (timeline `now` tokens), E-116 (cost figures counted per content block) |
+| **Total** | **38** | **24** | **23** | **32** | **117** | |
 
 Round-2 entries by loop (moved here from the table): L1-gate E-079; L1-BSC E-063, E-064, E-066, E-068 … E-072
 (residuals of round-0 fixes), E-075 … E-078 (integration-step fix round), E-082, E-084, E-085 (guests fix round); L2
@@ -97,7 +97,8 @@ L-orch E-080, E-081.
 - the L2 infra security review: 10 (E-095 … E-104);
 - the L4 black-box tester, round 2a: 5 (E-106 … E-110);
 - the L5 parity evidence re-run: 3 (E-111 … E-113);
-- L8 (disposition check, mutation canary, timeline check): 3 (E-105, E-114, E-115).
+- L8 (disposition check, mutation canary, timeline check, cost re-count, chronicle check): 5 (E-105, E-114, E-115,
+  E-116, E-117).
 
 ### By severity and kind
 
@@ -126,15 +127,15 @@ recommended fix caused. There are **12 of 24**:
 The trend is 7 of 38 → 12 of 24 → 17 of 23. As P0/P1 classes close, the remaining defects come increasingly from
 fixes.
 
-**Round 3 by severity:** P0 0, P1 5, P2 17, P3 8. **By kind:** D 16, G 5, C 6, Pr 3.
+**Round 3 by severity:** P0 0, P1 5, P2 18, P3 9. **By kind:** D 16, G 5, C 6, Ev 1, Pr 4.
 
-**Round 3, fix-related: 15 of 30 (50 %).**
+**Round 3, fix-related: 15 of 32 (47 %).**
 - The integration-step fix round 2: 10 (E-086 … E-094, E-114).
 - The backoffice round-1 fix round, refuted by UX 2a: 5 (E-106 … E-110). E-106 is the exact reproduction of E-025.
 - The share fell because the infra **first** review added 10 escapes that no fix caused. Of the escapes found by
   re-checking fixed work (re-review #3, UX 2a, the canary), **15 of 15** are fix-related.
 
-**Claims (kind C, plus D entries whose report or docs said the opposite):** 15 of 30 contradict a written claim: a
+**Claims (kind C, plus D entries whose report or docs said the opposite):** 15 of 32 contradict a written claim: a
 README, runbook, decisions-file "Done", self-check "yes" or parity row (E-087, E-096 … E-102, E-106, E-107, E-109,
 E-110, E-111; E-104 and E-105 are the orchestrator's records). RC-15 below.
 
@@ -159,6 +160,7 @@ E-110, E-111; E-104 and E-105 are the orchestrator's records). RC-15 below.
 | **RC-14 (round 3).** Closure is enumerated from memory, inside Portico's code. Writer and reader lists are recalled, not derived; the record's other states and exits, the external systems holding a copy of it, the enforcement points of a stored control fact, the key fields that select it, and concurrency per writer are outside the frame | E-086, E-087, E-088, E-089, E-090, E-092 | Builder self-check **v5** (BS5-1 … BS5-6); patterns AP-59 and AP-60 |
 | **RC-15 (round 3).** A prose claim about behaviour (a runbook capability, a recorded default, a "Done" refinement, a parity row, a self-check "yes") is written without a test or code check, and no gate reads prose | E-087, E-096 … E-102, E-104, E-106, E-107, E-109, E-110, E-111 | Builder **v5** BS5-7 (claim ledger); orchestrator **v4** O4-1; pattern AP-62 |
 | **RC-16 (round 3).** A loop step is skipped for cost and its function is not reassigned: the refiner's triage, disposition and confirm/refute of "Done" claims | E-105 (E-107 left unrouted as a result) | Orchestrator **v4** O4-2; refiner **v2.1** triage-only variant |
+| **RC-12 recurred (round 3).** Generated records not refreshed (agent briefs and reports, E-117), and a measuring tool whose unit was never checked against one known record (E-116, with L8) | E-116, E-117 | Orchestrator **v4** O4-4; retro edit 7 |
 | **RC-10 recurred (round 3).** A test cannot fail: values unasserted (E-099), a title that claims more than the body (E-113), a "concurrent" test whose race is set up sequentially (E-114) | E-099, E-113, E-114 | Builder **v5** BS5-8 (one mutant per guard) |
 
 ---
@@ -1526,6 +1528,42 @@ findings whose class was not in the builder's checklist, so they are **not** cou
   is the event's. L-orch contributed by choosing `now`.
 - **Checks added.** `when.py owner "<text>"` and `when.py trigger` (prototype in the scratchpad); verify-times refuses
   `now` on entries that begin "Owner" or "Resumed" (retro edit 2).
+
+#### E-116 · P3 · Ev · Every cost figure in the scorecard is about 2× too high: turns and tokens were counted per content block, not per message
+- **Defect.** A transcript writes one line per content block (thinking, text, each tool call), and every line repeats
+  the message's `usage`. `tools/chronicle/extract.py` counts each line as a turn and adds its usage, and so did my own
+  transcript reads. Re-counted once per message id (`canary-scripts/r3_costs.py`), the over-count is 1.85–2.94× for
+  output tokens and similar for turns and input tokens. Tool counts are right (one block per call).
+
+  | Run | Extractor (as published) | Once per message |
+  |---|---|---|
+  | First review round, 10 reviews | 2,183 turns, 2,129,873 output | 1,226 messages, 1,064,869 output |
+  | Parity evidence re-run | 238 turns, 502,185 output | 101 messages, 182,750 output |
+  | Quality steward rounds 0–1 (§ 11) | 364 turns, 833,568 output | 183 messages, 314,621 output |
+
+- **Found.** L8, this round, while costing the round-3 runs.
+- **Should have been caught by.** L8. I used `agents.json` for three rounds without checking its unit against one
+  known record. L-orch contributed: the extractor has the same fault.
+- **Effect.** Ratios between runs are roughly preserved (the factor varies from 1.85 to 2.94), so no ranking in the
+  scorecard changes. Absolute "output tokens per P0/P1 finding" halves: the first round's ≈ 19k becomes ≈ 9.6k.
+- **Checks added.** Scorecard § 10 correction table; § 1 method note (count once per message id); retro edit 7 (the
+  extractor dedupes by message id).
+
+### L-orch — the chronicle (found by L8)
+
+#### E-117 · P2 · Pr · Agent briefs and reports have not been extracted into the chronicle since 18:45
+- **Defect.** `docs/chronicle/agents/` and `data/agents.json` were last refreshed at 18:45 (`de3495e`). Seven agents
+  have finished since (the guests fix at 19:06, infra at 19:22, the integration-step fix rounds 2 and 3, re-review #3,
+  the infra review, UX tester 2a, the parity re-run), and their briefs and reports exist only in this session's
+  transcripts.
+- **Why it matters.** The owner asked for every agent's brief and report to be recorded (CLAUDE.md § 0, chronicle).
+  A container restart already lost one agent's log today: the 18:07 infra brief says "the first engineer's log was
+  lost in a container restart".
+- **Found.** L8, this round (`git log -- docs/chronicle/agents`).
+- **Should have been caught by.** L-orch, the merge step ("update it after every merge"). Timeline entries were
+  written; the extraction was not run.
+- **Checks added.** Orchestrator **v4** O4-4 (run the extractor in the same commit as every timeline entry that
+  records an agent's report).
 
 ### Not counted as escapes this round (recorded for completeness)
 
