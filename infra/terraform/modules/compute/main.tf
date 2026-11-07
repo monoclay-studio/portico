@@ -490,5 +490,8 @@ resource "aws_ssm_parameter" "deploy_config" {
     assign_public_ip = var.assign_public_ip
     log_groups       = var.log_group_names
     smoke_base_url   = var.smoke_base_url
+    web              = var.web
+    # Routing grants run with the migrate task definition and this command (infra/db/bootstrap-roles.mjs).
+    grants_command = ["node", "/app/ops/bootstrap-roles.mjs", "grants"]
   })
 }

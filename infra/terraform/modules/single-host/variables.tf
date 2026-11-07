@@ -100,3 +100,11 @@ variable "schedule" {
 variable "smoke_base_url" {
   type = string
 }
+
+variable "web" {
+  description = "Where the deploy pipeline publishes the staff web app: { bucket, distribution_id } (edge module)."
+  type = object({
+    bucket          = string
+    distribution_id = string
+  })
+}

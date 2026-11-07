@@ -103,6 +103,7 @@ module "single_host" {
   log_group_arn     = module.observability[0].log_group_arns["host"]
   schedule          = local.schedule
   smoke_base_url    = module.edge[0].public_base_url
+  web               = { bucket = module.edge[0].web_bucket_name, distribution_id = module.edge[0].distribution_id }
 }
 
 # ── Managed tiers: data ──────────────────────────────────────────────────────────────────────────────────────
@@ -216,6 +217,7 @@ module "compute" {
   ses_identity_arn             = one(module.email[*].identity_arn)
   ses_configuration_set_arn    = one(module.email[*].configuration_set_arn)
   smoke_base_url               = module.edge[0].public_base_url
+  web                          = { bucket = module.edge[0].web_bucket_name, distribution_id = module.edge[0].distribution_id }
 }
 
 module "backup" {

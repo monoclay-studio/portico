@@ -191,5 +191,6 @@ resource "aws_ssm_parameter" "deploy_config" {
     repositories   = var.repository_urls
     smoke_base_url = var.smoke_base_url
     log_group      = var.log_group_name
+    web            = var.web
   })
 }
