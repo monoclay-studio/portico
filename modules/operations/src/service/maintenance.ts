@@ -642,7 +642,7 @@ function nextStepForRefusal(code: string): string {
     case 'external_system_of_record':
     case 'forwarding_not_available':
       return 'Sellable inventory is managed in another system: set the unit out of order there.';
-    case 'module_unavailable':
+    case 'module_not_available':
       return 'Inventory is not reachable right now: request the block again shortly.';
     default:
       return 'Fix the problem described and request the block again.';

@@ -34,6 +34,7 @@ import {
   DomainError,
   fieldCryptoFromEnv,
   type ModuleManifest,
+  ModuleUnavailableError,
   randomToken,
   systemAuthorizer,
 } from '@portico/kernel';
@@ -107,16 +108,13 @@ export const MANIFESTS: readonly ModuleManifest[] = [
  */
 function unavailablePort<T extends object>(module: string, available: Partial<T> = {}): T {
   return new Proxy({} as T, {
-    get: (_t, prop) =>
-      prop in available
-        ? available[prop as keyof T]
-        : () => {
-            throw new DomainError(
-              'module_unavailable',
-              `The ${module} module is not connected yet (${String(prop)}). The action was recorded where possible; it will be completed once ${module} is available.`,
-              { status: 503, retryable: true, details: { module, operation: String(prop) } },
-            );
-          },
+    get: (_t, prop) => {
+      if (prop === 'then') return undefined; // not a thenable
+      if (prop in available) return available[prop as keyof T];
+      return () => {
+        throw new ModuleUnavailableError(module, String(prop));
+      };
+    },
   });
 }
 
@@ -130,7 +128,7 @@ const ledgerUntilFinanceMerges = unavailablePort<LedgerPort>('finance', {
   async describeTarget(_tx, ref) {
     if (ref.type === 'booking') return null;
     throw new DomainError(
-      'module_unavailable',
+      'module_not_available',
       'Finance is not connected yet, so Portico cannot confirm which property this folio belongs to and will not collect against it. Take the payment as a booking deposit, or record it once finance is connected.',
       { status: 503, retryable: true, details: { module: 'finance', operation: 'describeTarget' } },
     );

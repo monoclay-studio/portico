@@ -173,7 +173,7 @@ describe('payments API', () => {
       ref: { type: 'folio', id: folioId },
     });
     expect(res.statusCode).toBe(503);
-    expect(res.json()).toMatchObject({ code: 'module_unavailable', retryable: true });
+    expect(res.json()).toMatchObject({ code: 'module_not_available', retryable: true });
     expect(res.json().detail).toMatch(/booking deposit/);
     const status = await h.app.inject({
       method: 'GET',
