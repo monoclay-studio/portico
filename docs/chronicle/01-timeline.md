@@ -430,3 +430,17 @@ Each agent's brief and report are in `agents/`.
     - The parity gate fails on 3 P0 rows that need the real contracts.
   - The agent's open questions became Q162 (source-data retention, default 30 days; Monoclay co-sign).
   - The steward review waits for the usage rule.
+- **23:35 — Integration-step fix round 4 done** <!-- t: agent-a29fdf2e9c7d0e9dc @ 2026-11-07T23:35:19.754Z (Integration step: bind module ports) -->; head `a1bdd70`, pushed. The first fix round run under self-check v6.
+  - A saved card pays only for the bookings and folios its agreement names. The stays at consent are recorded server
+    side, so a stay added later is not covered until the cardholder confirms again.
+  - The running total is read under the card row lock. Open holds and increases still in flight count.
+  - The over-collected refund is the exact amount.
+  - A provider deactivation that is never confirmed becomes an owned, urgent exception, with an audited "link
+    stopped" route.
+  - The § 5.4 table holds 11 mutants, all killed. The round-3 E-114 survivor (the collection lock) is now killed.
+  - § 6 rewrote two claims and removed one.
+- **23:36 — Focused re-review #5 launched** <!-- t: now @ 2026-11-07T23:36:25Z -->: a critical-path merge check (seven-day 90%, the ≥ 85% rule allows it).
+  - Steward v2.1 with the queued v3 "verify the proof" step promoted for this run: re-run 2 builder mutants and
+    plant 1 of its own.
+  - Its focus is staff-editable paths into card coverage, the running total at N=10, and the new link-stopped
+    route.
