@@ -158,6 +158,34 @@ describe('R4-P1-2 / R4-P3-1 — open holds count against the agreement total, un
   });
 });
 
+describe('R4-P1-2 — a hold increase in flight counts against the total', () => {
+  it('an increase sent but not confirmed, then a charge: the charge is refused if both would pass the limit', async () => {
+    const org = await setupOrg(h);
+    const svc = h.module.service;
+    const card = await agreementCard(org, { bookingIds: [org.bookingId], maxAmount: usd(10_000) });
+    const stay = newId();
+    h.ledger.bookingOf.set(stay, org.bookingId);
+    const held = await hold(org, card, { type: 'stay', id: stay }, 5_000);
+    expect(codeOf(held)).toBe('accepted');
+    const holdId = held.ok ? held.v.id : '';
+    await svc.settle(org.ctx, { type: 'authorization', id: holdId });
+    // The increase is recorded (intent committed) and not yet confirmed by the provider.
+    await org.tx((tx) => svc.tx.increment(tx, { authorizationId: holdId, additionalAmount: usd(5_000) }));
+    const folio = newId();
+    const charge = await settle(
+      svc.chargeNow(org.ctx, {
+        propertyId: org.propertyId,
+        methodId: card,
+        amount: usd(5_000),
+        ref: { type: 'folio', id: folio },
+        purpose: 'balance',
+        businessKey: newId(),
+      }),
+    );
+    expect(codeOf(charge)).toBe('mandate_amount_exceeded');
+  });
+});
+
 describe('R4-P3-6 — guest actors and customer holds', () => {
   const guestFor = (org: Org, bookingId: string) => ({
     ...org.as(['payments.payment.collect', 'payments.method.manage']),

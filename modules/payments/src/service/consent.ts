@@ -217,7 +217,8 @@ export async function consentProblem(
 
 /**
  * R4-P1-2 / R4-P3-1: what the card's agreement would carry after this use — everything taken so far (merchant charges and
- * captures in flight or done), plus every hold still open (except the one being increased or captured), plus this use.
+ * captures in flight or done), plus every hold still open (except the one being increased or captured) and every hold
+ * increase still in flight, plus this use.
  * Called under the card row lock taken by `consentProblem`.
  */
 async function runningTotal(
@@ -243,9 +244,23 @@ async function runningTotal(
     Math.max(0, h.amount_minor - h.captured_minor - h.capture_reserved_minor);
   const others = holds.filter((h) => h.id !== use.authorizationId).reduce((n, h) => n + open(h), 0);
   const own = holds.find((h) => h.id === use.authorizationId);
+  // A hold increase sent to the provider but not confirmed yet is not in the hold's amount: count it (except the
+  // increase this use replaces — an increase passes the hold's new total as its amount).
+  const increases = await db(tx)
+    .selectFrom('payments.provider_operations as o')
+    .innerJoin('payments.authorizations as a', 'a.id', 'o.authorization_id')
+    .select(['o.authorization_id', 'o.amount_minor'])
+    .where('a.method_id', '=', methodId)
+    .where('a.initiator', '=', 'merchant')
+    .where('o.kind', '=', 'increment')
+    .where('o.status', 'in', ['pending', 'sent', 'pending_verification'])
+    .execute();
+  const pendingIncreases = increases
+    .filter((o) => !(use.kind === 'hold' && o.authorization_id === use.authorizationId))
+    .reduce((n, o) => n + o.amount_minor, 0);
   // A capture moves money from its hold to "taken": the hold's whole open amount is counted once.
   const thisUse = use.kind === 'capture' && own ? open(own) : use.amount.amountMinor;
-  return Number(taken.n) + others + thisUse;
+  return Number(taken.n) + others + pendingIncreases + thisUse;
 }
 
 export async function assertWithinConsent(
