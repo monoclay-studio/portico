@@ -65,7 +65,7 @@ for experts; the panel is the default path, not the only one.
 - **Check now** calls `POST /payments/transactions/:id/check` and replaces the line with the result: "Still pending —
   checked 07:42" / "Paid — confirmed by the provider 07:42" / "Failed — what to do".
 - **Open payment** links to the transaction record (attempts, provider reference, history).
-- Rule for every module (summary C7): a message that asks staff to verify something carries the button that verifies
+- Rule for every module (cross-module rule C7 in the round-1 summary; also FD-04): a message that asks staff to verify something carries the button that verifies
   it.
 
 **Expected outcome (targets).** Resolve a pending verification from the record in ≤ 10 s when the provider has an
