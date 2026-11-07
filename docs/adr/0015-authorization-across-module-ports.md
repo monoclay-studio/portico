@@ -88,3 +88,30 @@ her saved card then paid for it. Consent cannot depend on data that staff can ed
   count against the limit while they are open.
 - Lock order across modules stays: the shared collection lock, then the folio, then the payment request; modules
   that touch deposits take the shared lock first (R4-P3-2).
+
+## Amendment 4 — consent is checked where money lands, and purposes are facts (2026-11-07, integration-step re-review #5)
+
+Four reviews in a row found the same class of defect one step beyond the previous fix. A staff-editable input reached
+the consent check as if it were a cardholder fact:
+- the booker, then the payer directory (R3, R4);
+- the purpose label `no_show` (R5-P1-1);
+- a booking-level reference with no stay, later re-allocated to a stay added after consent (R5-P1-2).
+
+From now on the rule is about the class, not the path:
+1. **Every input to a consent decision is either a cardholder fact or a server fact, never a client label.**
+   - A purpose is derived from the record that justifies it: a no-show or cancellation penalty that reservations
+     recorded, capped at what it still owes; a deposit due under the booking's deposit schedule; a balance on a named
+     folio.
+   - Evidence time and channel are set by the server.
+   - Ownership is judged on stable identities, never on fields that a merge rewrites.
+2. **Coverage is checked where money lands, not only where it is taken.** Card-funded money that is moved or applied
+   to a folio, stay or booking keeps its agreement's coverage. This includes deposit application, folio transfer,
+   routing and split. If the destination is not covered, the move is refused, or held for new cardholder consent.
+   Reverse order (move first, then charge) is closed by the same check.
+3. **Staff-recorded agreements carry an amount limit.** `maxAmount` is required when an agreement is recorded by staff
+   (terminal, phone, paper form). Then any residual widening is bounded by what the cardholder agreed to. An agreement
+   the cardholder captures in self-service may be uncapped only if the cardholder chose it explicitly. (Default,
+   reversible; see Q160.)
+4. **Staff cannot clear money-risk states that finance owns.** A payment request the provider reported as already paid
+   (`completed`) is never "confirmed stopped" by staff. Only a finance role may confirm a deactivating link, only
+   while its exception is open, and only with `If-Match`.

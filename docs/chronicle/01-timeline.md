@@ -414,3 +414,47 @@ Each agent's brief and report are in `agents/`.
   - 87 module tests and 2 HTTP tests. The § 5.4 mutation table has 22 guards, all red.
   - P0 parity rows still open: 57 → 11.
   - 17 contract requests went to the other modules. The steward review waits for the usage rule.
+- **23:27 — Migration module ("Move to Portico") increments 1–2 built** <!-- t: agent-ac5ae1ef01ad9bd99 @ 2026-11-07T23:27:11.349Z (Build migration module (increments 1–2)) -->; branch `feat/migration` pushed, every gate green.
+  - **Decision:** a new module (`modules/migration`), not part of integration. It writes into every data-owning
+    module, so it uses integration only through ports.
+  - **Proven in tests:**
+    - The same-day guesthouse path: rehearse in a trial org, reconcile twice, second-person authorization and switch,
+      cutover, rollback window.
+    - Zero duplicate reservations, guarded by a database unique key per source key and tested with five racing
+      importers, crash resume and delta sync.
+    - A card number in any cell refuses the whole upload.
+  - 95 module tests and 3 HTTP tests.
+  - **Limits:**
+    - Reservations has no migration import yet (MIG-CR-1), so a real run stops honestly at that step.
+    - The vendor export layouts (Little Hotelier, Cloudbeds, eZee) are unverified.
+    - The parity gate fails on 3 P0 rows that need the real contracts.
+  - The agent's open questions became Q162 (source-data retention, default 30 days; Monoclay co-sign).
+  - The steward review waits for the usage rule.
+- **23:35 — Integration-step fix round 4 done** <!-- t: agent-a29fdf2e9c7d0e9dc @ 2026-11-07T23:35:19.754Z (Integration step: bind module ports) -->; head `a1bdd70`, pushed. The first fix round run under self-check v6.
+  - A saved card pays only for the bookings and folios its agreement names. The stays at consent are recorded server
+    side, so a stay added later is not covered until the cardholder confirms again.
+  - The running total is read under the card row lock. Open holds and increases still in flight count.
+  - The over-collected refund is the exact amount.
+  - A provider deactivation that is never confirmed becomes an owned, urgent exception, with an audited "link
+    stopped" route.
+  - The § 5.4 table holds 11 mutants, all killed. The round-3 E-114 survivor (the collection lock) is now killed.
+  - § 6 rewrote two claims and removed one.
+- **23:36 — Focused re-review #5 launched** <!-- t: now @ 2026-11-07T23:36:25Z -->: a critical-path merge check (seven-day 90%, the ≥ 85% rule allows it).
+  - Steward v2.1 with the queued v3 "verify the proof" step promoted for this run: re-run 2 builder mutants and
+    plant 1 of its own.
+  - Its focus is staff-editable paths into card coverage, the running total at N=10, and the new link-stopped
+    route.
+- **23:54 — Integration-step re-review #5: merge after fixes** <!-- t: agent-a9d7a144efc35a5f6 @ 2026-11-07T23:54:57.000Z (Focused re-review #5: integration-step) --> (P0 0 · P1 2 · P2 2 · P3 4).
+  - Round 4 held: N=10 concurrency was clean, there was no lock-order cycle, and the builder's M6 and M9 mutants were
+    confirmed killed.
+  - The reviewer planted 2 mutants of its own; 1 survived (`pending_verification` not counted).
+  - Both P1s are the same class one step beyond: the `no_show` purpose was a label the desk types, and a
+    booking-level deposit was later applied to a stay added after consent.
+  - Orchestrator decision, ADR-0015 Amendment 4, closes the class rather than the path:
+    - every consent input is a cardholder or server fact, never a client label;
+    - coverage is checked where money lands, including deposit application, transfers and routing;
+    - staff-recorded agreements require an amount limit (Q160 update);
+    - staff cannot clear finance-owned money-risk states.
+  - Escape note for quality round 4: four rounds of "one step beyond" in consent. The builder's control-fact grid had
+    no input-source column.
+- **23:55 — Fix round 5 sent** <!-- t: now @ 2026-11-07T23:55:55Z --> with self-check v6 plus an input-source column and a list of every money-moving writer.

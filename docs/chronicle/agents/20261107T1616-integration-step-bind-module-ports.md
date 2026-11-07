@@ -1,7 +1,7 @@
 # Agent run: Integration step: bind module ports
 
-- Started: 2026-11-07T16:16:26.294Z · last activity: 2026-11-07T22:53:12.761Z
-- Turns: 953 · tool uses: 981 · output tokens: 838,024
+- Started: 2026-11-07T16:16:26.294Z · last activity: 2026-11-07T23:55:41.551Z
+- Turns: 1137 · tool uses: 1170 · output tokens: 989,378
 - Type: general-purpose
 
 ## Brief (2026-11-07T16:16:26.294Z)
@@ -769,6 +769,53 @@ If you need specific details from before compaction (like exact code snippets, e
 Continue the conversation from where it left off without asking the user any further questions. Resume directly — do not acknowledge the summary, do not recap what was happening, do not preface with "I'll continue" or similar. Pick up the last task as if the break never happened.
 ````
 
+## Follow-up message (2026-11-07T23:55:41.542Z)
+
+````text
+The coordinator sent a message while you were working:
+Integration-step fix round 5. Re-review #5 says "merge after fixes" (P0 0, P1 2, P2 2, P3 4). Your round-4 work held: N=10 concurrency was clean, no lock-order cycle, and M6/M9 were confirmed killed. Thank you.
+
+The pattern is the problem now. Four reviews in a row found a staff-editable input reaching the consent check one step beyond the last fix. So this round closes the **class**, not the path.
+
+Read first, all on main:
+- `docs/orchestration/reviews/review-integration-step-5.md`, plus its PoCs `docs/orchestration/reviews/integration-step-poc/r5-*.test.ts.txt`
+- `docs/adr/0015-authorization-across-module-ports.md` **Amendment 4** (new)
+- Q160's update in `docs/OPEN_QUESTIONS.md`
+- the "integration-step fix round 5" line in `docs/orchestration/pending-fixes.md`
+
+Merge main first.
+
+1. **Purposes are facts (R5-P1-1).** No purpose label from the client is trusted. `no_show` (and every purpose) is derived from the record that justifies it:
+   - a no-show or cancellation penalty recorded by reservations, capped at what it still owes;
+   - a deposit due under the booking's deposit schedule;
+   - a balance on a named folio.
+
+   Turn the reviewer's attacks into regression tests: the USD 2,500 "no_show" charge on an ordinary stay, and R4-J reopened through `no_show`. Keep `reservations.stay.noShow` as the only way to create the no-show fact.
+2. **Coverage where money lands (R5-P1-2).** Card-funded money keeps its agreement's coverage wherever it is applied or moved: `applyDeposits`, folio transfer, routing and split. If the destination is not covered, the move is refused or held for new cardholder consent.
+   - Close the reverse order too: move first, then charge.
+   - A reference with no stay must not mean "covered".
+   - Take R5-A2 (add_stay, then a booking-level deposit, then `applyDeposits` into Otto's folio) as a regression test.
+3. **Staff-recorded agreements require `maxAmount`** (Amendment 4 rule 3). A cardholder self-service agreement may be uncapped only by the cardholder's explicit choice, recorded in the evidence.
+4. **R5-P2-1:** link-stopped refuses `completed`. `deactivating` is allowed only to a finance role, only while the exception is open, and only with `If-Match`.
+5. **R5-P2-2:** count `pending_verification` in the running total. Take the reviewer's R5-M test; it must kill that mutant.
+6. **P3s:**
+   - Evidence time and channel are set by the server.
+   - Ownership is checked on stable ids, not on the `owner_id` a merge rewrites.
+   - Fix the README "guest self-service" overclaim, since `confirmCardForBooking` has no route.
+   - Partial payments made before "already paid" must not be counted as the reported payment, and the overpaid credit must be right.
+   - Replace probe-only or timing-only proof with deterministic tests: barriers for M6, and the `applyDeposits` lock order.
+
+**Self-check v6**, with these additions for this round:
+- In § 5.1 control facts, add an **"input source"** column for every input to `consentProblem` and to every movement of card-funded money (cardholder fact / server fact / client label). Any "client label" cell is a defect.
+- List **every writer that moves money between folios, stays or bookings** (pasted grep), each with its coverage check and test.
+- § 5.4 mutation table for every new guard, plus re-kill M6 and the reviewer's `pending_verification` mutant.
+- § 6 claim ledger over the README and domain-map lines you change.
+
+Gates as before (lint `--error-on-warnings`). Commit after every meaningful step. Do not push, and never rewrite or amend existing commits.
+
+Address this before completing your current task.
+````
+
 ## Report (2026-11-07T17:04:17.381Z)
 
 ````text
@@ -1142,5 +1189,189 @@ Test locations:
 - **Payer-type mapping drift grows.** Payments' `ownerKeyOfPayer` adds a fourth copy of the mapping, and reservations still copies the `basis` enum. Both belong to the RC-2 / `payerRef` codec item.
 - **ADR text:** ADR-0015 Amendment 2 is on main (the orchestrator's). The domain map's "Integration-step fix round 3" section lists every contract change, including the lock order.
 
+````
+
+## Report (2026-11-07T23:35:19.754Z)
+
+````text
+## Integration-step fix round 4: report
+
+All four gates exit 0 at `a1bdd70`. I committed locally, pushed nothing, and amended nothing.
+
+**What changed in behaviour:**
+- A saved card now pays only for the bookings and folios its agreement names. The agreement also records the booking's stays at the moment the cardholder agreed (server-side), so a stay added later is not covered.
+- The agreement's amount limit is a running total, read under a lock on the card row. Open holds count against it, and so do hold increases still waiting for the provider.
+- `main` was merged twice: `fe0ad18` (default merge message, no attribution, which I cannot amend) and `c682aa1` (brings in ADR-0015 Amendment 3 and Q160).
+
+### Gates (`PORTICO_TEST_DB_PREFIX=w1_intstep_fix4`, output sent to log files, exit codes read)
+
+| Gate | Exit |
+|---|---|
+| `pnpm install --frozen-lockfile` | 0 |
+| `pnpm lint` (includes `--error-on-warnings`) | 0 |
+| `pnpm turbo run typecheck --force` | 0 |
+| `pnpm turbo run test --force --concurrency=2` | 0 (16/16 tasks) |
+
+- Test counts: payments 152, api 152 (+29 todo), finance 92, reservations 154; every other package passes.
+- No `w1_intstep_fix4%` databases are left over.
+- The same gates also passed earlier at `efa4120`.
+
+### Commits
+
+| Commit | Content |
+|---|---|
+| `8291b85` | Consent: card-row lock, open holds, named bookings, `confirmCardForBooking`. Also R4-P2-1/2: over-collected amount, `already_completed`, provider expiry, `payment_link_not_stopped`, Stripe lifetime cap 23 h. Also P3s: `no_show`, balance after a deposit, `applyDeposits` lock order, guest paths. Migration 0004 |
+| `31502d4` | Evidence lists the booking's stays at consent time (no timestamp ties). Agreements can name folios (`folioIds`). New `LedgerPort.depositsHeldFor`. Api harness `bookWithCard` / `cardholderConfirms`; older tests moved to the real consent flow |
+| `a95c836` | Round-4 regression tests (api and payments module). New route `POST /v1/payments/requests/:id/link-stopped` |
+| `bd6e576` | Docs: domain map, payments README, pending-fixes |
+| `7c9c76d` | A channel virtual card's agreement records the booking's stays as the channel sent it |
+| `efa4120` | Hold increases still waiting for the provider count against the total (a sibling gap I found) |
+| `a1bdd70` | link-stopped tested over HTTP plus a refused role; payer test; README wording |
+
+### Finding → commit → test (§ 3)
+
+The api test file is `apps/api/test/review-regressions-r4.test.ts`; the payments module file is `modules/payments/test/review-r4-regressions.test.ts`.
+
+| Finding | Commit | Regression test | (a) reverse order | (b) siblings | (c) failure path | (d) griefing | (e) atomic |
+|---|---|---|---|---|---|---|---|
+| R4-P1-1 | 8291b85, 31502d4, 7c9c76d | api "PoC R4-A flipped", "PoC R4-A2 flipped" | Consent first, staff add a stay afterwards → refused until she confirms again ("sibling: a stay added to the cardholder's OWN named booking…") | Create or patch guarantee (resAgent and desk both refused), add_stay, profile merge, folio payer, staff confirm (403, desk and setup), VCC evidence, foreign booking or folio (module) | `paymentsOn` is `[]` for Z, Y's folio and the added folio | Staff adding a stay leaves it uncovered; recovery is that the cardholder confirms again (tested) | n/a (no counter); `confirmCardForBooking` writes under the card row `FOR UPDATE` |
+| R4-P1-2 (+R4-P3-1) | 8291b85, efa4120 | api "PoC R4-B flipped" (5 at once → 10,000 taken, 4 refused); "PoC R4-C flipped" | Hold first, then charge (module "increase in flight") | charge, authorize, increment, capture, VCC (via charge), in-flight increase; 3 or 4 concurrent holds (api, module) | Exactly one row taken or held | Holding the full limit blocks further use; recovery is release or a new consent link | Card row `FOR UPDATE` before the read. Concurrency is N=5 / 4 / 3, not the playbook's N=10 |
+| R4-P2-1 | 8291b85 | "PoC R4-D1 flipped", "PoC R4-D2 flipped", "…DOES over-collect…" (item states paid minus still owed), "…already paid…" | Paid before the re-issue (`already_completed`) and after it | Webhook link payment, completion path, reconciliation expiry, provider `expired` event | — | — | Computed from the folio balance after posting |
+| R4-P2-2 | 8291b85, a95c836 | "PoC R4-E flipped" (nothing at 10 min; urgent, owner finance at 40 min; late item never says "is open — send it"; HTTP confirm → resolved, replacement `created`) | — | `failed` raises at once; `unknown` raises after the deadline; `completed` but never recorded raises | Role without rights → 403 | — | dedupeKey `link-not-stopped:<id>` |
+| R4-P3-2 | 8291b85 | probe R4-H (12 rounds; also run with `R4_ROUNDS_H=40`, clean) | | | | | |
+| R4-P3-3 | 8291b85, 31502d4 | "PoC R4-J flipped"; r3 "family" test updated (needs a reason before the deposit is applied, free afterwards) | | | | | |
+| R4-P3-4 | 8291b85 | "R4-P3-4: a no-show fee…"; `maxAmount` contract comment now says total | | | | | |
+| R4-P3-5 | 8291b85 | `stripe-connect.test.ts`: lifetime cap; expire → complete / expired / error / timeout | | | | | |
+| R4-P3-6 | 8291b85 | module "a guest pays only with a card they entered…", "a customer hold is captured only inside its own booking family" | | | | | |
+| E-114 | a95c836 | api E-114 ×2 (held transaction in both directions; asserts the competitor `waited: true`, then is refused) | | | | | |
+
+I also ran the reviewer's PoC file at head: every FINDING now fails at its flipped line (A:262, B:305, C:344, A2:627, J:708). The D, E, D2 and G setups now stop earlier, at check-in, because a standing agreement no longer covers the booking. My versions set up consent first.
+
+### § 5.1 State machine (BS5-1)
+
+| Record | Transition | Trigger | Closure row and test |
+|---|---|---|---|
+| Agreement | none → recorded | `createMethod` (terms, time, channel; server-built evidence; foreign booking or folio refused) | module "another hotel company" (M5) |
+| | + booking | cardholder `confirmCardForBooking` | "staff cannot confirm" (M4) |
+| | scope dropped (legacy row) → refused | — | R4-K: `mandate_scope_missing` ×4 |
+| | card detached → refused | — | `payment_method_inactive` |
+| Coverage | stay added after consent → uncovered → covered again | cardholder confirms again | own-booking sibling (M2, M3) |
+| Running total | up: charge, hold, increase, increase in flight | | R4-B, R4-C, module (M6, M7, M11) |
+| | down: void, expire, payment failed | | |
+| | refunds never restore headroom (conservative) | | |
+| Link (`link_status`) | pending → created → deactivating | replace, cancel, expiry | R3-B3, R4-D2 |
+| | deactivating → deactivated | provider confirms, or staff confirm | R4-E |
+| | deactivating → completed | provider answers "already paid" | already-paid sibling |
+| | completed → deactivated | payment recorded | already-paid sibling |
+| | deactivating > 30 min → urgent exception | reconciliation | R4-E |
+| | `failed` → exception at once | provider refuses | — |
+
+### § 5.1 External holders (BS5-2)
+
+- **Provider link:** deactivated first. The replacement waits while any older link is deactivating or completed. The simulator models already-paid, refused payment on dead links, and expiry. Stripe deactivation is unit-tested only, so it is unproven against the sandbox.
+- **Provider hold:** counted while open.
+- **Provider increase or charge in flight:** counted.
+
+### § 5.1 Derived lists (BS5-3)
+
+These are greps over `modules/*/src`.
+
+- **Writers of `payments.payment_methods`:** `accounts.ts:511` (insert with evidence), `:620` (detach), `:818` / `:846` (merge and unmerge change the owner only; consent never reads the owner), `:930` (confirm), `operations.ts:734` (`networkTransactionId` only), `requests.ts:955` (VCC with evidence).
+- **Readers of the scope:** `consent.ts:149-207`, `accounts.ts:731-774` (`assessGuaranteeCard`; the real hold re-checks), `:904-934`.
+- **Inputs to the running total:** `insertPayment` at `collect.ts:637` (capture), `:815` (charge), `:1111` (recordPayment, Route D, no card). Authorizations at `collect.ts:346` (authorize), `:1317` (recorded, no card). `webhooks.ts:900` (link payment, no card). Increment amount at `operations.ts:717`, after `provider_operations` (now counted).
+- **Collection-lock callers:** `collect.ts:175` (charge, capture, record), `:338` (authorize), `:629`; `requests.ts:148` (create), `:707`; `webhooks.ts:844`; `finance support.ts:488` (`lockMoneyFolios`), `deposits.ts:445` (`applyDeposits`).
+- **Lock order** (domain map): authorization row → card row → collection lock → deposit account / folio → request.
+
+### § 5.1 Control facts (BS5-4)
+
+Every row runs `consent.ts` (`consentProblem`):
+
+| Path | Card lock | Active | Agreement | Scope | Entity / properties | Purposes | Bookings / folios / stays | Amount |
+|---|---|---|---|---|---|---|---|---|
+| charge `collect.ts:803` | :93 | :95 | :144 | :152 | :157 / :158 | :167 (`custom` never) | :192 / :184 | :199 → `runningTotal` :245, :258, :262 |
+| authorize `collect.ts:326` | same | | | | | | | |
+| increment `collect.ts:477` | same | | | | | | | |
+| capture `collect.ts:603` | same (merchant hold) | | | | | | | |
+
+- The customer path is `consent.ts:102` (hosted entry by the actor); a customer hold's capture is family-checked at `collect.ts:617`.
+- `assessGuaranteeCard` at `accounts.ts:703` runs with `lock:false` (assessment only).
+- No cell is missing.
+
+### § 5.3 Exemptions
+
+- **Free balance after a paid deposit link:** allowed only up to what the folio owes minus deposits still held (`depositsHeldFor`). Attacked by R4-J, refused.
+- **Timestamp fallback** when the evidence has no stay list (only a reference directory that cannot list stays, i.e. the fakes): strict `<`, so a tie is not covered (module tie test).
+- **`lock:false`:** assessment only.
+- **Capture counts its own hold once:** M8 shows this is guarded.
+
+### § 5.4 Mutation table (one guard removed at a time, then restored; tree clean afterwards)
+
+| Mutant | Guard removed | File | Tests that turned red |
+|---|---|---|---|
+| M1 | named-booking check | consent.ts:192 | module ×3; api R4-A, R4-A2, merge |
+| M2 | stay-at-consent check | :185 | module "stay created after"; api own-booking sibling |
+| M3 | evidence stay list ignored | :187 | api own-booking sibling (+13 that depend on it) |
+| M4 | cardholder-only confirm | accounts.ts:893 | module "only the cardholder…"; api "staff cannot confirm" |
+| M5 | named-booking validation at save | accounts.ts:466 | module "another hotel company" |
+| M6 | card row `FOR UPDATE` | consent.ts:93 | module concurrent holds; api R4-B, 3 concurrent holds |
+| M7 | open holds counted | :245 | module concurrent holds; api R4-C, 3 holds |
+| M8 | own hold excluded from "others" | :245 | api R4-C (capture) |
+| M9 | collection lock in `assertCollectionOwnership` | collect.ts:175 | api E-114 ×2 |
+| M10 | collection lock in `createPaymentRequest` | requests.ts:148 | api E-114 ×2 |
+| M11 | in-flight increases counted | consent.ts:264 | module "increase in flight" |
+
+Every mutant was killed. The E-114 survivor from round 3 (the collection lock) is now killed by M9.
+
+### § 6 Claim ledger (BS6-1 grep over the changed README and domain-map lines)
+
+| Claim | Evidence | Verdict |
+|---|---|---|
+| README "only the bookings and folios it names" | R4-A, R4-A2, merge, payer, module named-folio; M1 | keep |
+| "a stay added later is not covered" | own-booking sibling; M2 | keep |
+| "read under a lock on the card row" | R4-B; M6 | keep |
+| "No staff-editable relationship … extends" | booker, occupant (add_stay), payer, merge tests | keep |
+| "only the cardholder adds a booking" | staff could still record a new agreement naming bookings | **rewritten:** "…to an existing agreement; a new agreement staff record must carry the cardholder's acceptance and names only this company's bookings and folios" |
+| "custom never covered" | R3-D1 inverted | keep |
+| "no-show fees are `no_show`" | R4-P3-4 test | keep (reservations posts the fee; the desk charges it) |
+| "guest uses only a card they entered"; "customer hold only inside its family" | module tests | keep |
+| Requests: "30 minutes → urgent, owner finance"; "link-stopped route, audited" | R4-E (HTTP + 403) | keep |
+| Requests: "exactly the over-collected amount, none otherwise" | D1, over-collect sibling | keep |
+| "Stripe ≤ 23 h (unit-tested only)" | adapter test | keep, stays R3 |
+| Domain map: `applyDeposits` lock order | `deposits.ts:445`; R4-H probe | keep |
+| Domain map: "never 'a link is open' before one exists" | R4-E | keep |
+| README "consent capture via link or terminal not built" | matches the code | keep |
+| README counts | **corrected** to 152 / 96 / 48 | — |
+| `raiseLinkNotStopped` next step "or send the replacement accepting the risk" | no such action exists | **removed** |
+
+### Choices you may want to review
+
+- I added `scope.folioIds` (an agreement can name a folio with no booking), following "bookings (and folios) it names". The HTTP payments tests use it.
+- I changed the expectation of r3's "one step beyond" test to the R4-P2-1 rule: no refund item when the guest still owes money.
+- `confirmLinkStopped` requires `payments.paymentRequest.create`. I logged it as a decision to review, since finance owns the exception.
+
+### Residuals (in `docs/orchestration/pending-fixes.md`)
+
+- Consent capture through the payment-link page or the terminal is not built.
+- The backoffice has no "Link stopped" action yet.
+- The permission choice for confirming a link stopped (above).
+
+The R4-P1-1, R4-P2, R4-P3 and E-114 lines there are marked DONE.
+
+### Files
+
+- `/home/user/wt/integration-step/modules/payments/src/service/consent.ts`
+- `/home/user/wt/integration-step/modules/payments/src/service/accounts.ts`
+- `/home/user/wt/integration-step/modules/payments/src/service/requests.ts`
+- `/home/user/wt/integration-step/modules/payments/src/service/collect.ts`
+- `/home/user/wt/integration-step/modules/payments/src/routes.ts`
+- `/home/user/wt/integration-step/modules/payments/migrations/0004_consent_and_link_states.sql`
+- `/home/user/wt/integration-step/modules/finance/src/service/deposits.ts`
+- `/home/user/wt/integration-step/modules/reservations/src/service/provider.ts`
+- `/home/user/wt/integration-step/apps/api/test/review-regressions-r4.test.ts`
+- `/home/user/wt/integration-step/modules/payments/test/review-r4-regressions.test.ts`
+- `/home/user/wt/integration-step/apps/api/test/scenarios/harness.ts`
+- `/home/user/wt/integration-step/docs/architecture/domain-map.md`
+- `/home/user/wt/integration-step/modules/payments/README.md`
+- `/home/user/wt/integration-step/docs/orchestration/pending-fixes.md`
 ````
 
