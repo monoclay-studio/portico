@@ -648,12 +648,20 @@ export async function assessGuaranteeCard(
   if (account.legal_entity_id !== property.legalEntityId) return notHere;
   const card = { brand: m.brand, last4: m.last4 };
   const owner = { type: m.owner_type, id: m.owner_id };
-  const problem = await consentProblem(d, tx, m, property, 'merchant', {
-    kind: 'hold',
-    purpose: 'guarantee',
-    ...(input.amount ? { amount: input.amount } : {}),
-    ref: { type: 'booking', id: input.bookingId },
-  });
+  const problem = await consentProblem(
+    d,
+    tx,
+    m,
+    property,
+    'merchant',
+    {
+      kind: 'hold',
+      purpose: 'guarantee',
+      ...(input.amount ? { amount: input.amount } : {}),
+      ref: { type: 'booking', id: input.bookingId },
+    },
+    { lock: false },
+  );
   const consent = { withinConsent: problem === null, consentReason: problem?.message ?? null };
   const mandate = (m.mandate ?? {}) as {
     kind?: string;
@@ -806,4 +814,73 @@ export async function restoreMethodsOnUnmerge(
     });
   }
   return moved.length;
+}
+
+// ───────────────────────── cardholder confirms a card for a booking (ADR-0015 Amendment 3) ─────────────────────────
+
+/**
+ * Re-review #4 R4-P1-1: an agreement covers only the bookings it names, as consented. More are added ONLY by the
+ * cardholder — here through the guest's own self-service (a guest actor holding the card); a payment link or the
+ * terminal are the other channels (they take a new card entry). Staff cannot call this: no relationship staff create
+ * extends a cardholder's consent. Evidence: who (the guest), when, and the channel.
+ */
+export async function confirmCardForBooking(
+  d: PaymentsDeps,
+  tx: TxContext,
+  input: { methodId: string; bookingId: string },
+): Promise<PaymentMethod> {
+  const actor = tx.actor.kind === 'guest' ? tx.actor : null;
+  const m = await db(tx)
+    .selectFrom('payments.payment_methods')
+    .selectAll()
+    .where('id', '=', input.methodId)
+    .forUpdate()
+    .executeTakeFirst();
+  const own =
+    m &&
+    actor &&
+    ((m.owner_type === 'guest_profile' && m.owner_id === actor.guestProfileId) ||
+      (m.owner_type === 'booking' && m.owner_id === actor.bookingId));
+  if (!m || !own) {
+    throw new ForbiddenError('payments.card.confirmForBooking', {});
+  }
+  const mandate = (m.mandate ?? {}) as {
+    termsVersion?: string;
+    acceptedAt?: string;
+    scope?: { bookingIds?: string[]; bookingEvidence?: Record<string, { at: string; channel: string }> };
+  };
+  if (!m.mit_agreement || !mandate.scope) {
+    throw new ValidationError(
+      'mandate_required',
+      'This card has no recorded agreement to add a booking to. Save it again with the agreement (terms, scope).',
+    );
+  }
+  const booking = await d.references.describeReference(tx, { type: 'booking', id: input.bookingId });
+  if (!booking || booking.propertyId !== m.property_id) {
+    throw new NotFoundError('booking', input.bookingId);
+  }
+  const bookingIds = [...new Set([...(mandate.scope.bookingIds ?? []), input.bookingId])];
+  if (bookingIds.length > 20) {
+    throw new ValidationError('mandate_too_many_bookings', 'An agreement names at most 20 bookings.');
+  }
+  const evidence = {
+    ...(mandate.scope.bookingEvidence ?? {}),
+    [input.bookingId]: { at: tx.now.toISOString(), channel: 'guest_self_service' },
+  };
+  const row = await db(tx)
+    .updateTable('payments.payment_methods')
+    .set({
+      mandate: JSON.stringify({ ...mandate, scope: { ...mandate.scope, bookingIds, bookingEvidence: evidence } }),
+      version: m.version + 1,
+    })
+    .where('id', '=', m.id)
+    .returningAll()
+    .executeTakeFirstOrThrow();
+  await tx.audit({
+    action: 'payments.method.bookingConsented',
+    target: { type: 'payment_method', id: m.id },
+    propertyId: m.property_id,
+    after: { bookingId: input.bookingId, channel: 'guest_self_service' },
+  });
+  return toMethodView(row);
 }

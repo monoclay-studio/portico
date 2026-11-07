@@ -135,6 +135,10 @@ export interface BalanceSyncResult {
   /** What the open payment request asks for after the sync — only what payments ACCEPTED (0 when none). */
   openMinor: number;
   requestId?: string | null;
+  /** R4-P2-2: the open request's link exists at the provider now ("send it" only then). */
+  linkReady?: boolean;
+  /** R4-P2-2: an earlier link is still being stopped at the provider (possibly payable meanwhile). */
+  oldLinkStopping?: boolean;
   detail?: string;
 }
 

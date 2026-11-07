@@ -695,6 +695,8 @@ export class SimulatorProvider implements PaymentProvider {
           message: `No simulated payment link ${call.linkRef}.`,
         };
       }
+      // Like a Checkout Session: a link already paid cannot be expired — "already paid" (re-review #4 R4-P2-1).
+      if (link.status === 'completed') return { kind: 'already_completed' };
       if (link.status !== 'deactivated') {
         await this.update(tx, call.linkRef, 'deactivated', {
           ...link.data,
@@ -841,6 +843,8 @@ export class SimulatorProvider implements PaymentProvider {
       if (link?.kind !== 'link') throw new Error(`No simulated payment link ${linkRef}`);
       // A deactivated link takes no payment (re-review #3: the old link of a replaced request).
       if (link.status === 'deactivated') throw new Error(`The payment link ${linkRef} is no longer active.`);
+      // A fully paid link is `completed` and takes no more payment (re-review #4, like a Checkout Session).
+      if (link.status === 'completed') throw new Error(`The payment link ${linkRef} has already been paid.`);
       const amount = amountMinor ?? link.amount_minor;
       const piId = `sim_pi_${randomToken(12).replace(/[^A-Za-z0-9]/g, 'x')}`;
       await this.insert(tx, account, `link-payment:${linkRef}:${newId()}`, {
@@ -858,6 +862,14 @@ export class SimulatorProvider implements PaymentProvider {
           linkRef,
           outcome: { kind: 'succeeded', providerRef: piId, amountMinor: amount },
         },
+      });
+      // A link is `completed` once what was paid on it reaches its amount (a provider that takes part payments keeps
+      // it open until then).
+      const paidSoFar = Number((link.data as { paidMinor?: number }).paidMinor ?? 0) + amount;
+      await this.update(tx, linkRef, paidSoFar >= link.amount_minor ? 'completed' : link.status, {
+        ...link.data,
+        paidMinor: paidSoFar,
+        ...(paidSoFar >= link.amount_minor ? { completedAt: this.now().toISOString() } : {}),
       });
       await this.queueEvent(tx, account, 'checkout.session.completed', {
         kind: 'payment_link',

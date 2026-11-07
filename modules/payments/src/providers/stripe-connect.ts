@@ -27,7 +27,7 @@ import type {
   VerifiedWebhook,
   WebhookObject,
 } from './provider';
-import { WebhookSignatureError } from './provider';
+import { STRIPE_LINK_MAX_LIFETIME_MS, WebhookSignatureError } from './provider';
 import { verifySignature } from './signature';
 
 export const STRIPE_API_BASE = 'https://api.stripe.com';
@@ -410,7 +410,13 @@ export class StripeConnectProvider implements PaymentProvider {
             },
           },
         ],
-        expires_at: Math.floor(call.expiresAt.getTime() / 1000),
+        // R4-P3-5: a Checkout Session expires within 24 h at most — the link is capped (the request may outlive it;
+        // reconciliation then retires it and the balance request is re-issued).
+        expires_at: Math.floor(
+          (call.now
+            ? Math.min(call.expiresAt.getTime(), call.now.getTime() + STRIPE_LINK_MAX_LIFETIME_MS)
+            : call.expiresAt.getTime()) / 1000,
+        ),
         metadata: { portico_payment_request_id: call.requestId },
         payment_intent_data: { metadata: { portico_payment_request_id: call.requestId } },
       },

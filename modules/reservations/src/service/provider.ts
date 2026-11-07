@@ -61,22 +61,22 @@ export async function describeReference(
       channelConnectionId?: string | null;
       bookingId: string;
       people: string[];
+      stayCreatedAt?: string;
     }
   | null
   | undefined
 > {
   if (ref.type !== 'booking' && ref.type !== 'stay') return undefined;
   if (!UUID.test(ref.id)) return null;
-  const bookingId =
-    ref.type === 'booking'
-      ? ref.id
-      : (
-          await db(tx)
-            .selectFrom('reservations.stays')
-            .select('booking_id')
-            .where('id', '=', ref.id)
-            .executeTakeFirst()
-        )?.booking_id;
+  const stay =
+    ref.type === 'stay'
+      ? await db(tx)
+          .selectFrom('reservations.stays')
+          .select(['booking_id', 'created_at'])
+          .where('id', '=', ref.id)
+          .executeTakeFirst()
+      : undefined;
+  const bookingId = ref.type === 'booking' ? ref.id : stay?.booking_id;
   if (!bookingId) return null;
   // Review R2-P1-1: where the booking came from — payments accepts a channel's virtual card only for a booking of that
   // channel connection. Re-review #3: its booking (the collection family) and its people (whose cards a standing
@@ -93,6 +93,8 @@ export async function describeReference(
     channelConnectionId: b.channel_connection_id,
     bookingId,
     people: [...(await bookingPeople(tx, bookingId))],
+    // ADR-0015 Amendment 3: a stay added after a cardholder consented to the booking is not covered by that consent.
+    ...(stay ? { stayCreatedAt: stay.created_at.toISOString() } : {}),
   };
 }
 

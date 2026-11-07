@@ -132,12 +132,20 @@ export const mandateScope = z
     /** Properties of that company the consent covers; omitted = every property of the legal entity. */
     propertyIds: z.array(z.uuid()).min(1).max(50).optional(),
     purposes: z.array(mandatePurpose).min(1),
-    /** Highest amount per use the cardholder agreed to. */
+    /**
+     * The most the hotel may have taken or held on the card under this agreement at any time, in total: every
+     * merchant-initiated charge and capture plus every open hold (re-review #4 R4-P1-2 / R4-P3-4 — not "per use").
+     */
     maxAmount: money.optional(),
     /**
-     * The bookings the consent names. A card is a booking's agreed guarantee through its mandate only when the
-     * mandate names that booking (or the card was saved for it): staff linking the cardholder to another booking
-     * never extends the consent (Amendment 1).
+     * What the agreement covers (ADR-0015 Amendment 3). `named_bookings` (the only kind today): exactly the bookings in
+     * `bookingIds`, as consented — no relationship staff can create (booker, occupant, payer, an added stay, a profile
+     * merge) extends it. A future-stays scope bound to a payer account the cardholder controls is Q160 (not offered).
+     */
+    coverage: z.enum(['named_bookings']).optional(),
+    /**
+     * The bookings the consent names, recorded when the cardholder consented. More are added only by the cardholder
+     * (`confirmCardForBooking`: self-service, link or terminal), never by staff. None = the card covers no booking yet.
      */
     bookingIds: z.array(z.uuid()).min(1).max(20).optional(),
   })
@@ -336,7 +344,7 @@ export const chargeInput = z
     amount: money,
     ref: ledgerRef,
     /** Defaults: booking → deposit, folio → balance. A payment request owns its purpose on a reference. */
-    purpose: z.enum(['deposit', 'balance', 'incidentals', 'custom']).optional(),
+    purpose: z.enum(['deposit', 'balance', 'incidentals', 'no_show', 'custom']).optional(),
     separateCollection: separateCollection.optional(),
     description: text(200).optional(),
   })
@@ -360,7 +368,7 @@ export const recordPaymentInput = z
       .optional(),
     receivedAt: z.iso.datetime(),
     authorizationId: z.uuid().optional(),
-    purpose: z.enum(['deposit', 'balance', 'incidentals', 'custom']).optional(),
+    purpose: z.enum(['deposit', 'balance', 'incidentals', 'no_show', 'custom']).optional(),
     separateCollection: separateCollection.optional(),
     /** The same approval code/receipt number really is a second payment: say why (audited). */
     duplicateOverride: separateCollection.optional(),

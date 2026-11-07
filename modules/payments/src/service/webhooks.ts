@@ -22,7 +22,8 @@ import { type AuthorizationStatus, authorizationTransition, disputeTransition } 
 import { PaymentsEvents } from '../events';
 import { type VerifiedWebhook, type WebhookObject, WebhookSignatureError } from '../providers/provider';
 import { clearingOf, ledgerKey, postPaymentLedger, tryLedger } from './ledger';
-import { creditPaymentRequest, verifyOperation } from './operations';
+import { creditPaymentRequest, raiseIfOvercollected, verifyOperation } from './operations';
+import { releaseWaitingLinks } from './requests';
 import {
   db,
   effectiveModeFor,
@@ -30,6 +31,7 @@ import {
   lockCollectionRefs,
   type PaymentsDeps,
   raiseException,
+  requestContextOf,
   resolveExceptionsByKey,
   toProviderAccount,
 } from './shared';
@@ -849,6 +851,14 @@ async function applyLinkEvent(
     .executeTakeFirst();
   if (!r) return 'no_match';
   if (o.state === 'expired') {
+    // The provider expired the link itself: it takes no more payments.
+    if (r.link_status === 'deactivating' || r.link_status === 'created' || r.link_status === 'unknown') {
+      await db(tx)
+        .updateTable('payments.payment_requests')
+        .set({ link_status: 'deactivated', link_status_at: tx.now })
+        .where('id', '=', r.id)
+        .execute();
+    }
     if (r.status !== 'open') return 'stale';
     await db(tx)
       .updateTable('payments.payment_requests')
@@ -924,9 +934,16 @@ async function applyLinkEvent(
       created_at: tx.now,
     })
     .execute();
-  // Review R2-P1-2: credit the request before finance posts (its balance sync then sees this payment on the link).
-  await creditPaymentRequest(tx, r.id, o.amountMinor);
+  // Review R2-P1-2: credit the request before finance posts (its balance sync then sees this payment on the link);
+  // R4-P2-1: then state any over-collection from the posted balance, and release a replacement that waited for this
+  // payment ("already paid" at the provider).
+  const credited = await creditPaymentRequest(tx, r.id, o.amountMinor);
   await postPaymentLedger(d, tx, id);
+  await raiseIfOvercollected(d, tx, credited.before, credited.paid, o.amountMinor, id);
+  if (credited.before.link_status === 'completed') {
+    const ctx = requestContextOf(tx);
+    tx.afterCommit(() => releaseWaitingLinks(d, ctx, { type: r.ref_type, id: r.ref_id }));
+  }
   await tx.emit({
     type: PaymentsEvents.paymentSucceeded,
     propertyId: r.property_id,

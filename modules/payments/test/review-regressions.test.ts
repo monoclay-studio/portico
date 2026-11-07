@@ -337,7 +337,7 @@ describe('P1-2: a payment request owns its purpose on a reference', () => {
   it('a paid deposit link blocks a desk charge for the same deposit (reviewer E2b) unless staff give a reason', async () => {
     const org = await setupOrg(h);
     const svc = h.module.service;
-    const booking = { type: 'booking' as const, id: newId() };
+    const booking = { type: 'booking' as const, id: org.bookingId };
     const req = await org.tx((tx) =>
       svc.tx.createPaymentRequest(tx, {
         propertyId: org.propertyId,
@@ -452,8 +452,8 @@ describe('P1-5/P1-6/P1-7/P1-9: Route D and deposits reach finance correctly', ()
   it('deposits carry the property; statement verification and acquirer fees reach finance; bank receipts need confirmation', async () => {
     const org = await setupOrg(h);
     const svc = h.module.service;
-    // P1-5: first deposit on a booking carries propertyId + legal entity.
-    const booking = newId();
+    // P1-5: first deposit on a booking carries propertyId + legal entity (the booking the card's agreement names).
+    const booking = org.bookingId;
     const methodId = await addMethod(h, org);
     await svc.chargeNow(org.ctx, {
       propertyId: org.propertyId,

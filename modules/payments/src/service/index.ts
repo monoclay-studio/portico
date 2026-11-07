@@ -409,6 +409,10 @@ export function createPaymentsService(input: PaymentsServiceDeps) {
         requests.createPaymentRequest(d, tx, i),
       getPaymentRequest: requests.getPaymentRequest,
       listPaymentRequests: requests.listPaymentRequests,
+      confirmCardForBooking: (tx: TxContext, i: { methodId: string; bookingId: string }) =>
+        accounts.confirmCardForBooking(d, tx, i),
+      confirmLinkStopped: (tx: TxContext, i: { requestId: string; reason: string }) =>
+        requests.confirmLinkStopped(d, tx, i),
       cancelPaymentRequest: (tx: TxContext, id: string, v: number, reason: string) =>
         requests.cancelPaymentRequest(d, tx, id, v, reason),
       registerVirtualCard: (tx: TxContext, i: Parameters<typeof requests.registerVirtualCard>[2]) =>

@@ -46,10 +46,12 @@ import {
   lockCollectionRefs,
   type PaymentsDeps,
   type RequestRow,
+  raiseException,
   referenceContext,
   requestContextOf,
   requestHash,
   requireRead,
+  resolveExceptionsByKey,
   toProviderAccount,
   toRequestView,
 } from './shared';
@@ -255,7 +257,7 @@ export async function ensurePaymentLink(
       .select('id')
       .where('ref_type', '=', r.ref_type)
       .where('ref_id', '=', r.ref_id)
-      .where('link_status', '=', 'deactivating')
+      .where('link_status', 'in', ['deactivating', 'completed'])
       .where('id', '!=', r.id)
       .executeTakeFirst();
     if (retiring) return null;
@@ -293,6 +295,7 @@ export async function ensurePaymentLink(
           description: r.description ?? `Payment ${r.purpose}`,
           expiresAt: new Date(r.expires_at),
           requestId: r.id,
+          now: d.database.clock.now(),
         })
       : { kind: 'failed', code: 'provider_not_configured', message: 'No provider credentials configured.' };
   } catch (err) {
@@ -341,7 +344,7 @@ export async function retireRequestLink(tx: TxContext, r: RequestRow): Promise<b
   if (!possiblyLive || r.link_status === 'deactivated') return false;
   await db(tx)
     .updateTable('payments.payment_requests')
-    .set({ link_status: 'deactivating', link_url: null })
+    .set({ link_status: 'deactivating', link_url: null, link_status_at: tx.now })
     .where('id', '=', r.id)
     .execute();
   return true;
@@ -377,7 +380,8 @@ export async function ensureLinkDeactivated(
         const created = await resolved.provider.createPaymentLink(pa, {
           operationId: r.id,
           idempotencyKey: `portico-link-${r.id}`,
-          amount: { amountMinor: Math.max(1, r.amount_minor - r.paid_minor), currency: r.currency },
+          // R4-P2-2: the ORIGINAL amount, so the provider's idempotency check matches the first call.
+          amount: { amountMinor: r.amount_minor, currency: r.currency },
           description: r.description ?? `Payment ${r.purpose}`,
           expiresAt: new Date(r.expires_at),
           requestId: r.id,
@@ -404,13 +408,31 @@ export async function ensureLinkDeactivated(
   } catch (err) {
     outcome = { kind: 'unknown', reason: err instanceof Error ? err.message : String(err) };
   }
-  // `already_completed`: the provider took a payment on it; that payment arrives by webhook and is credited to the
-  // closed request (urgent refund exception). Either way the link takes no further payment.
+  // R4-P2-1 / R4-P2-2: `already_completed` — the provider took a payment on it. The replacement waits until that payment
+  // is recorded here (the webhook credits it; its finance posting re-syncs the balance request), so it never asks for
+  // money just paid. `failed` raises an owned, urgent item at once; `unknown` is retried (oldest first) and raised
+  // after a deadline by reconciliation.
+  if (outcome.kind === 'failed') {
+    await withTenantTx(d.database, ctx, (tx) => raiseLinkNotStopped(tx, r, outcome.message));
+    return 'pending';
+  }
   if (outcome.kind !== 'deactivated' && outcome.kind !== 'already_completed') return 'pending';
-  const waiting = await withTenantTx(d.database, ctx, async (tx) => {
+  const released = await withTenantTx(d.database, ctx, async (tx) => {
+    const recorded =
+      outcome.kind === 'deactivated' ||
+      (await db(tx)
+        .selectFrom('payments.payments')
+        .select('id')
+        .where('payment_request_id', '=', r.id)
+        .where('kind', '=', 'link')
+        .executeTakeFirst()) !== undefined;
     await db(tx)
       .updateTable('payments.payment_requests')
-      .set((eb) => ({ link_status: 'deactivated', version: eb('version', '+', 1) }))
+      .set((eb) => ({
+        link_status: recorded ? 'deactivated' : 'completed',
+        link_status_at: tx.now,
+        version: eb('version', '+', 1),
+      }))
       .where('id', '=', r.id)
       .where('link_status', '=', 'deactivating')
       .execute();
@@ -418,19 +440,95 @@ export async function ensureLinkDeactivated(
       action: 'payments.request.linkDeactivated',
       target: { type: 'payment_request', id: r.id },
       propertyId: r.property_id,
-      after: { outcome: outcome.kind },
+      after: { outcome: outcome.kind, paymentRecorded: recorded },
     });
-    return db(tx)
+    if (recorded)
+      await resolveExceptionsByKey(
+        tx,
+        `link-not-stopped:${r.id}`,
+        'The provider confirmed the link is stopped.',
+      );
+    return recorded;
+  });
+  if (!released) return 'pending';
+  await releaseWaitingLinks(d, ctx, { type: r.ref_type, id: r.ref_id });
+  return 'deactivated';
+}
+
+/** After a retired link is known dead and its payments are accounted for: send the replacement link(s) waiting for it. */
+export async function releaseWaitingLinks(
+  d: PaymentsDeps,
+  ctx: RequestContext,
+  ref: { type: string; id: string },
+): Promise<void> {
+  const waiting = await withTenantTx(d.database, ctx, (tx) =>
+    db(tx)
       .selectFrom('payments.payment_requests')
       .select('id')
-      .where('ref_type', '=', r.ref_type)
-      .where('ref_id', '=', r.ref_id)
+      .where('ref_type', '=', ref.type as 'folio')
+      .where('ref_id', '=', ref.id)
       .where('status', '=', 'open')
       .where('link_status', '=', 'pending')
-      .execute();
-  });
+      .execute(),
+  );
   for (const w of waiting) await ensurePaymentLink(d, ctx, w.id);
-  return 'deactivated';
+}
+
+/**
+ * R4-P2-2: a link Portico retired that the provider has not confirmed as stopped is "possibly live" — it has an owner
+ * and a next step. Raised at once on a provider refusal, and by reconciliation when the confirmation is overdue.
+ */
+export async function raiseLinkNotStopped(tx: TxContext, r: RequestRow, why: string): Promise<void> {
+  await raiseException(tx, {
+    propertyId: r.property_id,
+    kind: 'payment_link_not_stopped',
+    severity: 'urgent',
+    problem: `The payment provider has not confirmed that the replaced or cancelled payment link for ${formatMoney(money(r.amount_minor, r.currency))} no longer takes payments (${why}).`,
+    businessImpact:
+      'The guest could still pay the old link, and the new link (if any) is held back so the guest is not asked twice.',
+    nextStep:
+      'Stop the link in the provider dashboard, then confirm it here ("link stopped"); or send the replacement accepting the risk of a double payment.',
+    ownerRole: 'finance',
+    responsibleParty: 'hotel',
+    ref: { type: 'payment_request', id: r.id },
+    dedupeKey: `link-not-stopped:${r.id}`,
+  });
+}
+
+/**
+ * R4-P2-2: staff confirm a retired link is stopped (they stopped it in the provider dashboard). Idempotent with a late
+ * provider confirmation (only a link still `deactivating`/`completed` changes). Audited with the reason.
+ */
+export async function confirmLinkStopped(
+  d: PaymentsDeps,
+  tx: TxContext,
+  input: { requestId: string; reason: string },
+): Promise<void> {
+  const r = await db(tx)
+    .selectFrom('payments.payment_requests')
+    .selectAll()
+    .where('id', '=', input.requestId)
+    .forUpdate()
+    .executeTakeFirst();
+  if (!r) throw new NotFoundError('payment_request', input.requestId);
+  requirePermission(tx, 'payments.paymentRequest.create', { propertyId: r.property_id });
+  if (r.link_status !== 'deactivating' && r.link_status !== 'completed') return;
+  await db(tx)
+    .updateTable('payments.payment_requests')
+    .set({ link_status: 'deactivated', link_status_at: tx.now, version: r.version + 1 })
+    .where('id', '=', r.id)
+    .execute();
+  await tx.audit({
+    action: 'payments.request.linkStoppedConfirmed',
+    target: { type: 'payment_request', id: r.id },
+    propertyId: r.property_id,
+    reason: input.reason,
+    before: { linkStatus: r.link_status },
+    after: { linkStatus: 'deactivated' },
+  });
+  await resolveExceptionsByKey(tx, `link-not-stopped:${r.id}`, `Confirmed stopped by staff: ${input.reason}`);
+  const ctx = requestContextOf(tx);
+  tx.afterCommit(() => releaseWaitingLinks(d, ctx, { type: r.ref_type, id: r.ref_id }));
 }
 
 export async function getPaymentRequest(tx: TxContext, id: string): Promise<PaymentRequest> {
@@ -570,6 +668,8 @@ export interface BalanceSyncResult {
    * provider confirms, that link may still be paid; the replacement link is sent only after the confirmation.
    */
   retiredRequestId?: string;
+  /** R4-P2-2: whether the open request's link exists at the provider NOW (never claim "send it" before). */
+  linkReady: boolean;
   detail: string;
 }
 
@@ -628,6 +728,7 @@ export async function syncBalanceRequest(
       status: 'deferred',
       requestId: current?.id ?? null,
       openMinor: openMinor(current),
+      linkReady: current?.link_status === 'created',
       detail:
         'A payment on this folio is still being confirmed, so the balance request was not changed (asking now could ask twice). It is brought in line as soon as that payment succeeds or fails.',
     };
@@ -675,6 +776,7 @@ export async function syncBalanceRequest(
         status: 'none',
         requestId: null,
         openMinor: 0,
+        linkReady: false,
         detail: 'The folio owes nothing; no payment request.',
       };
     }
@@ -684,6 +786,7 @@ export async function syncBalanceRequest(
       status: 'requested',
       requestId: id,
       openMinor: want,
+      linkReady: false,
       detail: `Payment request for ${fmt(want)} created; send the link to the payer.`,
     };
   }
@@ -693,6 +796,7 @@ export async function syncBalanceRequest(
       status: 'unchanged',
       requestId: current.id,
       openMinor: before,
+      linkReady: current.link_status === 'created',
       detail: `The open payment request already asks for ${fmt(want)}.`,
     };
   }
@@ -730,6 +834,7 @@ export async function syncBalanceRequest(
       status: 'cancelled',
       requestId: null,
       openMinor: 0,
+      linkReady: false,
       ...(retiring ? { retiredRequestId: current.id } : {}),
       detail: `The folio no longer owes anything, so the payment request for ${fmt(before)} was closed.${linkNote}`,
     };
@@ -740,6 +845,7 @@ export async function syncBalanceRequest(
     status: 'reissued',
     requestId: id,
     openMinor: want,
+    linkReady: false,
     ...(retiring ? { retiredRequestId: current.id } : {}),
     detail: `The folio now owes ${fmt(want)}: the request for ${fmt(before)} was replaced.${linkNote} The new link is sent once the old one is confirmed inactive.`,
   };

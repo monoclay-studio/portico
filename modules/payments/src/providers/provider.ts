@@ -110,7 +110,12 @@ export interface PaymentLinkCall extends CallBase {
   description: string;
   expiresAt: Date;
   requestId: string;
+  /** The server's clock at the call (providers that bound a link's lifetime cap `expiresAt` from it). */
+  now?: Date;
 }
+
+/** Re-review #4 R4-P3-5: Stripe Checkout Sessions live at most 24 hours; Portico asks for a little less. */
+export const STRIPE_LINK_MAX_LIFETIME_MS = 23 * 3_600_000;
 
 export type PaymentLinkOutcome =
   | { kind: 'created'; linkRef: string; url: string }

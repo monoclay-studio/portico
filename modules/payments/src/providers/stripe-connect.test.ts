@@ -500,3 +500,48 @@ describe('form encoding', () => {
     ).toBe('a=1&metadata[x]=y&list[]=card&items[0][q]=1&items[0][p][c]=usd');
   });
 });
+
+describe('StripeConnectProvider payment links (re-review #4 R4-P3-5)', () => {
+  const linkCall = {
+    operationId: 'req-1',
+    idempotencyKey: 'portico-link-req-1',
+    amount: { amountMinor: 23_400, currency: 'USD' },
+    description: 'Charges posted after departure',
+    expiresAt: new Date('2027-03-19T10:00:00Z'),
+    requestId: 'req-1',
+    now: new Date('2027-03-12T10:00:00Z'),
+  };
+
+  it('caps the Checkout Session lifetime below Stripe’s 24 hours, whatever the request’s expiry', async () => {
+    const http = fakeHttp([json(200, { id: 'cs_test_1', url: 'https://checkout.stripe.com/c/pay/cs_test_1' })]);
+    const out = await provider(http).createPaymentLink(account, linkCall);
+    expect(out).toEqual({ kind: 'created', linkRef: 'cs_test_1', url: 'https://checkout.stripe.com/c/pay/cs_test_1' });
+    const body = new URLSearchParams(http.requests[0]?.body ?? '');
+    const expiresAt = Number(body.get('expires_at'));
+    expect(expiresAt * 1000 - linkCall.now.getTime()).toBe(23 * 3_600_000);
+  });
+
+  it('deactivates a link by expiring its session; "complete" is already paid; errors are read back', async () => {
+    const off = { operationId: 'req-1', idempotencyKey: 'portico-link-off-req-1', linkRef: 'cs_test_1' };
+    // expire → expired
+    let http = fakeHttp([json(200, { id: 'cs_test_1', status: 'expired' })]);
+    expect(await provider(http).deactivatePaymentLink(account, off)).toEqual({ kind: 'deactivated' });
+    expect(http.requests[0]?.url).toMatch(/\/v1\/checkout\/sessions\/cs_test_1\/expire$/);
+    expect(http.requests[0]?.headers?.['idempotency-key']).toBe('portico-link-off-req-1');
+    // expire refused because the session completed → read it → already paid
+    http = fakeHttp([
+      json(400, { error: { type: 'invalid_request_error', code: 'checkout_session_complete', message: 'complete' } }),
+      json(200, { id: 'cs_test_1', status: 'complete' }),
+    ]);
+    expect(await provider(http).deactivatePaymentLink(account, off)).toEqual({ kind: 'already_completed' });
+    // expire refused because it already expired → read it → deactivated
+    http = fakeHttp([
+      json(400, { error: { type: 'invalid_request_error', message: 'already expired' } }),
+      json(200, { id: 'cs_test_1', status: 'expired' }),
+    ]);
+    expect(await provider(http).deactivatePaymentLink(account, off)).toEqual({ kind: 'deactivated' });
+    // the provider does not answer → unknown (Portico keeps the link "possibly payable")
+    http = fakeHttp([new HttpTransportError('timeout', 'timed out')]);
+    expect((await provider(http).deactivatePaymentLink(account, off)).kind).toBe('unknown');
+  });
+});

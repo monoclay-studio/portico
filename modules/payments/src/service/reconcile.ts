@@ -35,7 +35,7 @@ import { PaymentsEvents } from '../events';
 import { markBankTransferReceived } from './collect';
 import { ledgerKey, postPaymentLedger, postRefundLedger, postVerification, tryLedger } from './ledger';
 import { executeOperation, verifyOperation } from './operations';
-import { ensureLinkDeactivated, ensurePaymentLink } from './requests';
+import { ensureLinkDeactivated, ensurePaymentLink, raiseLinkNotStopped, retireRequestLink } from './requests';
 import {
   actorKey,
   db,
@@ -49,6 +49,9 @@ import {
 import { payoutFollowUp } from './webhooks';
 
 /** The reconciliation job: callable on demand, by the worker consumer and by a scheduler. */
+/** R4-P2-2: how long a retired link may stay unconfirmed as stopped before it is raised to an owner. */
+export const LINK_STOP_DEADLINE_MS = 30 * 60_000;
+
 export async function runReconciliation(
   d: PaymentsDeps,
   ctx: RequestContext,
@@ -117,11 +120,13 @@ export async function runReconciliation(
       .where('link_status', 'in', ['pending', 'unknown'])
       .limit(limit);
     if (opts.propertyId) links = links.where('property_id', '=', opts.propertyId);
-    // Re-review #3: retired links whose deactivation the provider has not confirmed yet are retried.
+    // Re-review #3/#4: retired links whose deactivation the provider has not confirmed yet are retried, OLDEST first
+    // (a permanently failing row never starves newer ones); overdue ones get an owner (R4-P2-2).
     let retiring = db(tx)
       .selectFrom('payments.payment_requests')
       .select('id')
       .where('link_status', '=', 'deactivating')
+      .orderBy('link_status_at')
       .limit(limit);
     if (opts.propertyId) retiring = retiring.where('property_id', '=', opts.propertyId);
     return {
@@ -171,8 +176,28 @@ export async function runReconciliation(
     result.ledgerRetried++;
   }
   for (const l of work.retiring) await ensureLinkDeactivated(d, ctx, l.id);
+  // R4-P2-2: a link still not confirmed stopped (or "already paid" with the payment never recorded) after the deadline
+  // is raised to an owner with a next step.
+  await withTenantTx(d.database, ctx, async (tx) => {
+    let overdue = db(tx)
+      .selectFrom('payments.payment_requests')
+      .selectAll()
+      .where('link_status', 'in', ['deactivating', 'completed'])
+      .where('link_status_at', '<', new Date(tx.now.getTime() - LINK_STOP_DEADLINE_MS));
+    if (opts.propertyId) overdue = overdue.where('property_id', '=', opts.propertyId);
+    for (const r of await overdue.execute()) {
+      await raiseLinkNotStopped(
+        tx,
+        r,
+        r.link_status === 'completed'
+          ? 'it reported a payment that has not reached Portico'
+          : `no confirmation for more than ${LINK_STOP_DEADLINE_MS / 60_000} minutes`,
+      );
+    }
+  });
   for (const l of work.links) await ensurePaymentLink(d, ctx, l.id);
 
+  const expiredLinks: string[] = [];
   await withTenantTx(d.database, ctx, async (tx) => {
     let expiring = db(tx)
       .selectFrom('payments.authorizations')
@@ -260,6 +285,13 @@ export async function runReconciliation(
         .set({ status: 'expired', version: r.version + 1 })
         .where('id', '=', r.id)
         .execute();
+      // R4-P2-1: an expired request's link is stopped at the provider like a cancelled one.
+      const row = await db(tx)
+        .selectFrom('payments.payment_requests')
+        .selectAll()
+        .where('id', '=', r.id)
+        .executeTakeFirstOrThrow();
+      if (await retireRequestLink(tx, row)) expiredLinks.push(r.id);
       await tx.emit({
         type: PaymentsEvents.requestExpired,
         propertyId: r.property_id,
@@ -293,6 +325,7 @@ export async function runReconciliation(
       result.exceptionsRaised++;
     }
   });
+  for (const id of expiredLinks) await ensureLinkDeactivated(d, ctx, id);
   return result;
 }
 

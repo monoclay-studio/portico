@@ -60,6 +60,12 @@ export interface LedgerPort {
     ref: { type: 'folio' | 'booking'; id: string },
   ): Promise<LedgerTargetInfo | null>;
   /**
+   * Re-review #4 (R4-P2-1, R4-P3-3): what a folio owes now (positive) or holds in credit (negative), from the ledger;
+   * null when finance cannot say (a booking deposit, an unknown target). Payments uses it to state an over-collection
+   * and to let a balance charge through only up to what the folio owes.
+   */
+  balanceOf(tx: TxContext, ref: { type: 'folio' | 'booking'; id: string }): Promise<number | null>;
+  /**
    * Review R2-P1-3 (AP-44): finance's own posting predicate for new money on this target at this scope, asked BEFORE
    * any card is charged, so pre-check and posting can never disagree (e.g. a booking whose deposits are held at
    * another property, or an imported deposit of a booking reservations does not know). Throws the refusal.
@@ -206,6 +212,8 @@ export interface ReferenceOwner {
    * `agency:<id>`, `booking:<id>`) — a standing card-on-file consent covers only its cardholder's own bookings.
    */
   people?: string[];
+  /** Stays only: when the stay was created — consent given before it does not cover it (ADR-0015 Amendment 3). */
+  stayCreatedAt?: string;
 }
 
 export interface PropertyInfo {

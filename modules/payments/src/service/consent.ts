@@ -1,22 +1,25 @@
 /**
- * Cardholder consent (ADR-0015 Amendment 2; re-review #3 R3-P1-2, R3-P2-4, R3-P3-1).
+ * Cardholder consent (ADR-0015 Amendments 2 and 3; re-reviews #3 R3-P1-2 and #4 R4-P1-1, R4-P1-2, R4-P3-1, R4-P3-6).
  *
  * Staff permission decides WHO may initiate; the cardholder's consent decides WHAT may be taken. Every use of a stored
  * card the hotel initiates — a charge, a hold, a hold increase, a capture — must lie inside the recorded agreement:
  *  - terms version and acceptance recorded (`mit_agreement`), WITH its scope (an agreement without a recorded scope is
  *    not stretched to "anything": it needs new consent) — or the card was entered by its cardholder FOR a booking,
- *    which is consent for that booking's guarantee, deposit, balance and no-show charge only;
+ *    which is consent for that booking's guarantee, deposit, balance and no-show charge;
  *  - the hotel company (legal entity) and properties it names;
- *  - the purpose (`guarantee` for holds and their captures; `deposit`, `balance`, `incidentals` for charges; a
- *    `custom` charge is never covered);
- *  - the bookings it covers: a card saved FOR a booking covers that booking (its stays and folios); an agreement naming
- *    bookings covers those; a standing agreement covers only the cardholder's OWN bookings and folios (booker,
- *    occupant, company, agency, payer) — which is also invariant (e) "a card is used for its owner's charges";
- *  - its amount: `maxAmount` is the most the hotel may take on the card in total under the agreement (every
- *    merchant-initiated charge and capture so far, plus this one) and the most it may hold at once — so five charges
- *    of 100 cannot pass a 100 limit.
- * Anything beyond it needs NEW consent from the cardholder (a payment link, or the terminal with the guest); no staff
- * permission stands in for it. A guest acting for themselves (customer-initiated) may use only their own card.
+ *  - the purpose (`guarantee` for holds and their captures; `deposit`, `balance`, `incidentals`, `no_show` for charges;
+ *    a `custom` charge is never covered);
+ *  - the bookings it NAMES, as recorded with evidence when the cardholder consented (Amendment 3). Nothing staff can
+ *    write — booker, occupants, payer, company, an added stay, a profile merge — extends it. A stay added to a named
+ *    booking AFTER the consent is not covered either. A future-stays / payer-account scope does not exist (Q160);
+ *  - its amount: `maxAmount` is the most the hotel may have taken or held on the card under the agreement at any time:
+ *    every merchant-initiated charge and capture so far, plus every hold still open, plus this use. The running total
+ *    is read under a lock on the card row (R4-P1-2), so parallel uses cannot each see the old total.
+ * Anything beyond it needs NEW consent from the cardholder (a payment link, the terminal, hosted entry, or the guest's
+ * own self-service); no staff permission stands in for it. A guest acting for themselves may use only a card they
+ * entered themselves (R4-P3-6).
+ *
+ * Lock order (domain map): authorization row → card row → collection lock → folio → payment request.
  */
 import type { TxContext } from '@portico/db';
 import { BusinessRuleError, formatMoney, money } from '@portico/kernel';
@@ -26,12 +29,14 @@ import { db, type MethodRow, type PaymentsDeps, referenceContext } from './share
 export type ConsentPurpose = 'guarantee' | 'deposit' | 'balance' | 'incidentals' | 'no_show' | 'custom';
 
 export interface ConsentUse {
-  /** `hold`: an authorization (or its increase: pass the new total); `charge`/`capture`: money collected. */
+  /** `hold`: a new authorization, or an increase (pass `authorizationId` and the hold's NEW total); `charge`; `capture`. */
   kind: 'hold' | 'charge' | 'capture';
   purpose: ConsentPurpose;
   /** Omitted: the amount is not known yet (assessing a card before a hold). */
   amount?: { amountMinor: number; currency: string };
   ref: { type: string; id: string };
+  /** The hold being increased or captured: its own open amount is not counted twice. */
+  authorizationId?: string;
 }
 
 interface StoredMandate {
@@ -43,40 +48,64 @@ interface StoredMandate {
     purposes?: string[];
     maxAmount?: { amountMinor: number; currency: string };
     bookingIds?: string[];
+    /** When each named booking was consented to (cardholder-confirmed later), with its evidence. */
+    bookingEvidence?: Record<string, { at: string; channel: string }>;
   };
 }
 
 const NEW_CONSENT =
-  'This needs new consent from the cardholder: send a payment link, or take the card on the terminal with the guest.';
+  'This needs new consent from the cardholder: send a payment link, take the card on the terminal, or let the guest confirm the card for this booking.';
 
 export interface ConsentProblem {
   code: string;
   message: string;
 }
 
-/** Why this use is outside the cardholder's consent, or null when it is inside. */
+/**
+ * Why this use is outside the cardholder's consent, or null when it is inside. For a hotel-initiated use it first LOCKS
+ * the card row and re-reads it (status and agreement as they are now), so the running total, a revocation and a
+ * concurrent use are serialized (R4-P1-2, AP-56).
+ */
 export async function consentProblem(
   d: PaymentsDeps,
   tx: TxContext,
-  method: MethodRow,
+  methodIn: MethodRow,
   property: PropertyInfo,
   initiator: 'customer' | 'merchant',
   use: ConsentUse,
+  opts: { lock?: boolean } = {},
 ): Promise<ConsentProblem | null> {
+  const method =
+    opts.lock === false
+      ? methodIn
+      : ((await db(tx)
+          .selectFrom('payments.payment_methods')
+          .selectAll()
+          .where('id', '=', methodIn.id)
+          .forUpdate()
+          .executeTakeFirst()) ?? methodIn);
+  if (method.status !== 'active') {
+    return {
+      code: 'payment_method_inactive',
+      message: `This saved card is ${method.status}. Ask the guest for another card or send a payment link.`,
+    };
+  }
   const ownerKey = `${method.owner_type}:${method.owner_id}`;
   if (initiator === 'customer') {
-    // R3-P3-1: a guest acting for themselves pays with THEIR card only.
+    // R3-P3-1 / R4-P3-6: a guest acting for themselves pays only with a card THEY entered (hosted entry), for
+    // themselves or their own booking — never a channel's virtual card or a card staff keyed in.
     const actor = tx.actor.kind === 'guest' ? tx.actor : null;
     const own =
-      (actor?.guestProfileId && ownerKey === `guest_profile:${actor.guestProfileId}`) ||
-      (actor?.bookingId && ownerKey === `booking:${actor.bookingId}`);
+      method.entry_channel === 'hosted_entry' &&
+      ((actor?.guestProfileId && ownerKey === `guest_profile:${actor.guestProfileId}`) ||
+        (actor?.bookingId && ownerKey === `booking:${actor.bookingId}`));
     return own
       ? null
-      : { code: 'card_not_yours', message: 'This saved card belongs to someone else. Use your own card.' };
+      : { code: 'card_not_yours', message: 'This saved card is not one you entered. Use your own card.' };
   }
   const stored = (method.mandate ?? {}) as StoredMandate;
   // A card its cardholder entered FOR a booking (self-service / hosted entry) is consent for that booking: its
-  // guarantee and the charges of that booking — nothing else (ADR-0015 Amendment 2: "the card supplied for this booking").
+  // guarantee and its charges — at the moment the card was entered (Amendment 2: "the card supplied for this booking").
   const suppliedForBooking =
     method.owner_type === 'booking' && method.entry_channel === 'hosted_entry' && !method.mit_agreement;
   const mandate: StoredMandate = suppliedForBooking
@@ -125,21 +154,21 @@ export async function consentProblem(
       message: `The cardholder agreed to ${purposes.join(', ') || 'no'} charges on this card, not to ${use.kind === 'charge' ? `a ${use.purpose} charge` : 'this hold'}. ${NEW_CONSENT}`,
     };
   }
+  // Amendment 3 / R4-P1-1: only the bookings the agreement NAMES, as consented — never the people staff link.
   const ctx = await referenceContext(d, tx, use.ref);
+  const named = scope.bookingIds ?? [];
+  const consentedAt = (bookingId: string) =>
+    new Date(scope.bookingEvidence?.[bookingId]?.at ?? (mandate.acceptedAt as string));
+  const inNamedBooking = ctx.bookingId !== null && named.includes(ctx.bookingId);
   const covered =
-    method.owner_type === 'booking'
-      ? ctx.bookingId === method.owner_id
-      : scope.bookingIds
-        ? ctx.bookingId !== null && scope.bookingIds.includes(ctx.bookingId)
-        : ctx.people.has(ownerKey);
+    inNamedBooking &&
+    // A stay added to the booking after the cardholder's consent is not part of what they agreed to.
+    (ctx.stayCreatedAt === null ||
+      ctx.stayCreatedAt.getTime() <= consentedAt(ctx.bookingId as string).getTime());
   if (!covered) {
     return {
       code: 'mandate_reference_not_covered',
-      message: `The cardholder’s agreement does not cover this ${use.ref.type}: ${
-        method.owner_type === 'booking' || scope.bookingIds
-          ? 'it names other bookings'
-          : 'the card is used only for the cardholder’s own bookings and bills'
-      }. ${NEW_CONSENT}`,
+      message: `The cardholder’s agreement does not cover this ${use.ref.type}: it covers only the bookings the cardholder agreed to${inNamedBooking ? ', and this stay was added after that agreement' : ''}. ${NEW_CONSENT}`,
     };
   }
   const max = scope.maxAmount;
@@ -150,25 +179,48 @@ export async function consentProblem(
         message: `The cardholder’s agreement is in ${max.currency}. ${NEW_CONSENT}`,
       };
     }
-    let total = use.amount.amountMinor;
-    if (use.kind !== 'hold') {
-      const taken = await db(tx)
-        .selectFrom('payments.payments')
-        .select((eb) => eb.fn.coalesce(eb.fn.sum<string>('amount_minor'), eb.val('0')).as('n'))
-        .where('method_id', '=', method.id)
-        .where('initiator', '=', 'merchant')
-        .where('status', 'in', ['processing', 'pending_verification', 'succeeded'])
-        .executeTakeFirstOrThrow();
-      total += Number(taken.n);
-    }
+    const total = await runningTotal(tx, method.id, { ...use, amount: use.amount });
     if (total > max.amountMinor) {
       return {
         code: 'mandate_amount_exceeded',
-        message: `The cardholder agreed to at most ${formatMoney(money(max.amountMinor, max.currency))} on this card${use.kind === 'hold' ? '' : ' in total'}; this would make ${formatMoney(money(total, max.currency))}. ${NEW_CONSENT}`,
+        message: `The cardholder agreed to at most ${formatMoney(money(max.amountMinor, max.currency))} taken or held on this card; with what is already taken or held, this would make ${formatMoney(money(total, max.currency))}. ${NEW_CONSENT}`,
       };
     }
   }
   return null;
+}
+
+/**
+ * R4-P1-2 / R4-P3-1: what the card's agreement would carry after this use — everything taken so far (merchant charges and
+ * captures in flight or done), plus every hold still open (except the one being increased or captured), plus this use.
+ * Called under the card row lock taken by `consentProblem`.
+ */
+async function runningTotal(
+  tx: TxContext,
+  methodId: string,
+  use: ConsentUse & { amount: { amountMinor: number; currency: string } },
+): Promise<number> {
+  const taken = await db(tx)
+    .selectFrom('payments.payments')
+    .select((eb) => eb.fn.coalesce(eb.fn.sum<string>('amount_minor'), eb.val('0')).as('n'))
+    .where('method_id', '=', methodId)
+    .where('initiator', '=', 'merchant')
+    .where('status', 'in', ['processing', 'pending_verification', 'succeeded'])
+    .executeTakeFirstOrThrow();
+  const holds = await db(tx)
+    .selectFrom('payments.authorizations')
+    .select(['id', 'amount_minor', 'captured_minor', 'capture_reserved_minor'])
+    .where('method_id', '=', methodId)
+    .where('initiator', '=', 'merchant')
+    .where('status', 'in', ['processing', 'pending_verification', 'authorized', 'partially_captured'])
+    .execute();
+  const open = (h: { amount_minor: number; captured_minor: number; capture_reserved_minor: number }) =>
+    Math.max(0, h.amount_minor - h.captured_minor - h.capture_reserved_minor);
+  const others = holds.filter((h) => h.id !== use.authorizationId).reduce((n, h) => n + open(h), 0);
+  const own = holds.find((h) => h.id === use.authorizationId);
+  // A capture moves money from its hold to "taken": the hold's whole open amount is counted once.
+  const thisUse = use.kind === 'capture' && own ? open(own) : use.amount.amountMinor;
+  return Number(taken.n) + others + thisUse;
 }
 
 export async function assertWithinConsent(

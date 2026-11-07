@@ -242,22 +242,27 @@ export async function referenceContext(
   d: PaymentsDeps,
   tx: TxContext,
   ref: { type: string; id: string },
-): Promise<{ bookingId: string | null; people: Set<string> }> {
+): Promise<{ bookingId: string | null; people: Set<string>; stayCreatedAt: Date | null }> {
   const people = new Set<string>();
+  let stayCreatedAt: Date | null = null;
   const fromDirectory = async (r: { type: string; id: string }) => {
     const o = await d.references.describeReference(tx, r);
     for (const p of o?.people ?? []) people.add(p);
+    if (r.type === 'stay' && o?.stayCreatedAt) stayCreatedAt = new Date(o.stayCreatedAt);
     return o?.bookingId ?? (r.type === 'booking' && o ? r.id : null);
   };
-  if (ref.type === 'booking' || ref.type === 'stay') return { bookingId: await fromDirectory(ref), people };
-  if (ref.type !== 'folio') return { bookingId: null, people };
+  if (ref.type === 'booking' || ref.type === 'stay') {
+    const bookingId = await fromDirectory(ref);
+    return { bookingId, people, stayCreatedAt };
+  }
+  if (ref.type !== 'folio') return { bookingId: null, people, stayCreatedAt };
   const f = await d.ledger.describeTarget(tx, { type: 'folio', id: ref.id });
   const payer = ownerKeyOfPayer(f?.payer);
   if (payer) people.add(payer);
   const owner = f?.owner;
   const bookingId =
     owner && (owner.type === 'stay' || owner.type === 'booking') ? await fromDirectory(owner) : null;
-  return { bookingId, people };
+  return { bookingId, people, stayCreatedAt };
 }
 
 /**

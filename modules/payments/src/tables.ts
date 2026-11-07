@@ -117,7 +117,7 @@ export interface PaymentsTable {
   payment_request_id: string | null;
   virtual_card_id: string | null;
   kind: 'charge' | 'capture' | 'link' | 'recorded';
-  purpose: Generated<'deposit' | 'balance' | 'incidentals' | 'custom' | null>;
+  purpose: Generated<'deposit' | 'balance' | 'incidentals' | 'no_show' | 'custom' | null>;
   method: 'card' | 'virtual_card' | 'payment_link' | 'external_terminal' | 'cash' | 'bank_transfer';
   initiator: 'customer' | 'merchant' | null;
   ref_type: 'folio' | 'booking';
@@ -276,7 +276,9 @@ export interface PaymentRequestsTable {
   mode: 'live' | 'sandbox' | 'simulate';
   provider_link_ref: string | null;
   link_url: string | null;
-  link_status: 'pending' | 'created' | 'failed' | 'unknown' | 'deactivating' | 'deactivated';
+  link_status: 'pending' | 'created' | 'failed' | 'unknown' | 'deactivating' | 'completed' | 'deactivated';
+  /** R4-P2-2: when `link_status` last changed (deadline for an unconfirmed stop). */
+  link_status_at: Ts | null;
   /** R3-P2-1: the booking the request's reference belongs to (booking, stay or folio of it). */
   family_booking_id: string | null;
   cancelled_reason: string | null;

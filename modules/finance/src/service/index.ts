@@ -23,7 +23,7 @@ import * as postings from './postings';
 import * as receivables from './receivables';
 import * as reports from './reports';
 import * as setup from './setup';
-import { type Deps, delegated, ensureChart } from './support';
+import { type Deps, delegated, ensureChart, folioBalance } from './support';
 
 type Rest<F> = F extends (tx: TxContext, deps: Deps, ...args: infer A) => infer R
   ? (tx: TxContext, ...args: A) => R
@@ -48,6 +48,8 @@ export function createFinance(ports: FinancePorts) {
     recordDeposit: bind(deps, deposits.recordDeposit),
     applyDeposits: bind(deps, deposits.applyDeposits),
     resyncDepartedFolio: bind(deps, departedFolios.resyncDepartedFolio),
+    /** The folio's ledger balance in minor units (positive = owed). Routing metadata for ports; RLS applies. */
+    folioBalanceMinor: (tx: TxContext, folioId: string) => folioBalance(tx, folioId),
     recordPayout: bind(deps, payouts.recordPayout),
     recordPaymentAdjustment: bind(deps, ledgerPort.recordPaymentAdjustment),
     recordDisputeMovement: bind(deps, ledgerPort.recordDisputeMovement),
@@ -288,6 +290,15 @@ export function financeLedgerForPayments(service: FinanceService) {
   return {
     describeTarget: (tx: TxContext, ref: { type: 'folio' | 'booking'; id: string }) =>
       service.describeTarget(d(tx, null), ref),
+    /**
+     * Re-review #4 (R4-P2-1, R4-P3-3): what a folio owes now (positive) or holds in credit (negative); null for a booking
+     * deposit (no "owed" figure) or an unknown target.
+     */
+    async balanceOf(tx: TxContext, ref: { type: 'folio' | 'booking'; id: string }): Promise<number | null> {
+      if (ref.type !== 'folio') return null;
+      const exists = await service.describeTarget(d(tx, null), ref);
+      return exists ? service.folioBalanceMinor(d(tx, exists.propertyId), ref.id) : null;
+    },
     /** Review R2-P1-3: the posting predicate itself, asked before any card is charged (new money). */
     assertTargetUsable: (tx: TxContext, ref: { type: 'folio' | 'booking'; id: string }, s: LedgerScope) =>
       service.assertTargetInScope(d(tx, s.propertyId), ref, scope(s), 'inflow'),

@@ -440,6 +440,9 @@ export async function applyDeposits(
     }
   }
   await deps.ports.platform.assertWritable(tx, f0.property_id, 'charges');
+  // Re-review #4 R4-P3-2: the shared collection lock FIRST, then the deposit account and the folio (domain-map order:
+  // collection → folio / deposit account → payment request) — the link webhook takes it first too.
+  await deps.ports.payments.lockCollections(tx, { folioIds: [input.toFolioId] });
   const acct = await db(tx)
     .selectFrom('finance.deposit_accounts')
     .selectAll()

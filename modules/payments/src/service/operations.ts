@@ -64,6 +64,7 @@ import {
   db,
   type PaymentsDeps,
   ProviderUnavailableError,
+  type RequestRow,
   raiseException,
   resolveExceptionsByKey,
   toProviderAccount,
@@ -942,9 +943,12 @@ async function applyPayment(
 
   if (to === 'succeeded') {
     // Review R2-P1-2: credit the link first, so finance's posting (which keeps a departed folio's balance request
-    // equal to its debt) sees the request as already paid by this payment.
-    if (p.payment_request_id) await creditPaymentRequest(tx, p.payment_request_id, collected);
+    // equal to its debt) sees the request as already paid by this payment; R4-P2-1: then state any over-collection.
+    const credited = p.payment_request_id
+      ? await creditPaymentRequest(tx, p.payment_request_id, collected)
+      : null;
     await postPaymentLedger(d, tx, p.id);
+    if (credited) await raiseIfOvercollected(d, tx, credited.before, credited.paid, collected, p.id);
     if (p.virtual_card_id) {
       await db(tx)
         .updateTable('payments.virtual_cards')
@@ -987,7 +991,17 @@ async function applyPayment(
   }
 }
 
-export async function creditPaymentRequest(tx: TxContext, requestId: string, amountMinor: number) {
+/**
+ * Credit a payment that arrived on a request's link. Returns the request as it was BEFORE the credit and the new paid
+ * total; the caller posts the payment to the ledger and then calls `raiseIfOvercollected` (re-review #4 R4-P2-1: the
+ * amount to refund is what the reference no longer owes AFTER posting, never the whole payment by default). A link the
+ * provider reported "already paid" (`completed`) is now accounted for (`deactivated`).
+ */
+export async function creditPaymentRequest(
+  tx: TxContext,
+  requestId: string,
+  amountMinor: number,
+): Promise<{ before: RequestRow; paid: number }> {
   const r = await db(tx)
     .selectFrom('payments.payment_requests')
     .selectAll()
@@ -998,9 +1012,23 @@ export async function creditPaymentRequest(tx: TxContext, requestId: string, amo
   const status = paymentRequestStatusFor(r.status, r.amount_minor, paid);
   await db(tx)
     .updateTable('payments.payment_requests')
-    .set({ paid_minor: paid, status, version: r.version + 1 })
+    .set({
+      paid_minor: paid,
+      status,
+      version: r.version + 1,
+      ...(r.link_status === 'completed'
+        ? { link_status: 'deactivated' as const, link_status_at: tx.now }
+        : {}),
+    })
     .where('id', '=', r.id)
     .execute();
+  if (r.link_status === 'completed') {
+    await resolveExceptionsByKey(
+      tx,
+      `link-not-stopped:${r.id}`,
+      'The payment the provider took on the link is recorded.',
+    );
+  }
   if (status === 'paid' && r.status !== 'paid') {
     await tx.emit({
       type: PaymentsEvents.requestPaid,
@@ -1014,23 +1042,58 @@ export async function creditPaymentRequest(tx: TxContext, requestId: string, amo
       },
     });
   }
-  if (r.status === 'cancelled' || r.status === 'expired' || paid > r.amount_minor) {
-    // Re-review #3 (Amendment 2): money taken on a link Portico had closed or replaced (or beyond what it asked) is
-    // money the guest may not owe — an URGENT refund item with the amount to refund, never a routine note.
-    const excess = r.status === 'cancelled' || r.status === 'expired' ? amountMinor : paid - r.amount_minor;
-    await raiseException(tx, {
-      propertyId: r.property_id,
-      kind: 'payment_request_overpaid',
-      severity: 'urgent',
-      problem: `A payment of ${formatMoney(money(amountMinor, r.currency))} arrived on a ${r.status === 'cancelled' ? 'cancelled (replaced or withdrawn)' : r.status} payment request (paid ${formatMoney(money(paid, r.currency))} of ${formatMoney(money(r.amount_minor, r.currency))}).`,
-      businessImpact: `The guest has probably paid ${formatMoney(money(excess, r.currency))} they do not owe.`,
-      nextStep: `Refund ${formatMoney(money(excess, r.currency))} to the guest (or keep it as a credit only if the guest agrees in writing).`,
-      ownerRole: 'finance',
-      responsibleParty: 'hotel',
-      ref: { type: 'payment_request', id: r.id },
-      dedupeKey: `request-overpaid:${r.id}:${paid}`,
-    });
-  }
+  return { before: r, paid };
+}
+
+/**
+ * Re-review #4 R4-P2-1: after a payment on a retired (cancelled, replaced, expired) request — or beyond what a request
+ * asked — has been POSTED, the amount to refund is what its reference no longer owes: the folio's credit, at most the
+ * payment. Money the guest still owed is not refunded (no item: the balance request re-syncs on the posting). When
+ * the balance cannot be read (a booking deposit, or the posting failed), the item says to check before refunding and
+ * gives no figure.
+ */
+export async function raiseIfOvercollected(
+  d: PaymentsDeps,
+  tx: TxContext,
+  before: RequestRow,
+  paid: number,
+  amountMinor: number,
+  paymentId: string,
+): Promise<void> {
+  const retired = before.status === 'cancelled' || before.status === 'expired';
+  if (!retired && paid <= before.amount_minor) return;
+  const posted = await db(tx)
+    .selectFrom('payments.payments')
+    .select('ledger_status')
+    .where('id', '=', paymentId)
+    .executeTakeFirst();
+  const ref = { type: before.ref_type, id: before.ref_id };
+  const balance = posted?.ledger_status === 'posted' ? await d.ledger.balanceOf(tx, ref) : null;
+  const fmt = (n: number) => formatMoney(money(n, before.currency));
+  const what = `A payment of ${fmt(amountMinor)} arrived on a ${retired ? (before.status === 'cancelled' ? 'cancelled (replaced or withdrawn)' : 'expired') : 'fully paid'} payment request`;
+  if (balance !== null && balance >= 0) return; // it paid money still owed: nothing to refund
+  const excess = balance === null ? null : Math.min(amountMinor, -balance);
+  await raiseException(tx, {
+    propertyId: before.property_id,
+    kind: 'payment_request_overpaid',
+    severity: 'urgent',
+    problem:
+      excess === null
+        ? `${what}. Portico cannot tell how much of it the guest still owed.`
+        : `${what}; the ${ref.type} is now ${fmt(excess)} in credit.`,
+    businessImpact:
+      excess === null
+        ? 'The guest may have paid money they do not owe.'
+        : `The guest has paid ${fmt(excess)} more than they owe.`,
+    nextStep:
+      excess === null
+        ? `Check the ${ref.type} before refunding anything; refund only what it holds in credit.`
+        : `Refund ${fmt(excess)} to the guest (or keep it as a credit only if the guest agrees in writing).`,
+    ownerRole: 'finance',
+    responsibleParty: 'hotel',
+    ref: { type: 'payment_request', id: before.id },
+    dedupeKey: `request-overpaid:${before.id}:${paid}`,
+  });
 }
 
 async function vccAfterFailure(

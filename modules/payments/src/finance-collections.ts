@@ -62,10 +62,12 @@ export function paymentsCollectionsForFinance(service: Pick<PaymentsService, 'pr
       status: FinanceBalanceSyncStatus;
       openMinor: number;
       requestId?: string | null;
+      linkReady?: boolean;
+      oldLinkStopping?: boolean;
       detail?: string;
     }> {
       try {
-        return await withSavepoint(tx, 'payments_balance_sync', () =>
+        const r = await withSavepoint(tx, 'payments_balance_sync', () =>
           service.provider.syncBalanceRequest(tx, {
             propertyId: input.propertyId,
             folioId: input.folioId,
@@ -74,6 +76,14 @@ export function paymentsCollectionsForFinance(service: Pick<PaymentsService, 'pr
             reason: input.reason,
           }),
         );
+        return {
+          status: r.status,
+          openMinor: r.openMinor,
+          requestId: r.requestId,
+          linkReady: r.linkReady,
+          oldLinkStopping: r.retiredRequestId !== undefined,
+          detail: r.detail,
+        };
       } catch (err) {
         if (err instanceof DomainError && err.status < 500)
           return { status: 'not_possible', openMinor: 0, detail: err.message };

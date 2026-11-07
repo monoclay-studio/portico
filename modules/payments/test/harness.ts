@@ -52,6 +52,12 @@ export interface LedgerControls {
   defaultPayer: Map<string, string>;
   /** Folio → its owner (stay or booking), for the booking family of a folio. */
   folioOwners: Map<string, { type: string; id: string }>;
+  /** Folio → what it owes (finance's balance); unknown when absent. */
+  balances: Map<string, number>;
+  /** The booking every reference of a tenant belongs to by default (set by setupOrg). */
+  defaultBooking: Map<string, string>;
+  /** Stays/folios registered under a specific booking. */
+  bookingOf: Map<string, string>;
 }
 
 /**
@@ -68,15 +74,21 @@ export function fakeReferences(controls: LedgerControls): ReferenceDirectoryPort
       if (!owner) return null;
       const payer = controls.defaultPayer.get(tx.tenantId);
       const people = payer ? [`guest_profile:${payer}`] : [];
+      // The fake world: a booking is its own family; every stay and folio of a tenant belongs to the tenant's ONE
+      // default booking (which `addMethod` cards name), unless a test registers it under another booking.
+      const family =
+        ref.type === 'booking'
+          ? ref.id
+          : (controls.bookingOf.get(ref.id) ?? (controls.defaultBooking.get(tx.tenantId) as string));
       return ref.type === 'booking'
         ? {
             propertyId: owner.propertyId,
             source: controls.directBookings.has(ref.id) ? 'direct' : 'channel',
             channelConnectionId: controls.directBookings.has(ref.id) ? null : DEFAULT_CHANNEL_CONNECTION,
-            bookingId: ref.id,
+            bookingId: family,
             people: [...people, `booking:${ref.id}`],
           }
-        : { propertyId: owner.propertyId, people };
+        : { propertyId: owner.propertyId, people, bookingId: family };
     },
   };
 }
@@ -131,9 +143,12 @@ export function fakeLedger(controls: LedgerControls): LedgerPort {
       const payer = controls.defaultPayer.get(tx.tenantId);
       return {
         ...owner,
-        owner: controls.folioOwners.get(ref.id) ?? null,
+        owner: controls.folioOwners.get(ref.id) ?? { type: 'stay', id: ref.id },
         payer: payer ? { type: 'guest', id: payer } : null,
       };
+    },
+    async balanceOf(_tx, ref) {
+      return controls.balances.get(ref.id) ?? null;
     },
     // The same predicate the fake uses when posting (review R2-P1-3): unknown → refused; other scope → refused.
     async assertTargetUsable(tx, ref, scope) {
@@ -310,6 +325,9 @@ export async function startHarness(): Promise<Harness> {
     directBookings: new Set(),
     defaultPayer: new Map(),
     folioOwners: new Map(),
+    balances: new Map(),
+    defaultBooking: new Map(),
+    bookingOf: new Map(),
   };
   const http = {
     calls: 0,
@@ -362,6 +380,8 @@ export interface Org {
   terminalAccountId: string;
   /** The guest who pays this org's folios and bookings (owner of `addMethod` cards by default). */
   payerId: string;
+  /** The booking all of this org's references belong to by default (the bookings `addMethod` cards name). */
+  bookingId: string;
   tx<T>(fn: (tx: TxContext) => Promise<T>): Promise<T>;
   /** A context with only these grants (property-scoped to the main property unless 'all'). */
   as(permissions: string[], propertyIds?: string[] | 'all'): RequestContext;
@@ -404,6 +424,8 @@ export async function setupOrg(h: Harness, environment: TenantEnvironment = 'dem
   h.ledger.defaultOwner.set(ctx.tenantId, { propertyId: p1.id, legalEntityId: le.id });
   const payerId = newId();
   h.ledger.defaultPayer.set(ctx.tenantId, payerId);
+  const bookingId = newId();
+  h.ledger.defaultBooking.set(ctx.tenantId, bookingId);
   const svc = h.module.service;
   const sim =
     environment === 'live'
@@ -434,6 +456,7 @@ export async function setupOrg(h: Harness, environment: TenantEnvironment = 'dem
     simAccountId: sim?.id ?? '',
     terminalAccountId: terminal.id,
     payerId,
+    bookingId,
     tx: (fn) => withTenantTx(h.db, ctx, fn),
     as(permissions, propertyIds) {
       return {
@@ -456,7 +479,7 @@ export function standingMandate(org: Org, at: string, extra: Record<string, unkn
     termsVersion: 'T-2026-1',
     acceptedAt: at,
     channel: 'front_desk',
-    scope: { legalEntityId: org.legalEntityId, purposes: [...ALL_PURPOSES], ...extra },
+    scope: { legalEntityId: org.legalEntityId, purposes: [...ALL_PURPOSES], bookingIds: [org.bookingId], ...extra },
   };
 }
 
@@ -487,7 +510,7 @@ export async function addMethod(
               termsVersion: 'T-2026-1',
               acceptedAt: h.clock.now().toISOString(),
               channel: 'booking_engine',
-              scope: { legalEntityId: org.legalEntityId, purposes: [...ALL_PURPOSES] },
+              scope: { legalEntityId: org.legalEntityId, purposes: [...ALL_PURPOSES], bookingIds: [org.bookingId] },
             },
           }
         : {}),

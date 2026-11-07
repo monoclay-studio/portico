@@ -97,7 +97,9 @@ export async function syncDepartedFolios(
     if (owed > 0) {
       const ask =
         requested === owed
-          ? `A payment link for ${fmt(owed)} is open — send it to ${f.payer_name}, or collect from the card on file.`
+          ? sync.linkReady
+            ? `A payment link for ${fmt(owed)} is open — send it to ${f.payer_name}, or collect from the card on file.`
+            : `A payment request for ${fmt(owed)} is ready; its link is ${sync.oldLinkStopping ? 'held until the provider has stopped the earlier link (the guest could still pay that one meanwhile)' : 'being created'} — send it once it appears.`
           : requested > 0
             ? `The open payment link asks for only ${fmt(requested)}; collect the remaining ${fmt(owed - requested)} another way.`
             : `No payment link was created (${sync.detail ?? sync.status}). Collect payment from ${f.payer_name} or the card on file.`;
@@ -130,7 +132,7 @@ export async function syncDepartedFolios(
       .set((eb) => ({
         status: 'resolved',
         resolved_at: tx.now,
-        resolution: `${change.reason}: the folio owes nothing${sync.status === 'cancelled' ? '; the payment link was cancelled' : ''}.`,
+        resolution: `${change.reason}: the folio owes nothing${sync.status === 'cancelled' ? (sync.oldLinkStopping ? '; the payment link was cancelled and is being stopped at the provider' : '; the payment link was cancelled') : ''}.`,
         details: JSON.stringify(details),
         version: eb('version', '+', 1),
       }))

@@ -93,6 +93,8 @@ describe('scenario s20: card payments go down during a busy shift', () => {
 
     // Alternative 3: a payment link to be paid later — created now, link pending until the provider is back.
     const folioLink = newId();
+    // Another guest's folio (its own booking), so this link does not own the collections on the first guest's folios.
+    h.ledger.bookingOf.set(folioLink, newId());
     const req = await org.tx((tx) =>
       svc.tx.createPaymentRequest(tx, {
         propertyId: org.propertyId,

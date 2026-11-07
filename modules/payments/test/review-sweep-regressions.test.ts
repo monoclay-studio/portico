@@ -66,7 +66,7 @@ describe('SW-PAY-1 — every collection path respects a link that owns the colle
   it('PoC flipped: hold then capture on a booking whose deposit link is paid is refused (no second deposit)', async () => {
     const org = await setupOrg(h);
     const svc = h.module.service;
-    const booking = { type: 'booking' as const, id: newId() };
+    const booking = { type: 'booking' as const, id: org.bookingId };
     await paidDepositLink(org, booking);
     const methodId = await addMethod(h, org);
     await expect(
@@ -99,7 +99,7 @@ describe('SW-PAY-1 — every collection path respects a link that owns the colle
   it('sibling: a hold taken BEFORE the link was paid cannot be captured — on the booking or moved to a folio', async () => {
     const org = await setupOrg(h);
     const svc = h.module.service;
-    const booking = { type: 'booking' as const, id: newId() };
+    const booking = { type: 'booking' as const, id: org.bookingId };
     const methodId = await addMethod(h, org);
     const a = await org.tx((tx) =>
       svc.tx.authorize(tx, {
@@ -138,7 +138,7 @@ describe('SW-PAY-1 — every collection path respects a link that owns the colle
   it('sibling: a recorded (terminal) payment of a deposit a paid link owns is refused without a reason', async () => {
     const org = await setupOrg(h);
     const svc = h.module.service;
-    const booking = { type: 'booking' as const, id: newId() };
+    const booking = { type: 'booking' as const, id: org.bookingId };
     await paidDepositLink(org, booking);
     await expect(
       org.tx((tx) =>
@@ -158,7 +158,7 @@ describe('SW-PAY-1 — every collection path respects a link that owns the colle
   it('(e) atomic: ten concurrent deposit links for one booking — exactly one is created', async () => {
     const org = await setupOrg(h);
     const svc = h.module.service;
-    const booking = { type: 'booking' as const, id: newId() };
+    const booking = { type: 'booking' as const, id: org.bookingId };
     const results = await Promise.allSettled(
       Array.from({ length: 10 }, () =>
         org.tx((tx) =>
@@ -183,7 +183,7 @@ describe('SW-PAY-1 — every collection path respects a link that owns the colle
   it('(e) atomic: ten concurrent desk deposit charges against a fresh link race — the guard never lets two through', async () => {
     const org = await setupOrg(h);
     const svc = h.module.service;
-    const booking = { type: 'booking' as const, id: newId() };
+    const booking = { type: 'booking' as const, id: org.bookingId };
     const methodId = await addMethod(h, org);
     // Link created first (open); then 10 desk charges at once: each must see the link under the lock.
     await org.tx((tx) =>
@@ -218,7 +218,7 @@ describe("SW-PAY-2 — purpose 'custom' is not a way around the guard", () => {
   it('PoC flipped: a custom desk charge on a booking with a paid deposit link is refused; another label needs a reason', async () => {
     const org = await setupOrg(h);
     const svc = h.module.service;
-    const booking = { type: 'booking' as const, id: newId() };
+    const booking = { type: 'booking' as const, id: org.bookingId };
     await paidDepositLink(org, booking);
     const methodId = await addMethod(h, org);
     const charge = (purpose: 'custom' | 'incidentals', reason?: string) =>
@@ -247,7 +247,7 @@ describe("SW-PAY-2 — purpose 'custom' is not a way around the guard", () => {
   it('sibling: a channel virtual-card charge (purpose custom) is not run over a guest link on the same booking', async () => {
     const org = await setupOrg(h);
     const svc = h.module.service;
-    const booking = { type: 'booking' as const, id: newId() };
+    const booking = { type: 'booking' as const, id: org.bookingId };
     await paidDepositLink(org, booking);
     const vcc = await org.tx((tx) =>
       svc.tx.registerVirtualCard(tx, {
@@ -280,7 +280,9 @@ describe('SW-PAY-3 — a card is a parameter only at the property it was saved a
         last4: '4242',
         owner: { type: 'guest_profile', id: org.payerId },
         mitAgreement: true,
-        mandate: mandate({ scope: { legalEntityId: org.legalEntityId, purposes: [...ALL_PURPOSES] } }),
+        mandate: mandate({
+          scope: { legalEntityId: org.legalEntityId, purposes: [...ALL_PURPOSES], bookingIds: [org.bookingId] },
+        }),
       }),
     );
 
