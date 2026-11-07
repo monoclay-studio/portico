@@ -54,7 +54,7 @@ Before reclassification, round 0 read L1-gate 9 / L1-BSC 7 / L2 11 / L3 0 / L4 5
 | Loop | Round 0 (reclassified) | Round 1 | Cumulative | Round-1 entries |
 |---|---|---|---|---|
 | L1-gate | 8 | **2** | 10 | E-052, E-059 |
-| L1-BSC (builder self-check, incl. fix rounds) | 7 | **12** | 19 | E-039, E-040, E-041, E-043, E-044, E-045, E-046, E-047, E-049, E-053, E-054, E-058 |
+| L1-BSC (builder self-check, incl. fix rounds) | 7 | **13** | 20 | E-039, E-040, E-041, E-043, E-044, E-045, E-046, E-047, E-049, E-053, E-054, E-058, E-062 |
 | L2 steward review | 10 | **3** | 13 | E-048, E-050, E-051 (all from review 2's own fix recommendations) |
 | L3 scenario proof | 0 | **1** | 1 | E-042 (the first L3 escape) |
 | L4 UX loop | 3 | **0** | 3 | No L4 round ran |
@@ -62,7 +62,7 @@ Before reclassification, round 0 read L1-gate 9 / L1-BSC 7 / L2 11 / L3 0 / L4 5
 | L-orch (orchestrator process) | 5 | **3** | 8 | E-055, E-057, E-060 |
 | L8 meta loop | 0 | **1** | 1 | E-056 |
 | L6 / L7 | 0 | 0 | 0 | — |
-| **Total** | **38** | **23** | **61** | |
+| **Total** | **38** | **24** | **62** | |
 
 ### By where they were found
 
@@ -77,7 +77,7 @@ Before reclassification, round 0 read L1-gate 9 / L1-BSC 7 / L2 11 / L3 0 / L4 5
 | L4 refiner or the delivery step | 4 | 0 | — |
 | L5 gap strategist | — | 2 | E-060, E-061 |
 | L7 owner | 1 | 0 | — |
-| L8 meta loop | 2 | 3 | E-056, E-058, E-059 (two of them by scripted canary or static scan) |
+| L8 meta loop | 2 | 4 | E-056, E-058, E-059, E-062 (three of them by scripted canary or static scan) |
 | The orchestrator about its own process | — | 2 | E-055, E-057 |
 | The checker itself (self-reported) | 1 | 0 | — |
 
@@ -88,12 +88,12 @@ Before reclassification, round 0 read L1-gate 9 / L1-BSC 7 / L2 11 / L3 0 / L4 5
 | P0 | 1 / 0 | — | 1 / 0 | — | — | 2 | **0** |
 | P1 | 5 / 5 | 2 / 0 | 2 / 0 | — | — | 9 | **5** |
 | P2 | 10 / 7 | 5 / 3 | 2 / 3 | — | 0 / 1 | 17 | **14** |
-| P3 | — / 1 | 4 / 0 | 0 / 1 | 4 / 1 | 2 / 1 | 10 | **4** |
-| **Total** | 16 / 13 | 11 / 3 | 5 / 4 | 4 / 1 | 2 / 2 | **38** | **23** |
+| P3 | — / 2 | 4 / 0 | 0 / 1 | 4 / 1 | 2 / 1 | 10 | **5** |
+| **Total** | 16 / 14 | 11 / 3 | 5 / 4 | 4 / 1 | 2 / 2 | **38** | **24** |
 
 "Fix-related" escapes in round 1 are those a fix introduced, or a fix left incomplete, or that a reviewer's own
-recommended fix caused. There are **11 of 23**:
-- incomplete or residual fixes: E-039, E-044, E-045, E-046, E-049, E-053, E-054;
+recommended fix caused. There are **12 of 24**:
+- incomplete or residual fixes: E-039, E-044, E-045, E-046, E-049, E-053, E-054, E-062;
 - introduced by the fix: E-047;
 - caused by the recommendation: E-048, E-050, E-051.
 
@@ -102,7 +102,7 @@ recommended fix caused. There are **11 of 23**:
 | Root cause | Escapes | Main fix |
 |---|---|---|
 | **RC-1.** The turbo cache key ignored workspace dependencies (fixed in `1be3ddc`). `apps/*` sources are still not hashed (E-038). | E-008, E-009, E-038 | Forced gates; turbo inputs; L1 gate self-test canary `C-L1-01` |
-| **RC-2.** A closed enum or error code is copied into each module instead of imported. | E-008, E-009, E-011 | Builder self-check; pattern `AP-42`; proposed lint rule |
+| **RC-2.** A closed enum or error code is copied into each module instead of imported. | E-008, E-009, E-011; round 1: E-054, E-058, E-062 | Builder self-check; pattern `AP-42`; proposed lint rule |
 | **RC-3.** A review's cross-module "notes for the orchestrator" have no owner and no tracking. | E-008, E-011 | Merge-procedure edit (retro, edit 4) |
 | **RC-4.** A fix is applied to the named path only: no sibling, reverse-order, failure-path or abuse probe. | E-001, E-003, E-004, E-005, E-006, E-007 | Builder self-check v2; steward v2 SR2-2 and SR2-4 |
 | **RC-5.** The UI review scope was narrower than the personas' reality (viewports, invalid input, roles, results). | E-025 … E-031 | Steward v2 SR2-5 |
@@ -777,6 +777,17 @@ v2 existed. So **no v2 playbook was used in round 1**, and the v2 effect is stil
   copy (in `shared.ts`), and the other four copies drift silently.
 - **Should have been caught by.** L1-BSC (RC-2). The lint rule from round-0 edit 5 is queued but not built.
 - **Checks added.** Builder self-check **v3**; retro edit 3a (the lint rule, with this drift list).
+
+#### E-062 · P3 · D · *Latent:* integration still defines its own `ModuleUnavailableError` with the code `module_unavailable`
+- **Found.** L8 in round 1, while validating builder self-check v3's BS3-1 grep.
+- **Where.** `modules/integration/src/ports.ts:153-161` declares a local class with the code `'module_unavailable'`. The
+  kernel and every other module use `module_not_available` (`apps/api/src/composition.ts:159`;
+  `operations/src/service/maintenance.ts:645`; `reservations/src/service/context.ts:60`).
+- **Why it matters.** Any caller that maps the kernel code, such as reservations' refusal handling or the UI, treats
+  integration's refusal as an unknown error.
+- **Should have been caught by.** L1-BSC. The E-011 fix (`5c2b5ee`) unified the code in the composition root, but not
+  this sibling declaration inside integration (RC-2 and RC-4).
+- **Checks added.** Builder self-check v3 BS3-1 (its second grep finds it); retro edit 3a (the lint rule).
 
 ### L1-gate — the gates or shared tooling
 

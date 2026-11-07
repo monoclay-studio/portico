@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Current version** | **v2** (2026-11-07, round 0) |
+| **Current version** | **v2.1** (2026-11-07, round 1). v2.1 is a clarification inside the v2 theme |
 | **Theme of v2** | A systematic pattern sweep with a declared coverage table |
 | **Previous** | `archive/steward-reviewer-v1.md` (the shared brief, the per-run launch shape, and the v1-b re-review variant) |
 | **Launch** | The orchestrator fills the **Run parameters** and hands over the **Launch brief** below, unchanged. Focus areas are added to the parameters, never by editing the brief |
@@ -19,8 +19,21 @@
 | v2 | 2026-11-07 | **SR2-4** | **Sibling paths.** For every finding, list the other entry points that make the same state change and probe them. Recommended fixes name all of them | The fix covered revoke and suspend but not transfer or group reconciliation | E-006, E-007 | C-L2-13 detected; no sibling-path escape |
 | v2 | 2026-11-07 | **SR2-5** | **UI sweep for front-end reviews:** the persona viewport matrix, invalid input on every form, activating every result and link, role × route and role × action, accessible names, a copy sweep, shared-desk handover | The black-box tester found 7 defects the UI review missed. The UI review's launch brief had limited widths to 1280–1920 | E-025…E-031 | L4-found defects that a UI review should have caught (round 0: 7) |
 | v2 | 2026-11-07 | *editorial* | Report path line repaired (it was garbled in the repository copy). "Do not modify" now covers every worktree except your own copy, so tools that write files run only in the copy. Record the commit you reviewed. Standing calibration notice | Housekeeping. No behaviour metric | E-037; `canaries.md` § 1.5 | — |
+| v2.1 | 2026-11-07 | **SR2-2a** | Inside "attack the fix": write every recommended fix as a **principle with its known instances**, and attack the principle's boundary. Exact text added to Pattern sweep step 3: "State the fix as a rule with examples (for example 'root change = anything that decides who signs in or which roles a sign-in grants: issuer, allow-list, groups claim, client id, …'), never as a closed list, and say which boundary case you attacked." | Review 2's fix for R2-P1-1 listed four root-change fields. ADR-0017 rule 15 copied the list, the builder implemented exactly that list, and review 3 then found the groups claim (R3-P1-2) | E-048 | No list-shaped recommendation leaves a sibling that the next review finds; canary C-L2-13 |
+| v2.1 | 2026-11-07 | **SR2-6** | **Load-bearing check (AP-54)**, new step 6 of the pattern sweep. Exact text: "List the mechanisms your recommended fix newly relies on. If any has an open lower-severity finding or known gap (in this review or earlier ones), re-rate it at the fix's severity and include it in the fix." | Review 2 rated stale domain verification as P3 (R2-P3-5), while its own P0 fix made that verification the global proof of email ownership (R3-P2-2) | E-050 | Load-bearing weaknesses that a later review finds (round 1: 1) |
 
-### Queued for later versions (one theme each; not in v2)
+### Round-1 note: v2 is not yet measured
+
+Both round-1 reviews launched before v2 was published: the integration step at 17:04 and identity review 3 at 17:09,
+against v2 published at 17:20. They used bespoke briefs that said "read the playbook if it exists".
+
+- The integration-step review produced a § 3 table, "what I checked and what held". That is a coverage declaration
+  in all but name, and it supports SR2-1.
+- Identity review 3 re-ran all 20 earlier attacks, which supports the v1-b re-review shape.
+
+v2 is first measured in round 2.
+
+### Queued for later versions (one theme each; not in v2 or v2.1)
 
 - **v3, gate integrity inside reviews.** Run gates on a merged copy with `--force`. Capture exit codes, never piped
   output. Run `pnpm install --frozen-lockfile`. Re-run any failing or flaky suite 3 times and report the flake rate.
@@ -53,7 +66,7 @@ UI REVIEW?:        yes/no (yes adds § "UI sweep"; personas and their devices: d
 ## Launch brief (v2): give this to the reviewer as is
 
 ````text
-# Architecture steward — branch review (playbook v2)
+# Architecture steward — branch review (playbook v2.1)
 
 You are Portico's **architecture steward**: an independent senior reviewer. You did not write this code. Your
 job is to find what is wrong, missing, inconsistent or overclaimed before it reaches `main` — not to praise it.
@@ -126,10 +139,16 @@ Report exact failures. Then read the code.
 3. **Attack the fix.** Before recommending a fix, state in the finding which attack you ran against the fixed
    design. For example: "if this is allowed only for brand-new emails, who controls a brand-new email?" A fix that
    creates a new exception must say why the exception is safe.
+   State the fix as a rule with examples (for example "root change = anything that decides who signs in or which
+   roles a sign-in grants: issuer, allow-list, groups claim, client id, …"), never as a closed list, and say which
+   boundary case you attacked. (v2.1)
 4. **Sibling paths** (AP-45). For every finding, list the other entry points that make the same state change:
    routes, services, SCIM/SSO, jobs, event consumers, imports. Probe them, and name all of them in the fix.
 5. **Privilege equivalence** (AP-09). For every permission that can be delegated, list what it reaches transitively.
    Any permission that reaches administrator power must be reported as administrator-equivalent.
+6. **Load-bearing check** (AP-54, v2.1). List the mechanisms your recommended fix newly relies on. If any has an open
+   lower-severity finding or known gap (in this review or earlier ones), re-rate it at the fix's severity and include
+   it in the fix.
 
 ## UI sweep (front-end reviews only, v2)
 - **Viewports from the personas:** 390×844, 768×1024, 1024×768, 1280×800, 1440×900, 1920×1080. Report any horizontal
