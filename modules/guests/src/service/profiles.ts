@@ -36,11 +36,13 @@ import {
   iso,
   linkProperty,
   loadProfileRow,
+  lockProfileForWrite,
   type ProfileRow,
   propertyCountry,
   requireVisibleProfile,
   requireWritableProfile,
   resolveAccess,
+  scrubReason,
   visibilityOf,
 } from './internal';
 import { buildProfileView } from './view';
@@ -286,7 +288,15 @@ export async function resolveProfile(
     }
     const visible = await visibleOnly(await scoreAgainstExisting(tx, subject));
     const reusable = visible.filter(isSafeExactReuse);
-    if (reusable.length === 1 && reusable[0]) {
+    // Lock, then decide (R2-P2-2): a profile erased or merged since the search is not reused.
+    const stillWritable =
+      reusable.length === 1 && reusable[0]
+        ? await lockProfileForWrite(tx, reusable[0].profileId).then(
+            () => true,
+            () => false,
+          )
+        : false;
+    if (stillWritable && reusable[0]) {
       const profileId = reusable[0].profileId;
       await linkProperty(tx, profileId, input.propertyId, 'resolved');
       for (const c of input.contactPoints ?? []) {
@@ -533,13 +543,14 @@ export async function removeContactPoint(
   const cp = await loadChild(tx, 'guests.contact_points', contactPointId);
   const vp = await requireWritableProfile(tx, ports, cp.profile_id, 'guests.profile.update', opts.propertyId);
   await assertIdentityWritable(tx, ports, vp.row);
+  const why = await scrubReason(tx, opts.reason ?? null, [vp.row.id]);
   await db(tx).deleteFrom('guests.contact_points').where('id', '=', contactPointId).execute();
   await bumpVersion(tx, vp.row.id);
   await tx.audit({
     action: 'guests.contactPoint.remove',
     target: { type: 'guest_profile', id: vp.row.id },
     propertyId: vp.actingPropertyId,
-    reason: opts.reason ?? null,
+    reason: why,
     metadata: { contactPointId },
   });
   return getProfile(tx, ports, vp.row.id);
@@ -765,6 +776,7 @@ export async function resolveAlert(
     'guests.alert.manage',
     alert.property_id ?? opts.propertyId,
   );
+  const why = await scrubReason(tx, opts.reason ?? null, [vp.row.id]);
   const row = await db(tx)
     .updateTable('guests.alerts')
     .set({ status: 'resolved', version: sql`version + 1` })
@@ -786,7 +798,7 @@ export async function resolveAlert(
     action: 'guests.alert.resolve',
     target: { type: 'guest_profile', id: vp.row.id },
     propertyId: vp.actingPropertyId,
-    reason: opts.reason ?? null,
+    reason: why,
     metadata: { alertId },
   });
   return getProfile(tx, ports, vp.row.id);
@@ -887,6 +899,7 @@ export async function addRelationship(
 ): Promise<GuestProfile> {
   const vp = await requireWritableProfile(tx, ports, profileId, 'guests.profile.update', input.propertyId);
   const other = await requireVisibleProfile(tx, ports, input.relatedProfileId, { access: vp.access });
+  await lockProfileForWrite(tx, other.row.id);
   if (other.row.id === vp.row.id) {
     throw new ValidationError('self_relationship', 'A profile cannot be related to itself.');
   }
@@ -981,12 +994,13 @@ export async function readSpecialNeed(
     throw new NotFoundError('special_need', specialNeedId);
   });
   requirePermission(tx, 'guests.sensitive.read', { propertyId: row.property_id });
+  const why = await scrubReason(tx, reason, [row.profile_id]);
   const detail = ports.crypto.cipher.decrypt(row.enc_detail, `guests.special_need:${tx.tenantId}:${row.id}`);
   await tx.audit({
     action: 'guests.sensitive.read',
     target: { type: 'special_need', id: row.id },
     propertyId: row.property_id,
-    reason,
+    reason: why,
     metadata: { profileId: row.profile_id, category: row.category },
   });
   return { id: row.id, category: row.category, detail };
@@ -1001,6 +1015,7 @@ export async function setLegalHold(
   input: { hold: boolean; reason: string },
 ): Promise<GuestProfile> {
   const vp = await requireWritableProfile(tx, ports, profileId, 'guests.privacy.erase');
+  const why = await scrubReason(tx, input.reason, [vp.row.id]);
   await db(tx)
     .updateTable('guests.profiles')
     .set({ legal_hold: input.hold, version: sql`version + 1` })
@@ -1009,7 +1024,7 @@ export async function setLegalHold(
   await tx.audit({
     action: input.hold ? 'guests.legalHold.set' : 'guests.legalHold.release',
     target: { type: 'guest_profile', id: vp.row.id },
-    reason: input.reason,
+    reason: why,
     before: { legalHold: vp.row.legal_hold },
     after: { legalHold: input.hold },
   });
@@ -1079,6 +1094,7 @@ export async function upsertMirroredProfile(
     if (!r) throw new NotFoundError('guest_profile', ref.entity_id);
     return { row: r as ProfileRow };
   })();
+  await lockProfileForWrite(tx, row.id); // refuses an anonymized profile (erasure raced the sync)
   const names = resolveNames(input.profile);
   await db(tx)
     .updateTable('guests.profiles')

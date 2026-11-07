@@ -1,4 +1,5 @@
 // Public API contracts for the guests module. No server-only imports: web apps import this file.
+import type { Provenance } from '@portico/kernel';
 import { z } from 'zod';
 
 const countryCode = z.string().regex(/^[A-Z]{2}$/, 'Use a two-letter ISO country code, e.g. MV');
@@ -10,7 +11,13 @@ const nameText = z.string().trim().min(1).max(120);
 const isoDateTime = z.string();
 
 export const profileStatus = z.enum(['active', 'merged', 'anonymized']);
-export const provenance = z.enum(['live', 'copied', 'external']);
+/**
+ * Provenance of a guest profile: the subset of the kernel vocabulary a profile can carry (a profile is never
+ * simulated, delayed or incomplete). Tied to the kernel type at compile time — a kernel rename fails the build
+ * (self-check BS3-1; the kernel exports no runtime list yet: FOUNDATION_REQUESTS FR-9).
+ */
+const PROFILE_PROVENANCE = ['live', 'copied', 'external'] as const satisfies readonly Provenance[];
+export const provenance = z.enum(PROFILE_PROVENANCE);
 export const contactKind = z.enum(['email', 'phone', 'whatsapp', 'address']);
 export const consentPurpose = z.enum([
   'marketing_email',

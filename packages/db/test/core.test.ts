@@ -237,6 +237,183 @@ describe('idempotency is bound to the caller', () => {
   });
 });
 
+describe('idempotency without personal data (SW-GUE-1)', () => {
+  const plan = {
+    store: (b: { id: string; name: string }) => ({ id: b.id }),
+    rebuild: async (tx: Parameters<Parameters<typeof withTenantTx>[2]>[0], s: { id: string }) => {
+      const row = await tx.db
+        .selectFrom('demo.notes')
+        .select(['id', 'body'])
+        .where('id', '=', s.id)
+        .executeTakeFirst();
+      if (!row) throw new Error('gone');
+      return { id: row.id as string, name: row.body as string };
+    },
+  };
+
+  it('a replay plan stores ids only and rebuilds the response from the current record', async () => {
+    const ctx = testContext();
+    const id = newId();
+    const run = () =>
+      runIdempotent(
+        t.db,
+        ctx,
+        { scope: 'POST /people', key: 'k-plan', request: { n: 1 } },
+        async (tx) => {
+          await tx.db
+            .insertInto('demo.notes')
+            .values({ id, tenant_id: ctx.tenantId, body: 'Quilla Person' })
+            .execute();
+          return { status: 201, body: { id, name: 'Quilla Person' } };
+        },
+        { replay: plan },
+      );
+    expect((await run()).body).toEqual({ id, name: 'Quilla Person' });
+    const { rows } = await sql<{ body: string }>`
+      select response_body::text as body from core.idempotency_keys where key = 'k-plan'`.execute(
+      t.admin.kysely,
+    );
+    expect(rows[0]?.body).not.toContain('Quilla');
+    expect(JSON.parse(rows[0]?.body ?? '{}')).toEqual({ $replay: 1, ref: { id } });
+    // The record changed since: the replay shows the current state, never a stored copy.
+    await withTenantTx(t.db, ctx, (tx) =>
+      tx.db.updateTable('demo.notes').set({ body: 'Renamed' }).where('id', '=', id).execute(),
+    );
+    const replay = await run();
+    expect(replay).toMatchObject({ replayed: true, status: 201, body: { id, name: 'Renamed' } });
+  });
+
+  it('erasure redaction: responses mentioning the subject answer 410; short values never match', async () => {
+    const { redactIdempotencyResponses } = await import('../src');
+    const ctx = testContext();
+    const subject = newId();
+    const store = (key: string, body: unknown) =>
+      runIdempotent(t.db, ctx, { scope: 'POST /x', key, request: {} }, async () => ({ status: 201, body }));
+    await store('k-a', { bookerProfileId: subject, booker: 'Quilla Person' });
+    await store('k-b', { email: 'quilla@guest.example' });
+    await store('k-c', { other: 'unrelated record Ali' });
+    const n = await withTenantTx(t.db, ctx, (tx) =>
+      redactIdempotencyResponses(tx, { identifiers: [subject, 'quilla@guest.example', 'Ali'] }),
+    );
+    expect(n).toBe(2);
+    await expect(store('k-a', {})).rejects.toMatchObject({ code: 'idempotent_response_erased', status: 410 });
+    await expect(store('k-b', {})).rejects.toMatchObject({ status: 410 });
+    expect((await store('k-c', {})).body).toEqual({ other: 'unrelated record Ali' });
+    // Another tenant's records are never touched.
+    const other = testContext();
+    const kept = await runIdempotent(
+      t.db,
+      other,
+      { scope: 'POST /x', key: 'k-a', request: {} },
+      async () => ({
+        status: 201,
+        body: { bookerProfileId: subject },
+      }),
+    );
+    expect(kept.replayed).toBe(false);
+  });
+
+  it('matches identifiers only as WHOLE string values, case-insensitively — never substrings, numbers or kept subjects', async () => {
+    const { redactIdempotencyResponses } = await import('../src');
+    const ctx = testContext();
+    const subject = newId();
+    const held = newId();
+    const store = (key: string, body: unknown) =>
+      runIdempotent(t.db, ctx, { scope: 'POST /m', key, request: {} }, async () => ({ status: 201, body }));
+    const cases: Record<string, { body: unknown; erased: boolean }> = {
+      // real copies — must be erased
+      'mixed-case email': { body: { payer: { email: 'Quilla.E@Guest.Example' } }, erased: true },
+      'deeply nested id': { body: { a: [{ b: { c: [subject] } }] }, erased: true },
+      'e164 phone': { body: { contact: '+9607771234' }, erased: true },
+      // unrelated — must survive
+      'time zone containing a word': { body: { timezone: 'Indian/Maldives' }, erased: false },
+      'amount containing the digits': { body: { amountMinor: 17771234, ref: '17771234x' }, erased: false },
+      'longer phone with the same prefix': { body: { contact: '+96077712345' }, erased: false },
+      'longer email ending the same': { body: { email: 'xquilla.e@guest.example' }, erased: false },
+      'email inside free text': { body: { note: 'write to quilla.e@guest.example' }, erased: false },
+      'another subject on legal hold': {
+        body: { payer: held, email: 'quilla.e@guest.example' },
+        erased: false,
+      },
+    };
+    for (const [k, c] of Object.entries(cases)) await store(k, c.body);
+    await withTenantTx(t.db, ctx, (tx) =>
+      redactIdempotencyResponses(tx, {
+        identifiers: [subject, 'quilla.e@guest.example', '+9607771234', 'Maldives', '7771234'],
+        keep: [held],
+      }),
+    );
+    for (const [k, c] of Object.entries(cases)) {
+      const r = await store(k, {}).then(
+        () => 'kept',
+        (e: { status?: number }) => (e.status === 410 ? 'erased' : `error ${e.status}`),
+      );
+      expect(r, k).toBe(c.erased ? 'erased' : 'kept');
+    }
+  });
+
+  it('after redaction every body answers 410 — the stored request hash is no oracle for the erased data', async () => {
+    const { redactIdempotencyResponses } = await import('../src');
+    const ctx = testContext();
+    const subject = newId();
+    const call = (request: unknown) =>
+      runIdempotent(t.db, ctx, { scope: 'POST /oracle', key: 'k-oracle', request }, async () => ({
+        status: 201,
+        body: { profileId: subject },
+      }));
+    await call({ name: 'Quilla', dob: '1981-02-03' });
+    await withTenantTx(t.db, ctx, (tx) => redactIdempotencyResponses(tx, { identifiers: [subject] }));
+    await expect(call({ name: 'Quilla', dob: '1981-02-03' })).rejects.toMatchObject({ status: 410 });
+    await expect(call({ name: 'Quilla', dob: '1980-01-01' })).rejects.toMatchObject({ status: 410 });
+    const { rows } = await sql<{
+      h: string;
+    }>`select request_hash as h from core.idempotency_keys where key = 'k-oracle'`.execute(t.admin.kysely);
+    expect(rows[0]?.h).toBe('erased');
+  });
+
+  it('a replay racing an erasure waits for it and then answers 410 (never the erased data)', async () => {
+    const { redactIdempotencyResponses } = await import('../src');
+    const ctx = testContext();
+    const subject = newId();
+    const replay = () =>
+      runIdempotent(t.db, ctx, { scope: 'POST /race', key: 'k-race', request: {} }, async () => ({
+        status: 201,
+        body: { profileId: subject, name: 'Quilla Person' },
+      }));
+    await replay();
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    let redacted: () => void = () => {};
+    const didRedact = new Promise<void>((r) => {
+      redacted = r;
+    });
+    const erasure = withTenantTx(t.db, ctx, async (tx) => {
+      await redactIdempotencyResponses(tx, { identifiers: [subject] });
+      redacted();
+      await gate; // erasure transaction still open
+    });
+    await didRedact;
+    let settled = false;
+    const racing = replay().then(
+      (r) => {
+        settled = true;
+        return r;
+      },
+      (e: unknown) => {
+        settled = true;
+        throw e;
+      },
+    );
+    await new Promise((r) => setTimeout(r, 300));
+    expect(settled).toBe(false); // waits on the erasure's row lock instead of reading the old body
+    release();
+    await erasure;
+    await expect(racing).rejects.toMatchObject({ status: 410 });
+  });
+});
+
 describe('savepoints', () => {
   it('rolls back only the failed part and keeps the transaction usable', async () => {
     const { withSavepoint, pgCode } = await import('../src');

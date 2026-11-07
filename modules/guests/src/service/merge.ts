@@ -47,6 +47,7 @@ import {
   type ProfileRow,
   requireVisibleProfile,
   resolveAccess,
+  scrubReason,
 } from './internal';
 
 export type MergePreview = z.infer<typeof mergePreview>;
@@ -442,6 +443,8 @@ export async function mergeProfiles(
   const choices = validateChoices(input.fieldChoices);
   const { survivor, merged } = await loadPair(tx, ports, input.survivorId, input.mergedId, true);
   await assertMergeAllowedByAuthority(tx, ports, [survivor, merged]);
+  // Staff-typed reason: the subjects' own identifiers never reach the append-only audit log.
+  const reason = await scrubReason(tx, input.reason, [survivor.id, merged.id]);
 
   const snapSurvivor = await snapshotProfile(tx, survivor.id);
   const snapMerged = await snapshotProfile(tx, merged.id);
@@ -503,7 +506,7 @@ export async function mergeProfiles(
       merge_id: mergeId,
       resolved_at: tx.now,
       resolved_by: actorKey(tx),
-      resolution_reason: input.reason,
+      resolution_reason: reason,
       version: sql`version + 1`,
     })
     .where('profile_a_id', '=', a)
@@ -518,7 +521,7 @@ export async function mergeProfiles(
       tenant_id: tx.tenantId,
       survivor_id: survivor.id,
       merged_id: merged.id,
-      reason: input.reason,
+      reason: reason,
       snapshot: JSON.stringify({ survivor: snapSurvivor, merged: snapMerged }),
       decisions: JSON.stringify(plan.decisions),
       moved: JSON.stringify(moved),
@@ -533,7 +536,7 @@ export async function mergeProfiles(
     await tx.audit({
       action: 'guests.profile.merge',
       target: { type: 'guest_profile', id: target },
-      reason: input.reason,
+      reason: reason,
       before: { status: 'active' },
       after: target === merged.id ? { status: 'merged', mergedInto: survivor.id } : { status: 'active' },
       metadata: {
@@ -853,6 +856,7 @@ export async function unmergeProfiles(
   await loadProfileRow(tx, second, { forUpdate: true });
   const snap = merge.snapshot;
   if (!snap) throw new BusinessRuleError('unmerge_not_possible', 'The merge snapshot is missing.', {});
+  const reason = await scrubReason(tx, input.reason, [merge.survivor_id, merge.merged_id]);
 
   const items = await postMergeItems(tx, merge);
   const assigned = new Map((input.assignments ?? []).map((a) => [`${a.kind}:${a.id}`, a.owner]));
@@ -996,7 +1000,7 @@ export async function unmergeProfiles(
       detected_at: tx.now,
       resolved_at: tx.now,
       resolved_by: actorKey(tx),
-      resolution_reason: `Unmerged: ${input.reason}`,
+      resolution_reason: `Unmerged: ${reason}`,
       merge_id: merge.id,
     })
     .onConflict((oc) =>
@@ -1004,7 +1008,7 @@ export async function unmergeProfiles(
         status: 'dismissed',
         resolved_at: tx.now,
         resolved_by: actorKey(tx),
-        resolution_reason: `Unmerged: ${input.reason}`,
+        resolution_reason: `Unmerged: ${reason}`,
         exact_keys: hashExactKeys(ports, score?.exactKeys ?? []),
         version: sql`guests.duplicate_candidates.version + 1`,
       }),
@@ -1031,7 +1035,7 @@ export async function unmergeProfiles(
       status: 'reversed',
       reversed_at: tx.now,
       reversed_by: actorKey(tx),
-      reverse_reason: input.reason,
+      reverse_reason: reason,
       unmerge_result: JSON.stringify(result),
       version: sql`version + 1`,
     })
@@ -1042,7 +1046,7 @@ export async function unmergeProfiles(
     await tx.audit({
       action: 'guests.profile.unmerge',
       target: { type: 'guest_profile', id: target },
-      reason: input.reason,
+      reason: reason,
       before:
         target === merge.merged_id
           ? { status: 'merged', mergedInto: merge.survivor_id }
