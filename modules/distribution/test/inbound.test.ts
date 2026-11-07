@@ -441,6 +441,31 @@ describe('ordering, parking and recovery (DST-R09, DST-R11)', () => {
       receivedVia: 'recovery',
       status: { revision: 'applied' },
     });
+    // Sibling of every hub path: a refused key during "re-request since T" pauses the connection with the urgent
+    // exception and is explained (not an unexplained 500).
+    await org.run((tx) =>
+      svc.injectFault(tx, h.dist.deps, c.connectionId, {
+        endpoint: 'bookings',
+        kind: 'unauthorized',
+        times: 1,
+      }),
+    );
+    await expect(
+      svc.recoverSince(
+        h.t.db,
+        h.dist.deps,
+        sys(org),
+        c.connectionId,
+        new Date(h.clock.now().getTime() - 3_600_000),
+      ),
+    ).rejects.toMatchObject({ code: 'hub_request_failed', status: 502 });
+    expect(
+      (await org.run((tx) => svc.getConnection(tx, h.dist.deps, c.connectionId))).status.credentials,
+    ).toBe('invalid');
+    const open = await org.run((tx) =>
+      svc.listExceptions(tx, { connectionId: c.connectionId, status: 'open' }),
+    );
+    expect(open.map((e) => e.code)).toContain('credentials_invalid');
   });
 });
 

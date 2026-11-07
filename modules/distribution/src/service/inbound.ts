@@ -993,7 +993,12 @@ export async function pullFeed(
         continue;
       }
       if (it.revision.externalPropertyId !== conn.external_property_id) {
-        await logDelivery(tx, { connectionId: conn.id, via, outcome: 'property_mismatch', detail: { revisionId: it.revision.revisionId } });
+        await logDelivery(tx, {
+          connectionId: conn.id,
+          via,
+          outcome: 'property_mismatch',
+          detail: { revisionId: it.revision.revisionId },
+        });
         continue;
       }
       const r = await storeRevision(tx, conn, it.revision, via);
@@ -1039,9 +1044,38 @@ export async function recoverSince(
 ): Promise<{ listed: number; fetched: number; stored: number; notAtChannel: number }> {
   const pre = await withTenantTx(database, ctx, async (tx) => {
     const conn = await loadConnection(tx, connectionId);
+    if (conn.status === 'disconnected' || conn.credential_state === 'invalid') {
+      throw new BusinessRuleError(
+        'hub_not_reachable',
+        conn.status === 'disconnected'
+          ? 'The connection is disconnected.'
+          : 'The hub refused the API key: replace and verify it before asking the hub for bookings.',
+      );
+    }
     return { conn, hubCtx: await hubContext(tx, deps, conn) };
   });
-  const listed = await deps.hub.listBookingsSince(pre.hubCtx, since.toISOString());
+  // The same rule as every other hub path: a refused key pauses this connection with an urgent exception, and a
+  // hub failure is explained (never an unexplained 500).
+  const guarded = async <T>(call: () => Promise<T>): Promise<T> => {
+    try {
+      return await call();
+    } catch (err) {
+      if (!(err instanceof HubError)) throw err;
+      if (err.failure.class === 'auth') {
+        await withTenantTx(database, ctx, (tx) => markCredentialsInvalid(tx, pre.conn, err.failure.message));
+      }
+      throw new DomainError(
+        'hub_request_failed',
+        `${err.failure.message} Nothing was changed; try again later.`,
+        {
+          status: 502,
+          retryable: err.failure.class !== 'payload' && err.failure.class !== 'auth',
+          details: { class: err.failure.class },
+        },
+      );
+    }
+  };
+  const listed = await guarded(() => deps.hub.listBookingsSince(pre.hubCtx, since.toISOString()));
   const known = await withTenantTx(database, ctx, async (tx) =>
     db(tx)
       .selectFrom('distribution.inbound_revisions')
@@ -1053,7 +1087,8 @@ export async function recoverSince(
   const fetched: HubRevision[] = [];
   for (const b of listed) {
     if (!b.latestRevisionId || knownRevisions.has(b.latestRevisionId)) continue;
-    const item = await deps.hub.fetchRevision(pre.hubCtx, b.latestRevisionId);
+    const id = b.latestRevisionId;
+    const item = await guarded(() => deps.hub.fetchRevision(pre.hubCtx, id));
     if (item?.ok) fetched.push(item.revision);
   }
   return withTenantTx(database, ctx, async (tx) => {
