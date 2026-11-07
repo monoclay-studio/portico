@@ -103,6 +103,38 @@ Notes:
 - **Not included above and potentially larger than everything above:** human support/on-call capacity (§8) and Stripe
   fees on Monoclay's SaaS revenue (§6).
 
+### 4a. Owner question (2026-11-07): "why does it cost that much with no users?"
+
+It doesn't. **With no hotels, Portico costs $0** to run: everything runs locally and in CI. The ≈ $460–780/month
+figure is for a **production pilot with a real hotel operating 24/7**, and it is dominated by things that exist to
+protect that hotel, not by usage:
+
+| Driver | Why it exists | ≈ $/month |
+|---|---|---|
+| Database in two availability zones + point-in-time recovery | a hotel cannot lose reservations or folios if one data centre fails | 110–150 |
+| Staging environment | test every release before it touches a live hotel | 40–80 |
+| Load balancer, NAT gateway, public IPs, WAF | secure, reachable API | 75–110 |
+| Channex platform fee (not AWS) | OTA connectivity — starts only when activated | 137 |
+| Monitoring, paging, support tooling | someone is alerted when it breaks | 0–110 |
+
+**Cheaper, honest tiers** `[estimate; verify with AWS Pricing Calculator before authorization]`:
+
+| Tier | What it is | Infra $/month |
+|---|---|---|
+| T0 — local | develop and demo on a laptop / this cloud dev environment | **$0** |
+| T1 — hosted demo | one small instance (app + Postgres), demo environment only, auto-stop off-hours, no WAF/NAT | **$10–30**, and covered by AWS Free Tier credits while they last (see below) |
+| T2 — lean pilot (small guesthouse) | single-AZ managed Postgres with automated backups + restore-tested, 1 API task + 1 worker, no NAT (VPC endpoints), staging started only for releases, basic WAF | **≈ $90–160** + Channex if activated |
+| T3 — resilient pilot (resort) | the full table in §5 (Multi-AZ, always-on staging) | ≈ $300–500 |
+
+Trade-off of T2: a database-zone failure means minutes-to-hours of downtime (restore from backup) instead of an
+automatic failover. Acceptable for a small guesthouse pilot with a paper fallback; not for a 120-villa resort.
+
+**AWS Free Tier — verified 2026-11-07 on [aws.amazon.com/free](https://aws.amazon.com/free/):** new accounts get
+**$100 in credits immediately and up to $100 more** by using key services — up to **$200 over 6 months** on the
+Free plan. A Free-plan account **closes after 6 months or when credits run out**, whichever comes first, unless
+upgraded to a Paid plan; Free-plan accounts are limited to selected services. → Good for a T1 hosted demo; not a
+basis for a pilot (readiness brief §15: credits are not permanent).
+
 ## 5. AWS line items for the pilot (`ap-south-1`, on-demand) `[estimate]`
 
 These are planning estimates from recalled list prices, **not verified for `ap-south-1` on 2026-11-07**. Replace with
