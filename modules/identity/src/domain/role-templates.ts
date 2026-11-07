@@ -108,6 +108,9 @@ export const ROLE_TEMPLATES: readonly RoleTemplate[] = [
       'payments.vcc.manage',
       'payments.externalRecord.create',
       'finance.folio.read',
+      // Channel bookings: see revisions and channel health, recover missed or parked bookings (distribution §8).
+      'distribution.channel.read',
+      'distribution.reservation.recover',
       'comms.conversation.manage',
       'ai.assistant.use',
     ],

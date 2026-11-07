@@ -237,6 +237,8 @@ describe('rejections are classified (DST-R04)', () => {
     expect(s.restrictions['RP-WV-BAR']?.[d(6)]?.rate).toBe('566.00');
     const exc = await org.run((tx) => svc.listExceptions(tx, { connectionId: c.connectionId }));
     expect(exc.find((e) => e.code === 'ari_delivery_failing')?.status.exception).toBe('resolved');
+    // A failure fixed by a retry within the freshness target never degraded the connection (no protection flapping).
+    expect(await org.run((tx) => svc.listStopSells(tx, c.connectionId))).toEqual([]);
   });
 
   it('a payload error is never retried: exception with a fix, the cells show "not accepted"', async () => {
