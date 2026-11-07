@@ -6,6 +6,9 @@ each canary exercises (`patterns.md`).
 
 > **Round 0: no canary has been run.** Usage is constrained. This file defines the catalogue, the planting procedure,
 > the scoring rule and the schedule. Results are appended to § 6 from round 1 onward.
+>
+> **Round 1:** the first canaries ran. C-L1-01 was run by the orchestrator at 17:30. Run `r1-l1` (C-L1-02, C-L1-03,
+> scripted, CPU only) was run by the quality steward. Results are in § 6.
 
 ---
 
@@ -92,6 +95,8 @@ Severity is the steward-scale severity of the planted defect. **Expected detecti
 | C-L1-01 | AP-52 stale cache (E-008, E-009, E-038) | Warm the cache with `pnpm typecheck`. Then change one exported signature in each of `packages/kernel/src`, `modules/<m>/src` and **`apps/api/src`** (for example the `compose` options used by `apps/worker`). Run `pnpm typecheck` **without** `--force` | It fails for each of the three edits. Today the `apps/api` edit is expected to **pass wrongly** (E-038): that is the known failure this canary tracks |
 | C-L1-02 | AP-06 / AP-42 contract drift | (a) Add `requirePermission(tx,'<module>.planted.key')` without registering it. (b) Add a value to a kernel enum that a module copies as a `z.enum` literal | (a) The permission-catalogue test fails. (b) Typecheck, or the proposed duplicated-enum lint, fails. (b) passing silently is the known gap (RC-2) |
 | C-L1-03 | AP-52 tool false positives and negatives (E-012, E-013, E-010) | (a) A `${x.operations.length}` interpolation inside a `sql` template. (b) A real cross-schema reference `operations.units` from another module. (c) `requirePermission(` inside a comment. (d) A lint error, then `tools/commit-checked.sh` | (a) Passes. (b) Fails. (c) Not counted. (d) "NOT COMMITTED" |
+| C-L1-04 | AP-52 boundary-checker false negative (E-059), added in round 1 | `sql.raw('select * from operations.units')` and a raw string passed to `executeQuery` that names `finance.folios`, inside another module's `src` | `tools/check-boundaries.mjs` fails. In round 1 this **passed silently**; that is the gap being tracked |
+| C-L1-05 | AP-52 environment-coupled gate (E-053, E-052), added in round 1 | (a) Run the backoffice Playwright suite with `WEB_PORT`/`API_PORT` set to free ports other than 5180/4100. (b) Run `packages/db` and identity tests with migrations owned by a `nobypassrls` role | (a) The same 11/11 as on the default ports. (b) Same results as under the superuser, with no RLS-dependent test passing only as superuser |
 
 ### 3.2 L2: seeded bugs for the steward reviewer
 
@@ -112,6 +117,8 @@ Severity is the steward-scale severity of the planted defect. **Expected detecti
 | C-L2-13 | AP-45 sibling path | P1 | Remove a guard from one of two entry points that make the same state change | The sibling grep |
 | C-L2-14 | AP-38 data-authority bypass | P1 | Remove `assertWritable` from one write path | Forward and read-only mode probe |
 | C-L2-15 | AP-43 event schema drift | P1 | Rename a field in a producer's event payload, without changing the consumer or its schema test | Parsing producer events with the consumer's schema |
+| C-L2-16 | AP-53 delegation widens authority (added round 1) | P1 | In one ADR-0015 delegated call, take a choice-carrying parameter (card, amount, account) from the request without binding it to the record | Hostile-parameter probe |
+| C-L2-17 | AP-56 one-time transition race (added round 1) | P1 | Move a credential writer's row lock below its state read, beside a one-time wipe or rotation | A concurrent writer during the transition, with a test-only delay |
 
 Combine them into **sets** so that each run covers one theme:
 
@@ -145,6 +152,7 @@ Combine them into **sets** so that each run covers one theme:
 |---|---|---|---|
 | C-L3-01 | L3 | In a copy, post one ledger line to a control account without its sub-ledger mirror; separately, consume one inventory night without a reservation | The scenario global-consistency checks (`docs/scenarios/README.md`) fail |
 | C-L3-02 | L3 | Bind one port in a scenario's composition to a fake | The binding manifest (ST2-1) flags the scenario as not real-path |
+| C-L3-03 | L3 (added round 1) | Post a booking deposit for property A's booking at property B's legal entity; open a collection request larger than the folio's debit balance | A cross-module global-consistency check fails: every deposit account's booking belongs to the same property and legal entity, and every open collection request is ≤ the folio's debit balance. Today this is **expected to pass wrongly**: the integration-step review (§ 7) notes the checks would not catch P1-1 or P1-3 |
 | C-L5-01 | L5 | In a copy of a parity file, mark 3 rows `tested`, citing tests that exist but do not assert the row | The parity re-check (PR2-1) downgrades all 3 |
 | C-L5-02 | L5 | Remove 3 edge-case rows that belong to applicable AP classes | The PR2-2 sweep re-adds them |
 
@@ -190,5 +198,22 @@ metrics the round exists to measure (`docs/ux/scorecard.md`). Keep L4 canaries i
 | Run id | Date | Checker / playbook version | Set | Planted | Credit | Recall | False positives | Time | Output tokens | Patterns missed |
 |---|---|---|---|---|---|---|---|---|---|---|
 | — | — | Round 0: no runs (usage constrained) | — | — | — | — | — | — | — | — |
+| c-l1-01-orch | 2026-11-07 17:30 | L1 gate (turbo inputs after edit 6) | C-L1-01 (`apps/api` edit only) | 1 | 1 | 1.00 | 0 | minutes | 0 (CPU) | — (run by the orchestrator; the worker typecheck had a cache miss and failed, as required) |
+| r1-l1 | 2026-11-07 17:40–17:47 | L1 gates and tools, as on `main` @ `af73991` | C-L1-02 a/b, C-L1-03 a/b/b2/c/d | 7 conditions | 5 | 0.71 | 1 (C-L1-03c: a comment counted as a permission check) | ≈ 7 min | 0 (CPU) | **C-L1-03b2** (`sql.raw` not detected, E-059); **C-L1-03c** (known false positive E-013, still open). C-L1-02b passed only through payments' copy (E-058) |
 
 <!-- Append one row per canary run. After scoring, append the answer key under "### <run-id> key". -->
+
+### r1-l1 key (scored 2026-11-07)
+
+Detached worktree `<scratchpad>/canary-l1-r1` at `main` `af73991`. Installed offline. No database was used. The
+worktree was removed afterwards, and `git worktree list` shows no canary.
+
+| Canary | Plant | Command | Want | Got |
+|---|---|---|---|---|
+| C-L1-03a | `modules/inventory/src/zz-canary-a.ts`: a `sql` template interpolating `x.operations.length` | `node tools/check-boundaries.mjs` | exit 0 | **exit 0** ✓ |
+| C-L1-03b | `zz-canary-b.ts`: a `sql` template with `select * from operations.units` | same | exit ≠ 0 | **exit 1**, "raw SQL references operations.units" ✓ |
+| C-L1-03b2 | `zz-canary-b2.ts`: `sql.raw('select * from operations.units')` | same | exit ≠ 0 | **exit 0** ✗ (false negative, E-059) |
+| C-L1-02a | `zz-canary-c.ts`: `requirePermission(tx, 'inventory.planted.key')` | `pnpm --filter @portico/api exec vitest run test/permission-catalog.test.ts` | fail | **fail**, "inventory: inventory.planted.key" ✓ |
+| C-L1-03c | `zz-canary-d.ts`: the key appears in a `//` comment only | same | pass | **fail**, "inventory.commented.key" ✗ (false positive E-013 still open) |
+| C-L1-02b | `packages/kernel/src/context.ts`: `'planted'` added to `Provenance` | `pnpm turbo run typecheck --force --continue` | fail | **fail** (exit 1), but only through `modules/payments/src/service/shared.ts` (TS2322 ×5, seen from payments, api, backoffice and worker). The reservations, guests and operations copies were not detected (E-058). Counted as ✓ with weak coverage |
+| C-L1-03d | `zz-canary-e.ts`: `export function planted(x: any)`, then `tools/commit-checked.sh` | — | "NOT COMMITTED", HEAD unchanged | **"NOT COMMITTED"**, HEAD unchanged ✓ |
