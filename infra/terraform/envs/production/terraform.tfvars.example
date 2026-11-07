@@ -1,0 +1,13 @@
+# Copy to terraform.tfvars (git-ignored). Every OWNER line is a decision only the owner can make.
+region              = "ap-south-1"          # OWNER (Q4)
+allowed_account_ids = ["000000000000"]      # OWNER: production account
+tier                = "lean"                # OWNER: lean (guesthouse pilot) or resilient (resort/group) — README
+domain_name         = "portico.example"     # OWNER (Q1)
+route53_zone_id     = "Z0000000000000000000"
+budget_monthly_usd  = 200                   # OWNER (Q22): alert-only for production
+budget_alert_emails = ["owner@example.invalid"]
+oncall_emails       = ["owner@example.invalid"]
+dr_region           = "ap-south-2"          # OWNER: backup copy region (data residency)
+# email_domain      = "mail.portico.example"
+# github_repository = "monoclay/portico"
+# overrides         = { db_multi_az = true }  # lean + synchronous standby (online change, ≈ +$31/month)

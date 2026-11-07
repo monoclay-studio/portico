@@ -1,0 +1,40 @@
+#!/bin/bash
+# cloud-init first boot for the Portico demo host. Rendered by Terraform; secrets are generated HERE, not in
+# Terraform, and never leave the instance.
+set -euo pipefail
+exec > >(tee -a /var/log/portico-bootstrap.log) 2>&1
+
+dnf install -y docker
+systemctl enable --now docker
+
+install -d -m 0700 /opt/portico /var/lib/portico
+cat > /opt/portico/portico.env <<'EOF'
+REGION=${region}
+API_REPO=${api_repo}
+WORKER_REPO=${worker_repo}
+LOG_GROUP=${log_group}
+POSTGRES_IMAGE=${postgres_image}
+APP_PORT=${app_port}
+CORS_ORIGINS=${cors_origins}
+SEED_DEMO=${seed_demo}
+EOF
+
+if [ ! -f /opt/portico/secrets.env ]; then
+  umask 077
+  {
+    echo "PG_SUPERUSER_PASSWORD=$(openssl rand -hex 24)"
+    echo "OWNER_PASSWORD=$(openssl rand -hex 24)"
+    echo "APP_BLUE_PASSWORD=$(openssl rand -hex 24)"
+    echo "APP_GREEN_PASSWORD=$(openssl rand -hex 24)"
+  } > /opt/portico/secrets.env
+fi
+
+echo '${portico_sh_b64}' | base64 -d > /opt/portico/portico.sh
+chmod 0700 /opt/portico/portico.sh
+ln -sf /opt/portico/portico.sh /usr/local/sbin/portico
+
+%{ if deploy_on_first ~}
+/opt/portico/portico.sh deploy ${image_tag}
+%{ else ~}
+echo "No image yet: the deploy pipeline runs 'portico deploy <tag>' through SSM Run Command."
+%{ endif ~}

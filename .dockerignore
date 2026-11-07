@@ -16,7 +16,6 @@ test-results
 docs
 infra/terraform
 infra/ci
-infra/restore-drill
 **/.terraform
 **/*.tfstate
 **/*.tfstate.*

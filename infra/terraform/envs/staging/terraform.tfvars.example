@@ -1,0 +1,10 @@
+# Copy to terraform.tfvars (git-ignored).
+region              = "ap-south-1"          # OWNER (Q4)
+allowed_account_ids = ["000000000000"]      # OWNER
+active              = false                 # true only during a release rehearsal
+domain_name         = "portico.example"     # OWNER (Q1) — required when active
+route53_zone_id     = "Z0000000000000000000"
+budget_monthly_usd  = 40                    # OWNER (Q22)
+budget_alert_emails = ["owner@example.invalid"]
+oncall_emails       = ["owner@example.invalid"]
+# github_repository = "monoclay/portico"
