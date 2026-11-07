@@ -1,0 +1,378 @@
+// Copy to apps/api/test/r2-inverted-original-pocs.test.ts (imports ./scenarios/harness). Run: PORTICO_TEST_DB_PREFIX=<prefix> npx vitest run --silent=false test/r2-inverted-original-pocs.test.ts
+/**
+ * Focused re-review (round 2) of feat/integration-step: every first-review PoC
+ * (docs/orchestration/reviews/integration-step-poc/*.ts.txt) re-run with its BUG assertions inverted.
+ * Each attack must now be REFUSED (or, for P3-9, no longer dead-end).
+ */
+import { sql } from '@portico/db';
+import { financeForReservations } from '@portico/finance';
+import { newId, type RequestContext, staticAuthorizer } from '@portico/kernel';
+import { platform } from '@portico/platform';
+import type { Booking, TermsSnapshot } from '@portico/reservations';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import {
+  applied,
+  bookingInput,
+  cardOnFile,
+  guestWithCard,
+  hiyani,
+  kandu,
+  makeExternal,
+  organization,
+  readyUnit,
+  type Scenario,
+  startScenario,
+} from './scenarios/harness';
+
+let s: Scenario;
+beforeAll(async () => {
+  s = await startScenario();
+});
+afterAll(async () => s?.close());
+
+const settle = <T>(p: Promise<T>) =>
+  p.then(
+    (v) => ({ ok: true as const, v }),
+    (e: unknown) => ({ ok: false as const, e }),
+  );
+
+describe('inverted poc-deposit-wrong-property (P1-1, P2-7)', () => {
+  it("H's desk cannot take a deposit for K's booking; K reads status and checks in", async () => {
+    const org = await organization(s);
+    const k = await kandu(s, org, '2027-03-10');
+    const h = await hiyani(s, org, '2027-03-10');
+    const { reservations, payments } = s.c.services;
+    const kAgent = org.staff('reservations_agent', 'Aishath', [k.id]);
+    const b = applied<Booking>(
+      await org.run(kAgent, (tx) =>
+        reservations.createBooking(
+          tx,
+          bookingInput(k, { arrival: '2027-03-10', departure: '2027-03-12', unit: '214' }),
+        ),
+      ),
+    );
+    const hDesk = org.staff('front_desk', 'Hiyani desk', [h.id]);
+    const hCard = await cardOnFile(s, org, h.id, h.legalEntityId);
+    const r = await settle(
+      payments.chargeNow(hDesk, {
+        propertyId: h.id,
+        methodId: hCard.id,
+        amount: { amountMinor: 50_000, currency: 'USD' },
+        ref: { type: 'booking', id: b.id },
+        businessKey: `deposit:${newId()}`,
+      }),
+    );
+    expect(r.ok).toBe(false); // INVERTED: was succeeded/posted
+    expect(r.ok ? null : r.e).toMatchObject({ code: 'ledger_target_other_property' });
+    const acct = await sql<{ n: number }>`
+      select count(*)::int as n from finance.deposit_accounts where booking_id = ${b.id}`.execute(
+      s.t.admin.kysely,
+    );
+    expect(acct.rows[0]?.n).toBe(0);
+    const kDesk = org.staff('front_desk', 'Kandu desk', [k.id]);
+    const status = await org.run(kDesk, (tx) =>
+      reservations.deps.ports.payments.getPaymentStatus(
+        tx,
+        { type: 'booking', id: b.id },
+        { propertyId: k.id },
+      ),
+    );
+    expect(status).toBeDefined(); // INVERTED: was scope_mismatch
+    await s.drain();
+    await readyUnit(s, org, k.id, k.units['214'] as string);
+    const checkIn = await reservations
+      .performWorkflow(s.t.db, kDesk, {
+        stayId: b.stays[0]?.id as string,
+        kind: 'check_in',
+        checkIn: { registration: { identityVerified: true }, access: { kind: 'card', count: 1 } },
+      })
+      .catch((e: unknown) => e);
+    expect(JSON.stringify(checkIn)).not.toMatch(/scope_mismatch|another property/);
+  });
+
+  it('a deposit for a booking id that exists nowhere is refused', async () => {
+    const org = await organization(s);
+    const h = await hiyani(s, org, '2027-03-10');
+    const hDesk = org.staff('front_desk', 'Hiyani desk', [h.id]);
+    const hCard = await cardOnFile(s, org, h.id, h.legalEntityId);
+    const ghost = newId();
+    const r = await settle(
+      s.c.services.payments.chargeNow(hDesk, {
+        propertyId: h.id,
+        methodId: hCard.id,
+        amount: { amountMinor: 12_345, currency: 'USD' },
+        ref: { type: 'booking', id: ghost },
+        businessKey: `deposit:${newId()}`,
+      }),
+    );
+    expect(r.ok ? null : r.e).toMatchObject({ code: 'ledger_target_unknown' });
+    const rows = await sql<{ n: number }>`
+      select count(*)::int as n from finance.deposit_accounts where booking_id = ${ghost}`.execute(
+      s.t.admin.kysely,
+    );
+    expect(rows.rows[0]?.n).toBe(0);
+  });
+});
+
+describe('inverted poc-checkin-any-card (P1-2)', () => {
+  it("a night receptionist (no payments.*) can no longer hold USD 25,000 on a stranger's card", async () => {
+    const org = await organization(s);
+    const k = await kandu(s, org, '2027-03-10');
+    const { reservations } = s.c.services;
+    const agent = org.staff('reservations_agent', 'Aishath', [k.id]);
+    const b = applied<Booking>(
+      await org.run(agent, (tx) =>
+        reservations.createBooking(
+          tx,
+          bookingInput(k, { arrival: '2027-03-10', departure: '2027-03-11', unit: '214' }),
+        ),
+      ),
+    );
+    await s.drain();
+    await readyUnit(s, org, k.id, k.units['214'] as string);
+    const strangersCard = await cardOnFile(s, org, k.id, k.legalEntityId);
+    const perms = [
+      'platform.property.read',
+      'reservations.booking.read',
+      'reservations.stay.checkIn',
+      'guests.profile.read',
+      'guests.profile.update',
+      'operations.unit.read',
+      'inventory.unit.read',
+    ];
+    const night: RequestContext = {
+      tenantId: org.tenantId,
+      environment: org.environment,
+      actor: { kind: 'user', userId: newId(), displayName: 'Night receptionist' },
+      authz: staticAuthorizer(perms.map((permission) => ({ permission, propertyIds: [k.id] }))),
+      correlationId: newId(),
+    };
+    const r = await settle(
+      reservations.performWorkflow(s.t.db, night, {
+        stayId: b.stays[0]?.id as string,
+        kind: 'check_in',
+        checkIn: {
+          registration: { identityVerified: true },
+          guarantee: {
+            paymentMethodId: strangersCard.id,
+            amount: { amountMinor: 2_500_000, currency: 'USD' },
+          },
+          access: { kind: 'card', count: 1 },
+        },
+      }),
+    );
+    expect(r.ok ? null : r.e).toMatchObject({ status: 403 });
+    const auths = await sql<{ n: number }>`
+      select count(*)::int as n from payments.authorizations where ref_id = ${b.stays[0]?.id}`.execute(
+      s.t.admin.kysely,
+    );
+    expect(auths.rows[0]?.n).toBe(0); // INVERTED: was 1 authorization of 2,500,000
+  });
+});
+
+describe('inverted poc-late-charge-overcollect (P1-3)', () => {
+  it('no payment request when the folio is still in credit after the late charge', async () => {
+    const org = await organization(s);
+    const k = await kandu(s, org, '2027-03-10');
+    const desk = org.staff('front_desk', 'Hassan', [k.id]);
+    const { reservations, payments, finance } = s.c.services;
+    // Adapted: the original used a card of a different owner, which booking creation now refuses (P1-2).
+    const { profileId, card } = await guestWithCard(s, org, k);
+    const b = applied<Booking>(
+      await org.run(desk, (tx) =>
+        reservations.createBooking(
+          tx,
+          bookingInput(
+            k,
+            { arrival: '2027-03-10', departure: '2027-03-12', unit: '214', guestProfileId: profileId },
+            { guarantee: { kind: 'card', paymentMethodId: card.id } },
+          ),
+        ),
+      ),
+    );
+    const stay = b.stays[0];
+    if (!stay) throw new Error('no stay');
+    await s.drain();
+    await readyUnit(s, org, k.id, k.units['214'] as string);
+    await payments.chargeNow(desk, {
+      propertyId: k.id,
+      methodId: card.id,
+      amount: { amountMinor: 50_000, currency: 'USD' },
+      ref: { type: 'booking', id: b.id },
+      businessKey: `deposit:${b.id}:1`,
+    });
+    const checkIn = await reservations.performWorkflow(s.t.db, desk, {
+      stayId: stay.id,
+      kind: 'check_in',
+      checkIn: { registration: { identityVerified: true }, access: { kind: 'card', count: 1 } },
+    });
+    expect(checkIn.run?.status).toBe('completed');
+    await org.run(org.setup, (tx) => platform.advanceBusinessDate(tx, k.id, '2027-03-10'));
+    await org.run(org.setup, (tx) => platform.advanceBusinessDate(tx, k.id, '2027-03-11'));
+    const manager = org.staff('general_manager', 'Duty manager', [k.id]);
+    const out = await reservations.performWorkflow(s.t.db, manager, {
+      stayId: stay.id,
+      kind: 'check_out',
+      checkOut: { settle: { leaveOpenReason: 'Deposit credit to be refunded' } },
+    });
+    expect(out.run?.status).toBe('completed');
+    await s.drain();
+    const [folio] = await org.run(desk, (tx) =>
+      finance.listFolios(tx, { owner: { type: 'stay', id: stay.id } }),
+    );
+    expect(folio?.balance.amountMinor).toBe(-50_000);
+    await org.run(desk, (tx) =>
+      finance.postCharge(tx, {
+        propertyId: k.id,
+        target: { type: 'stay', id: stay.id },
+        chargeCode: 'MISC',
+        amount: { amountMinor: 10_000, currency: 'USD' },
+        description: 'Minibar',
+        serviceDate: '2027-03-12',
+        sourceRef: { type: 'pos_check', id: newId() },
+        idempotencyKey: `pos:${newId()}`,
+      }),
+    );
+    const requests = await sql<{ n: number }>`
+      select count(*)::int as n from payments.payment_requests where ref_type = 'folio' and ref_id = ${folio?.id}`.execute(
+      s.t.admin.kysely,
+    );
+    expect(requests.rows[0]?.n).toBe(0); // INVERTED: was one open request > 0
+  });
+});
+
+describe('inverted poc-fd15-money-leak (P2-1)', () => {
+  it('housekeeping cannot tell paid from unpaid arrivals nor read booking money', async () => {
+    const org = await organization(s);
+    const k = await kandu(s, org, '2027-03-10');
+    const { reservations, payments } = s.c.services;
+    const desk = org.staff('front_desk', 'Hassan', [k.id]);
+    const mk = async (lastName: string) =>
+      applied<Booking>(
+        await org.run(desk, (tx) =>
+          reservations.createBooking(
+            tx,
+            bookingInput(k, {
+              arrival: '2027-03-10',
+              departure: '2027-03-12',
+              guest: { firstName: 'G', lastName },
+            }),
+          ),
+        ),
+      );
+    const paid = await mk('Paid');
+    const unpaid = await mk('Unpaid');
+    const card = await cardOnFile(s, org, k.id, k.legalEntityId);
+    await payments.chargeNow(desk, {
+      propertyId: k.id,
+      methodId: card.id,
+      amount: { amountMinor: 90_000, currency: 'USD' },
+      ref: { type: 'booking', id: paid.id },
+      businessKey: `dep:${newId()}`,
+    });
+    const hk = org.staff('housekeeping_supervisor', 'Mariyam', [k.id]);
+    const board = await org.run(hk, (tx) => reservations.listArrivals(tx, { propertyId: k.id }));
+    const row = (id: string) => board.items.find((r) => r.bookingId === id);
+    const pay = (id: string) => row(id)?.readiness?.checks.find((c) => c.key === 'payment_secured');
+    expect(pay(paid.id)?.status).toBe(pay(unpaid.id)?.status); // INVERTED: was ok vs blocking
+    expect(pay(paid.id)?.status).toBe('unknown');
+    expect(row(paid.id)?.readiness?.ready).toBe(row(unpaid.id)?.readiness?.ready);
+    const rec = await org.run(hk, (tx) => reservations.getBooking(tx, paid.id));
+    expect(rec.totals).toBeNull(); // INVERTED
+    expect(rec.status.payment).toBeUndefined(); // INVERTED
+    expect(rec.depositRequirement).toBeNull();
+  });
+});
+
+describe('inverted poc-finance-unscoped-delegation (P2-2)', () => {
+  it("a Kandu-only agent cannot read Hiyani's folio with the scope omitted", async () => {
+    const org = await organization(s);
+    const k = await kandu(s, org);
+    const h = await hiyani(s, org);
+    const port = financeForReservations(s.c.services.finance);
+    const hStay = { type: 'stay', id: newId() };
+    const { folioId } = await org.run(org.setup, (tx) =>
+      port.openFolio(tx, { propertyId: h.id, owner: hStay, payer: { type: 'house', id: newId() } }),
+    );
+    const kAgent = org.staff('reservations_agent', 'Aishath', [k.id]);
+    const omit = port as unknown as {
+      getFolioBalance(tx: unknown, id: string): Promise<{ folioId: string }>;
+      listFolios(tx: unknown, i: { owner: unknown }): Promise<Array<{ folioId: string }>>;
+    };
+    const a = await settle(org.run(kAgent, (tx) => omit.getFolioBalance(tx, folioId)));
+    expect(a.ok).toBe(false); // INVERTED
+    const l = await settle(org.run(kAgent, (tx) => omit.listFolios(tx, { owner: hStay })));
+    expect(l.ok && l.v.map((f) => f.folioId).includes(folioId)).toBe(false); // INVERTED
+    // and with the agent's own property as scope: nothing of Hiyani's
+    const scoped = await settle(
+      org.run(kAgent, (tx) => port.listFolios(tx, { owner: hStay, propertyId: k.id })),
+    );
+    expect(scoped.ok && scoped.v.map((f) => f.folioId).includes(folioId)).toBe(false);
+  });
+});
+
+describe('inverted poc-rates-adapter (P2-3)', () => {
+  it('altered sealed terms are refused by the pure functions too', async () => {
+    const org = await organization(s);
+    const k = await kandu(s, org);
+    const agent = org.staff('reservations_agent', 'Aishath', [k.id]);
+    const { reservations } = s.c.services;
+    const offers = await org.run(agent, (tx) =>
+      reservations.deps.ports.rates.quote(tx, {
+        propertyId: k.id,
+        nights: { from: '2027-03-15', to: '2027-03-18' },
+        occupancy: { adults: 2, childrenAges: [] },
+        unitTypeIds: [k.types.BV as string],
+        ratePlanIds: [k.plans.BAR as string],
+      }),
+    );
+    const view = offers[0]?.terms as TermsSnapshot;
+    const port = reservations.deps.ports.rates;
+    const doc = structuredClone(view.providerDocument) as {
+      policies: { cancellation: unknown; deposit: unknown };
+    };
+    doc.policies.cancellation = null;
+    doc.policies.deposit = null;
+    const forged: TermsSnapshot = { ...view, providerDocument: doc };
+    const at = new Date('2027-03-10T09:00:00+05:00');
+    expect(() =>
+      port.evaluateCancellationPenalty(forged, at, { event: 'cancellation', nights: ['2027-03-15'] }),
+    ).toThrow(/altered/); // INVERTED: was penalty 0
+    expect(() => port.instantiatePaymentSchedule(forged)).toThrow(/altered/); // INVERTED
+  });
+});
+
+describe('inverted poc-connected-checkin (P3-9)', () => {
+  for (const domain of ['charges', 'payments'] as const) {
+    it(`${domain} external: check-in is no longer interrupted`, async () => {
+      const org = await organization(s);
+      const k = await kandu(s, org, '2027-03-10');
+      const desk = org.staff('front_desk', 'Hassan', [k.id]);
+      const { reservations } = s.c.services;
+      // Adapted: card of the booker (stranger cards are refused at booking now).
+      const { profileId, card } = await guestWithCard(s, org, k);
+      const b = applied<Booking>(
+        await org.run(desk, (tx) =>
+          reservations.createBooking(
+            tx,
+            bookingInput(
+              k,
+              { arrival: '2027-03-10', departure: '2027-03-12', unit: '214', guestProfileId: profileId },
+              { guarantee: { kind: 'card', paymentMethodId: card.id } },
+            ),
+          ),
+        ),
+      );
+      await s.drain();
+      await readyUnit(s, org, k.id, k.units['214'] as string);
+      await makeExternal(s, org, k.id, domain);
+      const r = await reservations.performWorkflow(s.t.db, desk, {
+        stayId: b.stays[0]?.id as string,
+        kind: 'check_in',
+        checkIn: { registration: { identityVerified: true }, access: { kind: 'card', count: 1 } },
+      });
+      expect(r.interrupted).toBeFalsy(); // INVERTED: was interrupted with external_system_of_record
+      expect(r.run?.status).toBe('completed');
+    });
+  }
+});
