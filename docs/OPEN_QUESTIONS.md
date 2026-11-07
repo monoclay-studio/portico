@@ -107,3 +107,42 @@ Template:
 **If the answer differs:** for a resort pilot, the resort module (wave 3a), POS posting and lock interfaces move earlier.
 **Blocks:** nothing now; it shapes engineering priority and pilot outreach.
 **Raised by / date:** operational-readiness agent, 2026-11-07
+### Q60 — Packaging and pricing for standalone modules and migration services    Status: open
+**Context:** The adoption brief lets hotels keep their PMS and use selected Portico capabilities (housekeeping, guest messaging, reporting, transfers — `docs/adoption/adoption-paths.md` §4). Every edition in `modules/platform/src/domain/plans.ts` is built on the full PMS core, and Essentials allows only 1 property, so a 3-property group adopting only housekeeping and messaging cannot be represented. Migration effort (rehearsals, OPERA imports) is also a cost: competitors sell reservation import separately (Cloudbeds) or include it.
+**Question:** (a) Do you approve selling standalone modules as separate "connected" packages (per property or per unit, with their own limits), independent of the PMS editions? (b) Is migration of future reservations, profiles and open balances included in onboarding, or a paid service?
+**Default we are proceeding with:** entitlements for standalone modules modeled as separate feature keys and limits (e.g. `standalone.housekeeping`) with prices stored as configuration and none published; migration of future reservations, profiles and open balances treated as included in onboarding for planning purposes, history migration and archive as optional.
+**If the answer differs:** configuration and commercial documents change; no product rework.
+**Blocks:** pricing page, quotes for Path A/B customers. Nothing in development.
+**Raised by / date:** Integration & Adoption lead, 2026-11-07
+
+### Q61 — Oracle partner access for OPERA (OHIP for OPERA Cloud; OPERA 5.x interfaces)    Status: open
+**Context:** The representative group setup RS-3 (keep OPERA Cloud, adopt Portico housekeeping and messaging) and OPERA migrations need Oracle access. Research 01 found OHIP is partner-gated, the partner (Monoclay) pays usage (about US$10 per 10,000 REST calls/month and US$10 per 100,000 streamed events), and sources conflict on whether an Oracle PartnerNetwork membership is required. Streaming must be enabled per hotel environment by Oracle. OPERA 5.x interface rights (OXI or others) are unconfirmed.
+**Question:** May we apply to Oracle's partner programme for OHIP (accepting partner terms and usage fees once a hotel is ready), and approach Oracle about OPERA 5.x interface/export rights?
+**Default we are proceeding with:** build the OHIP connector and an OPERA-like simulator from public documentation up to R3; no application, agreement or paid usage until you authorize; OPERA migrations planned via hotel-provided exports.
+**If the answer differs:** if declined, RS-3 is replaced by a Mews- or Cloudbeds-based connected group and OPERA support is limited to file-based migration.
+**Blocks:** RS-3 beyond R3; any live connection to an OPERA hotel. Not blocking other work.
+**Raised by / date:** Integration & Adoption lead, 2026-11-07
+
+### Q62 — On-site local connector: support commitment and legacy interface licensing    Status: open
+**Context:** Door-lock encoders, on-premise POS and OPERA 5.x cannot talk to a cloud service; they need software installed on the hotel network (`docs/adoption/rollout-requirements.md` §5). That creates obligations: updates, monitoring, incident response for equipment-dependent functions (keys at check-in), plus vendor interface licences. Some widely used legacy hotel interface protocols are owned by vendors (e.g. Oracle's PMS interface specifications); implementing a compatible interface may need a licence or partner agreement.
+**Question:** (a) Will Monoclay offer and support an on-site connector for resorts, and with what support hours? (b) May we pursue vendor interface agreements (POS, door locks, OPERA interfaces) where they carry fees or contractual obligations?
+**Default we are proceeding with:** design and build the local connector to R3 with business-hours support assumed; implement only interfaces whose documentation and usage terms we can verify; no vendor agreements signed; manual alternatives (encode keys in the lock vendor's software, manual POS posting lists) documented for pilots.
+**If the answer differs:** if no on-site connector, resorts with on-premise locks/POS must use cloud-native vendors or manual alternatives; RS-2 scope shrinks.
+**Blocks:** RS-2 live key issuance and POS posting beyond R4. Not blocking cloud-only setups.
+**Raised by / date:** Integration & Adoption lead, 2026-11-07
+
+### Q63 — Trial data governance: retention, roles, and real AI on copied hotel data    Status: open
+**Context:** Trials hold an authorized copy of a hotel's data in an isolated organization (`docs/adoption/evaluation-and-trial.md`). We need defaults for how long copied data is kept, whether Monoclay acts as the hotel's processor for trial copies, and whether trials may use real (paid) AI over copied guest data — today the environment policy simulates AI in trials.
+**Question:** Approve (a) trial expiry after 60 days of inactivity with deletion within 7 days of request (backups aging out per the backup policy), (b) Monoclay acting as processor under the hotel's data processing terms for trial copies, subject to professional review, and (c) keeping AI simulated in trials (or allowing real AI with a per-trial spending cap).
+**Default we are proceeding with:** (a) and (b) as stated, pending legal review of the processing terms; (c) AI stays simulated in trials; guest email/phone masked by default; identity documents and card data never copied.
+**If the answer differs:** configuration change (retention periods, policy value for `ai.inference` in `trial`) plus cost-model update if real AI is allowed.
+**Blocks:** trials with real hotel data (needs signed processing terms). Demo and sample-data work proceed.
+**Raised by / date:** Integration & Adoption lead, 2026-11-07
+
+### Q64 — Discovery with Maldivian hotels to confirm the systems they actually use    Status: open
+**Context:** Integration priorities must follow the systems our target customers use (adoption brief §5), not logo counts. This session could not verify which PMS, POS, accounting, payment acquirers, door locks and messaging tools Maldivian guesthouses and resorts use (web research budget exhausted; vendor hosts unreachable), so P0/P1 tiers for RS-1 and RS-2 rest partly on labeled assumptions (`docs/adoption/integration-coverage-matrix.md` §2).
+**Question:** Can you arrange 5–10 short discovery conversations (or a questionnaire) with Maldivian guesthouses and resorts — and, if possible, identify a candidate pilot property — so we can confirm their systems, versions, contracts and pain points?
+**Default we are proceeding with:** build the vendor-neutral pieces first (Portico POS posting API, journal file export, CSV and OPERA importers, Channex hub, email/WhatsApp); defer vendor-specific POS, ERP, lock and acquirer connectors until discovery confirms them.
+**If the answer differs:** priorities in the coverage matrix and roadmap are re-ranked; no completed work is lost.
+**Blocks:** choosing the RS-2 POS/ERP/lock vendors; any readiness level above R6 (needs a named hotel).
+**Raised by / date:** Integration & Adoption lead, 2026-11-07
