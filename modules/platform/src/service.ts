@@ -300,8 +300,24 @@ export async function createProperty(tx: TxContext, input: PropertyInput): Promi
       `"${input.timezone}" is not a recognised time zone. Use an IANA name such as Indian/Maldives.`,
     );
   }
-  // PLT-R10 / P2-8: `limits.properties` counts pilot and active properties and is enforced at activation (the
-  // activation checklist, under a tenant lock). A new property starts in setup, so creation is not limited by it.
+  // P2-8: two distinct caps. PLT-R10 (`limits.properties` counts pilot + active) is enforced at activation, under a
+  // tenant lock. Creation has a setup cap of the same size over properties that are not inactive, so a plan cannot
+  // accumulate unlimited setup properties; deactivating a property frees its slot.
+  const limit = await getLimit(tx, 'limits.properties');
+  if (limit !== null) {
+    const count = await db(tx)
+      .selectFrom('platform.properties')
+      .select(sql<number>`count(*)::int`.as('n'))
+      .where('status', '<>', 'inactive')
+      .executeTakeFirstOrThrow();
+    if (count.n >= limit) {
+      throw new BusinessRuleError(
+        'plan_limit_reached',
+        `Your plan allows ${limit} propert${limit === 1 ? 'y' : 'ies'}. Deactivate one you no longer use, or upgrade the plan to add more.`,
+        { limit: 'limits.properties', value: limit },
+      );
+    }
+  }
   await getLegalEntity(tx, input.legalEntityId);
   const id = newId();
   try {
