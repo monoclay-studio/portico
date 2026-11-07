@@ -556,6 +556,19 @@ export function paymentsHttp(deps: { database: PorticoDatabase; service: Payment
           return r;
         },
       );
+      // R4-P2-2: staff stopped a retired link in the provider dashboard (the provider never confirmed it): record it with
+      // the reason, close the owned exception, and let the replacement link go out.
+      app.post(
+        '/payments/requests/:id/link-stopped',
+        { schema: { tags, params: idParams, body: cancelRequestInput, response: { 200: paymentRequest } } },
+        async (req) => {
+          await idem(req, 'POST /payments/requests/:id/link-stopped', async (t) => {
+            await svc.tx.confirmLinkStopped(t, { requestId: req.params.id, reason: req.body.reason });
+            return { ok: true };
+          });
+          return svc.view.request(req.ctx, req.params.id);
+        },
+      );
       app.post(
         '/payments/requests/:id/simulate-payment',
         {

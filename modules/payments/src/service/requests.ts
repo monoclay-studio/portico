@@ -487,7 +487,7 @@ export async function raiseLinkNotStopped(tx: TxContext, r: RequestRow, why: str
     businessImpact:
       'The guest could still pay the old link, and the new link (if any) is held back so the guest is not asked twice.',
     nextStep:
-      'Stop the link in the provider dashboard, then confirm it here ("link stopped"); or send the replacement accepting the risk of a double payment.',
+      'Stop the link in the provider dashboard, then confirm it on the payment request ("Link stopped", with what you did). The replacement link is created then.',
     ownerRole: 'finance',
     responsibleParty: 'hotel',
     ref: { type: 'payment_request', id: r.id },
