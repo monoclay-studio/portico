@@ -8,7 +8,7 @@
  */
 import { addDays } from '@portico/kernel';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { STEP_KEYS, SimulatedCrash, type StepKey } from '../src';
+import { SimulatedCrash, STEP_KEYS, type StepKey } from '../src';
 import {
   addStay,
   assertBooksBalance,
@@ -40,7 +40,8 @@ const POINTS: Point[] = [
   ...WITH_ITEMS.map((step) => ({ at: 'insideItem' as const, step })),
 ];
 
-const nightOf = (date: string) => new Date(new Date(NIGHT).getTime() + (Date.parse(date) - Date.parse(D))).toISOString();
+const nightOf = (date: string) =>
+  new Date(new Date(NIGHT).getTime() + (Date.parse(date) - Date.parse(D))).toISOString();
 
 describe('crash at every step boundary and inside every step, then resume (E07)', () => {
   let day = D;
@@ -61,9 +62,9 @@ describe('crash at every step boundary and inside every step, then resume (E07)'
       afterStep: (s: StepKey) => (at === 'afterStep' && s === step ? crash(`after ${s}`) : undefined),
       insideItem: (s: StepKey) => (at === 'insideItem' && s === step ? crash(`inside ${s}`) : undefined),
     };
-    await expect(h.service.startRun(h.t.db, org.auditor, { propertyId: org.propertyId, hooks })).rejects.toBeInstanceOf(
-      SimulatedCrash,
-    );
+    await expect(
+      h.service.startRun(h.t.db, org.auditor, { propertyId: org.propertyId, hooks }),
+    ).rejects.toBeInstanceOf(SimulatedCrash);
     await assertBooksBalance(h, org);
     const runs = await org.run((tx) => h.service.listRuns(tx, org.propertyId, { limit: 1 }), org.auditor);
     const run = runs[0];

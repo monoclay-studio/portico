@@ -43,15 +43,15 @@ describe('S09: Day Close interrupted after 67 of 112 room postings', () => {
         propertyId: org.propertyId,
         hooks: {
           afterItem: (step, index) => {
-            if (step === 'room_and_package_postings' && index === 67) throw new SimulatedCrash('after 67 postings');
+            if (step === 'room_and_package_postings' && index === 67)
+              throw new SimulatedCrash('after 67 postings');
           },
         },
       }),
     ).rejects.toBeInstanceOf(SimulatedCrash);
 
-    const runId = (
-      await org.run((tx) => sql<{ id: string }>`select id from day_close.runs`.execute(tx.db))
-    ).rows[0]?.id as string;
+    const runId = (await org.run((tx) => sql<{ id: string }>`select id from day_close.runs`.execute(tx.db)))
+      .rows[0]?.id as string;
     const crashed = await org.run((tx) => h.service.getRun(tx, runId), auditor);
     // State: the dead process still holds the run; nothing pretends it finished or failed cleanly.
     expect(crashed.runStatus).toBe('running');

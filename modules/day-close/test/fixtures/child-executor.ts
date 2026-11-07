@@ -11,8 +11,8 @@ import { ratesService } from '@portico/rates';
 import { createDayCloseService } from '../../src';
 import {
   buildPorts,
-  FakeInventory,
   FakeIntegration,
+  FakeInventory,
   FakeOperations,
   FakePayments,
   financePortsFor,

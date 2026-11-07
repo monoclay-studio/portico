@@ -28,7 +28,9 @@ describe('run state machine', () => {
       ),
     ).toBe('room_and_package_postings');
     expect(
-      firstIncompleteStep(steps({ preflight: 'completed', no_shows: 'completed', room_and_package_postings: 'running' })),
+      firstIncompleteStep(
+        steps({ preflight: 'completed', no_shows: 'completed', room_and_package_postings: 'running' }),
+      ),
     ).toBe('room_and_package_postings');
     expect(firstIncompleteStep(steps(Object.fromEntries(STEP_KEYS.map((k) => [k, 'completed']))))).toBeNull();
   });
@@ -67,12 +69,19 @@ describe('run state machine', () => {
     expect(
       progressLine({ key: 'no_shows', status: 'completed', total: 3, done: 2, failed: 0, skipped: 1 }),
     ).toBe('No-shows: 2 of 3 arrivals done, 1 skipped');
-    expect(progressLine({ key: 'integrity', status: 'failed', total: null, done: 0, failed: 0, skipped: 0 })).toBe(
-      'Books balance: failed',
-    );
-    expect(progressLine({ key: 'payments_housekeeping', status: 'skipped', total: null, done: 0, failed: 0, skipped: 0 })).toBe(
-      'Payments housekeeping: skipped',
-    );
+    expect(
+      progressLine({ key: 'integrity', status: 'failed', total: null, done: 0, failed: 0, skipped: 0 }),
+    ).toBe('Books balance: failed');
+    expect(
+      progressLine({
+        key: 'payments_housekeeping',
+        status: 'skipped',
+        total: null,
+        done: 0,
+        failed: 0,
+        skipped: 0,
+      }),
+    ).toBe('Payments housekeeping: skipped');
   });
 });
 
@@ -88,7 +97,10 @@ describe('policy', () => {
     const p = { ...defaultPolicy(), warningCodes: ['entry_unbalanced'] };
     expect(policyProblems(p)).toHaveLength(1);
     for (const code of INTEGRITY_CODES) {
-      expect(classify({ code, severity: 'warning' }, p, true)).toEqual({ blocking: true, overridable: false });
+      expect(classify({ code, severity: 'warning' }, p, true)).toEqual({
+        blocking: true,
+        overridable: false,
+      });
     }
     expect(resolvePolicyValue(p, 'property').valid).toBe(false);
   });
@@ -103,11 +115,17 @@ describe('policy', () => {
       blocking: false,
       overridable: true,
     });
-    expect(classify({ code: 'payment_pending_verification', severity: 'warning' }, p, false).blocking).toBe(false);
+    expect(classify({ code: 'payment_pending_verification', severity: 'warning' }, p, false).blocking).toBe(
+      false,
+    );
     const strict = { ...p, blockingCodes: ['payment_pending_verification'] };
-    expect(classify({ code: 'payment_pending_verification', severity: 'warning' }, strict, false).blocking).toBe(true);
+    expect(
+      classify({ code: 'payment_pending_verification', severity: 'warning' }, strict, false).blocking,
+    ).toBe(true);
     const lenient = { ...p, warningCodes: ['departure_not_checked_out'] };
-    expect(classify({ code: 'departure_not_checked_out', severity: 'blocking' }, lenient, false).blocking).toBe(false);
+    expect(
+      classify({ code: 'departure_not_checked_out', severity: 'blocking' }, lenient, false).blocking,
+    ).toBe(false);
   });
 
   it('makes arrivals block only when no-shows are decided by hand', () => {
@@ -121,13 +139,21 @@ describe('policy', () => {
 describe('readiness rules', () => {
   const now = new Date('2026-11-07T18:00:00Z');
   it('treats an arrival as transfer-delayed when its estimate is later than scheduled or still ahead', () => {
-    expect(transferDelayed({ scheduledAt: '2026-11-07T10:00:00Z', estimatedAt: '2026-11-07T13:30:00Z' }, null, now)).toBe(
-      true,
-    );
+    expect(
+      transferDelayed(
+        { scheduledAt: '2026-11-07T10:00:00Z', estimatedAt: '2026-11-07T13:30:00Z' },
+        null,
+        now,
+      ),
+    ).toBe(true);
     expect(transferDelayed({ scheduledAt: null, estimatedAt: '2026-11-07T18:30:00Z' }, null, now)).toBe(true);
-    expect(transferDelayed({ scheduledAt: '2026-11-07T10:00:00Z', estimatedAt: '2026-11-07T10:00:00Z' }, null, now)).toBe(
-      false,
-    );
+    expect(
+      transferDelayed(
+        { scheduledAt: '2026-11-07T10:00:00Z', estimatedAt: '2026-11-07T10:00:00Z' },
+        null,
+        now,
+      ),
+    ).toBe(false);
     expect(transferDelayed({ scheduledAt: null, estimatedAt: null }, '2026-11-07T19:00:00Z', now)).toBe(true);
     expect(transferDelayed({ scheduledAt: null, estimatedAt: null }, '14:00', now)).toBe(false);
     expect(transferDelayed({ scheduledAt: null, estimatedAt: 'not a date' }, null, now)).toBe(false);
@@ -151,7 +177,10 @@ describe('readiness rules', () => {
 
 describe('statistics', () => {
   it('computes occupancy, ADR and RevPAR exactly, excluding complimentary and house use', () => {
-    const k = computeKpis({ capacity: 120, outOfOrder: 4, sold: 87, complimentary: 2, houseUse: 1 }, 8_700_050);
+    const k = computeKpis(
+      { capacity: 120, outOfOrder: 4, sold: 87, complimentary: 2, houseUse: 1 },
+      8_700_050,
+    );
     expect(k.available).toBe(115);
     expect(k.occupancyPercent).toBe('75.65');
     expect(k.adrMinor).toBe(100_001); // 8,700,050 / 87 = 100,000.57 → 100,001 (half up, once)
@@ -165,17 +194,24 @@ describe('statistics', () => {
       adrMinor: 0,
       revparMinor: 0,
     });
-    expect(computeKpis({ capacity: 10, outOfOrder: 12, sold: 0, complimentary: 0, houseUse: 0 }, 0).available).toBe(0);
-    expect(computeKpis({ capacity: 10, outOfOrder: 0, sold: 10, complimentary: 0, houseUse: 0 }, 1).occupancyPercent).toBe(
-      '100.00',
-    );
+    expect(
+      computeKpis({ capacity: 10, outOfOrder: 12, sold: 0, complimentary: 0, houseUse: 0 }, 0).available,
+    ).toBe(0);
+    expect(
+      computeKpis({ capacity: 10, outOfOrder: 0, sold: 10, complimentary: 0, houseUse: 0 }, 1)
+        .occupancyPercent,
+    ).toBe('100.00');
   });
 });
 
 describe('schedule', () => {
   it('puts morning times after midnight and evening times on the business date', () => {
-    expect(scheduledInstant('2026-11-07', '02:00', 'Indian/Maldives').toISOString()).toBe('2026-11-07T21:00:00.000Z');
-    expect(scheduledInstant('2026-11-07', '23:30', 'Indian/Maldives').toISOString()).toBe('2026-11-07T18:30:00.000Z');
+    expect(scheduledInstant('2026-11-07', '02:00', 'Indian/Maldives').toISOString()).toBe(
+      '2026-11-07T21:00:00.000Z',
+    );
+    expect(scheduledInstant('2026-11-07', '23:30', 'Indian/Maldives').toISOString()).toBe(
+      '2026-11-07T18:30:00.000Z',
+    );
     expect(earliestStart('2026-11-07', null, 'Indian/Maldives')).toBeNull();
   });
 
@@ -184,7 +220,9 @@ describe('schedule', () => {
     const t = scheduledInstant('2027-03-27', '01:30', 'Europe/London');
     expect(t.toISOString()).toBe('2027-03-28T01:00:00.000Z'); // 02:00 BST
     // The business date logic is unaffected: the same rule on a normal night.
-    expect(scheduledInstant('2027-03-20', '01:30', 'Europe/London').toISOString()).toBe('2027-03-21T01:30:00.000Z');
+    expect(scheduledInstant('2027-03-20', '01:30', 'Europe/London').toISOString()).toBe(
+      '2027-03-21T01:30:00.000Z',
+    );
   });
 
   it('retries transient failures three times five minutes apart and never integrity failures', () => {

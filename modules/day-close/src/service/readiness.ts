@@ -194,7 +194,9 @@ export async function collectReadiness(
 
   const gather = async (source: string, fn: () => Promise<RawItem[]>) => {
     try {
-      raws.push(...(await withSavepoint(tx, `dcl_src_${source}`, fn)));
+      raws.push(
+        ...(await withSavepoint(tx, `dcl_src_${source.toLowerCase().replace(/[^a-z0-9_]/g, '_')}`, fn)),
+      );
     } catch (err) {
       const reason =
         err instanceof DomainError

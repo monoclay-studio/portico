@@ -10,7 +10,13 @@
  */
 import { join } from 'node:path';
 import { sourcesFromManifests, sql, type TxContext, withTenantTx } from '@portico/db';
-import { createFinance, type FinancePorts, type FinanceService, financeManifest, financeProvider } from '@portico/finance';
+import {
+  createFinance,
+  type FinancePorts,
+  type FinanceService,
+  financeManifest,
+  financeProvider,
+} from '@portico/finance';
 import { ROLE_TEMPLATES } from '@portico/identity';
 import {
   BusinessRuleError,
@@ -63,8 +69,14 @@ const asSystem = <T extends { authz: unknown }>(tx: T): T => ({ ...tx, authz: sy
 // ───────────────────────────── strict fakes ─────────────────────────────
 
 export class FakePayments {
-  pending: Array<{ propertyId: string; type: string; id: string; amountMinor: number; currency: string; since: string }> =
-    [];
+  pending: Array<{
+    propertyId: string;
+    type: string;
+    id: string;
+    amountMinor: number;
+    currency: string;
+    since: string;
+  }> = [];
   /** bookingId → agreed guarantee basis (ADR-0015 Amendment 1). Absent = no agreed guarantee. */
   agreedGuarantee = new Map<string, 'cardholder_supplied' | 'mandate' | 'channel_card'>();
   /** When set, collection is not connected (the composition stub's behaviour). */
@@ -81,11 +93,22 @@ export class FakeInventory {
 }
 
 export class FakeOperations {
-  conditions = new Map<string, Array<{ unitId: string; unitNumber: string; condition: string | null; discrepancy: string | null }>>();
+  conditions = new Map<
+    string,
+    Array<{ unitId: string; unitNumber: string; condition: string | null; discrepancy: string | null }>
+  >();
 }
 
 export class FakeIntegration {
-  exceptions: Array<{ propertyId: string; id: string; severity: string; problem: string; nextStep: string; responsibleParty: string; workflow: string | null }> = [];
+  exceptions: Array<{
+    propertyId: string;
+    id: string;
+    severity: string;
+    problem: string;
+    nextStep: string;
+    responsibleParty: string;
+    workflow: string | null;
+  }> = [];
   exportConnected = false;
   readonly exports: string[] = [];
 }
@@ -168,14 +191,20 @@ function fakeReservations(rates: RatesService, finance: FinanceService): DayClos
       return rows.map(due);
     },
     async markNoShow(tx, input) {
-      const { rows } = await sql<Row>`select * from dcl_fake.stays where id = ${input.stayId} for update`.execute(tx.db);
+      const { rows } =
+        await sql<Row>`select * from dcl_fake.stays where id = ${input.stayId} for update`.execute(tx.db);
       const r = rows[0];
       if (!r) throw new NotFoundError('stay', input.stayId);
       if (r.property_id !== input.propertyId)
         throw new BusinessRuleError('stay_other_property', 'This stay belongs to another property.');
       if (r.status === 'no_show') {
         const rec = r.no_show as { penalty: Money; penaltyPostingIds: string[] };
-        return { stayId: r.id, penalty: rec.penalty, penaltyPostingIds: rec.penaltyPostingIds, replayed: true };
+        return {
+          stayId: r.id,
+          penalty: rec.penalty,
+          penaltyPostingIds: rec.penaltyPostingIds,
+          replayed: true,
+        };
       }
       if (r.status !== 'expected')
         throw new BusinessRuleError('invalid_stay_transition', `A ${r.status} stay cannot become a no-show.`);
@@ -186,18 +215,22 @@ function fakeReservations(rates: RatesService, finance: FinanceService): DayClos
       const penalty = rates.evaluateCancellationPenalty(seg.terms, tx.now, { event: 'no_show' }).amount;
       let penaltyPostingIds: string[] = [];
       if (penalty.amountMinor > 0 && r.commercial_type === 'standard') {
-        const posted = await financeProvider(finance, 'reservations').postCharge(tx, { propertyId: r.property_id }, {
-          propertyId: r.property_id,
-          target: { type: 'stay', id: r.id },
-          chargeCode: 'CXL',
-          amount: penalty,
-          serviceDate: r.arrival,
-          description: 'No-show charge per agreed terms',
-          sourceRef: { type: 'stay', id: r.id },
-          idempotencyKey: `penalty:no_show:${r.id}`,
-          taxMode: 'compute',
-          reason: `No-show for arrival ${r.arrival}`,
-        });
+        const posted = await financeProvider(finance, 'reservations').postCharge(
+          tx,
+          { propertyId: r.property_id },
+          {
+            propertyId: r.property_id,
+            target: { type: 'stay', id: r.id },
+            chargeCode: 'CXL',
+            amount: penalty,
+            serviceDate: r.arrival,
+            description: 'No-show charge per agreed terms',
+            sourceRef: { type: 'stay', id: r.id },
+            idempotencyKey: `penalty:no_show:${r.id}`,
+            taxMode: 'compute',
+            reason: `No-show for arrival ${r.arrival}`,
+          },
+        );
         penaltyPostingIds = posted.postingIds;
       }
       await sql`update dcl_fake.stays set status = 'no_show', version = version + 1,
@@ -227,7 +260,13 @@ export function financePortsFor(rates: RatesService): FinancePorts {
     platform: {
       async getProperty(tx, id) {
         const p = await platform.getProperty(asSystem(tx), id);
-        return { id: p.id, name: p.name, legalEntityId: p.legalEntityId, baseCurrency: p.baseCurrency, timezone: p.timezone };
+        return {
+          id: p.id,
+          name: p.name,
+          legalEntityId: p.legalEntityId,
+          baseCurrency: p.baseCurrency,
+          timezone: p.timezone,
+        };
       },
       getBusinessDate: (tx, id) => platform.getBusinessDate(tx, id),
       async getLegalEntity(tx, id) {
@@ -340,7 +379,10 @@ export function buildPorts(rates: RatesService, finance: FinanceService, fakes: 
         });
       },
       dailyRevenue: (tx, scope, input) =>
-        finance.dailyRevenue(asSystem(tx), { propertyId: scope.propertyId, businessDate: input.businessDate }),
+        finance.dailyRevenue(asSystem(tx), {
+          propertyId: scope.propertyId,
+          businessDate: input.businessDate,
+        }),
     },
     payments: {
       async listUnresolved(_tx, input) {
@@ -352,17 +394,23 @@ export function buildPorts(rates: RatesService, finance: FinanceService, fakes: 
         };
       },
       async collectAgreedNoShowFee(tx, input) {
-        if (!fakes.payments.collectionConnected) throw new ModuleUnavailableError('payments', 'collectAgreedNoShowFee');
+        if (!fakes.payments.collectionConnected)
+          throw new ModuleUnavailableError('payments', 'collectAgreedNoShowFee');
         const basis = fakes.payments.agreedGuarantee.get(input.bookingId);
         if (!basis) {
           return {
             outcome: 'not_agreed' as const,
             paymentId: null,
-            reason: 'the booking has no card its cardholder supplied for it and no recorded mandate covering a no-show charge.',
+            reason:
+              'the booking has no card its cardholder supplied for it and no recorded mandate covering a no-show charge.',
             mode: null,
           };
         }
-        fakes.payments.collections.push({ stayId: input.stayId, amount: input.amount, key: input.idempotencyKey });
+        fakes.payments.collections.push({
+          stayId: input.stayId,
+          amount: input.amount,
+          key: input.idempotencyKey,
+        });
         return {
           outcome: 'requested' as const,
           paymentId: newId(),
@@ -407,7 +455,8 @@ export function buildPorts(rates: RatesService, finance: FinanceService, fakes: 
         return fakes.integration.exceptions.filter((e) => e.propertyId === input.propertyId);
       },
       async queueJournalExport(_tx, input) {
-        if (!fakes.integration.exportConnected) throw new ModuleUnavailableError('integration', 'queueJournalExport');
+        if (!fakes.integration.exportConnected)
+          throw new ModuleUnavailableError('integration', 'queueJournalExport');
         fakes.integration.exports.push(input.idempotencyKey);
         return { status: 'queued' as const, exportId: newId() };
       },
@@ -440,7 +489,8 @@ export function ratesPortsFor(): RatesPorts {
       };
     },
     assertWritable: (tx, propertyId, domain) => platform.assertWritable(tx, propertyId, domain),
-    resolvePolicy: (tx, propertyId, key, defaultValue) => platform.resolvePolicy(tx, propertyId, key, defaultValue),
+    resolvePolicy: (tx, propertyId, key, defaultValue) =>
+      platform.resolvePolicy(tx, propertyId, key, defaultValue),
     getBusinessDate: (tx, propertyId) => platform.getBusinessDate(tx, propertyId),
   };
 }
@@ -493,7 +543,8 @@ export async function setupOrg(
 ): Promise<Org> {
   const environment = opts.environment ?? 'live';
   const admin = testContext({ environment, actor: { kind: 'user', userId: newId(), displayName: 'Admin' } });
-  const run = <T>(fn: (tx: TxContext) => Promise<T>, ctx: RequestContext = admin) => withTenantTx(h.t.db, ctx, fn);
+  const run = <T>(fn: (tx: TxContext) => Promise<T>, ctx: RequestContext = admin) =>
+    withTenantTx(h.t.db, ctx, fn);
   await run((tx) =>
     platform.provisionOrganization(tx, {
       name: 'Kandu Atoll',
@@ -522,7 +573,11 @@ export async function setupOrg(
       timezone: 'Indian/Maldives',
       baseCurrency: 'USD',
       businessDate: opts.businessDate ?? D,
-      classification: { 'mv.establishmentType': 'resort', 'mv.inhabitedIsland': false, 'mv.registeredRooms': 120 },
+      classification: {
+        'mv.establishmentType': 'resort',
+        'mv.inhabitedIsland': false,
+        'mv.registeredRooms': 120,
+      },
     }),
   );
   const propertyId = property.id;
@@ -548,7 +603,9 @@ export async function setupOrg(
       { code: 'TRANSFER_SEAPLANE', name: 'Seaplane transfer', group: 'transfer', taxGroup: 'transfer' },
       { code: 'ACTIVITY_EXCURSION', name: 'Excursion', group: 'activity', taxGroup: 'activity' },
     ] as const)
-      await h.finance.createChargeCode(tx, { propertyId, ...c } as Parameters<FinanceService['createChargeCode']>[1]);
+      await h.finance.createChargeCode(tx, { propertyId, ...c } as Parameters<
+        FinanceService['createChargeCode']
+      >[1]);
   });
   const unitTypes = [
     { id: newId(), code: 'BV', name: 'Beach Villa' },
@@ -559,7 +616,11 @@ export async function setupOrg(
     return seedResortRates(h.rates, tx, { propertyId, unitTypes, from: '2026-10-01', days: 400 });
   });
   h.fakes.inventory.capacityByProperty.set(propertyId, opts.capacity ?? 120);
-  const as = (permissions: readonly string[], propertyIds: string[] | 'all' = [propertyId], name = 'Staff') => ({
+  const as = (
+    permissions: readonly string[],
+    propertyIds: string[] | 'all' = [propertyId],
+    name = 'Staff',
+  ) => ({
     ...admin,
     actor: { kind: 'user' as const, userId: newId(), displayName: name },
     authz: staticAuthorizer(permissions.map((permission) => ({ permission, propertyIds }))),
@@ -609,7 +670,8 @@ export async function addStay(h: Harness, org: Org, o: StayOptions) {
     }),
   );
   const offer = quoted.offers[0] as Offer;
-  if (!offer?.bookable) throw new Error(`no bookable offer for ${o.plan ?? 'BAR'} ${o.arrival}–${o.departure}`);
+  if (!offer?.bookable)
+    throw new Error(`no bookable offer for ${o.plan ?? 'BAR'} ${o.arrival}–${o.departure}`);
   const terms = o.mutateTerms ? o.mutateTerms(offer.terms) : offer.terms;
   await org.run(async (tx) => {
     await h.finance.openFolio(tx, {
@@ -630,10 +692,14 @@ export async function addStay(h: Harness, org: Org, o: StayOptions) {
 
 /** Check a stay in (the fake's state change, as reservations' check-in would). */
 export async function checkIn(org: Org, stayId: string) {
-  await org.run((tx) => sql`update dcl_fake.stays set status = 'in_house' where id = ${stayId}`.execute(tx.db));
+  await org.run((tx) =>
+    sql`update dcl_fake.stays set status = 'in_house' where id = ${stayId}`.execute(tx.db),
+  );
 }
 export async function checkOut(org: Org, stayId: string) {
-  await org.run((tx) => sql`update dcl_fake.stays set status = 'checked_out' where id = ${stayId}`.execute(tx.db));
+  await org.run((tx) =>
+    sql`update dcl_fake.stays set status = 'checked_out' where id = ${stayId}`.execute(tx.db),
+  );
 }
 export async function extendStay(org: Org, stayId: string, departure: LocalDate) {
   await org.run((tx) =>

@@ -42,7 +42,10 @@ async function runAndKill(org: Org, runId: string, step: string, hangAt: number)
     err += String(d);
   });
   const hung = await new Promise<string>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`child did not reach the hang point: ${out}\n${err}`)), 45_000);
+    const timer = setTimeout(
+      () => reject(new Error(`child did not reach the hang point: ${out}\n${err}`)),
+      45_000,
+    );
     child.stdout?.on('data', (d) => {
       out += String(d);
       const m = /HANGING (\S+) (\d+)/.exec(out);
