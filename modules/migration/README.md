@@ -8,7 +8,7 @@
   export adapters (layouts **unverified**), the PMS simulator as a source, the import ledger (exactly once), the
   reconciliation engine (the sign-off artefact), the seven human steps, the production gate, the cutover journal,
   rollback, the card re-collection list, the cross-organization trial rehearsal, the composition wiring and tests.
-- **Known failing tests:** none. 93 module tests (48 domain, 45 integration on a real database) + 3 HTTP tests in
+- **Known failing tests:** none. 95 module tests (48 domain, 47 integration on a real database) + 3 HTTP tests in
   `apps/api/test/migration.test.ts`.
 - **Next:** increment 3 (OPERA concept map, File Export pack, OHIP extractor against public specs + simulator) — see
   "Next increment" below. Real providers for MIG-CR-1/3/4/5 (FOUNDATION_REQUESTS.md) to make the live path work end

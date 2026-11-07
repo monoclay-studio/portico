@@ -73,7 +73,7 @@ evidence labels ([V] verified documentation, [S] secondary, [3P] third party, [V
 | EC-MIG-016 | The same channel booking id on two reservations (FIDI) | Both blocked until a person decides; never two bookings | P0 | tested | src/domain/pack.test.ts:328 |
 | EC-MIG-017 | One unit assigned to two overlapping stays; more stays than units | Blocking for the reservations manager; overbooking imported as a visible inventory conflict | P0 | tested | src/domain/pack.test.ts:328 |
 | EC-MIG-018 | A "confirmed" stay already over; an "in house" stay not covering today | Blocking with the dates explained | P0 | tested | src/domain/pack.test.ts:371 |
-| EC-MIG-019 | Booking marked prepaid but no deposit listed | Blocking for finance; finance may decide "import as is" | P1 | tested | src/domain/pack.test.ts:371 |
+| EC-MIG-019 | Booking marked prepaid but no deposit listed | Blocking FINANCIAL exception (finance owns and closes it); finance may decide "import as is"; then imported once | P1 | tested | src/domain/pack.test.ts:371; test/scenario-s18-opening-balances.test.ts:295 (decision by finance → imported once) |
 | EC-MIG-020 | Folio charges − payments ≠ balance | Blocking for finance | P0 | tested | src/domain/pack.test.ts:250 |
 | EC-MIG-021 | Masked names / emails in the export | Record blocked (names) or contact dropped with a warning; > 20 % masked flags the export | P0 | tested | src/domain/pack.test.ts:233; test/safety-isolation.test.ts:74 |
 | EC-MIG-022 | A card number in any cell of any file | Whole upload refused; nothing stored; refusal audited with row/column only | P0 | tested | test/safety-isolation.test.ts:33; src/domain/files.test.ts:110 |
@@ -87,4 +87,5 @@ evidence labels ([V] verified documentation, [S] secondary, [3P] third party, [V
 | EC-MIG-030 | The SMB export has no room list | Unit types derived (warning); stays shown as inventory conflicts until units exist | P1 | tested | test/smb-export.test.ts:19 |
 | EC-MIG-031 | Events raised by the migration's own cutover run | Not journaled as post-cutover activity | P1 | tested | test/scenario-guesthouse-same-day.test.ts:283 |
 | EC-MIG-032 | The same bookings arrive through a second, different source adapter | Not yet detected across sources (different ledger namespace) | P1 | specified | — README Known gaps |
+| EC-MIG-034 | A migration with a planned switch is cancelled | The open authority transition is cancelled; the old system stays the system of record; the job is closed | P1 | tested | test/production-gate.test.ts:224 |
 | EC-MIG-033 | A guest asks for erasure while a migration still holds their source rows | Purged 30 days after the migration ends; immediate per-subject erasure needs guests' erase hook (MIG-CR-2) | P1 | specified | — README Known gaps |

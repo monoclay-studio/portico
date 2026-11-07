@@ -290,3 +290,39 @@ describe('S18: opening balances against the previous system’s closing balances
     );
   });
 });
+
+describe('finance decides an unclear booking', () => {
+  it('a booking marked prepaid without a deposit waits; finance may import it as is; it is then imported once', async () => {
+    const org = await setupOrg(h, { environment: 'trial' });
+    const pack = sampleGuesthousePack(org.businessDate);
+    const { lead, jobId } = await rehearse(org, {
+      deposits: pack.deposits.filter((d) => d[0] !== 'CN1008'),
+      control_totals: pack.control_totals.map((r) =>
+        r[0] === 'deposit' ? ['deposit', 'USD', '1', '100.00'] : r,
+      ),
+    });
+    const ex = (await openExceptions(org, jobId)).find((e) => e.code === 'prepaid_without_deposit');
+    expect(ex).toMatchObject({ source_key: 'CN1008' });
+    expect(
+      await org.run(
+        async (tx) =>
+          (await migration.loadLedger(tx, await migration.getJob(tx, jobId))).get('reservation:CN1008')
+            ?.state,
+      ),
+    ).toBe('exception');
+    await org.run(
+      (tx) =>
+        migration.resolveException(tx, ex?.id as string, {
+          outcome: 'import_as_is',
+          resolution: 'Guaranteed by the company; no deposit was taken (confirmed with the controller).',
+        }),
+      org.user('Finance', FIN),
+    );
+    await migration.runPipeline(h.t.db, h.deps, lead, jobId);
+    const l = await org.run(async (tx) =>
+      (await migration.loadLedger(tx, await migration.getJob(tx, jobId))).get('reservation:CN1008'),
+    );
+    expect(l?.state).toBe('imported');
+    expect(await org.run((tx) => h.reservations.count(tx, org.propertyId))).toBe(8);
+  });
+});

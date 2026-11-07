@@ -219,3 +219,23 @@ describe('environment safety', () => {
     ).rejects.toMatchObject({ code: 'rehearsal_org_not_trial' });
   });
 });
+
+describe('cancelling a planned migration', () => {
+  it('cancels the open authority transition; the old system stays the system of record (truthfully)', async () => {
+    const f = await productionInSync(h);
+    const job = await f.live.run(
+      (tx) => migration.cancelJob(tx, h.deps, f.jobId, 'Hotel postponed the move'),
+      f.lead,
+    );
+    expect(job.state).toBe('cancelled');
+    const t = await f.live.run(
+      async (tx) => (await platform.listAuthorityTransitions(asSystem(tx), f.live.propertyId))[0],
+    );
+    expect(t?.status).toBe('cancelled');
+    const auth = await f.live.run((tx) => platform.getDataAuthority(tx, f.live.propertyId, 'reservations'));
+    expect(auth).toMatchObject({ authority: 'external', writeMode: 'read_only' });
+    await expect(migration.runPipeline(h.t.db, h.deps, f.lead, f.jobId)).rejects.toMatchObject({
+      code: 'migration_closed',
+    });
+  });
+});

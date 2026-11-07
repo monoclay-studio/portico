@@ -172,6 +172,14 @@ export const OWNER_FOR: Record<DataClass, string> = {
   ar_open_item: 'Finance controller',
 };
 
+/** Problems on non-financial records whose decision is a money decision (finance owns and closes them). */
+export const FINANCIAL_CODES: ReadonlySet<string> = new Set([
+  'prepaid_without_deposit',
+  'in_house_without_balance',
+  'total_mismatch',
+  'nightly_total_mismatch',
+]);
+
 /** Open (or refresh) an exception; deduplicated per job, class, record and problem code (repeat count). */
 export async function raiseException(
   tx: TxContext,
@@ -188,7 +196,7 @@ export async function raiseException(
     financial?: boolean;
   },
 ): Promise<void> {
-  const financial = e.financial ?? FINANCIAL_CLASSES.has(e.dataClass);
+  const financial = e.financial ?? (FINANCIAL_CLASSES.has(e.dataClass) || FINANCIAL_CODES.has(e.code));
   const impact =
     e.impact ??
     (e.severity === 'blocking'
@@ -214,7 +222,7 @@ export async function raiseException(
       problem: e.problem,
       impact,
       proposed_resolution: proposed,
-      owner_role: e.ownerRole ?? OWNER_FOR[e.dataClass],
+      owner_role: e.ownerRole ?? (financial ? 'Finance controller' : OWNER_FOR[e.dataClass]),
       owner_user_id: null,
       due_at: new Date(tx.now.getTime() + (e.severity === 'blocking' ? 1 : 3) * 86_400_000),
       status: 'open',
