@@ -421,6 +421,7 @@ async function advance(s: StepContext): Promise<StepOutcome> {
       expected: D,
       dayCloseRunId: s.run.id,
     });
+    await s.hooks.insideItem?.('advance', 0);
     // Completion commits in the SAME transaction as the advance: a crash cannot leave the date advanced while the
     // step looks unfinished (resume never advances twice).
     await setStep(tx, s.run.id, 'advance', {
