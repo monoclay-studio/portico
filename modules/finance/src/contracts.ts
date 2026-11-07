@@ -40,6 +40,30 @@ export const payerRef = z.object({
 export type OwnerRef = z.infer<typeof ownerRef>;
 export type PayerRef = z.infer<typeof payerRef>;
 
+// ───────────────────────────── Universal record contract (docs/product/experience-architecture.md) ───────────
+
+export const recordAction = z.object({
+  action: z.string(),
+  label: z.string(),
+  enabled: z.boolean(),
+  reason: z.string().optional(),
+  previewRequired: z.boolean().optional(),
+});
+export const recordIssue = z.object({
+  code: z.string(),
+  severity: z.enum(['blocking', 'warning', 'info']),
+  message: z.string(),
+  owner: z.object({ kind: z.enum(['user', 'department']), id: z.string(), name: z.string().optional() }).optional(),
+  since: z.string().optional(),
+});
+export const recordLink = z.object({ rel: z.string(), type: z.string(), id: z.string(), title: z.string().optional() });
+export const recordFields = {
+  allowedActions: z.array(recordAction),
+  issues: z.array(recordIssue),
+  owner: z.object({ kind: z.enum(['user', 'department']), id: z.string(), name: z.string().optional() }).optional(),
+  links: z.array(recordLink),
+};
+
 // ───────────────────────────── Chart of accounts & charge codes ─────────────────────────────
 
 export const account = z.object({
@@ -111,13 +135,19 @@ export const folio = z.object({
   id: uuid,
   propertyId: uuid,
   legalEntityId: uuid,
-  owner: ownerRef,
+  /** The record the folio belongs to (stay, booking, group, company, house). `owner` in provider calls. */
+  attachedTo: ownerRef,
   payer: payerRef,
   label: z.string().nullable(),
   displayName: z.string(),
   currency: z.string(),
   isDefault: z.boolean(),
-  status: folioStatus,
+  /** Status per family (never merged): lifecycle, balance, invoicing. */
+  status: z.object({
+    folio: folioStatus,
+    balance: z.enum(['due', 'zero', 'credit']),
+    invoicing: z.enum(['nothing_to_invoice', 'not_invoiced', 'partly_invoiced', 'invoiced']),
+  }),
   reopenCount: z.number().int(),
   reopenedReason: z.string().nullable(),
   supplementaryOf: uuid.nullable(),
@@ -169,7 +199,7 @@ export const posting = z.object({
 });
 export type Posting = z.infer<typeof posting>;
 
-export const folioDetail = folio.extend({ postings: z.array(posting) });
+export const folioDetail = folio.extend({ postings: z.array(posting), ...recordFields });
 export type FolioDetail = z.infer<typeof folioDetail>;
 
 export const providedTaxLine = z.object({
@@ -441,8 +471,9 @@ export const fiscalDocument = z.object({
   issuedAt: z.string(),
   hash: z.string(),
   previousHash: z.string(),
-  status: z.enum(['issued', 'partially_credited', 'credited']),
+  status: z.object({ document: z.enum(['issued', 'partially_credited', 'credited']) }),
   snapshot: z.record(z.string(), z.unknown()),
+  ...recordFields,
 });
 export type FiscalDocument = z.infer<typeof fiscalDocument>;
 
@@ -466,9 +497,10 @@ export const receivablesAccount = receivablesAccountInput.extend({
   id: uuid,
   creditLimitMinor: z.number().int().nullable(),
   creditLimitMode: z.enum(['block', 'warn']),
-  status: z.enum(['active', 'on_hold', 'closed']),
+  status: z.object({ account: z.enum(['active', 'on_hold', 'closed']), credit: z.enum(['no_limit', 'within_limit', 'over_limit']) }),
   balance: moneyInput,
   version: z.number().int(),
+  ...recordFields,
 });
 export type ReceivablesAccount = z.infer<typeof receivablesAccount>;
 export const transferToReceivablesInput = z.object({
@@ -520,7 +552,7 @@ export const cashierSummary = z.object({
   id: uuid,
   propertyId: uuid,
   cashierName: z.string(),
-  status: z.enum(['open', 'closed']),
+  status: z.object({ session: z.enum(['open', 'closed']), count: z.enum(['not_counted', 'balanced', 'over', 'short']) }),
   openedAt: z.string(),
   closedAt: z.string().nullable(),
   openingFloats: amountsByCurrency,
@@ -529,6 +561,7 @@ export const cashierSummary = z.object({
   variance: amountsByCurrency.nullable(),
   byMethod: z.array(z.object({ method: z.string(), currency: z.string(), totalMinor: z.number().int(), count: z.number().int() })),
   version: z.number().int(),
+  ...recordFields,
 });
 export type CashierSummary = z.infer<typeof cashierSummary>;
 

@@ -27,6 +27,7 @@ import { categorize, type InvoiceItem, invoiceTotals, taxSummary } from '../doma
 import { renderTextPdf } from '../domain/pdf';
 import type { FiscalDocumentsTable, FiscalSeriesTable } from '../tables';
 import { adjustPosting } from './postings';
+import { documentRecord } from './records';
 import { actorKey, type Deps, db, delegated, displayName, isUniqueViolation, loadFolio, requestHash } from './support';
 
 /** Tolerance between the conversion rate used on an invoice and the central bank (MMA) rate — MIRA ±2%. */
@@ -200,12 +201,17 @@ async function creditedTotal(tx: TxContext, invoiceId: string): Promise<{ total:
 }
 
 async function toDocument(tx: TxContext, r: Selectable<FiscalDocumentsTable>): Promise<FiscalDocument> {
-  let status: FiscalDocument['status'] = 'issued';
+  let status: 'issued' | 'partially_credited' | 'credited' = 'issued';
+  let creditNotes: Array<{ id: string; number: string }> = [];
   if (r.kind === 'invoice') {
     const c = await creditedTotal(tx, r.id);
     if (c.cancelled || (c.total > 0 && c.total >= Math.abs(Number(r.total_minor)))) status = 'credited';
     else if (c.total > 0) status = 'partially_credited';
+    creditNotes = (
+      await db(tx).selectFrom('finance.fiscal_documents').select(['id', 'document_number']).where('original_document_id', '=', r.id).orderBy('chain_position').execute()
+    ).map((d) => ({ id: d.id, number: d.document_number }));
   }
+  const snapshot = r.snapshot as Record<string, unknown>;
   return {
     id: r.id,
     kind: r.kind,
@@ -220,8 +226,18 @@ async function toDocument(tx: TxContext, r: Selectable<FiscalDocumentsTable>): P
     issuedAt: new Date(r.issued_at).toISOString(),
     hash: r.hash,
     previousHash: r.previous_hash,
-    status,
-    snapshot: r.snapshot as Record<string, unknown>,
+    status: { document: status },
+    snapshot,
+    ...documentRecord(tx, {
+      id: r.id,
+      propertyId: r.property_id,
+      kind: r.kind,
+      status,
+      folioId: r.folio_id,
+      originalDocumentId: r.original_document_id,
+      snapshot,
+      creditNotes,
+    }),
   };
 }
 

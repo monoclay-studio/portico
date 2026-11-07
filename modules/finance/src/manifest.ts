@@ -39,4 +39,12 @@ export const financeManifest: ModuleManifest = {
   schema: 'finance',
   migrationsDir: join(dirname(fileURLToPath(import.meta.url)), '..', 'migrations'),
   permissions: FINANCE_PERMISSIONS,
+  recordTypes: [
+    { type: 'folio', label: 'Folio', readPermission: 'finance.folio.read', route: '/finance/folios/:id' },
+    { type: 'fiscal_document', label: 'Invoice or credit note', readPermission: 'finance.folio.read', route: '/finance/documents/:id' },
+    { type: 'receivables_account', label: 'Receivables account', readPermission: 'finance.receivables.read', route: '/finance/receivables/:id' },
+    { type: 'cashier_session', label: 'Cashier session', readPermission: 'finance.cashier.review', route: '/finance/cashier/:id' },
+    { type: 'billing_rule', label: 'Billing rule', readPermission: 'finance.folio.read' },
+    { type: 'journal_entry', label: 'Journal entry', readPermission: 'finance.ledger.read' },
+  ],
 };

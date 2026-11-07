@@ -10,6 +10,7 @@ import {
 } from '@portico/kernel';
 import type { Folio, FolioDetail, OpenFolioInput, OwnerRef, Posting } from '../contracts';
 import { assertCanClose, assertCanSettle, assertCanVoid, destinationAction } from '../domain/folio';
+import { folioInvoicing, folioRecord, type InvoicingState, invoicingState } from './records';
 import type { FolioOwnerType, PayerType } from '../domain/types';
 import {
   type Deps,
@@ -22,12 +23,12 @@ import {
   ownerDeparture,
 } from './support';
 
-export function toFolio(r: FolioRow, balanceMinor: number): Folio {
+export function toFolio(r: FolioRow, balanceMinor: number, invoicing: InvoicingState): Folio {
   return {
     id: r.id,
     propertyId: r.property_id,
     legalEntityId: r.legal_entity_id,
-    owner: { type: r.owner_type as FolioOwnerType, id: r.owner_id },
+    attachedTo: { type: r.owner_type as FolioOwnerType, id: r.owner_id },
     payer: {
       type: r.payer_type as PayerType,
       ...(r.payer_id ? { id: r.payer_id } : {}),
@@ -37,7 +38,11 @@ export function toFolio(r: FolioRow, balanceMinor: number): Folio {
     displayName: displayName(r),
     currency: r.currency,
     isDefault: r.is_default,
-    status: r.status,
+    status: {
+      folio: r.status,
+      balance: balanceMinor > 0 ? 'due' : balanceMinor < 0 ? 'credit' : 'zero',
+      invoicing,
+    },
     reopenCount: r.reopen_count,
     reopenedReason: r.reopened_reason,
     supplementaryOf: r.supplementary_of,
@@ -45,6 +50,11 @@ export function toFolio(r: FolioRow, balanceMinor: number): Folio {
     balance: { amountMinor: balanceMinor, currency: r.currency },
     version: r.version,
   };
+}
+
+async function folioView(tx: TxContext, r: FolioRow, balanceMinor: number): Promise<Folio> {
+  const inv = await folioInvoicing(tx, r.id);
+  return toFolio(r, balanceMinor, invoicingState(inv.invoiced, inv.uninvoicedCharges));
 }
 
 /** Open a folio for a payer. The first folio of an owner becomes its default folio. */
@@ -157,7 +167,22 @@ export async function getFolio(tx: TxContext, folioId: string): Promise<FolioDet
     createdAt: new Date(p.created_at).toISOString(),
   }));
   const balance = postings.reduce((s, p) => s + p.amount.amountMinor, 0);
-  return { ...toFolio(f, balance), postings };
+  const view = await folioView(tx, f, balance);
+  const record = await folioRecord(tx, {
+    id: f.id,
+    propertyId: f.property_id,
+    status: f.status,
+    balanceMinor: balance,
+    currency: f.currency,
+    owner: view.attachedTo,
+    payer: view.payer,
+    supplementaryOf: f.supplementary_of,
+    postDeparture: f.post_departure,
+    reopenedReason: f.reopened_reason,
+    postingCount: postings.length,
+    invoicing: view.status.invoicing,
+  });
+  return { ...view, postings, ...record };
 }
 
 /** Folios of an owner (stay, booking, group, company, house) with balances. */
@@ -179,7 +204,9 @@ export async function listFolios(tx: TxContext, input: { owner: OwnerRef }): Pro
     .execute();
   const first = rows[0];
   if (first) requirePermission(tx, 'finance.folio.read', { propertyId: first.property_id });
-  return rows.map((r) => toFolio(r, Number(r.balance ?? 0)));
+  const out: Folio[] = [];
+  for (const r of rows) out.push(await folioView(tx, r, Number(r.balance ?? 0)));
+  return out;
 }
 
 async function changeStatus(
@@ -222,7 +249,7 @@ export async function settleFolio(tx: TxContext, folioId: string, expectedVersio
     aggregate: { type: 'folio', id: folioId },
     payload: { folioId, owner: { type: f.owner_type, id: f.owner_id } },
   });
-  return toFolio(row, balance);
+  return folioView(tx, row, balance);
 }
 
 /** Internal settle used after receivables transfer (no version check, folio already locked). */
@@ -244,7 +271,7 @@ export async function closeFolio(tx: TxContext, folioId: string, expectedVersion
   requirePermission(tx, 'finance.folio.manage', { propertyId: f.property_id });
   assertCanClose(f.status);
   const row = await changeStatus(tx, f, expectedVersion, { status: 'closed' }, 'finance.folio.close');
-  return toFolio(row, await folioBalance(tx, folioId));
+  return folioView(tx, row, await folioBalance(tx, folioId));
 }
 
 export async function voidFolio(tx: TxContext, folioId: string, expectedVersion: number, reason: string): Promise<Folio> {
@@ -269,7 +296,7 @@ export async function voidFolio(tx: TxContext, folioId: string, expectedVersion:
     );
   }
   const row = await changeStatus(tx, f, expectedVersion, { status: 'voided', is_default: false }, 'finance.folio.void', reason);
-  return toFolio(row, 0);
+  return folioView(tx, row, 0);
 }
 
 /**

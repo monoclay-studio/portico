@@ -5,6 +5,7 @@ import { type CurrencyAmounts, cashVariance } from '../domain/cashier';
 import type { LineDraft } from '../domain/ledger';
 import type { CashierSessionsTable } from '../tables';
 import { prepareDestination } from './folios';
+import { cashierRecord } from './records';
 import {
   actorKey,
   actorName,
@@ -24,7 +25,7 @@ import { bridgeLines, recordCashMovement } from './tender';
 
 const asAmounts = (v: unknown): CurrencyAmounts => (v ?? {}) as CurrencyAmounts;
 
-async function summary(tx: TxContext, s: Selectable<CashierSessionsTable>): Promise<CashierSummary> {
+async function summary(tx: TxContext, s: Selectable<CashierSessionsTable>, currentBusinessDate?: string): Promise<CashierSummary> {
   const moves = await db(tx).selectFrom('finance.cash_movements').select(['currency', 'amount_minor', 'kind']).where('session_id', '=', s.id).execute();
   const { expected } = cashVariance(
     asAmounts(s.opening_floats),
@@ -43,11 +44,19 @@ async function summary(tx: TxContext, s: Selectable<CashierSessionsTable>): Prom
     .where('kind', 'in', ['payment', 'refund'])
     .groupBy(['payment_method', sql`coalesce(original_currency, currency)`])
     .execute();
+  const variance = s.variance ? asAmounts(s.variance) : null;
+  const count: CashierSummary['status']['count'] = !variance
+    ? 'not_counted'
+    : Object.values(variance).some((v) => v < 0)
+      ? 'short'
+      : Object.values(variance).some((v) => v > 0)
+        ? 'over'
+        : 'balanced';
   return {
     id: s.id,
     propertyId: s.property_id,
     cashierName: s.cashier_name,
-    status: s.status,
+    status: { session: s.status, count },
     openedAt: new Date(s.opened_at).toISOString(),
     closedAt: s.closed_at ? new Date(s.closed_at).toISOString() : null,
     openingFloats: asAmounts(s.opening_floats),
@@ -56,6 +65,16 @@ async function summary(tx: TxContext, s: Selectable<CashierSessionsTable>): Prom
     variance: s.variance ? asAmounts(s.variance) : null,
     byMethod: byMethod.map((m) => ({ method: m.payment_method ?? 'other', currency: m.cur, totalMinor: Number(m.total), count: m.n })),
     version: s.version,
+    ...cashierRecord(tx, {
+      propertyId: s.property_id,
+      userKey: s.user_key,
+      mine: s.user_key === actorKey(tx),
+      cashierName: s.cashier_name,
+      status: s.status,
+      openedBusinessDate: s.opened_business_date,
+      businessDate: currentBusinessDate ?? null,
+      variance,
+    }),
   };
 }
 
@@ -97,18 +116,19 @@ export async function openCashierSession(tx: TxContext, deps: Deps, input: { pro
   }
 }
 
-export async function getCashierSession(tx: TxContext, id: string): Promise<CashierSummary> {
+export async function getCashierSession(tx: TxContext, deps: Deps, id: string): Promise<CashierSummary> {
   const s = await db(tx).selectFrom('finance.cashier_sessions').selectAll().where('id', '=', id).executeTakeFirst();
   if (!s) throw new NotFoundError('cashier_session', id);
   if (s.user_key !== actorKey(tx)) requirePermission(tx, 'finance.cashier.review', { propertyId: s.property_id });
   else requirePermission(tx, 'finance.cashier.operate', { propertyId: s.property_id });
-  return summary(tx, s);
+  return summary(tx, s, await deps.ports.platform.getBusinessDate(tx, s.property_id));
 }
 
-export async function listOpenCashierSessions(tx: TxContext, propertyId: string): Promise<CashierSummary[]> {
+export async function listOpenCashierSessions(tx: TxContext, deps: Deps, propertyId: string): Promise<CashierSummary[]> {
   requirePermission(tx, 'finance.cashier.review', { propertyId });
+  const businessDate = await deps.ports.platform.getBusinessDate(tx, propertyId);
   const rows = await db(tx).selectFrom('finance.cashier_sessions').selectAll().where('property_id', '=', propertyId).where('status', '=', 'open').execute();
-  return Promise.all(rows.map((r) => summary(tx, r)));
+  return Promise.all(rows.map((r) => summary(tx, r, businessDate)));
 }
 
 /**

@@ -166,6 +166,9 @@ importers:
       '@portico/kernel':
         specifier: workspace:*
         version: link:../../packages/kernel
+      fastify:
+        specifier: 'catalog:'
+        version: 5.12.8
       zod:
         specifier: 'catalog:'
         version: 4.6.7

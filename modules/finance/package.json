@@ -15,6 +15,7 @@
     "@portico/db": "workspace:*",
     "@portico/http": "workspace:*",
     "@portico/kernel": "workspace:*",
+    "fastify": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {

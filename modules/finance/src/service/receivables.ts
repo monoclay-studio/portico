@@ -17,6 +17,7 @@ import { ageItems } from '../domain/aging';
 import type { PaymentMethodKind } from '../domain/types';
 import type { ReceivablesAccountsTable } from '../tables';
 import { issueInvoice } from './fiscal';
+import { receivablesRecord } from './records';
 import { settleLocked } from './folios';
 import {
   accountId,
@@ -46,6 +47,11 @@ async function balanceOf(tx: TxContext, accountIdValue: string): Promise<number>
 }
 
 async function toAccount(tx: TxContext, r: Selectable<ReceivablesAccountsTable>): Promise<ReceivablesAccount> {
+  const balance = await balanceOf(tx, r.id);
+  const limit = r.credit_limit_minor === null ? null : Number(r.credit_limit_minor);
+  const overLimit = limit !== null && balance > limit;
+  const asOf = tx.now.toISOString().slice(0, 10);
+  const aging = await receivablesAgingRows(tx, r.id, asOf);
   return {
     id: r.id,
     legalEntityId: r.legal_entity_id,
@@ -54,12 +60,39 @@ async function toAccount(tx: TxContext, r: Selectable<ReceivablesAccountsTable>)
     name: r.name,
     currency: r.currency,
     termsDays: r.terms_days,
-    creditLimitMinor: r.credit_limit_minor === null ? null : Number(r.credit_limit_minor),
+    creditLimitMinor: limit,
     creditLimitMode: r.credit_limit_mode,
-    status: r.status,
-    balance: { amountMinor: await balanceOf(tx, r.id), currency: r.currency },
+    status: { account: r.status, credit: limit === null ? 'no_limit' : overLimit ? 'over_limit' : 'within_limit' },
+    balance: { amountMinor: balance, currency: r.currency },
     version: r.version,
+    ...receivablesRecord(tx, {
+      id: r.id,
+      companyId: r.company_id,
+      kind: r.kind,
+      name: r.name,
+      status: r.status,
+      overLimit,
+      balanceMinor: balance,
+      limitMinor: limit,
+      currency: r.currency,
+      over90Minor: aging.buckets.over_90,
+    }),
   };
+}
+
+async function receivablesAgingRows(tx: TxContext, accountIdValue: string, asOf: LocalDate) {
+  const items = await db(tx).selectFrom('finance.receivables_items').selectAll().where('account_id', '=', accountIdValue).where('business_date', '<=', asOf).execute();
+  const allocs = await db(tx).selectFrom('finance.receivables_allocations').selectAll().where('account_id', '=', accountIdValue).where('business_date', '<=', asOf).execute();
+  return ageItems(
+    items.map((i) => ({
+      id: i.id,
+      dueDate: i.due_date,
+      businessDate: i.business_date,
+      amountMinor: Number(i.amount_minor),
+      allocatedMinor: allocs.filter((x) => x.debit_item_id === i.id || x.credit_item_id === i.id).reduce((s, x) => s + Number(x.amount_minor), 0),
+    })),
+    asOf,
+  );
 }
 
 export async function createReceivablesAccount(
@@ -447,18 +480,7 @@ export async function receivablesAging(tx: TxContext, input: { legalEntityId: st
   const accounts = await q.orderBy('name').execute();
   const out: AgingReport['accounts'] = [];
   for (const a of accounts) {
-    const items = await db(tx).selectFrom('finance.receivables_items').selectAll().where('account_id', '=', a.id).where('business_date', '<=', input.asOf).execute();
-    const allocs = await db(tx).selectFrom('finance.receivables_allocations').selectAll().where('account_id', '=', a.id).where('business_date', '<=', input.asOf).execute();
-    const summary = ageItems(
-      items.map((i) => ({
-        id: i.id,
-        dueDate: i.due_date,
-        businessDate: i.business_date,
-        amountMinor: Number(i.amount_minor),
-        allocatedMinor: allocs.filter((x) => x.debit_item_id === i.id || x.credit_item_id === i.id).reduce((s, x) => s + Number(x.amount_minor), 0),
-      })),
-      input.asOf,
-    );
+    const summary = await receivablesAgingRows(tx, a.id, input.asOf);
     out.push({ accountId: a.id, name: a.name, currency: a.currency, ...summary });
   }
   return { asOf: input.asOf, accounts: out };
