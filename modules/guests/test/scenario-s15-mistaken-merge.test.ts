@@ -10,7 +10,7 @@ import { addDays, newId } from '@portico/kernel';
 import type { TestDatabase } from '@portico/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { ProfileSnapshot } from '../src/service/merge';
-import { auditRows, outboxRows, setupOrg, startDb, type TestOrg } from './helpers';
+import { auditRows, makeService, outboxRows, setupOrg, startDb, type TestOrg } from './helpers';
 
 let t: TestDatabase;
 beforeAll(async () => {
@@ -439,6 +439,32 @@ describe('merge invariants', () => {
     await org.sys((tx) => org.svc.unmergeProfiles(tx, { mergeId: m2.mergeId, reason: 'undo later merge' }));
     await org.sys((tx) => org.svc.unmergeProfiles(tx, { mergeId: m1.mergeId, reason: 'undo earlier merge' }));
     expect((await org.sys((tx) => org.svc.getProfile(tx, a))).id).toBe(a);
+  });
+
+  it('the merge preview shows reference counts per module (and says when a module cannot answer)', async () => {
+    const org = await setupOrg(t, {
+      svc: makeService({
+        referenceCounters: [
+          { module: 'reservations', countReferences: async () => 3 },
+          {
+            module: 'finance',
+            countReferences: async () => {
+              throw new Error('finance not connected');
+            },
+          },
+        ],
+      }),
+    });
+    const { p1, p2 } = await twoAhmedAlis(org);
+    const preview = await org.sys((tx) => org.svc.previewMerge(tx, { survivorId: p1, mergedId: p2 }));
+    expect(preview.references).toEqual([
+      { module: 'reservations', count: 3, status: 'counted' },
+      { module: 'finance', count: null, status: 'unavailable' },
+    ]);
+    expect(preview.fields.find((f) => f.field === 'nationality')).toMatchObject({
+      chosen: 'survivor',
+      changes: false,
+    });
   });
 
   it('refuses invalid merges with explanations', async () => {

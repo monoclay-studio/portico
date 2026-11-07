@@ -14,7 +14,7 @@ import {
   shouldReopenDismissed,
 } from '../domain/duplicates';
 import type { GuestsPorts } from '../ports';
-import { actorKey, db, iso, resolveAccess, visibilitySql } from './internal';
+import { actorKey, db, iso, requireVisibleProfile, resolveAccess, visibilitySql } from './internal';
 
 export type DuplicateCandidate = z.infer<typeof duplicateCandidateView>;
 
@@ -234,15 +234,21 @@ export async function dismissDuplicate(
   reason: string,
 ): Promise<DuplicateCandidate> {
   requirePermission(tx, 'guests.profile.merge');
-  const visible = await listDuplicates(tx, ports, { status: 'open', limit: 1000 });
   const existing = await db(tx)
     .selectFrom('guests.duplicate_candidates')
     .selectAll()
     .where('id', '=', candidateId)
     .forUpdate()
     .executeTakeFirst();
-  if (!existing || (existing.status === 'open' && !visible.some((v) => v.id === candidateId)))
-    throw new NotFoundError('duplicate_candidate', candidateId);
+  if (!existing) throw new NotFoundError('duplicate_candidate', candidateId);
+  // The reviewer must see both profiles in full (same rule as the queue).
+  const access = await resolveAccess(tx, ports);
+  const fullOnly = { ...access, sharedViewing: false };
+  for (const id of [existing.profile_a_id, existing.profile_b_id]) {
+    await requireVisibleProfile(tx, ports, id, { access: fullOnly }).catch(() => {
+      throw new NotFoundError('duplicate_candidate', candidateId);
+    });
+  }
   if (existing.status !== 'open') {
     throw new BusinessRuleError(
       'duplicate_not_open',

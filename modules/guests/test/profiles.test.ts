@@ -341,6 +341,11 @@ describe('connected mode (data authority guestProfiles = external)', () => {
     expect(first.created).toBe(true);
     const p = await org.sys((tx) => org.svc.getProfile(tx, first.profileId));
     expect(p).toMatchObject({ provenance: 'external', external: { systemName: 'Legacy PMS (simulated)' } });
+    expect(p.issues.map((i) => i.code)).toContain('mirrored_profile');
+    expect(p.allowedActions.find((a) => a.action === 'edit')).toMatchObject({
+      enabled: false,
+      reason: expect.stringMatching(/mastered in Legacy PMS/),
+    });
     expect(p.contactPoints[0]?.normalized).toBe('+9607771234');
     await expect(
       org.sys((tx) => org.svc.updateProfile(tx, first.profileId, p.version, { givenName: 'Aisha' })),

@@ -209,6 +209,13 @@ export async function profileRecord(
       message: 'Under legal hold: erasure requests are held.',
     });
   }
+  if (facts.mirroredFrom) {
+    issues.push({
+      code: 'mirrored_profile',
+      severity: 'info',
+      message: `Mirrored from ${facts.mirroredFrom}. Preferences, alerts, notes and consent recorded here are Portico-only and are not sent to ${facts.mirroredFrom}.`,
+    });
+  }
 
   const links: RecordLink[] = [
     ...facts.companies.map((c) => ({ rel: `company:${c.role}`, type: 'company', id: c.company_id })),
