@@ -216,3 +216,67 @@ billing is not activated for live customers until this is answered.
 **Blocks:** choosing the RS-2 POS/ERP/lock vendors; any readiness level above R6 (needs a named hotel).
 **Raised by / date:** Integration & Adoption lead, 2026-11-07
 
+
+### Q80 — Door-lock vendor partner programmes and key issuance for pilots    Status: open
+**Context:** The guest-journey audit found no module for keys (`docs/journey/gap-register.md` JG-01; new spec `docs/specs/access.md`). Issuing keys from Portico requires each lock vendor's PMS interface or cloud API (ASSA ABLOY Vostio/Visionline, Salto Space, dormakaba Ambiance and others), usually under a partner agreement, an SDK or interface licence and sometimes per-door or per-key fees paid by the hotel; on-premise lock servers also need the local connector (Q62). Which systems Maldivian resorts use is unconfirmed (Q64).
+**Question:** May we apply to lock vendors' partner programmes (accepting NDAs and, once a hotel is ready, interface fees that the hotel or Monoclay pays), and which vendor should be first once discovery names the pilot's lock system?
+**Default we are proceeding with:** build the vendor-neutral `access` module with the **manual key log**, mechanical-key register, key rules for room moves/extensions/checkout and a lock **simulator** (all usable at a pilot without any vendor agreement); no partner applications or agreements; first vendor chosen after Q64 discovery.
+**If the answer differs:** declining keeps key issuance manual (encode in the lock vendor's software, record in Portico) — acceptable for a pilot but weaker at check-in; approving moves one lock connector into wave 3.
+**Blocks:** live key issuance from Portico (R4+ for any lock vendor). Not blocking the pilot (manual path) or development.
+**Raised by / date:** guest-journey audit, 2026-11-07
+
+### Q81 — Tour-operator contracting in the first pilot slice    Status: open
+**Context:** Maldivian resorts (and many guesthouses selling through Malé DMCs) are believed to earn most room nights through tour-operator contracts with seasons, net rates per market, supplements, allotments with release periods, combinable offers and stop-sales [assumption — Q64]. The specs had only net rates and simple allotments; the audit proposes a `contracting` module (`docs/specs/contracting.md`) that compiles contracts into rates and allotments and checks every tour-operator voucher against the contract. Loading contracts is labour-intensive; some vendors offer it as a service.
+**Question:** (a) Confirm that contracting belongs in the first pilot slice (it moves contracts, offers, allotments and the contract check into wave 2 and pushes other wave-2 items back); (b) should Monoclay offer contract loading as an onboarding service, and on what terms?
+**Default we are proceeding with:** contracting is P0 for any resort pilot and for guesthouses that sell through DMCs; wave 2 includes contracts, offers with combinability, allotments/release, stop-sale notices and the contract check; statements and rate sheets in wave 3; contract loading is done by the hotel in Portico with Monoclay guidance, no paid service defined.
+**If the answer differs:** if not in the pilot slice, the pilot must be a property with little tour-operator business (or accept manual pricing of vouchers, a known source of errors); a loading service changes onboarding cost and the cost model.
+**Blocks:** a resort pilot's pricing accuracy for tour-operator bookings. Development proceeds on the default.
+**Raised by / date:** guest-journey audit, 2026-11-07
+
+### Q82 — Review platforms: access, the paid reviews add-on and publishing replies    Status: open
+**Context:** Answering OTA, Google and TripAdvisor reviews from Portico (`docs/specs/crm-marketing.md` §3.4) needs the channel hub's messaging-and-reviews add-on (planning baseline +US$7 per property per month, readiness brief §5, per-channel support unverified) and API access from Google (Business Profile) and TripAdvisor, each with its own terms. Publishing a reply is a public statement on the hotel's behalf.
+**Question:** May we (a) enable the hub's reviews add-on for pilot properties at that cost, (b) apply for Google Business Profile and TripAdvisor API access, and (c) publish replies through APIs after staff approval?
+**Default we are proceeding with:** review aggregation and reply drafting built against simulators and manual import; replies are approved in Portico and then copied to the platform by staff ("copy and open extranet"); no add-on activation or API applications.
+**If the answer differs:** approving adds per-property cost (pass-through per Q45) and API publication (`reputation.publish` effect, live only with authorization).
+**Blocks:** automatic review import and API reply publication. Not blocking the reputation workflow itself.
+**Raised by / date:** guest-journey audit, 2026-11-07
+
+### Q83 — Gift vouchers: tax point, expiry rules and launch    Status: open
+**Context:** Selling gift vouchers (`docs/specs/crm-marketing.md` §3.6; finance SCR-26) creates a liability on the hotel's books. The tax point for vouchers under MIRA's time-of-supply rule (earlier of invoice or payment), whether monetary and experience vouchers are treated differently, and any consumer-law limits on expiry are unverified for the Maldives and other markets.
+**Question:** Can the Maldives tax/legal adviser (Q20 scope) confirm the TGST treatment of monetary and experience vouchers and any rules on voucher expiry and unredeemed balances?
+**Default we are proceeding with:** vouchers are P2; built as hotel-merchant stored-value liabilities with a configurable tax point per voucher type (default: tax at redemption for monetary vouchers, at sale for experience vouchers — marked `unverified`), configurable expiry and breakage, and no live voucher sale until verified.
+**If the answer differs:** configuration change of the voucher tax rule and expiry policy.
+**Blocks:** live voucher sales. Nothing in development.
+**Raised by / date:** guest-journey audit, 2026-11-07
+
+### Q84 — Guest-facing AI (automatic answers to guests)    Status: open
+**Context:** Hotels increasingly use AI to answer guest questions in chat, WhatsApp and the booking engine. Portico's AI is staff-facing: drafts are suggestions a person sends (AI-R03/R04). Letting AI answer guests directly would speed replies at night but sends model output to guests without review, adds per-message AI cost, and processes guest messages with an AI provider (Q25).
+**Question:** Should Portico offer automatic AI answers to guests (limited to approved property content and live tool results, never inventing availability, prices or policies), or keep AI to staff-approved drafts only?
+**Default we are proceeding with:** staff-approved drafts only; no automatic guest-facing AI answers (`docs/journey/gap-register.md` JG-57, P2).
+**If the answer differs:** an `ai` capability for gated auto-replies with per-property opt-in, budget caps, evaluation and an "answered by AI" label; cost model update.
+**Blocks:** nothing in development.
+**Raised by / date:** guest-journey audit, 2026-11-07
+
+### Q85 — Paid flight-status data for arrival and departure tracking    Status: open
+**Context:** Seaplane transfers fly in daylight only and are scheduled around international flights; late arrivals need transit nights in Malé/Hulhumalé (`docs/journey/guest-journey-coverage.md` §1.4). Automatic flight-status updates would keep ETAs, transfers and arrival preparation current, but flight-data APIs are paid per query or per property.
+**Question:** May we budget a flight-status data provider (choice after price comparison) for resort properties, passed through or included?
+**Default we are proceeding with:** manual ETA updates by the transfer desk (RES-R39) and operator information; the integration workflow `flightStatus` is designed but no provider is contracted.
+**If the answer differs:** a connector for one provider; cost per property in the cost model.
+**Blocks:** automatic flight tracking only.
+**Raised by / date:** guest-journey audit, 2026-11-07
+
+### Q86 — Incident, medical and security records: scope, legal duties and retention    Status: open
+**Context:** The audit adds an incident/security log, minimal medical-visit records (no clinical notes) and an emergency muster list (`docs/specs/guest-services.md` §3.4–3.5). These hold sensitive personal data; Maldivian duties to notify authorities (police, Ministry of Tourism, health) after incidents, rules for keeping such records, and retention periods are unconfirmed.
+**Question:** Can the Maldives adviser (Q20 scope) confirm incident-notification duties for tourist establishments and the retention rules for incident, medical and security records?
+**Default we are proceeding with:** incident and medical records restricted by permission, append-only, retained 7 years by default (configurable), no clinical notes, no automatic submissions; notification fields are free text references.
+**If the answer differs:** retention and field requirements change as configuration; possibly a report format for authority notifications (file, never an automatic submission without authorization).
+**Blocks:** privacy notice wording for these records at a pilot. Nothing in development.
+**Raised by / date:** guest-journey audit, 2026-11-07
+
+### Q87 — Loyalty: recognition only, or a points programme    Status: open
+**Context:** Groups expect guest recognition across properties; some want a points programme. Points create a financial liability (accrual, redemption, breakage), terms and conditions, and possibly tax questions, and compete with brand programmes some hotels already belong to.
+**Question:** Should Portico offer a points programme for hotel groups, or recognition tiers and benefits only?
+**Default we are proceeding with:** recognition tiers and benefits (`docs/specs/crm-marketing.md` CRM-R16–R18) and capture of external programme numbers; points programme LATER and only after this answer.
+**If the answer differs:** a points ledger in `finance` (liability and breakage like vouchers) and programme management in `crm` (medium effort).
+**Blocks:** nothing now.
+**Raised by / date:** guest-journey audit, 2026-11-07

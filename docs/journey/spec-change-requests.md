@@ -56,6 +56,7 @@ Columns: **Pri** = Maldives-pilot priority of the gap it serves; **Gap** = [gap-
 | SCR-43 | `docs/specs/ai.md` | Guest-facing drafting and gated guest-facing answers | JG-57, 40 | P2 |
 | SCR-44 | `docs/specs/identity.md` | Guest principals, device sessions, new role templates | JG-03, 05 | P1 |
 | SCR-45 | `docs/readiness/readiness-register.md`, `docs/product/personas-and-workspaces.md` | Readiness rows for new capabilities; new personas | all new | P1 |
+| SCR-46 | `docs/parity/` (on `main` after this branch was cut) | Parity matrices and edge-case catalogues for the five new modules; universal record contract | all new | P1 |
 
 ## 2. Details
 
@@ -358,6 +359,19 @@ F&B outlet manager (allergy acknowledgement), Marketing manager, Contracts manag
 (locks per vendor, PBX, Wi-Fi, IPTV/GRMS, review sources, flight data, ID verification, table systems) with external
 approval columns; add personas: Security officer, Concierge/bell, Marketing manager, Contracts manager, Kitchen/outlet
 manager (allergy acknowledgement) to `docs/product/personas-and-workspaces.md`.
+
+**SCR-46 — Parity and universal record contract (added after `main` gained `docs/parity/` and the domain-map
+section "Universal record contract").** Each new module (`access`, `guest-experience`, `crm`, `contracting`,
+`guest-services`) needs `docs/parity/<module>.md` with its parity matrix and edge-case catalogue before it can be
+called complete (CLAUDE.md §7 on `main`). Seed rows: the capabilities in each spec's §3 (P0/P1 per the gap register)
+and the edge cases already named in the specs (offline locks that cannot be cancelled; encoder timeout; duplicate key
+by a non-occupant; voucher received after a stop-sale; partner applies an offer to a free night; allergy changed after
+acknowledgement; muster during an outage with a delayed mirror; minibar found after an issued invoice; portal payment
+pending verification; upsell race for the last villa). Primary aggregates of the new modules (credential, key
+operation, pre-check-in, upsell offer, contract version, booking check, sales notice, statement, survey response,
+review, voucher sale, case, incident, amenity order, venue reservation, muster) expose the universal record contract
+(`status` per family, `allowedActions` with disabled reasons, `issues`, `owner`, `links`, `provenance`) and register
+`recordTypes` and a `SearchProvider`.
 
 ## 3. Applying these requests
 
