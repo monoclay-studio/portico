@@ -6,7 +6,7 @@
 #
 # Outbox alarms read metrics derived from worker log lines (metric filters). Two log lines exist today:
 #   {"level":"error","msg":"event delivery failed",…}  and  {"level":"error","msg":"worker loop error",…}
-# Two more are a CONTRACT the worker does not emit yet (infra/README.md, Findings):
+# Two more are a CONTRACT the worker does not emit yet (infra/README.md, Requests to other modules):
 #   {"level":"error","msg":"event delivery dead","eventId":…,"consumer":…}            when a delivery goes dead
 #   {"level":"info","msg":"outbox stats","pending":N,"oldestPendingAgeSeconds":N,"dead":N}   every 60 s
 # Until the worker emits them, the backlog/dead alarms stay in INSUFFICIENT_DATA; `outbox_stats_contract_live`

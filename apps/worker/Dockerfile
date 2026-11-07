@@ -10,7 +10,7 @@
 #
 # Why tsx at runtime and why no HEALTHCHECK: see apps/api/Dockerfile. The worker has no HTTP port; ECS restarts
 # it if the process exits, and stalls are caught by the outbox backlog / worker-error alarms (observability
-# module). A container-level liveness check needs a heartbeat from the worker first (infra/README.md, Findings).
+# module). A container-level liveness check needs a heartbeat from the worker first (infra/README.md, Requests to other modules).
 
 ARG NODE_IMAGE=node:22.23.4-slim
 

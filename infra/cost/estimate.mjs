@@ -56,7 +56,7 @@ function demo(hours) {
     ],
     ['DNS Firewall (external-effect providers blocked)', u.dnsMillion * p('dns_firewall_million')],
     ['ECR 2 GB', u.ecrGb * p('ecr_gb_month')],
-    ['AWS Budgets (1 budget, 2 actions)', 0],
+    ['AWS Budgets (1 budget, 2 actions) — assumed free tier of Budgets, not in the price files: verify', 0],
   ];
 }
 

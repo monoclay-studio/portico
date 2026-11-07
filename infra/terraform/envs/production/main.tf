@@ -1,9 +1,10 @@
 # PRODUCTION: where a pilot hotel's real data would live.
 #
 # The tier has NO default — choosing it is an owner decision (README "Owner decisions"):
-#   lean       T2 ≈ $100–160/month infra. Single-AZ database: an AZ outage means restoring from backup
+#   lean       T2 ≈ $121/month infra (estimate, infra/README.md). Single-AZ database: an AZ outage means restoring from backup
 #              (TARGET RTO in hours, not minutes). Reasonable for a small guesthouse pilot with a paper fallback.
-#   resilient  T3. Aurora with a standby in another AZ, NAT per AZ, cross-region backups, vault lock.
+#   resilient  T3 ≈ $410–540/month (≈ $335 with RDS Multi-AZ instead of Aurora). Aurora with a standby in another AZ,
+#              NAT per AZ, cross-region backups and key replicas, vault lock.
 #              Required before a resort or group pilot.
 # Moving lean → resilient changes the database engine (RDS → Aurora): a planned, rehearsed migration, not a flip.
 # Alternative: keep engine = "rds" and set overrides = { db_multi_az = true } — an online change.

@@ -37,7 +37,7 @@ variable "oncall_emails" {
 }
 
 variable "budget_monthly_usd" {
-  description = "Demo ceiling (Q22 default is $0 incremental; the T1 estimate is ~$13–20 — see README)."
+  description = "Demo ceiling (Q22 default is $0 incremental; the T1 estimate is ≈ $15 office hours / $20 always on — infra/README.md)."
   type        = number
   default     = 25
 }

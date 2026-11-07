@@ -13,7 +13,7 @@
 # Why tsx at runtime (not an esbuild bundle): workspace packages export TypeScript sources with extensionless
 # imports, and every module manifest resolves its migrations directory relative to its own source file
 # (import.meta.url). Bundling collapses those paths into one file and breaks migration discovery. tsx keeps the
-# source layout intact. Follow-up for the app team: a real build step (see infra/README.md, "Findings").
+# source layout intact. Follow-up for the app team: a real build step (see infra/README.md, "Requests to other modules").
 #
 # Why no HEALTHCHECK: ECS ignores the Dockerfile HEALTHCHECK instruction. Liveness/readiness comes from the ALB
 # target-group check on /health/ready (DB ping) plus the ECS deployment circuit breaker, which is what decides
