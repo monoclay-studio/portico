@@ -1,0 +1,401 @@
+/**
+ * Focused re-review of SW-GUE-1 (review-guests-erasure-fix.md): attack the fix itself.
+ * Service level, real Postgres. Each test logs what it observed; expectations encode the CURRENT behaviour so the
+ * file documents findings (a test named "FINDING" passes while the defect exists).
+ */
+import { runIdempotent, sql } from '@portico/db';
+import { newId } from '@portico/kernel';
+import type { TestDatabase } from '@portico/testing';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { guestsReplayPlans } from '../src/replay';
+import { makeService, platformPort, setupOrg, startDb, type TestOrg } from './helpers';
+
+let t: TestDatabase;
+beforeAll(async () => {
+  t = await startDb();
+});
+afterAll(async () => t?.drop());
+
+async function newGuest(
+  org: TestOrg,
+  propertyId: string,
+  contacts: Array<{ kind: 'email' | 'phone' | 'address'; value: string }>,
+  names: { givenName: string; familyName: string } = { givenName: 'Quilla', familyName: 'Erasemeplease' },
+) {
+  const r = await org.sys((tx) =>
+    org.svc.createProfile(tx, {
+      propertyId,
+      ...names,
+      dateOfBirth: '1981-02-03',
+      matchStrategy: 'create_new',
+      contactPoints: contacts,
+    }),
+  );
+  return r.profile.id;
+}
+
+/** Another module's endpoint that stores its response body as-is (no replay plan). */
+function otherModule(org: TestOrg, key: string, body: unknown) {
+  return runIdempotent(t.db, org.admin, { scope: 'POST /other/thing', key, request: { k: key } }, async () => ({
+    status: 201,
+    body,
+  }));
+}
+
+const erase = (org: TestOrg, profileId: string) =>
+  org.sys((tx) => org.svc.eraseProfile(tx, { kind: 'erasure', profileId, reason: 'Erasure request' }));
+
+describe('R2: redaction net — false positives', () => {
+  it('FINDING R2-P2-1a: an address contact redacts unrelated records of the tenant (substring of a time zone)', async () => {
+    const org = await setupOrg(t);
+    const [A] = org.properties as [string];
+    // An unrelated stored response, e.g. a property or legal-entity create (time zone "Indian/Maldives").
+    const keyProp = newId();
+    await otherModule(org, keyProp, { id: newId(), name: 'Property 0', timezone: 'Indian/Maldives' });
+    const pid = await newGuest(org, A, [{ kind: 'address', value: 'Maldives' }]);
+    const res = await erase(org, pid);
+    console.log('R2-P2-1a counts', JSON.stringify((res.result as { counts: unknown }).counts));
+    const replay = await otherModule(org, keyProp, {}).catch((e: { status?: number; code?: string }) => e);
+    console.log('R2-P2-1a unrelated property replay ->', JSON.stringify(replay));
+    expect(replay).toMatchObject({ status: 410, code: 'idempotent_response_erased' });
+  });
+
+  it('FINDING R2-P2-1b: a 7-digit local phone number redacts an unrelated money response whose amount contains it', async () => {
+    const org = await setupOrg(t);
+    const [A] = org.properties as [string];
+    const keyCharge = newId();
+    await otherModule(org, keyCharge, {
+      postingId: newId(),
+      amount: { amountMinor: 17771234, currency: 'USD' },
+    });
+    const pid = await newGuest(org, A, [{ kind: 'phone', value: '7771234' }]); // Maldives local number as typed
+    await erase(org, pid);
+    const replay = await otherModule(org, keyCharge, {}).catch((e: { status?: number }) => e);
+    console.log('R2-P2-1b unrelated charge replay ->', JSON.stringify(replay));
+    expect(replay).toMatchObject({ status: 410 });
+  });
+
+  it('FINDING R2-P2-1c: a shared email (family / agency) redacts ANOTHER guest’s stored responses, even one on legal hold', async () => {
+    const org = await setupOrg(t);
+    const [A] = org.properties as [string];
+    const shared = 'family.bookings@guest.example';
+    const erased = await newGuest(org, A, [{ kind: 'email', value: shared }]);
+    const held = await newGuest(org, A, [{ kind: 'email', value: shared }], {
+      givenName: 'Other',
+      familyName: 'Person',
+    });
+    await org.sys((tx) => org.svc.setLegalHold(tx, held, { hold: true, reason: 'Litigation hold on file' }));
+    const keyHeld = newId();
+    await otherModule(org, keyHeld, { payer: { type: 'guest_profile', id: held, email: shared }, amountMinor: 5000 });
+    await erase(org, erased);
+    const replay = await otherModule(org, keyHeld, {}).catch((e: { status?: number }) => e);
+    console.log('R2-P2-1c held guest’s payment replay ->', JSON.stringify(replay));
+    expect(replay).toMatchObject({ status: 410 });
+  });
+
+  it('tenant scope holds: the same values in another organization are untouched', async () => {
+    const org1 = await setupOrg(t);
+    const org2 = await setupOrg(t);
+    const pid = await newGuest(org1, org1.properties[0] as string, [
+      { kind: 'email', value: 'cross.tenant@guest.example' },
+    ]);
+    const k = newId();
+    await otherModule(org2, k, { email: 'cross.tenant@guest.example', ref: pid });
+    await erase(org1, pid);
+    const replay = await otherModule(org2, k, {});
+    expect(replay.replayed).toBe(true);
+    expect(JSON.stringify(replay.body)).toContain('cross.tenant@guest.example');
+  });
+});
+
+describe('R2: redaction net — false negatives (exemption audit)', () => {
+  it('RESIDUAL: name-only, differently-cased email and differently formatted phone survive erasure and replay', async () => {
+    const org = await setupOrg(t);
+    const [A] = org.properties as [string];
+    const pid = await newGuest(org, A, [
+      { kind: 'email', value: 'quilla.erasemeplease@guest.example' },
+      { kind: 'phone', value: '+9607771234' },
+    ]);
+    const bookingId = newId();
+    const k1 = newId();
+    const k2 = newId();
+    const k3 = newId();
+    // payments: card saved for the booking (owner booking), holder name only
+    await otherModule(org, k1, { owner: { type: 'booking', id: bookingId }, holderName: 'Quilla Erasemeplease' });
+    // payment request typed by staff with the email in mixed case
+    await otherModule(org, k2, { payer: { type: 'other', name: 'Q. Erasemeplease', email: 'Quilla.Erasemeplease@Guest.Example' } });
+    // phone typed with spaces by another module
+    await otherModule(org, k3, { contact: '+960 777 1234' });
+    await erase(org, pid);
+    const bodies = [];
+    for (const k of [k1, k2, k3]) bodies.push(JSON.stringify((await otherModule(org, k, {})).body));
+    console.log('RESIDUAL survivors after erasure:', bodies);
+    expect(bodies.join(' ')).toMatch(/Erasemeplease/);
+    expect(bodies.join(' ')).toMatch(/777 1234/);
+  });
+
+  it('RESIDUAL: request_hash survives and is a same-actor membership oracle (409 vs 410)', async () => {
+    const org = await setupOrg(t);
+    const [A] = org.properties as [string];
+    const plans = guestsReplayPlans(org.svc);
+    const key = newId();
+    const input = {
+      propertyId: A,
+      givenName: 'Quilla',
+      familyName: 'Erasemeplease',
+      dateOfBirth: '1981-02-03',
+      matchStrategy: 'create_new' as const,
+    };
+    const call = (request: unknown) =>
+      runIdempotent(
+        t.db,
+        org.admin,
+        { scope: 'POST /guests/profiles', key, request },
+        async (tx) => ({ status: 201, body: await org.svc.createProfile(tx, input) }),
+        { replay: plans.createProfile(A) },
+      );
+    const created = await call(input);
+    await erase(org, created.body.profile.id);
+    const right = await call(input).catch((e: { status?: number }) => e.status);
+    const wrong = await call({ ...input, dateOfBirth: '1980-01-01' }).catch((e: { status?: number }) => e.status);
+    const { rows } = await sql<{ h: string }>`select request_hash as h from core.idempotency_keys where key = ${key}`.execute(
+      t.admin.kysely,
+    );
+    console.log('request_hash oracle: right guess ->', right, 'wrong guess ->', wrong, 'hash kept:', !!rows[0]?.h);
+    expect(right).toBe(410);
+    expect(wrong).toBe(409);
+  });
+});
+
+describe('R2: replay with the caller’s CURRENT permissions', () => {
+  it('a different actor is refused; a role downgrade turns the replay into 403, not the stored data', async () => {
+    const org = await setupOrg(t);
+    const [A] = org.properties as [string];
+    const plans = guestsReplayPlans(org.svc);
+    const uid = newId();
+    const full = org.user(
+      ['guests.profile.create', 'guests.profile.read', 'guests.profile.update'].map((permission) => ({
+        permission,
+        propertyIds: [A],
+      })),
+      uid,
+    );
+    const key = newId();
+    const input = { propertyId: A, givenName: 'Role', familyName: 'Changer', matchStrategy: 'create_new' as const };
+    const call = (ctx: typeof full) =>
+      runIdempotent(
+        t.db,
+        ctx,
+        { scope: 'POST /guests/profiles', key, request: input },
+        async (tx) => ({ status: 201, body: await org.svc.createProfile(tx, input) }),
+        { replay: plans.createProfile(A) },
+      );
+    const first = await call(full);
+    expect(first.status).toBe(201);
+    const other = org.user([{ permission: 'guests.profile.read', propertyIds: 'all' }]);
+    const asOther = await call(other).catch((e: { status?: number; code?: string }) => e);
+    const downgraded = org.user([{ permission: 'guests.profile.create', propertyIds: [A] }], uid);
+    const asDowngraded = await call(downgraded).catch((e: { status?: number; code?: string }) => e);
+    console.log('different actor ->', JSON.stringify(asOther), '| role downgraded ->', JSON.stringify(asDowngraded));
+    expect(asOther).toMatchObject({ status: 409 });
+    expect(asDowngraded).toMatchObject({ status: 403 });
+  });
+
+  it('possibleDuplicates are replayed from the stored ref, not re-checked against current permissions', async () => {
+    const org = await setupOrg(t);
+    const [A, B] = org.properties as [string, string];
+    const plans = guestsReplayPlans(org.svc);
+    // A guest known only at B.
+    const atB = await newGuest(org, B, [{ kind: 'email', value: 'dup.check@guest.example' }], {
+      givenName: 'Dupe',
+      familyName: 'Candidate',
+    });
+    const uid = newId();
+    const wide = org.user(
+      [
+        { permission: 'guests.profile.create', propertyIds: [A] },
+        { permission: 'guests.profile.update', propertyIds: [A] },
+        { permission: 'guests.profile.read', propertyIds: [A] },
+        { permission: 'guests.profile.readShared', propertyIds: 'all' },
+      ],
+      uid,
+    );
+    const key = newId();
+    const input = {
+      propertyId: A,
+      givenName: 'Dupe',
+      familyName: 'Candidate',
+      matchStrategy: 'create_new' as const,
+      contactPoints: [{ kind: 'email' as const, value: 'dup.check@guest.example' }],
+    };
+    const call = (ctx: typeof wide) =>
+      runIdempotent(
+        t.db,
+        ctx,
+        { scope: 'POST /guests/profiles', key, request: input },
+        async (tx) => ({ status: 201, body: await org.svc.createProfile(tx, input) }),
+        { replay: plans.createProfile(A) },
+      );
+    const first = await call(wide);
+    const narrow = org.user(
+      [
+        { permission: 'guests.profile.create', propertyIds: [A] },
+        { permission: 'guests.profile.update', propertyIds: [A] },
+        { permission: 'guests.profile.read', propertyIds: [A] },
+      ],
+      uid,
+    );
+    const again = await call(narrow);
+    console.log(
+      'possibleDuplicates first:',
+      JSON.stringify(first.body.possibleDuplicates.map((d) => d.profileId === atB)),
+      'replay after losing readShared:',
+      JSON.stringify(again.body.possibleDuplicates.map((d) => d.profileId === atB)),
+    );
+    expect(again.replayed).toBe(true);
+  });
+});
+
+describe('R2: concurrency both ways', () => {
+  it('FINDING R2-P2-2: a contact added by a write that read the profile before the erasure survives the erasure', async () => {
+    let arm = false;
+    let reached: () => void = () => {};
+    const atGate = new Promise<void>((r) => {
+      reached = r;
+    });
+    let open: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      open = r;
+    });
+    const base = platformPort();
+    const svc = makeService({
+      platform: {
+        ...base,
+        assertWritable: async (tx, propertyId, domain) => {
+          if (arm) {
+            arm = false;
+            reached();
+            await gate;
+          }
+          return base.assertWritable(tx, propertyId, domain);
+        },
+      },
+    });
+    const org = await setupOrg(t, { svc });
+    const [A] = org.properties as [string];
+    const pid = await newGuest(org, A, [{ kind: 'email', value: 'first@guest.example' }]);
+    arm = true;
+    const writer = org.sys((tx) =>
+      org.svc.addContactPoint(tx, pid, { kind: 'email', value: 'late.contact@guest.example' }),
+    );
+    await atGate; // the writer has read the profile (active) and passed its checks
+    const erasure = await erase(org, pid);
+    console.log('R2-P2-2 erasure status', (erasure.result as { counts?: unknown }).counts ? 'completed' : erasure.result);
+    open();
+    const w = await writer.then(
+      (p) => `writer committed: ${p.status.profile}`,
+      (e: { code?: string }) => `writer refused: ${e.code}`,
+    );
+    const { rows } = await sql<{ value: string }>`
+      select value from guests.contact_points where profile_id = ${pid}`.execute(t.admin.kysely);
+    const status = await sql<{ status: string }>`select status from guests.profiles where id = ${pid}`.execute(
+      t.admin.kysely,
+    );
+    console.log('R2-P2-2', w, '| profile status', status.rows[0]?.status, '| contacts after erasure', rows);
+    expect(rows.map((r) => r.value)).toContain('late.contact@guest.example');
+  });
+
+  it('FINDING R2-P3-x: another module’s in-flight request that read the guest before erasure commits after it, unredacted', async () => {
+    const org = await setupOrg(t);
+    const [A] = org.properties as [string];
+    const pid = await newGuest(org, A, [{ kind: 'email', value: 'inflight@guest.example' }]);
+    let open: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      open = r;
+    });
+    let reached: () => void = () => {};
+    const atGate = new Promise<void>((r) => {
+      reached = r;
+    });
+    const key = newId();
+    const inflight = runIdempotent(t.db, org.admin, { scope: 'POST /other/booking', key, request: {} }, async (tx) => {
+      const p = await org.svc.getProfile(tx, pid);
+      reached();
+      await gate;
+      return { status: 201, body: { bookerProfileId: pid, bookerName: p.displayName } };
+    });
+    await atGate;
+    await erase(org, pid);
+    open();
+    await inflight;
+    const replay = await runIdempotent(t.db, org.admin, { scope: 'POST /other/booking', key, request: {} }, async () => ({
+      status: 201,
+      body: {},
+    })).catch((e: { status?: number }) => e);
+    console.log('R2-P3 in-flight replay after erasure ->', JSON.stringify(replay));
+    expect(JSON.stringify(replay)).toMatch(/Erasemeplease/);
+  });
+
+  it('erasure first, then a replay of a guests create: the replay waits and answers 410 (claim holds)', async () => {
+    const org = await setupOrg(t);
+    const [A] = org.properties as [string];
+    const plans = guestsReplayPlans(org.svc);
+    const key = newId();
+    const input = { propertyId: A, givenName: 'Quilla', familyName: 'Waitforit', matchStrategy: 'create_new' as const };
+    const call = () =>
+      runIdempotent(
+        t.db,
+        org.admin,
+        { scope: 'POST /guests/profiles', key, request: input },
+        async (tx) => ({ status: 201, body: await org.svc.createProfile(tx, input) }),
+        { replay: plans.createProfile(A) },
+      );
+    const created = await call();
+    let open: () => void = () => {};
+    const gate = new Promise<void>((r) => {
+      open = r;
+    });
+    let done: () => void = () => {};
+    const erased = new Promise<void>((r) => {
+      done = r;
+    });
+    const e = org.sys(async (tx) => {
+      await org.svc.eraseProfile(tx, { kind: 'erasure', profileId: created.body.profile.id, reason: 'x' });
+      done();
+      await gate;
+    });
+    await erased;
+    const racing = call().catch((err: { status?: number }) => err);
+    await new Promise((r) => setTimeout(r, 200));
+    open();
+    await e;
+    expect(await racing).toMatchObject({ status: 410 });
+  });
+});
+
+describe('R2: legal hold', () => {
+  it('an erasure on legal hold redacts nothing and replays still answer with the current record', async () => {
+    const org = await setupOrg(t);
+    const [A] = org.properties as [string];
+    const plans = guestsReplayPlans(org.svc);
+    const key = newId();
+    const input = { propertyId: A, givenName: 'Held', familyName: 'Guest', matchStrategy: 'create_new' as const };
+    const call = () =>
+      runIdempotent(
+        t.db,
+        org.admin,
+        { scope: 'POST /guests/profiles', key, request: input },
+        async (tx) => ({ status: 201, body: await org.svc.createProfile(tx, input) }),
+        { replay: plans.createProfile(A) },
+      );
+    const created = await call();
+    const pid = created.body.profile.id;
+    const ko = newId();
+    await otherModule(org, ko, { bookerProfileId: pid, name: 'Held Guest' });
+    await org.sys((tx) => org.svc.setLegalHold(tx, pid, { hold: true, reason: 'Litigation hold on file' }));
+    const res = await erase(org, pid);
+    expect(res.result).toMatchObject({ onHold: true });
+    expect((await call()).body.profile.status.profile).toBe('active');
+    expect(JSON.stringify((await otherModule(org, ko, {})).body)).toContain('Held Guest');
+  });
+});
