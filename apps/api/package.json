@@ -21,6 +21,7 @@
     "@portico/guests": "workspace:*",
     "@portico/http": "workspace:*",
     "@portico/identity": "workspace:*",
+    "@portico/integration": "workspace:*",
     "@portico/inventory": "workspace:*",
     "@portico/kernel": "workspace:*",
     "@portico/operations": "workspace:*",

@@ -22,6 +22,22 @@ import {
 import type { Authenticator, HttpModule } from '@portico/http';
 import { type IdentityPorts, identityAuthenticator, identityHttp, identityManifest } from '@portico/identity';
 import {
+  createConnectorRegistry,
+  type IntegrationDeps,
+  integrationHttp,
+  integrationJobs,
+  integrationManifest,
+  integrationSearch,
+  integrationSubscriptions,
+  localSecretStore,
+  noAuthorityTransitions,
+  PmsSimulatorHub,
+  safeWebhookTransport,
+  systemResolver,
+  unavailableActivationScope,
+  unavailableCatalog,
+} from '@portico/integration';
+import {
   createInventoryDemoSeed,
   createInventoryJobs,
   createInventoryService,
@@ -97,6 +113,7 @@ export const MANIFESTS: readonly ModuleManifest[] = [
   reservationsManifest,
   operationsManifest,
   ratesManifest,
+  integrationManifest,
   // wave-1 modules register here
   paymentsManifest,
 ];
@@ -329,6 +346,85 @@ export function compose(database: PorticoDatabase): Composition {
   const rates = ratesService(ratesPorts, { termsSealKey: termsSealKeyFromEnv().key });
   const ratesModule = ratesHttp({ database, rates });
 
+  // ── integration ──
+  // Ports: platform, inventory (unit types, units) and rates (rate plans) are real. Tax-rule / finance / outlet
+  // catalogs, platform activation scope (G-04) and authority transitions (G-02) are bound to stubs until those
+  // providers merge (modules/integration/README.md).
+  const notYetBound = unavailableCatalog({
+    taxRule: 'rates (tax rules)',
+    chargeCode: 'finance',
+    ledgerAccount: 'finance',
+    outlet: 'platform (outlets)',
+  });
+  const pmsSimulators = new PmsSimulatorHub(database);
+  const fieldCrypto = fieldCryptoFromEnv();
+  const integrationDeps: IntegrationDeps = {
+    ports: {
+      platform: {
+        async getProperty(tx, id) {
+          const p = await platform.getProperty(tx, id);
+          return {
+            id: p.id,
+            name: p.name,
+            code: p.code,
+            timezone: p.timezone,
+            baseCurrency: p.baseCurrency,
+            countryCode: p.countryCode,
+          };
+        },
+        getDataAuthority: (tx, propertyId, domain) => platform.getDataAuthority(tx, propertyId, domain),
+        setDataAuthority: (tx, input) => platform.setDataAuthority(tx, input),
+      },
+      // Unit types and units come from inventory (on main). Integration already authorized the user's intent and
+      // property scope (ADR-0015), so the read goes through a system context scoped to that property.
+      catalog: {
+        async listCandidates(tx, input) {
+          if (input.kind === 'unitType') {
+            const types = await inventoryService.listUnitTypes(asSystem(tx), input.propertyId);
+            return types.map((t) => ({
+              id: t.id,
+              code: t.code,
+              name: t.name,
+              attributes: { maxOccupancy: t.maxOccupancy },
+            }));
+          }
+          if (input.kind === 'unit') {
+            const units = await inventoryService.listUnits(asSystem(tx), input.propertyId);
+            return units.map((u) => ({
+              id: u.id,
+              code: u.number,
+              name: u.name ?? u.number,
+              attributes: { unitTypeId: u.unitTypeId },
+            }));
+          }
+          if (input.kind === 'ratePlan') {
+            const plans = await rates.listRatePlans(asSystem(tx), { propertyId: input.propertyId });
+            return plans.map((r) => ({
+              id: r.id,
+              code: r.code,
+              name: r.name,
+              attributes: { currency: r.currency, mealPlan: r.mealPlan },
+            }));
+          }
+          return notYetBound.listCandidates(tx, input);
+        },
+      },
+      // Owning modules register inbound handlers here (operations → roomStatus, reservations → reservations) when
+      // they merge; until then received records are stored as `accepted` and applied in order once bound.
+      inbound: {},
+      activationScope: unavailableActivationScope,
+      // When platform authority transitions are on main (identity-plus), bind: activeTransition ← openTransitionFor
+      // (status → state); plan ← planAuthorityTransition(tx, propertyId, { changes, reason, freezeMinutes }); and
+      // platform's transitionGuard ← createIntegrationProvider(integrationDeps).pendingOperations.
+      transitions: noAuthorityTransitions,
+    },
+    connectors: createConnectorRegistry({ pmsSimulator: pmsSimulators }),
+    secrets: localSecretStore(fieldCrypto.cipher, fieldCrypto.keySource),
+    transport: safeWebhookTransport({ resolver: systemResolver, allowedPorts: [443] }),
+    net: { resolver: systemResolver, allowedPorts: [443] },
+    simulators: { pms: pmsSimulators },
+  };
+  const integrationModule = integrationHttp({ database, integration: integrationDeps });
   // ── payments ── (finance LedgerPort: bind `financeLedgerForPayments(finance)` when finance merges)
   const paymentsPlatform: PaymentsPlatformPort = {
     // Payments has already checked its own permission; it needs the merchant (legal entity) and time zone.
@@ -361,6 +457,7 @@ export function compose(database: PorticoDatabase): Composition {
     reservations.search(),
     operationsSearch,
     ratesSearch,
+    integrationSearch,
     paymentsSearch,
   ];
   const recordsModule = recordsHttp({ database, manifests: MANIFESTS, searchProviders });
@@ -375,12 +472,14 @@ export function compose(database: PorticoDatabase): Composition {
       reservationsModule,
       operationsModule,
       ratesModule,
+      integrationModule,
       payments.http,
       recordsModule,
     ],
     subscriptions: [
       ...reservations.subscriptions(),
       ...operationsSubscriptions(operationsPorts),
+      ...integrationSubscriptions(integrationDeps),
       ...payments.subscriptions,
     ],
     searchProviders,
@@ -402,6 +501,7 @@ export function compose(database: PorticoDatabase): Composition {
             }),
           ),
       }),
+      ...integrationJobs(integrationDeps),
     ],
     services: {
       guests: guestsService,
