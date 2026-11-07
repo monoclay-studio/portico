@@ -1558,7 +1558,7 @@ export async function reverseEntry(
     .selectAll()
     .where('id', '=', input.entryId)
     .executeTakeFirst();
-  if (!entry || !entry.property_id)
+  if (!entry?.property_id)
     throw new ValidationError('entry_not_found', 'The journal entry was not found.');
   requirePermission(tx, 'finance.posting.correct', { propertyId: entry.property_id });
   if (entry.entry_type !== 'charge') {
