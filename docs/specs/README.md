@@ -5,8 +5,8 @@ contradict them. Engineers build from these; reviewers test against them.
 
 | Wave | Specs |
 |---|---|
-| 1 | [platform](platform.md) · [identity](identity.md) · [inventory](inventory.md) · [rates](rates.md) · [guests](guests.md) · [reservations](reservations.md) · [finance](finance.md) · [payments](payments.md) · [operations](operations.md) |
-| 2 | [day-close](day-close.md) · [distribution](distribution.md) · [groups](groups.md) · [comms](comms.md) · [analytics](analytics.md) · [integration](integration.md) |
+| 1 | [platform](platform.md) · [identity](identity.md) · [inventory](inventory.md) · [rates](rates.md) · [guests](guests.md) · [reservations](reservations.md) · [finance](finance.md) · [payments](payments.md) · [operations](operations.md) · [integration](integration.md) (connector framework; migration is wave 2) |
+| 2 | [day-close](day-close.md) · [distribution](distribution.md) · [groups](groups.md) · [comms](comms.md) · [analytics](analytics.md) |
 | 3 | [resort](resort.md) · [ai](ai.md) · [billing](billing.md) |
 
 Related product documents: `docs/product/editions.md` (entitlement keys), `docs/product/ux-principles.md`
@@ -44,6 +44,15 @@ permissions (money movement, exports, user admin, overrides) are marked ⚑.
 
 **Scenario participation.** `S01`–`S20` are the brief §17 proof scenarios; `E01`–`E15` are the readiness-brief §19
 evidence items. Both are defined, with test names, in `docs/scenarios/README.md`.
+
+**Adoption modes.** Every spec ends with §14 *Adoption modes* (adoption brief §2, CLAUDE.md rule 15): (a) whether
+the module can run standalone alongside an external PMS, (b) its hard dependencies, (c) behaviour in connected mode
+(what it reads, writes or forwards, what is disabled), (d) which data-authority domains it owns or respects. Every
+write in a governed domain calls `platform.assertWritable`. Adoption evidence items `A01`–`A07` are defined in
+`docs/scenarios/README.md` §3.
+
+**Provenance.** Data shown to users carries provenance (`live`, `simulated`, `copied`, `delayed`, `incomplete`,
+`external`) per CLAUDE.md rule 16 and `docs/product/ux-principles.md` §3.
 
 **Terminology.** Glossary terms only (`docs/product/glossary.md`). Competitor product names appear only in
 *Competitive inspirations* sections, citing `docs/research/0n-*.md`.
