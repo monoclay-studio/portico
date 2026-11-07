@@ -23,5 +23,6 @@ export {
 export * from './service/health';
 export * from './service/jobs';
 export * from './service/mappings';
+export * from './service/retention';
 export * from './service/simulators';
 export * from './service/webhooks';

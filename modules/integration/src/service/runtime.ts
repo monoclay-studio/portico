@@ -62,12 +62,13 @@ export async function prepareCall(
       .select(['workflow', 'name', 'content', 'created_at'])
       .where('connection_id', '=', conn.id)
       .where('direction', '=', 'import')
+      .where('purged_at', 'is', null)
       .orderBy('seq', 'desc')
       .limit(50)
       .execute();
     const latest = new Map<string, { workflow: string; name: string; content: string }>();
     for (const r of rows)
-      if (!latest.has(r.workflow))
+      if (!latest.has(r.workflow) && r.content !== null)
         latest.set(r.workflow, { workflow: r.workflow, name: r.name, content: r.content });
     files = [...latest.values()];
   }

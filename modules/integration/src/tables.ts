@@ -178,7 +178,8 @@ export interface FilesTable {
   content_type: string;
   sha256: string;
   size_bytes: number;
-  content: string;
+  content: string | null;
+  purged_at: Ts | null;
   created_at: Ts;
   actor_key: string;
 }

@@ -114,6 +114,7 @@ export async function raiseException(
       type: 'integration.exception.raised',
       propertyId: input.propertyId ?? null,
       aggregate: { type: 'integration_exception', id },
+      aggregateVersion: 1,
       payload: {
         exceptionId: id,
         connectionId: conn.id,
@@ -182,6 +183,7 @@ export async function resolveException(
     type: 'integration.exception.resolved',
     propertyId: ex.property_id,
     aggregate: { type: 'integration_exception', id: ex.id },
+    aggregateVersion: row.version,
     payload: {
       exceptionId: ex.id,
       connectionId: ex.connection_id,
@@ -213,7 +215,7 @@ export async function autoResolveExceptions(
       .where('connection_id', '=', connectionId)
       .where('status', 'in', ['open', 'acknowledged'])
       .where('dedupe_key', 'like', `${prefix}%`)
-      .returning(['id', 'property_id'])
+      .returning(['id', 'property_id', 'version'])
       .execute();
     for (const r of rows) {
       n++;
@@ -221,6 +223,7 @@ export async function autoResolveExceptions(
         type: 'integration.exception.resolved',
         propertyId: r.property_id,
         aggregate: { type: 'integration_exception', id: r.id },
+        aggregateVersion: r.version,
         payload: { exceptionId: r.id, connectionId, resolution, automatic: true },
       });
     }

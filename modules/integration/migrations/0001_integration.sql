@@ -241,10 +241,14 @@ create table integration.files (
   content_type   text not null,
   sha256         text not null,
   size_bytes     int not null check (size_bytes <= 5242880),
-  content        text not null,
+  -- Purged after the retention period (personal data minimisation); name, hash and size stay as the record.
+  content        text,
+  purged_at      timestamptz,
   created_at     timestamptz not null,
-  actor_key      text not null
+  actor_key      text not null,
+  check ((content is null) = (purged_at is not null))
 );
+create index files_retention_idx on integration.files (created_at) where purged_at is null;
 select core.enable_tenant_isolation('integration.files');
 
 create table integration.sync_runs (
@@ -318,6 +322,7 @@ create table integration.inbound_messages (
   -- Dedupe: the same (connection, workflow, external id, revision) is stored once, whatever the vendor resends.
   unique (tenant_id, connection_id, workflow, external_id, revision)
 );
+create index inbound_messages_retention_idx on integration.inbound_messages (received_at) where redacted_at is null;
 create index inbound_held_idx on integration.inbound_messages (connection_id, status) where status in ('held_mapping', 'held_validation');
 select core.enable_tenant_isolation('integration.inbound_messages');
 
@@ -518,7 +523,6 @@ select core.make_append_only('integration.mapping_versions');
 select core.make_append_only('integration.validation_runs');
 select core.make_append_only('integration.previews');
 select core.make_append_only('integration.exchange_log');
-select core.make_append_only('integration.files');
 select core.make_append_only('integration.webhook_attempts');
 
 ---------------------------------------------------------------------------------------------------------

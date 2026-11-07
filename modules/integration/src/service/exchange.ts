@@ -2307,7 +2307,7 @@ export async function dispatchOutbound(
         return;
       }
       if (final.kind === 'ack') {
-        await db(tx)
+        const acked = await db(tx)
           .updateTable('integration.outbound_commands')
           .set({
             status: 'acknowledged',
@@ -2315,10 +2315,12 @@ export async function dispatchOutbound(
             completed_at: tx.now,
             lease_until: null,
             last_error: null,
+            hold_after_send: false,
             version: sql`version + 1`,
           })
           .where('id', '=', c.id)
-          .execute();
+          .returning('version')
+          .executeTakeFirstOrThrow();
         await recordExchange(tx, {
           ...base,
           externalRef: final.externalRef,
@@ -2331,6 +2333,7 @@ export async function dispatchOutbound(
           type: 'integration.outbound.acknowledged',
           propertyId: c.property_id,
           aggregate: { type: 'integration_outbound_command', id: c.id },
+          aggregateVersion: acked.version,
           payload: {
             commandId: c.id,
             connectionId: conn.id,
@@ -2556,6 +2559,7 @@ export async function revalidateCommand(
       type: 'integration.outbound.cancelled',
       propertyId: cmd.property_id,
       aggregate: { type: 'integration_outbound_command', id: cmd.id },
+      aggregateVersion: row.version,
       payload: {
         commandId: cmd.id,
         connectionId: conn.id,
@@ -2569,6 +2573,7 @@ export async function revalidateCommand(
       type: 'integration.outbound.acknowledged',
       propertyId: cmd.property_id,
       aggregate: { type: 'integration_outbound_command', id: cmd.id },
+      aggregateVersion: row.version,
       payload: {
         commandId: cmd.id,
         connectionId: conn.id,

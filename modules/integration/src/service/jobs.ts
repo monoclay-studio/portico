@@ -11,6 +11,7 @@ import { isOperational } from '../domain/setup-journey';
 import { db, type IntegrationDeps, registered } from './common';
 import { dispatchOutbound, runSync } from './exchange';
 import { checkCredentialExpiry, refreshHealth } from './health';
+import { applyRetention } from './retention';
 import { deliverDueWebhooks } from './webhooks';
 
 export interface TenantWorkResult {
@@ -64,6 +65,7 @@ export async function runTenantWork(
     res.errors.push(`webhooks: ${err instanceof Error ? err.message : String(err)}`);
   }
   const next = await withTenantTx(database, ctx, async (tx) => {
+    await applyRetention(tx);
     for (const c of await db(tx)
       .selectFrom('integration.connections')
       .selectAll()

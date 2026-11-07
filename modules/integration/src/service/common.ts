@@ -352,6 +352,7 @@ export async function transition(
     await tx.emit({
       type: 'integration.connection.statusChanged',
       aggregate: { type: 'integration_connection', id: conn.id },
+      aggregateVersion: updated.version,
       payload: {
         connectionId: conn.id,
         propertyIds: conn.property_ids,
