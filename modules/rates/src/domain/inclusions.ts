@@ -75,8 +75,11 @@ function amountFor(inc: InclusionSnapshot, occ: Occupancy, bands: readonly Child
   if (p.kind === 'percent_of_night') {
     return new Decimal(nightAmountMinor).mul(p.percent).div(100).toDecimalPlaces(0, Decimal.ROUND_HALF_UP).toNumber();
   }
-  if (inc.basis === 'per_child' && p.childBandAmountsMinor) {
-    return childrenInBands(occ, bands).reduce((s, c) => s + (p.childBandAmountsMinor?.[c.band ?? ''] ?? p.amountMinor), 0);
+  if ((inc.basis === 'per_child' || inc.basis === 'per_person') && p.childBandAmountsMinor) {
+    const children = childrenInBands(occ, bands);
+    const childTotal = children.reduce((s, c) => s + (p.childBandAmountsMinor?.[c.band ?? ''] ?? p.amountMinor), 0);
+    // per_person: adults (and children older than every band) at the adult amount, children by band.
+    return inc.basis === 'per_person' ? (quantity - children.length) * p.amountMinor + childTotal : childTotal;
   }
   return p.amountMinor * quantity;
 }
@@ -108,7 +111,8 @@ export function computeInclusions(input: {
     }
     if (inc.kind === 'allowance' && inc.allowance) {
       const a = inc.allowance;
-      const persons = a.perPerson ? input.occupancy.adults + input.occupancy.childrenAges.length : 1;
+      // "Per person" entitlements follow the inclusion's basis (per adult ⇒ adults only, per child ⇒ children only).
+      const persons = a.perPerson ? quantityFor(inc, input.occupancy, input.bands) : 1;
       const first = nightDates[0] as LocalDate;
       const periods =
         a.period === 'per_night'

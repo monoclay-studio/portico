@@ -469,7 +469,7 @@ export const inclusionPricing = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('fixed'),
     amountMinor: minorAmount,
-    /** per_child basis only: amount per child age band code. */
+    /** per_person / per_child bases: amount per child age band code (adults use amountMinor). */
     childBandAmountsMinor: z.record(z.string(), minorAmount).optional(),
   }),
   /** Percentage of the night price (allocation / revenue split). */

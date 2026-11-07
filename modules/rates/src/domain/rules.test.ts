@@ -149,7 +149,7 @@ describe('inclusions and allowances', () => {
           chargeCode: 'ALLOW_DINING',
           taxCategory: 'food_beverage',
           pricing: { kind: 'percent_of_night', percent: '10' },
-          basis: 'per_unit',
+          basis: 'per_person',
           rhythm: { kind: 'nightly' },
           priceMode: 'included',
           allowance: { kind: 'monetary', amountMinor: 5_000, period: 'per_night', perPerson: true, eligibleChargeCodes: ['FB'], eligibleOutlets: [], excludedChargeCodes: [], remainderPolicy: 'forfeit' },
