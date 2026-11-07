@@ -444,3 +444,17 @@ Each agent's brief and report are in `agents/`.
     plant 1 of its own.
   - Its focus is staff-editable paths into card coverage, the running total at N=10, and the new link-stopped
     route.
+- **23:54 — Integration-step re-review #5: merge after fixes** <!-- t: agent-a9d7a144efc35a5f6 @ 2026-11-07T23:54:57.000Z (Focused re-review #5: integration-step) --> (P0 0 · P1 2 · P2 2 · P3 4).
+  - Round 4 held: N=10 concurrency was clean, there was no lock-order cycle, and the builder's M6 and M9 mutants were
+    confirmed killed.
+  - The reviewer planted 2 mutants of its own; 1 survived (`pending_verification` not counted).
+  - Both P1s are the same class one step beyond: the `no_show` purpose was a label the desk types, and a
+    booking-level deposit was later applied to a stay added after consent.
+  - Orchestrator decision, ADR-0015 Amendment 4, closes the class rather than the path:
+    - every consent input is a cardholder or server fact, never a client label;
+    - coverage is checked where money lands, including deposit application, transfers and routing;
+    - staff-recorded agreements require an amount limit (Q160 update);
+    - staff cannot clear finance-owned money-risk states.
+  - Escape note for quality round 4: four rounds of "one step beyond" in consent. The builder's control-fact grid had
+    no input-source column.
+- **23:55 — Fix round 5 sent** <!-- t: now @ 2026-11-07T23:55:55Z --> with self-check v6 plus an input-source column and a list of every money-moving writer.

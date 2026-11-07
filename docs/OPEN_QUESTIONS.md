@@ -635,6 +635,7 @@ bookings they name).
 **If the answer differs:** add a mandate scope bound to a payer account the cardholder controls, with its own consent
 capture and evidence. That is about a day of payments work; no rework.
 **Blocks:** nothing.
+**Update 2026-11-07 (re-review #5):** every remaining widening found by review is bounded only by the agreement's optional amount limit. Default added: an agreement recorded by staff must carry `maxAmount` (ADR-0015 Amendment 4, rule 3). A cardholder self-service agreement may be uncapped only by the cardholder's explicit choice. If you prefer optional limits for trusted corporate accounts, say so; it is a validation change.
 **Raised by / date:** orchestrator, from integration-step re-review #4, 2026-11-07
 
 ### Q161 — Before production: break-glass keys, backup lock, deploy reviewers, release tags      Status: open

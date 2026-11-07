@@ -1,6 +1,6 @@
 # Agent run: Integration step: bind module ports
 
-- Started: 2026-11-07T16:16:26.294Z · last activity: 2026-11-07T23:35:19.853Z
+- Started: 2026-11-07T16:16:26.294Z · last activity: 2026-11-07T23:55:41.551Z
 - Turns: 1137 · tool uses: 1170 · output tokens: 989,378
 - Type: general-purpose
 
@@ -767,6 +767,53 @@ Summary:
 
 If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /root/.claude/projects/-home-user-portico/4f98af2a-3564-5e4b-aedc-2d94c911507d/subagents/agent-a29fdf2e9c7d0e9dc.jsonl
 Continue the conversation from where it left off without asking the user any further questions. Resume directly — do not acknowledge the summary, do not recap what was happening, do not preface with "I'll continue" or similar. Pick up the last task as if the break never happened.
+````
+
+## Follow-up message (2026-11-07T23:55:41.542Z)
+
+````text
+The coordinator sent a message while you were working:
+Integration-step fix round 5. Re-review #5 says "merge after fixes" (P0 0, P1 2, P2 2, P3 4). Your round-4 work held: N=10 concurrency was clean, no lock-order cycle, and M6/M9 were confirmed killed. Thank you.
+
+The pattern is the problem now. Four reviews in a row found a staff-editable input reaching the consent check one step beyond the last fix. So this round closes the **class**, not the path.
+
+Read first, all on main:
+- `docs/orchestration/reviews/review-integration-step-5.md`, plus its PoCs `docs/orchestration/reviews/integration-step-poc/r5-*.test.ts.txt`
+- `docs/adr/0015-authorization-across-module-ports.md` **Amendment 4** (new)
+- Q160's update in `docs/OPEN_QUESTIONS.md`
+- the "integration-step fix round 5" line in `docs/orchestration/pending-fixes.md`
+
+Merge main first.
+
+1. **Purposes are facts (R5-P1-1).** No purpose label from the client is trusted. `no_show` (and every purpose) is derived from the record that justifies it:
+   - a no-show or cancellation penalty recorded by reservations, capped at what it still owes;
+   - a deposit due under the booking's deposit schedule;
+   - a balance on a named folio.
+
+   Turn the reviewer's attacks into regression tests: the USD 2,500 "no_show" charge on an ordinary stay, and R4-J reopened through `no_show`. Keep `reservations.stay.noShow` as the only way to create the no-show fact.
+2. **Coverage where money lands (R5-P1-2).** Card-funded money keeps its agreement's coverage wherever it is applied or moved: `applyDeposits`, folio transfer, routing and split. If the destination is not covered, the move is refused or held for new cardholder consent.
+   - Close the reverse order too: move first, then charge.
+   - A reference with no stay must not mean "covered".
+   - Take R5-A2 (add_stay, then a booking-level deposit, then `applyDeposits` into Otto's folio) as a regression test.
+3. **Staff-recorded agreements require `maxAmount`** (Amendment 4 rule 3). A cardholder self-service agreement may be uncapped only by the cardholder's explicit choice, recorded in the evidence.
+4. **R5-P2-1:** link-stopped refuses `completed`. `deactivating` is allowed only to a finance role, only while the exception is open, and only with `If-Match`.
+5. **R5-P2-2:** count `pending_verification` in the running total. Take the reviewer's R5-M test; it must kill that mutant.
+6. **P3s:**
+   - Evidence time and channel are set by the server.
+   - Ownership is checked on stable ids, not on the `owner_id` a merge rewrites.
+   - Fix the README "guest self-service" overclaim, since `confirmCardForBooking` has no route.
+   - Partial payments made before "already paid" must not be counted as the reported payment, and the overpaid credit must be right.
+   - Replace probe-only or timing-only proof with deterministic tests: barriers for M6, and the `applyDeposits` lock order.
+
+**Self-check v6**, with these additions for this round:
+- In § 5.1 control facts, add an **"input source"** column for every input to `consentProblem` and to every movement of card-funded money (cardholder fact / server fact / client label). Any "client label" cell is a defect.
+- List **every writer that moves money between folios, stays or bookings** (pasted grep), each with its coverage check and test.
+- § 5.4 mutation table for every new guard, plus re-kill M6 and the reviewer's `pending_verification` mutant.
+- § 6 claim ledger over the README and domain-map lines you change.
+
+Gates as before (lint `--error-on-warnings`). Commit after every meaningful step. Do not push, and never rewrite or amend existing commits.
+
+Address this before completing your current task.
 ````
 
 ## Report (2026-11-07T17:04:17.381Z)
