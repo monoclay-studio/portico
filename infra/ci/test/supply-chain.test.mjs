@@ -22,7 +22,9 @@ test('every base image is pinned by digest', () => {
       assert.match(ref, /@sha256:[0-9a-f]{64}$/, `${f}: FROM ${ref} is not digest-pinned`);
     }
   }
-  const pg = read('infra/terraform/modules/single-host/variables.tf').match(/default\s*=\s*"(public\.ecr\.aws\/docker\/library\/postgres[^"]+)"/);
+  const pg = read('infra/terraform/modules/single-host/variables.tf').match(
+    /default\s*=\s*"(public\.ecr\.aws\/docker\/library\/postgres[^"]+)"/,
+  );
   assert.ok(pg && /@sha256:[0-9a-f]{64}$/.test(pg[1]), 'demo Postgres image is not digest-pinned');
 });
 
@@ -45,7 +47,15 @@ test('every action is pinned to a 40-hex commit SHA', () => {
 
 test('dependabot covers images, the tsx lockfile, terraform and actions', () => {
   const d = read('.github/dependabot.yml');
-  for (const needle of ['package-ecosystem: docker', '/apps/api', '/apps/worker', '/infra/restore-drill', '/infra/docker/tsx-runtime', 'package-ecosystem: terraform', 'package-ecosystem: github-actions']) {
+  for (const needle of [
+    'package-ecosystem: docker',
+    '/apps/api',
+    '/apps/worker',
+    '/infra/restore-drill',
+    '/infra/docker/tsx-runtime',
+    'package-ecosystem: terraform',
+    'package-ecosystem: github-actions',
+  ]) {
     assert.ok(d.includes(needle), `dependabot.yml lacks ${needle}`);
   }
 });
