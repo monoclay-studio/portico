@@ -134,8 +134,8 @@ run "resilient_tier_plans" {
     error_message = "resilient tier: Aurora writer + replica across 3 AZs."
   }
   assert {
-    condition     = output.effective_settings.nat_mode == "per_az" && length(module.backup) == 1 && output.effective_settings.private_tasks
-    error_message = "resilient tier: NAT per AZ, private tasks and AWS Backup."
+    condition     = output.effective_settings.nat_mode == "per_az" && length(module.backup) == 1 && output.effective_settings.private_tasks && length(output.effective_settings.interface_endpoints) == 0
+    error_message = "resilient tier: NAT per AZ (which also reaches AWS APIs, so no paid interface endpoints by default), private tasks and AWS Backup."
   }
   assert {
     condition     = output.effective_settings.waf_level == "full"
@@ -211,6 +211,10 @@ run "runtime_contract_lean_production" {
   assert {
     condition     = length([for k in concat(output.runtime_contract.api.secrets, output.runtime_contract.worker.secrets) : k if contains(["OPERATOR_TOKEN", "PORTICO_OPERATORS"], k)]) == 0
     error_message = "no operator token in production."
+  }
+  assert {
+    condition     = !contains(keys(module.secrets[0].integration_secret_arns), "operator-token") && contains(keys(module.secrets[0].integration_secret_arns), "payments-stripe-connect-secret-key-live")
+    error_message = "production creates the payment-provider placeholders but not the operator-console ones."
   }
   assert {
     condition     = alltrue([for c in output.trusted_proxy_cidrs : !endswith(c, "/0")]) && contains(output.trusted_proxy_cidrs, "10.20.0.0/20") && contains(output.trusted_proxy_cidrs, "10.20.16.0/20") && contains(output.trusted_proxy_cidrs, "13.32.0.0/15")
@@ -289,6 +293,18 @@ run "demo_tier_refused_for_production" {
     route53_zone_id = "Z0000000000000000000"
   }
   expect_failures = [var.tier]
+}
+
+run "operator_secret_refused_in_production_under_any_name" {
+  command = plan
+  variables {
+    tier                         = "lean"
+    deployment                   = "production"
+    domain_name                  = "portico.example"
+    route53_zone_id              = "Z0000000000000000000"
+    injected_integration_secrets = { SOME_ALIAS = "portico-operators" }
+  }
+  expect_failures = [var.injected_integration_secrets]
 }
 
 run "operator_token_refused_in_production" {

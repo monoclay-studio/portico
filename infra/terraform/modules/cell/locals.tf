@@ -22,7 +22,10 @@ locals {
   run_managed = !local.is_demo && var.active
   run_any     = local.run_host || local.run_managed
   production  = var.deployment == "production"
-  ephemeral   = !local.production # staging/demo data is synthetic: allow clean destroy/recreate
+  # Operator-console placeholders are useless in production (refused there until IAM Identity Center); not created.
+  operator_secret_keys = ["operator-token", "portico-operators"]
+  integration_secrets  = local.production ? { for k, v in var.integration_secrets : k => v if !contains(local.operator_secret_keys, k) } : var.integration_secrets
+  ephemeral            = !local.production # staging/demo data is synthetic: allow clean destroy/recreate
 
   t = var.tier
   o = var.overrides
@@ -35,7 +38,10 @@ locals {
     # identity providers, outbound webhooks, Channex) for ≈ $3.65/month per task. Interface endpoints (≈ $9.49 each
     # per AZ) reach AWS APIs only, so the app's payment/SSO/webhook calls would fail. Fixed egress IP or private
     # tasks: overrides = { nat_mode = "single" } (≈ +$45/month). README § Egress.
-    interface_endpoints = { demo = [], lean = [], resilient = ["ecr.api", "ecr.dkr", "logs", "secretsmanager"] }[local.t]
+    # Resilient: NAT per AZ already reaches AWS APIs. Interface endpoints for ecr.api/ecr.dkr/logs/secretsmanager in 3
+    # AZs would add 12 endpoint-hours ≈ $114/month to save cents of NAT data processing; opt in with overrides =
+    # { interface_endpoints = [...], endpoint_az_count = 3 } when AWS-API traffic must not depend on the NAT gateways.
+    interface_endpoints = { demo = [], lean = [], resilient = [] }[local.t]
     endpoint_az_count   = { demo = 1, lean = 1, resilient = 3 }[local.t]
     flow_logs           = { demo = null, lean = null, resilient = "ALL" }[local.t]
     db_engine           = { demo = "rds", lean = "rds", resilient = "aurora" }[local.t]

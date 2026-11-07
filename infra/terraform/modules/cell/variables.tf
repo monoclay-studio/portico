@@ -204,7 +204,10 @@ variable "injected_integration_secrets" {
   }
   validation {
     # Static operator tokens have no expiry and no MFA (identity review P2-17): never in a production deployment.
-    condition     = var.deployment != "production" || length(setintersection(keys(var.injected_integration_secrets), ["OPERATOR_TOKEN", "PORTICO_OPERATORS"])) == 0
+    condition = var.deployment != "production" || (
+      length(setintersection(keys(var.injected_integration_secrets), ["OPERATOR_TOKEN", "PORTICO_OPERATORS"])) == 0 &&
+      length(setintersection(values(var.injected_integration_secrets), ["operator-token", "portico-operators"])) == 0
+    )
     error_message = "OPERATOR_TOKEN / PORTICO_OPERATORS must not be injected into production (operator console is disabled there until IAM Identity Center)."
   }
   validation {

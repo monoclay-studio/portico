@@ -113,7 +113,7 @@ module "secrets" {
   secret_path          = local.secret_path
   db_host              = module.database[0].writer_endpoint
   recovery_window_days = local.ephemeral ? 0 : 30
-  integration_secrets  = var.integration_secrets
+  integration_secrets  = local.integration_secrets
   # Keys travel with the cross-region backup copies: a restored database is useless without them.
   replica_region = local.s.aws_backup ? var.dr_region : null
 }
