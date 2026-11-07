@@ -32,8 +32,21 @@ afterAll(async () => h?.close());
 
 describe('MFA over HTTP: enrolment, second factor at sign-in, step-up as a distinct problem', () => {
   it('turns a step-up denial on another module’s route into mfa_required, and verification restores it', async () => {
-    const o = await enterpriseOrg(h);
-    const enrol = await h.app.inject({ method: 'POST', url: '/v1/me/mfa/totp', headers: o.auth });
+    const o = await enterpriseOrg(h, { mfa: false });
+    // ADR-0017 §4: enrolling needs proof of the existing credential (here the password), not just a session.
+    const noProof = await h.app.inject({
+      method: 'POST',
+      url: '/v1/me/mfa/totp',
+      headers: o.auth,
+      payload: {},
+    });
+    expect(noProof.json()).toMatchObject({ status: 400, code: 'proof_required' });
+    const enrol = await h.app.inject({
+      method: 'POST',
+      url: '/v1/me/mfa/totp',
+      headers: o.auth,
+      payload: { currentPassword: PASSWORD },
+    });
     expect(enrol.statusCode).toBe(200);
     const secret = enrol.json().secret as string;
     const confirm = await h.app.inject({
@@ -107,17 +120,18 @@ describe('MFA over HTTP: enrolment, second factor at sign-in, step-up as a disti
     expect(allowed.statusCode).toBe(201);
   });
 
-  it('after the grace period an unenrolled administrator gets mfa_enrollment_required', async () => {
-    const o = await enterpriseOrg(h);
+  it('an unenrolled administrator gets mfa_enrollment_required for sensitive permissions, even in the grace', async () => {
+    const o = await enterpriseOrg(h, { mfa: false });
     const policy = await h.app.inject({ method: 'GET', url: '/v1/security/policy', headers: o.auth });
     expect(policy.headers.etag).toBe('W/"0"');
+    // Changing the policy is itself sensitive.
     const put = await h.app.inject({
       method: 'PUT',
       url: '/v1/security/policy',
       headers: { ...o.auth, 'if-match': policy.headers.etag as string },
       payload: { mfaGracePeriodHours: 0 },
     });
-    expect(put.statusCode).toBe(200);
+    expect(put.json()).toMatchObject({ status: 403, code: 'mfa_enrollment_required' });
     const res = await h.app.inject({
       method: 'POST',
       url: '/v1/legal-entities',
@@ -183,15 +197,41 @@ describe('SCIM over HTTP', () => {
       headers: { ...o.auth, 'idempotency-key': newId() },
       payload: { name: 'Okta provisioning', permissions: ['identity.scim.provision'] },
     });
-    expect(issued.statusCode).toBe(201);
+    // ADR-0017 §9: a key with sensitive permissions must expire within 90 days.
+    expect(issued.json()).toMatchObject({ status: 400, code: 'expiry_required' });
+    const expiresAt = new Date(h.clock.now().getTime() + 60 * 86_400_000).toISOString();
+    const key = newId();
+    const request = { name: 'Okta provisioning', permissions: ['identity.scim.provision'], expiresAt };
+    const issue = () =>
+      h.app.inject({
+        method: 'POST',
+        url: '/v1/api-clients',
+        headers: { ...o.auth, 'idempotency-key': key },
+        payload: request,
+      });
+    const first = await issue();
+    expect(first.statusCode).toBe(201);
+    // P2-7: a retry never returns (or stores) the token again.
+    const replay = await issue();
+    expect(replay.json()).toMatchObject({
+      status: 409,
+      code: 'already_issued',
+      details: { clientId: first.json().clientId },
+    });
+    const stored = await h.t.admin.kysely
+      .selectFrom('core.idempotency_keys')
+      .select('response_body')
+      .where('key', '=', key)
+      .executeTakeFirstOrThrow();
+    expect(JSON.stringify(stored.response_body)).not.toContain(first.json().token);
     const bogus = await h.app.inject({
       method: 'POST',
       url: '/v1/api-clients',
       headers: { ...o.auth, 'idempotency-key': newId() },
-      payload: { name: 'Bad', permissions: ['identity.everything'] },
+      payload: { name: 'Bad', permissions: ['platform.everything'] },
     });
     expect(bogus.json().code).toBe('invalid_permissions');
-    const client = issued.json() as { clientId: string; token: string };
+    const client = first.json() as { clientId: string; token: string };
     const auth = { authorization: `Bearer ${client.token}`, 'content-type': 'application/scim+json' };
     const userName = `scim-${newId().slice(-6)}@lagoon.mv`;
     const body = JSON.stringify({
@@ -348,7 +388,8 @@ describe('staff lifecycle over HTTP', () => {
     });
     expect(invite.statusCode).toBe(201);
     // Live organization: the message is queued for delivery, never echoed back.
-    expect(invite.json().delivery).toEqual({ mode: 'live' });
+    expect(invite.json().delivery).toEqual({ mode: 'queued' });
+    expect(invite.body).not.toContain('inv.');
     const userId = invite.json().userId;
     const detail = await h.app.inject({ method: 'GET', url: `/v1/users/${userId}`, headers: o.auth });
     expect(detail.json()).toMatchObject({

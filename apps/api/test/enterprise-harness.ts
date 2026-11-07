@@ -5,6 +5,8 @@ import type { IdentityPorts } from '@portico/identity';
 import { fixedClock, newId, randomToken } from '@portico/kernel';
 import { createTestDatabase, type TestDatabase } from '@portico/testing';
 import { compose, MANIFESTS, provisionOrganization } from '../src';
+import { enrolMfa } from './helpers';
+import { totpCode } from './totp';
 
 export interface EnterpriseHarness {
   t: TestDatabase;
@@ -54,16 +56,20 @@ export async function startEnterpriseApi(identity: Partial<IdentityPorts> = {}):
 export const PASSWORD = 'correct horse battery staple';
 
 /** Provision an organization with an admin, sign in over HTTP, and return helpers for more members. */
-export async function enterpriseOrg(h: EnterpriseHarness, opts: { planCode?: string; name?: string } = {}) {
+export async function enterpriseOrg(
+  h: EnterpriseHarness,
+  opts: { planCode?: string; name?: string; environment?: 'live' | 'trial'; mfa?: boolean } = {},
+) {
   const email = `admin-${newId()}@lagoon.mv`;
   const { tenantId, adminUserId } = await provisionOrganization(h.t.db, {
     name: opts.name ?? 'Lagoon Collection',
     slug: `org-${newId().slice(-12)}`,
-    environment: 'live',
+    environment: opts.environment ?? 'live',
     planCode: opts.planCode ?? 'enterprise',
     admin: { email, displayName: 'Admin', password: PASSWORD },
   });
-  const auth = await login(h, email);
+  // Administrators enrol MFA so their sensitive (⚑) permissions work; `mfa: false` keeps a fresh, unenrolled one.
+  const auth = opts.mfa === false ? await login(h, email) : await loginWithMfa(h, email);
   /** Add a second administrator (for separation-of-duties flows) and sign them in. */
   const addAdmin = async () => {
     const e = `admin2-${newId()}@lagoon.mv`;
@@ -79,20 +85,47 @@ export async function enterpriseOrg(h: EnterpriseHarness, opts: { planCode?: str
       },
     });
     if (res.statusCode !== 201) throw new Error(`create admin failed: ${res.body}`);
-    return { userId: res.json().userId as string, email: e, auth: await login(h, e) };
+    return { userId: res.json().userId as string, email: e, auth: await loginWithMfa(h, e) };
   };
   return { tenantId, adminUserId, email, auth, addAdmin };
 }
 
+/** Authenticator secrets of people enrolled through these helpers (test-only "phones"). */
+const authenticators = new Map<string, string>();
+
+/** Sign in over HTTP; a person with an authenticator answers the second-factor challenge with a fresh code. */
 export async function login(h: EnterpriseHarness, email: string, organizationId?: string) {
   const res = await h.app.inject({
     method: 'POST',
     url: '/v1/auth/login',
     payload: { email, password: PASSWORD, ...(organizationId ? { organizationId } : {}) },
   });
-  const body = res.json();
-  if (body.status !== 'signed_in') throw new Error(`login failed: ${res.body}`);
+  let body = res.json();
+  const secret = authenticators.get(email);
+  if (body.status === 'mfa_required' && secret) {
+    h.clock.advance(30_000); // a fresh time step: codes are single-use
+    const second = await h.app.inject({
+      method: 'POST',
+      url: '/v1/auth/login/mfa',
+      payload: { challengeToken: body.challengeToken, code: totpCode(secret, h.clock.now()) },
+    });
+    body = second.json();
+  }
+  if (body.status !== 'signed_in') throw new Error(`login failed: ${JSON.stringify(body)}`);
   return { authorization: `Bearer ${body.token}` };
+}
+
+/** Sign in and make sure the person has an authenticator, so sensitive (⚑) permissions are effective. */
+export async function loginWithMfa(h: EnterpriseHarness, email: string, organizationId?: string) {
+  const auth = await login(h, email, organizationId);
+  if (!authenticators.has(email))
+    authenticators.set(email, await enrolMfa(h.app, auth, PASSWORD, h.clock.now()));
+  return auth;
+}
+
+/** The test authenticator of a person enrolled through these helpers. */
+export function authenticatorOf(email: string): string | undefined {
+  return authenticators.get(email);
 }
 
 export async function legalEntityAndProperty(
