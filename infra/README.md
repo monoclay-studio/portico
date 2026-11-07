@@ -17,7 +17,7 @@ state, no image build has ever happened. Readiness: **R2–R3 for the code, R1 f
   Stripe Connect TEST/LIVE placeholders with guard rails; operator token refused in production.
 - `portico_worker` DB role (group + blue/green logins) for apps/worker; the job-routing `SECURITY DEFINER` functions
   are granted to it only (`bootstrap-roles.mjs grants`, run after every migration, self-verifying).
-- `infra/db/verify-roles.sh`: **37/37** checks on a SCRAM-auth PostgreSQL 16, using the production runtime layout
+- `infra/db/verify-roles.sh`: **38/38** checks on a SCRAM-auth PostgreSQL 16, using the production runtime layout
   (`pnpm deploy --prod` + pinned tsx, read-only files, no writable TMPDIR).
 - `infra/ci/deploy.yml.example` + `infra/ci/deploy-cell.sh` (tested offline: **27/27**, fake AWS CLI).
 - Cost per tier from the downloaded AWS Price List (§ Cost per tier); reproducible with `node infra/cost/estimate.mjs`.
@@ -132,11 +132,12 @@ appends the address it saw. The CloudFront list comes from the AWS-managed prefi
 | `terraform test` — cell: demo, lean, resilient, inactive staging, runtime contract, 8 guard rails | **15/15 pass** | mocked AWS provider; real `random` (ephemeral resources cannot be mocked) |
 | `terraform test` — database: master-username guard | **2/2 pass** | mocked AWS provider |
 | Mutation checks | a `0.0.0.0/0` trusted proxy is refused; removing the smoke-test rollback fails the deploy test | done by hand, reverted |
-| Role model end to end (`infra/db/verify-roles.sh`) | **37/37** | SCRAM PostgreSQL 16.15; runtime from `pnpm deploy --prod` + tsx 4 (read-only, no TMPDIR): bootstrap → 16 migrations as `portico_owner` → grants ×2 → probes → API `/health/ready` as `portico_app_blue` (and refusal without the seal key) → demo seed → worker ran 12 jobs as `portico_worker_blue`, 0 failed, outbox drained → worker as `portico_app_blue` refused → restore-drill SQL passes, and catches a re-granted routing function and an unbalanced journal entry |
+| Role model end to end (`infra/db/verify-roles.sh`) | **38/38** | SCRAM PostgreSQL 16.15; runtime from `pnpm deploy --prod` + tsx 4 (read-only, no TMPDIR): bootstrap → 16 migrations as `portico_owner` → grants, then grants and roles each twice concurrently → probes → API `/health/ready` as `portico_app_blue` (and refusal without the seal key) → demo seed → worker ran 12 jobs as `portico_worker_blue`, 0 failed, outbox drained → worker as `portico_app_blue` refused → restore-drill SQL passes, and catches a re-granted routing function and an unbalanced journal entry |
 | Deploy script (`infra/ci/test/deploy-cell.test.sh`) | **27/27** | fake AWS CLI + fake skopeo + local HTTP server: order of steps, digest checks, refused mutable tag, failed migration, ECS rollback, failed smoke test, demo host |
 | Workflow file | parses; every action pinned to a commit SHA (resolved with `git ls-remote`, tags ≥ 2 weeks old) | never run on GitHub |
 | Dockerfiles | reviewed statically; runtime layout exercised (row above) | **NOT built** — no Docker daemon |
 | `pnpm lint` | exit 0 | repository root |
+| Gate block after merging `main` (module-builder self-check §1) | install (frozen) exit 0; `turbo typecheck --force` exit 0 (18/18); `pnpm test` exit 0 (16/16 packages); `turbo run test --force` **exit 1**: `apps/api` demo-seed tests time out at 30 s (`inventory.test.ts` 30.2 s, `rates.test.ts` 30.5 s) under default concurrency at load average ≈ 42; reproduced on a re-run (1 test) | this branch changes nothing outside infra/, docs/runbooks/ and the Dockerfiles — a known main-side timing issue, reported, not fixed here |
 
 **Never verified:** `terraform plan/apply` against AWS (provider-side validation, quotas, IAM policy correctness,
 service-linked roles, ACM/DNS validation, WAF capacity units, Aurora/RDS engine version availability — `engine_version`

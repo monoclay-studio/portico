@@ -1,6 +1,6 @@
 # Runbook: database roles
 
-**Status:** verified on a local SCRAM-auth PostgreSQL 16 with `infra/db/verify-roles.sh` (37 checks: bootstrap,
+**Status:** verified on a local SCRAM-auth PostgreSQL 16 with `infra/db/verify-roles.sh` (38 checks: bootstrap,
 migrations as a non-superuser owner, routing grants twice, privilege probes, API and worker under their own logins
 from the production runtime layout, restore-drill SQL with planted defects). **Not yet run on RDS/Aurora**
 (differences: `rds_superuser`, the RDS-managed master secret, IAM authentication).

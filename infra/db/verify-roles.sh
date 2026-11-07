@@ -82,13 +82,14 @@ echo "== 2. migrations as portico_owner"
 (cd "$API_DIR" && NODE_ENV=production DATABASE_URL="$OWNER_URL" "${API_CMD[@]}" src/migrate-cli.ts) >"$WORK/migrate.log" 2>&1 \
   && ok "migrations as non-superuser owner ($(tail -1 "$WORK/migrate.log"))" || { ko "migrations"; tail -20 "$WORK/migrate.log"; exit 1; }
 
-echo "== 3. grants phase as portico_owner (twice: idempotent)"
-for i in 1 2; do
-  DATABASE_URL="$OWNER_URL" node "$BOOTSTRAP" grants >"$WORK/grants$i.log" 2>&1 \
-    && ok "grants phase run $i" || { ko "grants phase run $i"; cat "$WORK/grants$i.log"; exit 1; }
-done
+echo "== 3. grants phase as portico_owner (once, then twice concurrently: idempotent and serialized)"
+DATABASE_URL="$OWNER_URL" node "$BOOTSTRAP" grants >"$WORK/grants1.log" 2>&1 \
+  && ok "grants phase run 1" || { ko "grants phase run 1"; cat "$WORK/grants1.log"; exit 1; }
+DATABASE_URL="$OWNER_URL" node "$BOOTSTRAP" grants >"$WORK/grants2.log" 2>&1 & g2=$!
+DATABASE_URL="$OWNER_URL" node "$BOOTSTRAP" grants >"$WORK/grants3.log" 2>&1 & g3=$!
+if wait "$g2" && wait "$g3"; then ok "two concurrent grants runs both succeed (advisory lock)"; else ko "concurrent grants runs"; cat "$WORK/grants2.log" "$WORK/grants3.log"; fi
 node_eval "
-  const lines = (await import('node:fs')).readFileSync('$WORK/grants2.log', 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  const lines = (await import('node:fs')).readFileSync('$WORK/grants3.log', 'utf8').trim().split('\n').map((l) => JSON.parse(l));
   const r = lines.find((l) => l.msg === 'routing grants applied');
   console.log('  info  granted to worker: ' + r.granted.length + ', revoked from app: ' + r.revokedFromApp.length + ', missing: ' + JSON.stringify(r.missing) + ', unreviewed definers: ' + JSON.stringify(r.unreviewed));
   const w = lines.find((l) => l.level === 'warn'); if (w) console.log('  warn  ' + w.msg);
@@ -102,6 +103,18 @@ elif grep -q "must run as portico_owner" "$WORK/grants-app.log"; then
 else
   ko "grants phase as app: $(tail -1 "$WORK/grants-app.log")"
 fi
+
+# Roles phase concurrently with itself (two deploys racing): both must succeed, nothing duplicated.
+roles_env() {
+  env PGHOST="$HOST" PGPORT="$PORT" PGDATABASE="$DB" PGSSLMODE=disable MASTER_USERNAME="$SUPERUSER" MASTER_PASSWORD="$SUPERPASS" \
+    OWNER_SECRET_JSON="{\"username\":\"portico_owner\",\"password\":\"$OWNER_PW\"}" \
+    APP_SECRET_JSON="{\"username\":\"portico_app_blue\",\"password\":\"$APP_BLUE_PW\",\"standby_username\":\"portico_app_green\",\"standby_password\":\"$APP_GREEN_PW\"}" \
+    WORKER_SECRET_JSON="{\"username\":\"portico_worker_blue\",\"password\":\"$WORKER_BLUE_PW\",\"standby_username\":\"portico_worker_green\",\"standby_password\":\"$WORKER_GREEN_PW\"}" \
+    node "$BOOTSTRAP"
+}
+roles_env >"$WORK/roles2.log" 2>&1 & r2=$!
+roles_env >"$WORK/roles3.log" 2>&1 & r3=$!
+if wait "$r2" && wait "$r3"; then ok "two concurrent roles runs both succeed"; else ko "concurrent roles runs"; cat "$WORK/roles2.log" "$WORK/roles3.log"; fi
 
 echo "== 4. privilege probes as login roles"
 if psql "$(url portico_app_blue wrong-password)" -Atqc "select 1" >"$WORK/out" 2>&1; then
