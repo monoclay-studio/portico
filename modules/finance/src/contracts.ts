@@ -729,6 +729,23 @@ export const openingDepositsInput = z.object({
         bookingId: uuid,
         externalRef: z.string().max(120).optional(),
         amountMinor: z.number().int(),
+        /**
+         * Tax the previous system already declared on this deposit (time of supply = receipt). It is released, not
+         * declared again, when the deposit is applied — so migrated prepaid bookings are not taxed twice.
+         */
+        declaredTaxes: z
+          .array(
+            z.object({
+              /** Tax account key, e.g. 'tgst' (must be a tax account in the chart). */
+              accountKey: z.string().min(1).max(60),
+              name: z.string().min(1).max(120),
+              rate: z.string().max(20).optional(),
+              ruleVersionId: z.string().max(120).optional(),
+              amountMinor: z.number().int().nonnegative(),
+            }),
+          )
+          .max(10)
+          .optional(),
       }),
     )
     .min(1)

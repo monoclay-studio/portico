@@ -1,6 +1,6 @@
 import { newId } from '@portico/kernel';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { assertLedgerIntegrity, type Harness, setupOrg, startHarness } from './helpers';
+import { assertLedgerIntegrity, type Harness, setupOrg, startHarness, usd } from './helpers';
 
 /**
  * S18 (groundwork) — Imported deposits disagree with the previous system's closing balance. The import posts
@@ -103,5 +103,60 @@ describe('S18: imported deposits vs the previous system closing balance', () => 
         org.as(['finance.posting.create']),
       ),
     ).rejects.toThrow(/permission/);
+  });
+
+  it('migrated deposits keep the tax the previous system declared, so prepaid stays are not taxed twice (F-09)', async () => {
+    const org = await setupOrg(h);
+    const [b1, b2] = [newId(), newId()];
+    const report = await org.run((tx) =>
+      h.finance.importOpeningDeposits(tx, {
+        propertyId: org.propertyId,
+        importRef: `opera-tax-${org.tenantId.slice(-6)}`,
+        currency: 'USD',
+        providedClosingMinor: 117000,
+        items: [
+          {
+            bookingId: b1,
+            amountMinor: 117000,
+            declaredTaxes: [{ accountKey: 'TGST', name: 'TGST', rate: '17%', amountMinor: 17000 }],
+          },
+          {
+            bookingId: b2,
+            amountMinor: 5000,
+            declaredTaxes: [{ accountKey: 'vat_unknown', name: 'VAT', amountMinor: 500 }],
+          },
+        ],
+        idempotencyKey: 'k',
+      }),
+    );
+    expect(report.status).toBe('difference'); // the unknown tax account row is rejected with a reason
+    expect(report.rejected).toEqual([expect.objectContaining({ row: 2, reason: expect.stringMatching(/vat_unknown/) })]);
+    const folio = await org.run((tx) =>
+      h.finance.openFolio(tx, {
+        propertyId: org.propertyId,
+        owner: { type: 'stay', id: newId() },
+        payer: { type: 'guest', name: 'Migrated guest' },
+      }),
+    );
+    await org.run((tx) =>
+      h.finance.postCharge(tx, {
+        propertyId: org.propertyId,
+        folioId: folio.folioId,
+        chargeCode: 'ROOM',
+        amount: usd(100000),
+        serviceDate: '2026-11-07',
+        description: 'Room',
+        sourceRef: { type: 'stay', id: folio.folioId },
+        idempotencyKey: `room:${folio.folioId}`,
+      }),
+    );
+    await org.run((tx) => h.finance.applyDeposits(tx, { bookingId: b1, toFolioId: folio.folioId }));
+    const tb = await org.run((tx) => h.finance.trialBalance(tx, { legalEntityId: org.legalEntityId }));
+    const bal = (k: string) => tb.accounts.find((a) => a.systemKey === k)?.balanceMinor ?? 0;
+    // Charges carry TGST 18,700 (17% of 1,100.00); 17,000 was declared by the previous system → 1,700 due here.
+    expect(bal('tax:tgst')).toBe(-1700);
+    expect(bal('deposit_tax_declared')).toBe(0);
+    expect((await org.run((tx) => h.finance.getFolio(tx, folio.folioId))).balance).toEqual(usd(128700 - 117000));
+    await assertLedgerIntegrity(h, org);
   });
 });

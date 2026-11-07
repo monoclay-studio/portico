@@ -13,7 +13,7 @@ import {
 import type { DepositSummary, OpeningDepositsInput, OpeningImportReport } from '../contracts';
 import { taxAccountKey } from '../domain/chart';
 import type { LineDraft } from '../domain/ledger';
-import { fromRatesTaxLine, type PostingTax } from '../domain/tax-map';
+import { fromRatesTaxLine, normalizeLedgerKey, type PostingTax } from '../domain/tax-map';
 import type { PaymentMethodKind } from '../domain/types';
 import type { DepositAccountsTable } from '../tables';
 import { prepareDestination } from './folios';
@@ -25,6 +25,7 @@ import {
   db,
   type FolioRow,
   findEntryByKey,
+  functionalCurrencyOf,
   loadFolio,
   lockFolios,
   type PostingDraft,
@@ -430,6 +431,13 @@ export async function applyDeposits(
     throw new BusinessRuleError(
       'intercompany_transfer',
       'The deposit belongs to another legal entity than the folio.',
+    );
+  }
+  if (acct.property_id !== f0.property_id) {
+    throw new BusinessRuleError(
+      'deposit_property_mismatch',
+      'The deposit was taken by another property than the folio’s. Refund it there, or transfer it through finance.',
+      { bookingId: input.bookingId, folioId: f0.id },
     );
   }
   const businessDate = await deps.ports.platform.getBusinessDate(tx, f0.property_id);
@@ -953,7 +961,18 @@ export async function importOpeningDeposits(
   const businessDate = await deps.ports.platform.getBusinessDate(tx, input.propertyId);
   const rejected: OpeningImportReport['rejected'] = [];
   const seen = new Set<string>();
-  const accepted: Array<{ bookingId: string; amountMinor: number }> = [];
+  const accepted: Array<{ bookingId: string; amountMinor: number; taxes: DeclaredTax[] }> = [];
+  await functionalCurrencyOf(tx, deps, property.legalEntityId); // chart seeded
+  const taxAccounts = new Set(
+    (
+      await db(tx)
+        .selectFrom('finance.accounts')
+        .select('system_key')
+        .where('legal_entity_id', '=', property.legalEntityId)
+        .where('system_key', 'like', 'tax:%')
+        .execute()
+    ).map((a) => a.system_key),
+  );
   input.items.forEach((it, i) => {
     if (seen.has(it.bookingId)) {
       rejected.push({
@@ -972,8 +991,35 @@ export async function importOpeningDeposits(
       });
       return;
     }
+    const taxes: DeclaredTax[] = (it.declaredTaxes ?? [])
+      .filter((t) => t.amountMinor > 0)
+      .map((t) => ({
+        accountKey: normalizeLedgerKey(t.accountKey),
+        ruleId: `opening:${normalizeLedgerKey(t.accountKey)}`,
+        ruleVersionId: t.ruleVersionId ?? `opening:${input.importRef}`,
+        name: t.name,
+        ...(t.rate ? { rate: t.rate } : {}),
+        amountMinor: t.amountMinor,
+      }));
+    const unknown = taxes.filter((t) => !taxAccounts.has(taxAccountKey(t.accountKey)));
+    if (unknown.length) {
+      rejected.push({
+        row: i + 1,
+        bookingId: it.bookingId,
+        reason: `Declared tax ${unknown.map((t) => `"${t.accountKey}"`).join(', ')} is not a tax account in the chart. Map it to an existing tax account (e.g. tgst) and import the row again.`,
+      });
+      return;
+    }
+    if (taxes.reduce((s, t) => s + t.amountMinor, 0) >= it.amountMinor) {
+      rejected.push({
+        row: i + 1,
+        bookingId: it.bookingId,
+        reason: 'The tax declared on this deposit is not smaller than the deposit. Check the source system.',
+      });
+      return;
+    }
     seen.add(it.bookingId);
-    accepted.push({ bookingId: it.bookingId, amountMinor: it.amountMinor });
+    accepted.push({ bookingId: it.bookingId, amountMinor: it.amountMinor, taxes });
   });
   const total = accepted.reduce((s, a) => s + a.amountMinor, 0);
   const difference = input.providedClosingMinor - total;
@@ -1009,6 +1055,23 @@ export async function importOpeningDeposits(
         currency: input.currency,
         subLedger: { type: 'booking_deposit', id: a.bookingId },
       });
+      // Tax the previous system declared: carried as declared (released at application), its liability is part of
+      // the previous system's tax balances, which the general-ledger opening import clears from suspense.
+      for (const t of a.taxes) {
+        lines.push({
+          accountKey: 'deposit_tax_declared',
+          amountMinor: t.amountMinor,
+          currency: input.currency,
+          subLedger: { type: 'booking_deposit', id: a.bookingId },
+          memo: `${t.name} declared on deposit by the previous system`,
+        });
+        lines.push({
+          accountKey: 'migration_suspense',
+          amountMinor: -t.amountMinor,
+          currency: input.currency,
+          memo: `${t.name} declared by the previous system`,
+        });
+      }
     }
     await writeEntryBody(
       tx,
@@ -1031,9 +1094,15 @@ export async function importOpeningDeposits(
         currency: input.currency,
         create: true,
       })) as Selectable<DepositAccountsTable>;
+      const map = { ...declaredOf(acct) };
+      for (const t of a.taxes) map[t.accountKey] = (map[t.accountKey] ?? 0) + t.amountMinor;
       await db(tx)
         .updateTable('finance.deposit_accounts')
-        .set({ balance_minor: sql`balance_minor + ${a.amountMinor}`, version: sql`version + 1` })
+        .set({
+          balance_minor: sql`balance_minor + ${a.amountMinor}`,
+          declared_tax: JSON.stringify(map),
+          version: sql`version + 1`,
+        })
         .where('id', '=', acct.id)
         .execute();
       await db(tx)
@@ -1050,6 +1119,7 @@ export async function importOpeningDeposits(
           folio_id: null,
           payment_ref_type: 'opening_balance_import',
           payment_ref_id: importId,
+          taxes: JSON.stringify(a.taxes),
           business_date: businessDate,
         })
         .execute();
