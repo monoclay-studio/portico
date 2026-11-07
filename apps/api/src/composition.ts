@@ -240,13 +240,16 @@ export function compose(database: PorticoDatabase): Composition {
       requestCollection: (tx, input) =>
         paymentsCollectionsForFinance(bound(paymentsRef, 'payments')).requestCollection(tx, input),
     },
-    // Payer names for folios and tax invoices: guest profiles by id (companies/agencies when that module exists).
+    // Payer names and invoice particulars for folios and tax invoices: guest profiles, companies and agencies (guests).
     payers: {
       async describePayer(tx, input) {
-        if (input.type !== 'guest') return null;
         try {
-          const p = await guestsService.getProfile(asSystem(tx), input.id, { propertyId: input.propertyId });
-          return { name: p.displayName };
+          if (input.type === 'guest') {
+            const p = await guestsService.getProfile(asSystem(tx), input.id, { propertyId: input.propertyId });
+            return { name: p.displayName };
+          }
+          const c = await guestsService.getCompany(asSystem(tx), input.id);
+          return { name: c.legalName, ...(c.taxId ? { taxId: c.taxId } : {}) };
         } catch (err) {
           if (err instanceof NotFoundError) return null;
           throw err;
