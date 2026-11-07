@@ -210,7 +210,7 @@ Each agent's brief and report are in `agents/`.
   playbook v2.1. It is the first run that measures v2.
 - **18:00 — Owner: "only check 5hour window on checks".** The seven-day pacing rule is retired; the guardrail checks
   and the heartbeat now read only the 5-hour window.
-- **18:08 — Parity research for the operations cluster merged.**
+- **18:02 — Parity research for the operations cluster merged.**
   - Ten matrices: operations, guests, integration, identity, comms, resort, access, guest experience, CRM, AI.
   - All 179 `tested` rows quote their asserting test on main; 17 over-claimed rows were downgraded.
   - No module passes the gate yet.
