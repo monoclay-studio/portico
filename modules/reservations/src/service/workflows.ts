@@ -241,6 +241,7 @@ async function stepRegistration(
           id: newId(tx.now.getTime()),
           tenant_id: tx.tenantId,
           stay_id: stay.row.id,
+          position: -1,
           profile_id: profileId,
           name,
           kind: 'adult',

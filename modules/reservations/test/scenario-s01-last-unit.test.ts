@@ -56,7 +56,7 @@ describe('S01: two agents, last villa', () => {
     expect(fresh.feasible).toBe(false);
     expect(fresh.blockers[0]?.code).toBe('unavailable');
     expect(fresh.stays[0]?.nights[0]?.availability).toMatchObject({ available: 0, sufficient: false });
-    const explanation = (err.details?.explanation as string[]).join(' ');
+    const explanation = ((err.details?.explanation ?? []) as string[]).join(' ');
     expect(explanation).toContain(winner.code);
     expect(explanation).toContain(winnerName);
     expect(explanation).toMatch(/sold \d+ seconds? ago/);

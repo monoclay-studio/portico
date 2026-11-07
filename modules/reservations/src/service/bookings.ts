@@ -369,6 +369,16 @@ export async function insertStayWithInventory(
 ): Promise<{ stayId: string; conflictIds: string[] }> {
   const { inventory } = deps.ports;
   const s = input.priced.input;
+  if (s.unitId) {
+    const unit = await inventory.getUnit(tx, s.unitId);
+    if (unit.unitTypeId !== s.unitTypeId || unit.propertyId !== input.propertyId) {
+      throw new BusinessRuleError(
+        'unit_type_differs',
+        `${unit.name} is not a unit of the booked unit type at this property. Choose a unit of that type, or book its unit type.`,
+        { unitId: unit.id },
+      );
+    }
+  }
   const stayStatus: StayStatus = input.waitlisted ? 'waitlisted' : 'expected';
   const stayId = newId(tx.now.getTime());
   const position = await db(tx)
@@ -491,6 +501,7 @@ async function insertOccupants(
         id: newId(tx.now.getTime()),
         tenant_id: tx.tenantId,
         stay_id: stayId,
+        position: i,
         profile_id: profileId,
         name: o.profile ? [o.profile.firstName, o.profile.lastName].filter(Boolean).join(' ') : null,
         kind: o.kind,

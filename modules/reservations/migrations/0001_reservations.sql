@@ -127,6 +127,7 @@ create table reservations.occupants (
   id               uuid primary key,
   tenant_id        uuid not null,
   stay_id          uuid not null references reservations.stays (id) on delete cascade,
+  position         int not null,          -- order as entered (primary first)
   profile_id       uuid,
   name             text,
   kind             text not null check (kind in ('adult', 'child')),

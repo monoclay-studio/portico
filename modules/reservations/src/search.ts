@@ -9,7 +9,9 @@ import { type Deps, db, isModuleUnavailable } from './service/context';
  * number (unit names from inventory → the stay currently or next assigned to it). Permission and property scope
  * are enforced here (reservations.booking.read).
  */
-export function reservationsSearch(deps: Deps): SearchProvider {
+export function reservationsSearch(
+  deps: Deps,
+): SearchProvider & { summarize: NonNullable<SearchProvider['summarize']> } {
   const scopeOf = (tx: TxContext) => tx.authz.propertyScope(P.bookingRead);
 
   async function bookingHits(

@@ -92,6 +92,7 @@ export interface OccupantsTable {
   id: string;
   tenant_id: string;
   stay_id: string;
+  position: number;
   profile_id: string | null;
   name: string | null;
   kind: string;

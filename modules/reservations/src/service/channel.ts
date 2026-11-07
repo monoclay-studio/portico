@@ -324,6 +324,7 @@ async function replaceStayFromChannel(
         id: newId(tx.now.getTime()),
         tenant_id: tx.tenantId,
         stay_id: stay.row.id,
+        position: i,
         profile_id: profileId,
         name: o.profile ? [o.profile.firstName, o.profile.lastName].filter(Boolean).join(' ') : null,
         kind: o.kind,

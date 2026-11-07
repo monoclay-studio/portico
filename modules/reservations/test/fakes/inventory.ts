@@ -242,7 +242,7 @@ export class FakeInventory implements InventoryPort {
       select unit_type_id, from_date::text, to_date::text, quantity, status, expires_at from fake_inventory.holds
        where id = ${input.holdId} for update`.execute(tx.db);
     const h = rows[0];
-    if (!h || h.status !== 'active' || h.expires_at.getTime() <= tx.now.getTime()) {
+    if (h?.status !== 'active' || h.expires_at.getTime() <= tx.now.getTime()) {
       throw new BusinessRuleError('hold_expired', 'The hold has expired or was released.');
     }
     await sql`update fake_inventory.holds set status = 'converted' where id = ${input.holdId}`.execute(tx.db);
@@ -292,8 +292,10 @@ export class FakeInventory implements InventoryPort {
     const cut = input.nights;
     for (const a of rows) {
       const pieces: DateRange[] = [];
-      if (a.from < cut.from) pieces.push({ from: a.from, to: a.to < cut.from ? a.to : cut.from });
-      if (a.to > cut.to) pieces.push({ from: a.from > cut.to ? a.from : cut.to, to: a.to });
+      const earlier = (x: string, y: string) => [x, y].sort()[0] as string;
+      const later = (x: string, y: string) => [x, y].sort()[1] as string;
+      if (a.from < cut.from) pieces.push({ from: a.from, to: earlier(a.to, cut.from) });
+      if (a.to > cut.to) pieces.push({ from: later(a.from, cut.to), to: a.to });
       for (const p of pieces) {
         await sql`insert into fake_inventory.assignments values (${newId()}, ${tx.tenantId}, ${a.unit_id}, ${input.ref.type},
                   ${input.ref.id}, daterange(${p.from}::date, ${p.to}::date, '[)'))`.execute(tx.db);

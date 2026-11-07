@@ -145,6 +145,13 @@ describe('booking lifecycle', () => {
     expect(b.stays[0]?.allowedActions.find((a) => a.action === 'checkIn')?.enabled).toBe(true);
   });
 
+  it('refuses a requested unit of another unit type', async () => {
+    const org = await setupOrg(t);
+    await expect(
+      org.run((tx) => org.svc.createBooking(tx, org.booking({}, { unitId: org.units.W201 }))),
+    ).rejects.toThrow(/not a unit of the booked unit type/);
+  });
+
   it('waitlisted stays never consume; confirming from the waitlist consumes', async () => {
     const org = await setupOrg(t);
     const b = created<Booking>(

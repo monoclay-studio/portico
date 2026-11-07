@@ -85,7 +85,7 @@ export async function loadStayRecords(tx: TxContext, stayRows: StayRow[]): Promi
       .sort((a, b) => (a.from < b.from ? -1 : 1)),
     occupants: occ
       .filter((o) => o.stay_id === row.id)
-      .sort((a, b) => Number(b.is_primary) - Number(a.is_primary) || (a.id < b.id ? -1 : 1)),
+      .sort((a, b) => Number(b.is_primary) - Number(a.is_primary) || a.position - b.position),
   }));
 }
 
