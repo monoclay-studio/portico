@@ -89,6 +89,9 @@ importers:
       '@portico/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@portico/finance':
+        specifier: workspace:*
+        version: link:../../modules/finance
       '@portico/guests':
         specifier: workspace:*
         version: link:../../modules/guests
@@ -175,6 +178,40 @@ importers:
       typescript:
         specifier: 'catalog:'
         version: 7.0.2
+
+  modules/finance:
+    dependencies:
+      '@portico/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      '@portico/http':
+        specifier: workspace:*
+        version: link:../../packages/http
+      '@portico/kernel':
+        specifier: workspace:*
+        version: link:../../packages/kernel
+      fastify:
+        specifier: 'catalog:'
+        version: 5.12.8
+      zod:
+        specifier: 'catalog:'
+        version: 4.6.7
+    devDependencies:
+      '@portico/platform':
+        specifier: workspace:*
+        version: link:../platform
+      '@portico/testing':
+        specifier: workspace:*
+        version: link:../../packages/testing
+      '@types/node':
+        specifier: 'catalog:'
+        version: 22.20.5
+      typescript:
+        specifier: 'catalog:'
+        version: 7.0.2
+      vitest:
+        specifier: 'catalog:'
+        version: 5.1.0(@types/node@22.20.5)(vite@8.3.6(@types/node@22.20.5)(esbuild@0.28.2)(tsx@4.23.15)(yaml@2.9.1))
 
   modules/guests:
     dependencies:

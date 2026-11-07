@@ -11,6 +11,16 @@ import {
   type TxEventSubscription,
 } from '@portico/db';
 import {
+  createFinance,
+  type FinancePorts,
+  financeDemoSeed,
+  financeHttp,
+  financeManifest,
+  financeSearch,
+  financeSubscriptions,
+  unavailableFinancePorts,
+} from '@portico/finance';
+import {
   createGuestsDemoSeed,
   createGuestsService,
   type GuestsService,
@@ -51,6 +61,7 @@ import {
   fieldCryptoFromEnv,
   type ModuleManifest,
   ModuleUnavailableError,
+  NotFoundError,
   randomToken,
   systemAuthorizer,
 } from '@portico/kernel';
@@ -110,6 +121,7 @@ export const MANIFESTS: readonly ModuleManifest[] = [
   identityManifest,
   inventoryManifest,
   guestsManifest,
+  financeManifest,
   reservationsManifest,
   operationsManifest,
   ratesManifest,
@@ -220,6 +232,35 @@ export function compose(database: PorticoDatabase): Composition {
 
   // ── inventory ──
   const inventoryModule = inventoryHttp({ database, inventory: inventoryService });
+
+  // ── finance ──
+  // Tax engine (rates) and payments are wave-1 modules built in parallel: bound to explicit "not connected"
+  // stubs until they merge (tax computation fails loudly; collection requests report 'unavailable').
+  const financePorts: FinancePorts = {
+    platform: {
+      // Routing metadata only (legal entity, currency): not gated by platform.property.read.
+      getProperty: (tx, id) => platform.getProperty({ ...tx, authz: systemAuthorizer }, id),
+      getBusinessDate: platform.getBusinessDate,
+      getLegalEntity: platform.getLegalEntity,
+      assertWritable: platform.assertWritable,
+    },
+    ...unavailableFinancePorts(),
+    // Payer names for folios and tax invoices: guest profiles by id (companies/agencies when that module exists).
+    payers: {
+      async describePayer(tx, input) {
+        if (input.type !== 'guest') return null;
+        try {
+          const p = await guestsService.getProfile(asSystem(tx), input.id, { propertyId: input.propertyId });
+          return { name: p.displayName };
+        } catch (err) {
+          if (err instanceof NotFoundError) return null;
+          throw err;
+        }
+      },
+    },
+  };
+  const finance = createFinance(financePorts);
+  const financeModule = financeHttp({ database, finance });
 
   // ── reservations ──
   // Platform is real. inventory, rates, guests, finance, payments, operations are wave-1 modules built in
@@ -454,6 +495,7 @@ export function compose(database: PorticoDatabase): Composition {
     platformSearch,
     inventorySearch,
     guestsSearchProvider(guestsService),
+    financeSearch,
     reservations.search(),
     operationsSearch,
     ratesSearch,
@@ -469,6 +511,7 @@ export function compose(database: PorticoDatabase): Composition {
       identityModule,
       inventoryModule,
       guestsModule,
+      financeModule,
       reservationsModule,
       operationsModule,
       ratesModule,
@@ -477,6 +520,7 @@ export function compose(database: PorticoDatabase): Composition {
       recordsModule,
     ],
     subscriptions: [
+      ...financeSubscriptions(finance, financePorts),
       ...reservations.subscriptions(),
       ...operationsSubscriptions(operationsPorts),
       ...integrationSubscriptions(integrationDeps),
@@ -517,6 +561,7 @@ export function compose(database: PorticoDatabase): Composition {
       // After inventory: prices the demo properties' unit types by profile (resort vs guesthouse).
       { name: 'rates', run: createRatesDemoSeed(rates, ratesPorts) },
       { name: 'payments', run: seedPaymentsDemo },
+      { name: 'finance', run: (tx, org) => financeDemoSeed(tx, org) },
     ],
   };
 }
