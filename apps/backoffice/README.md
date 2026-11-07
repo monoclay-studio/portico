@@ -9,11 +9,11 @@ built in wave 1.
 
 | Area | State | Evidence |
 |---|---|---|
-| Sign-in incl. organization selection, session, sign-out, session-expired handling | **Real** (POST /v1/auth/login, /v1/auth/logout, 401 handling) | e2e `smoke.spec.ts` |
+| Sign-in incl. organization selection, session; session ended by the server (401 → sign-in with redirect; the next person on the tab sees none of the previous data) | **Real** (POST /v1/auth/login, /v1/auth/logout, 401 handling) | e2e `smoke.spec.ts` (`P0-1 …`, `signs in …`, `wrong password …`). Explicit sign-out from the menu is not covered by e2e yet |
 | `/v1/me`, organization, properties + switcher, legal entities (create with Idempotency-Key), users & roles (invite with Idempotency-Key) | **Real** | e2e smoke, Vitest client tests |
 | Property settings with `If-Match` and the **409 ConflictDialog** (yours vs theirs, re-apply on latest version) | **Real** | e2e smoke (`409 version conflict`) |
 | Global search (`/`) + command palette (`Ctrl/⌘K`) on `GET /v1/search`; hover previews on `GET /v1/records/:type/:id/summary`; record history on `GET /v1/records/:type/:id/history` | **Real** for property (+ legal entity history); other types plug in as modules register search providers | e2e smoke |
-| Front-desk arrivals board (readiness + single blocker), housekeeping board, reservations timeline, change preview (extend stay), Today dashboard, My work inbox, stay/unit/guest records | **SIMULATED** (`src/mocks`) — badged SIMULATED on every screen and record | Vitest `maldives.test.ts`; e2e screenshots |
+| Front desk: Arrivals (readiness + single blocker), In house, Departures; housekeeping board; reservations timeline; change preview (extend stay); Today; My work; stay/unit/guest records | **Simulated** in non-live organizations only (`src/data/simulated`), payloads in the REAL reservations/operations contract shapes; provenance badge from the source. Live organizations show "not set up yet" | Vitest `data/simulated/maldives.test.ts` (contract compatibility, truthfulness); e2e smoke + screenshots |
 | Learning layer: help anchors on every screen, help panel, learning centre (role paths + progress), first-run checklist, "Practise in training" | Implemented; website content map empty (by design) | Vitest `app.test.ts`; screenshots |
 
 Readiness (CLAUDE.md §7): the real integrations above are **R3** (implemented and tested internally against the
@@ -65,8 +65,10 @@ src/
                 trail in the URL `?record=type:id,…`), RecordLink (EntityLink bound to the API), recent/pinned
   learning/     help anchors → website map (empty), help panel, learning paths, first-run checklist, progress
   features/     sign-in, today, my-work, learn, front-desk, housekeeping, reservations, settings, design system
-  data/         sources.ts — the binding table: which workspace domain is simulated vs live
-  mocks/        ISOLATED simulated data layer: provisional Zod contracts, Maldives simulation, adapter
+  data/         contracts.ts (re-exports of @portico/reservations|operations|payments contracts), views.ts
+                (view models the app owns), sources.ts (one source per domain + binding by environment),
+                front-desk.ts (desk row view model), use-workspace.ts
+  data/simulated/  ISOLATED simulator (Maldives sample day) + adapter; loaded lazily, never in live orgs
   i18n/         en (source) + ar (RTL stub)
 ```
 
@@ -80,21 +82,25 @@ src/
   and re-applies the chosen fields with the new version — their change survives, nothing is silently lost.
 - **Records open in a drawer** over the current screen (filters and scroll stay), with a breadcrumb trail;
   `Esc` steps back; `Shift+Enter` / the button opens the full page; the trail is in the URL (deep-linkable).
-- **One keyboard map**: `/` search, `Ctrl/⌘K` palette, `?` shortcuts, `N` new (screens register it), `E` edit the
-  open record, `G` then a key to go to a screen, `G P` property switcher.
+- **One keyboard map** (UX round 1 C2): `/` search, `Ctrl/⌘K` palette, `?` shortcuts, `N` new (screens register
+  it), `E` edit the open record; `g o` Today, `g w` My work, `g a` Arrivals, `g i` In house, `g d` Departures,
+  `g t` Timeline, `g h` Housekeeping, `g l` Learning, `g s` switch property. Lists: `j`/`k` move (the open record
+  follows — split view), `x` select (Shift+click range), `e` the row's main action, `Enter` open.
 - **Learning layer**: every screen passes a stable `helpKey` (`<module>.<screen>[.<element>]`) to its header;
   tables, timeline, sections and forms carry `data-help-key`. `learning/help-map.ts` resolves keys (with parent
   fallback) to article/video URLs — empty until the website publishes courses.
-- **Switching to real endpoints**: implement `WorkspaceDataSource` (`mocks/adapter.ts` interface) with the
-  merged module's contracts and bind it in `data/sources.ts`. Screens do not change; provenance flips from
-  SIMULATED to live because it comes from the source, never from the screen. The provisional contracts in
-  `mocks/contracts.ts` follow the in-progress `reservations.frontDeskRow` and `operations.boardRow` shapes.
+- **Switching to real endpoints**: each workspace domain has ONE source interface in `data/sources.ts`, typed with
+  the module contracts (`data/contracts.ts`) or app-owned view models (`data/views.ts`) — never with simulator
+  types. Binding a merged module = one adapter for its domain + its row in `bindWorkspaceSources`. The simulator
+  already emits reservations `deskList`/`frontDeskRow` and operations `board` payloads, parsed with those schemas,
+  so the composition (`data/front-desk.ts`) is the code a live adapter will run. Provenance on screen comes from
+  the source. Simulated sources are bound only when the organization's environment is not `live` (fail closed).
 
 ## Real vs mocked (exactly)
 
-| Real (API on main) | Simulated (`src/mocks`, labelled SIMULATED) |
+| Real (API on main) | Simulated (`src/data/simulated`, labelled Simulated, non-live organizations only) |
 |---|---|
-| Sign-in, org selection, sessions, `/me`, organization, properties, property PATCH + 409, legal entities, users, roles, search (property provider), record summaries & history (property/legal entity) | Arrivals + readiness, housekeeping board, timeline, extend-stay preview/commit, stay/unit/guest records, Today KPIs, My work, simulated guest/booking search results |
+| Sign-in, org selection, sessions, `/me`, organization, properties, property PATCH + 409, legal entities, users, roles, search (property provider), record summaries & history (property/legal entity) | Arrivals / In house / Departures, housekeeping board, timeline, extend-stay preview/commit, stay/unit/guest records, Today figures, My work, today's stays in the palette |
 
 Simulated sample content: a 120-villa resort (Beach / Water / Sunset Water villas, residences), a 12-room
 guesthouse, a hotel and apartments; seaplane / speedboat / domestic-flight arrivals via Velana International
@@ -103,14 +109,16 @@ names are invented. Tax lines in the preview are labelled *sample* — real taxe
 
 ## Accessibility checklist (WCAG 2.2 AA)
 
-- [x] Colour contrast AA in **light and dark** — axe (incl. `color-contrast`) on Today, Arrivals, Housekeeping,
-      Users in both themes: no serious/critical violations (e2e smoke).
+- [x] Axe (wcag2a/aa, 2.1 a/aa, 2.2 aa) with **no violations of any impact** on Today, My work, Arrivals, In house,
+      Departures, Housekeeping, Timeline, Learning, Users — and with the record drawer and the command palette
+      open — in light and dark (e2e smoke `axe: …`).
 - [x] No colour-only meaning: status = icon + text + shape; provenance/environments add hatching; chart parts have
       labels, legend names and table views.
-- [x] Visible focus (2 px ring, offset) on every control; skip link; focus lands in opened drawers/dialogs and
-      returns on close.
-- [x] Keyboard: everything operable; WAI-ARIA grid navigation in DataTable and Timeline (arrows, Home/End,
-      PageUp/Down, Enter), calendar grid, combobox, command palette; one shortcut map shown with `?`.
+- [x] Visible focus (2 px ring, offset) on every control; skip link; `scroll-padding` keeps focus out from under the
+      sticky header. Focus moves into the record drawer on open and returns to the row on Esc (ui test
+      `RecordDrawer focus (P1-1)`, e2e `keyboard: …`); dialogs and the palette restore focus on close.
+- [x] Keyboard: the main desk flows are operable (grid is one tab stop; arrows/j/k/x/e/Enter; split view; palette;
+      `?` map). Not yet verified for every screen and widget — see the scorecard's keyboard-only metric.
 - [x] Names and descriptions: icon buttons named; disabled actions keep their reason as an accessible
       description; fields wire label/description/error; live regions for offline state, counts and results.
 - [x] Touch targets ≥ 44 px on coarse pointers / phone widths (density tokens); phone layouts switch tables to cards.
@@ -146,6 +154,9 @@ radix-ui 1.8.1 · react-i18next 17.1.5 · i18next 26.5.7 · lucide-react 1.61.0 
 - "Practise in training" re-authenticates with the password: no endpoint lists the account's organizations
   after sign-in.
 - Timeline is click/keyboard driven; drag-to-move with change preview arrives with the reservations module.
+- Production builds emit **hidden** source maps (no `sourceMappingURL`); deployment must not publish `*.map`
+  (upload them to error reporting only).
+- Simulated actions (check in, mark inspected …) do not change the sample data yet, except extend stay.
 - Only the Arabic stub exists as an RTL locale; it is unreviewed.
 
 ## Open questions for the owner

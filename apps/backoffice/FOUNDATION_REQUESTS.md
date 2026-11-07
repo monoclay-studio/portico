@@ -24,3 +24,20 @@ Each item: problem → proposal. Worked around locally; nothing outside `package
 7. **Record route templates**: platform's manifest uses `/settings/properties/:id`; the back office adopted
    `/settings/*` to match. Proposal: document route templates as part of the record contract in domain-map so each
    module's `route` resolves in every web app.
+
+## Added in the steward fix round
+
+8. **Record history newest first** (`/v1/records/:type/:id/history?order=desc&limit=`, or a `lastChange` field on
+   the summary). Today the route returns the OLDEST 500 entries, so "changed by" on a busy record can name the
+   wrong person (SR P2-7). The conflict dialog uses the last entry it receives until then.
+9. **One shared status-vocabulary contracts package** (kernel `contracts` or `packages/contracts`): booking, stay,
+   unit condition, occupancy/discrepancy, unit availability, inventory cell, payment/authorization states and
+   provenance are declared separately in reservations, operations, payments and `@portico/ui`. The UI renders an
+   unknown value as a neutral chip (never a crash), but the lists should come from one place.
+10. **Universal record facets in kernel** (`recordAction/Issue/Owner/Link`): duplicated in reservations,
+    operations and payments contracts; `RecordModel` would map from the kernel types.
+11. **Front-desk row additions** (reservations `frontDeskRow`), so the board needs no client-side guessing:
+    `vip`, `unitTypeName`, and per blocker a short `summary` + `detail` + `owner` (department or person). The
+    app derives the owner from the check key today (`data/front-desk.ts`).
+12. **Operations provenance** lacks `delayed` / `incomplete` (CLAUDE.md §4.16) — the UI already renders both.
+13. **Preferences API** (saved views shared to a role, density, pinned records) — views live in this browser now.
