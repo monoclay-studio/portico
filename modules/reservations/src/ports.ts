@@ -112,7 +112,20 @@ export interface TermsSnapshot {
   };
   quotedAt: string;
   configVector?: string;
+  /**
+   * The provider's own agreed-terms document (rates' sealed `TermsSnapshot` v1), stored VERBATIM inside this view and
+   * passed back unchanged to rates (priceChange, evaluateCancellationPenalty, complimentaryTerms,
+   * instantiatePaymentSchedule). Reservations never reads or rewrites it; the fields above are the adapter's view of it.
+   */
+  providerDocument?: unknown;
   [extra: string]: unknown;
+}
+
+/** One item of the agreed payment schedule (rates `ScheduleInstance`). */
+export interface PaymentScheduleItem {
+  kind: 'deposit' | 'preauthorization' | 'balance';
+  dueDate: LocalDate;
+  amount: Money;
 }
 
 // ───────────────────────────── inventory ─────────────────────────────
@@ -182,11 +195,13 @@ export interface InventoryPort {
       onShortfall?: 'reject' | 'record_conflict';
     },
   ): Promise<{ conflictIds?: string[]; assignedUnitId?: string | null } | undefined>;
-  release(tx: TxContext, input: { ref: EntityRef; nights?: DateRange }): Promise<void>;
+  /** `propertyId` (ADR-0015): the property reservations authorized; the ref's inventory must belong to it. */
+  release(tx: TxContext, input: { propertyId: string; ref: EntityRef; nights?: DateRange }): Promise<void>;
   /** Atomically replace the ref's consumption of `from` with `to` (type and/or nights). */
   changeConsumption(
     tx: TxContext,
     input: {
+      propertyId: string;
       ref: EntityRef;
       from: { unitTypeId: string; nights: DateRange };
       to: { unitTypeId: string; nights: DateRange };
@@ -203,13 +218,16 @@ export interface InventoryPort {
       ref: EntityRef;
     },
   ): Promise<{ holdId: string }>;
-  convertHold(tx: TxContext, input: { holdId: string; ref: EntityRef }): Promise<void>;
+  convertHold(tx: TxContext, input: { propertyId: string; holdId: string; ref: EntityRef }): Promise<void>;
   /** Throws code `unit_assignment_conflict` with `details.conflicts: EntityRef[]` on overlap. */
   assignUnit(
     tx: TxContext,
-    input: { unitId: string; ref: EntityRef; nights: DateRange; locked?: boolean },
+    input: { propertyId: string; unitId: string; ref: EntityRef; nights: DateRange; locked?: boolean },
   ): Promise<void>;
-  unassignUnit(tx: TxContext, input: { ref: EntityRef; nights?: DateRange }): Promise<void>;
+  unassignUnit(
+    tx: TxContext,
+    input: { propertyId: string; ref: EntityRef; nights?: DateRange },
+  ): Promise<void>;
   /** `ref`: the stay being placed — its own assignments are not conflicts. */
   findAssignableUnits(
     tx: TxContext,
@@ -223,7 +241,8 @@ export interface InventoryPort {
     tx: TxContext,
     input: { propertyId: string; unitTypeId: string; date: LocalDate },
   ): Promise<AvailabilityExplanation>;
-  getUnit(tx: TxContext, unitId: string): Promise<UnitSummary>;
+  /** The unit must belong to `scope.propertyId` (ADR-0015). */
+  getUnit(tx: TxContext, unitId: string, scope: { propertyId: string }): Promise<UnitSummary>;
   listUnits(tx: TxContext, input: { propertyId: string }): Promise<UnitSummary[]>;
   listUnitTypes(tx: TxContext, input: { propertyId: string }): Promise<UnitTypeSummary[]>;
 }
@@ -351,6 +370,11 @@ export interface RatesPort {
   ): Promise<void>;
   /** Release a stay's plan sales (all, or only `nights`). */
   releasePlanSale(tx: TxContext, input: { ref: EntityRef; nights?: DateRange }): Promise<void>;
+  /**
+   * Pure (no IO): the payment schedule of an agreement (deposit / preauthorization / balance items with due dates
+   * and amounts). Reservations never computes deposits itself (rates `instantiatePaymentSchedule`).
+   */
+  instantiatePaymentSchedule(terms: TermsSnapshot, opts?: { bookingDate?: LocalDate }): PaymentScheduleItem[];
 }
 
 // ───────────────────────────── guests ─────────────────────────────
@@ -466,26 +490,35 @@ export interface FinancePort {
       reason?: string;
     },
   ): Promise<{ postingIds: string[]; folioId: string }>;
+  // ADR-0015 / finance contract change 9: every call carries the property reservations authorized; finance scopes
+  // its delegation to it and refuses folios, deposits and rules of another property.
   recordDeposit(
     tx: TxContext,
-    input: { bookingId: string; amount: Money; paymentRef: EntityRef; idempotencyKey: string },
+    input: {
+      propertyId: string;
+      bookingId: string;
+      amount: Money;
+      paymentRef: EntityRef;
+      idempotencyKey: string;
+    },
   ): Promise<void>;
   applyDeposits(
     tx: TxContext,
-    input: { bookingId: string; toFolioId: string },
+    input: { propertyId: string; bookingId: string; toFolioId: string },
   ): Promise<{ applied: Money } | undefined>;
   getFolioBalance(
     tx: TxContext,
     folioId: string,
+    scope: { propertyId: string },
   ): Promise<{ folioId: string; balance: Money; status: string }>;
-  listFolios(tx: TxContext, input: { owner: EntityRef }): Promise<FolioSummary[]>;
+  listFolios(tx: TxContext, input: { propertyId: string; owner: EntityRef }): Promise<FolioSummary[]>;
   /** Finance spec proposed contract change #3 (who pays for what). */
   setBillingRules(
     tx: TxContext,
-    input: { owner: EntityRef; rules: BillingRuleInput[] },
+    input: { propertyId: string; owner: EntityRef; rules: BillingRuleInput[] },
   ): Promise<{ ruleIds: string[] }>;
   /** Proposed additive: deposits held (liability) for a booking, for change previews. */
-  getDepositBalance(tx: TxContext, input: { bookingId: string }): Promise<Money | null>;
+  getDepositBalance(tx: TxContext, input: { propertyId: string; bookingId: string }): Promise<Money | null>;
 }
 
 // ───────────────────────────── payments ─────────────────────────────
@@ -556,7 +589,12 @@ export interface PaymentStatusView {
 export type PaymentStatusValue = PaymentSummaryStatus | 'failed';
 
 export interface PaymentsPort {
-  getPaymentStatus(tx: TxContext, ref: { type: string; id: string }): Promise<PaymentStatusView>;
+  /** `scope` (ADR-0015): every record on the reference must belong to the property reservations authorized. */
+  getPaymentStatus(
+    tx: TxContext,
+    ref: { type: string; id: string },
+    scope: { propertyId: string },
+  ): Promise<PaymentStatusView>;
   createPaymentRequest(
     tx: TxContext,
     input: {

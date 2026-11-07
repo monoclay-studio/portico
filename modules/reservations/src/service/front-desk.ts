@@ -52,7 +52,11 @@ async function baseRow(
     .executeTakeFirstOrThrow();
   const unitId = currentUnit(stay, businessDate);
   const unitName = unitId
-    ? await safely(async () => (await deps.ports.inventory.getUnit(tx, unitId)).name, null)
+    ? await safely(
+        async () =>
+          (await deps.ports.inventory.getUnit(tx, unitId, { propertyId: stay.row.property_id })).name,
+        null,
+      )
     : null;
   const run = await db(tx)
     .selectFrom('reservations.workflow_runs')
@@ -143,13 +147,23 @@ export async function listArrivals(
         : null;
       const stayPay = await safely(
         async () =>
-          paymentReadiness(await deps.ports.payments.getPaymentStatus(tx, { type: 'stay', id: stay.row.id })),
+          paymentReadiness(
+            await deps.ports.payments.getPaymentStatus(
+              tx,
+              { type: 'stay', id: stay.row.id },
+              { propertyId: stay.row.property_id },
+            ),
+          ),
         'unknown' as const,
       );
       const bookingPay = await safely(
         async () =>
           paymentReadiness(
-            await deps.ports.payments.getPaymentStatus(tx, { type: 'booking', id: stay.row.booking_id }),
+            await deps.ports.payments.getPaymentStatus(
+              tx,
+              { type: 'booking', id: stay.row.booking_id },
+              { propertyId: stay.row.property_id },
+            ),
           ),
         'unknown' as const,
       );
@@ -196,7 +210,10 @@ async function staysBalance(
   currency: string,
 ): Promise<Money | null> {
   return safely(async () => {
-    const folios = await deps.ports.finance.listFolios(tx, { owner: { type: 'stay', id: stay.row.id } });
+    const folios = await deps.ports.finance.listFolios(tx, {
+      propertyId: stay.row.property_id,
+      owner: { type: 'stay', id: stay.row.id },
+    });
     return sum(
       currency,
       folios.map((f) => f.balance),

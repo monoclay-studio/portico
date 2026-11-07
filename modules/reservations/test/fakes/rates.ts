@@ -11,11 +11,13 @@ import {
   type Occupancy,
   sum,
 } from '@portico/kernel';
+import { nightlyGross, rangeTotals, requiredDeposit } from '../../src/domain/terms';
 import type {
   CancellationPolicy,
   DepositItem,
   GuaranteeKind,
   Offer,
+  PaymentScheduleItem,
   PenaltyEvaluation,
   PenaltyEvent,
   QuoteRequest,
@@ -169,6 +171,39 @@ export class FakeRates implements RatesPort {
                  and (${input.nights?.to ?? null}::date is null or stay_date < ${input.nights?.to ?? null}::date)`.execute(
       tx.db,
     );
+  }
+
+  /**
+   * Fake of rates' pure `instantiatePaymentSchedule`: deposit items of the agreement over ITS nights (the rule
+   * reservations used before R-03; the real rates module computes the same for these policy shapes).
+   */
+  instantiatePaymentSchedule(
+    terms: TermsSnapshot,
+    opts?: { bookingDate?: LocalDate },
+  ): PaymentScheduleItem[] {
+    const nights = terms.nights.map((n) => n.date).sort();
+    const first = nights[0];
+    const last = nights[nights.length - 1];
+    if (!first || !last) return [];
+    const range = { from: first, to: addDays(last, 1) };
+    const totals = rangeTotals(terms, range);
+    const gross = nightlyGross(terms, range);
+    return terms.policies.deposit.items
+      .filter((i) => i.kind === 'deposit')
+      .map((item) => {
+        const anchor = item.due?.anchor ?? 'booking';
+        const base =
+          anchor === 'arrival'
+            ? range.from
+            : anchor === 'departure'
+              ? range.to
+              : (opts?.bookingDate ?? terms.quotedAt.slice(0, 10));
+        return {
+          kind: 'deposit' as const,
+          dueDate: addDays(base, item.due?.offsetDays ?? 0),
+          amount: requiredDeposit([item], totals, gross),
+        };
+      });
   }
 
   /** Active plan sales per night for a plan (test inspection). */

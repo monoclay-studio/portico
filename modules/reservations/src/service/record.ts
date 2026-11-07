@@ -41,7 +41,7 @@ async function stayExtras(
   const active = status === 'expected' || status === 'in_house';
   const unitId = currentUnit(stay, ctx.businessDate);
   const unitName = unitId
-    ? await safely(async () => (await deps.ports.inventory.getUnit(tx, unitId)).name, null)
+    ? await safely(async () => (await deps.ports.inventory.getUnit(tx, unitId, { propertyId })).name, null)
     : null;
   const condition: UnitCondition | null =
     unitId && active
@@ -50,7 +50,9 @@ async function stayExtras(
   const payment = active
     ? await safely(
         async () =>
-          paymentReadiness(await deps.ports.payments.getPaymentStatus(tx, { type: 'stay', id: stay.row.id })),
+          paymentReadiness(
+            await deps.ports.payments.getPaymentStatus(tx, { type: 'stay', id: stay.row.id }, { propertyId }),
+          ),
         null,
       )
     : null;
@@ -148,7 +150,7 @@ async function stayExtras(
   }
   if (unitId) links.push({ rel: 'unit', type: 'unit', id: unitId, ...(unitName ? { title: unitName } : {}) });
   const folios = await safely(
-    () => deps.ports.finance.listFolios(tx, { owner: { type: 'stay', id: stay.row.id } }),
+    () => deps.ports.finance.listFolios(tx, { propertyId, owner: { type: 'stay', id: stay.row.id } }),
     [],
   );
   for (const f of folios)
@@ -222,7 +224,9 @@ export async function bookingRecord(deps: Deps, tx: TxContext, rec: BookingRecor
   const can = (p: string) => tx.authz.can(p, { propertyId });
   const payment = await safely(
     async () =>
-      paymentReadiness(await deps.ports.payments.getPaymentStatus(tx, { type: 'booking', id: rec.row.id })),
+      paymentReadiness(
+        await deps.ports.payments.getPaymentStatus(tx, { type: 'booking', id: rec.row.id }, { propertyId }),
+      ),
     null,
   );
   const issues: RecordIssue[] = [];

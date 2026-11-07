@@ -386,7 +386,7 @@ export async function insertStayWithInventory(
   const { inventory } = deps.ports;
   const s = input.priced.input;
   if (s.unitId) {
-    const unit = await inventory.getUnit(tx, s.unitId);
+    const unit = await inventory.getUnit(tx, s.unitId, { propertyId: input.propertyId });
     if (unit.unitTypeId !== s.unitTypeId || unit.propertyId !== input.propertyId) {
       throw new BusinessRuleError(
         'unit_type_differs',
@@ -491,7 +491,7 @@ export async function insertStayWithInventory(
     });
     conflictIds = result && typeof result === 'object' ? (result.conflictIds ?? []) : [];
     if (s.unitId) {
-      await inventory.assignUnit(tx, { unitId: s.unitId, ref, nights });
+      await inventory.assignUnit(tx, { propertyId: input.propertyId, unitId: s.unitId, ref, nights });
       await db(tx)
         .updateTable('reservations.stay_segments')
         .set({ unit_id: s.unitId })
@@ -586,6 +586,7 @@ export async function applyBillingInstructions(
         label: 'Accommodation',
       });
       await finance.setBillingRules(tx, {
+        propertyId: rec.row.property_id,
         owner,
         rules: [
           {
@@ -741,7 +742,7 @@ export async function transitionBooking(
     } else if (input.to === 'tentative' || input.to === 'confirmed') {
       if (from === 'held' && stay.row.hold_id) {
         try {
-          await inventory.convertHold(tx, { holdId: stay.row.hold_id, ref });
+          await inventory.convertHold(tx, { propertyId: row.property_id, holdId: stay.row.hold_id, ref });
         } catch (err) {
           // An expired hold no longer reserves anything: consume fresh (throws if sold out meanwhile).
           if (!(err instanceof BusinessRuleError) && !inventoryShortfall(err)) throw err;
@@ -769,7 +770,7 @@ export async function transitionBooking(
       }
       if (input.to === 'confirmed') await acceptQuotedTerms(tx, stay);
     } else if (input.to === 'declined' && stay.row.hold_id) {
-      await inventory.release(tx, { ref });
+      await inventory.release(tx, { propertyId: row.property_id, ref });
     }
   }
   const updated = await bumpBooking(tx, row.id, `status:${input.to}`, {
@@ -842,7 +843,10 @@ export async function expireBookings(
   for (const id of toExpire) {
     const rec = await loadBooking(tx, id, { forUpdate: true });
     for (const stay of rec.stays)
-      await deps.ports.inventory.release(tx, { ref: { type: 'stay', id: stay.row.id } });
+      await deps.ports.inventory.release(tx, {
+        propertyId: rec.row.property_id,
+        ref: { type: 'stay', id: stay.row.id },
+      });
     await bumpBooking(tx, id, 'status:expired', { status: 'expired', hold_expires_at: null });
     await syncPlanSales(deps, tx, id);
     await tx.audit({
@@ -1024,7 +1028,7 @@ export async function assignUnit(
       'Units can be assigned once the booking is tentative or confirmed.',
     );
   }
-  const unit = await deps.ports.inventory.getUnit(tx, input.unitId);
+  const unit = await deps.ports.inventory.getUnit(tx, input.unitId, { propertyId: row.property_id });
   const businessDate = await businessDateOf(deps, tx, row.property_id);
   const fromDate =
     stay.row.status === 'in_house' && businessDate > stay.row.arrival ? businessDate : stay.row.arrival;
@@ -1038,8 +1042,9 @@ export async function assignUnit(
   }
   const ref: EntityRef = { type: 'stay', id: stay.row.id };
   const nights = { from: fromDate, to: stay.row.departure };
-  if (segs.some((s) => s.unitId)) await deps.ports.inventory.unassignUnit(tx, { ref, nights });
-  await deps.ports.inventory.assignUnit(tx, { unitId: unit.id, ref, nights });
+  if (segs.some((s) => s.unitId))
+    await deps.ports.inventory.unassignUnit(tx, { propertyId: row.property_id, ref, nights });
+  await deps.ports.inventory.assignUnit(tx, { propertyId: row.property_id, unitId: unit.id, ref, nights });
   const next = splitAt(stay.segments, fromDate).map((s) =>
     s.from >= fromDate ? { ...s, unitId: unit.id } : s,
   );
@@ -1143,11 +1148,15 @@ export async function markNoShow(
   const releasedNights =
     releaseFrom < stay.row.departure ? { from: releaseFrom, to: stay.row.departure } : null;
   if (releasedNights) {
-    await deps.ports.inventory.release(tx, { ref, nights: releasedNights });
+    await deps.ports.inventory.release(tx, { propertyId: row.property_id, ref, nights: releasedNights });
     // Plan sales mirror inventory exactly (R-15): the released nights stop counting against sales limits.
     await deps.ports.rates.releasePlanSale(tx, { ref, nights: releasedNights });
     if (stay.segments.some((s) => s.unitId))
-      await deps.ports.inventory.unassignUnit(tx, { ref, nights: releasedNights });
+      await deps.ports.inventory.unassignUnit(tx, {
+        propertyId: row.property_id,
+        ref,
+        nights: releasedNights,
+      });
   }
   const keys = await keyOperation(deps, tx, {
     propertyId: row.property_id,

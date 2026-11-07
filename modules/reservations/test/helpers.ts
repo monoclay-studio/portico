@@ -1,7 +1,12 @@
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sourcesFromManifests, type TxContext, withTenantTx } from '@portico/db';
-import { createInventoryService, type InventoryService, inventoryManifest } from '@portico/inventory';
+import {
+  createInventoryService,
+  type InventoryService,
+  inventoryManifest,
+  inventoryProvider,
+} from '@portico/inventory';
 import {
   type Clock,
   newId,
@@ -158,7 +163,8 @@ export async function setupOrg(
   let seeded: { types: Record<string, string>; units: Record<string, string> };
   if (opts.inventory === 'real') {
     const real = realInventoryService();
-    inventory = inventoryPortFrom(real);
+    // ADR-0015: the real port surface (property-scoped delegation), exactly as the composition root binds it.
+    inventory = inventoryPortFrom(inventoryProvider(real));
     seeded = await withTenantTx(t.db, sys, (tx) => seedRealInventory(real, tx, property.id, typeSpecs));
   } else {
     seeded = await withTenantTx(t.db, sys, (tx) =>

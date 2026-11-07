@@ -312,7 +312,7 @@ async function stepUnit(
 ): Promise<Outcome> {
   let unitId = currentUnit(stay, businessDate);
   if (input?.unitId && input.unitId !== unitId) {
-    const unit = await deps.ports.inventory.getUnit(tx, input.unitId);
+    const unit = await deps.ports.inventory.getUnit(tx, input.unitId, { propertyId: stay.row.property_id });
     const night = stay.row.arrival;
     const seg = stay.segments.find((s) => night >= s.from && night < s.to);
     if (!seg || seg.unitTypeId !== unit.unitTypeId) {
@@ -323,8 +323,14 @@ async function stepUnit(
     }
     const ref: EntityRef = { type: 'stay', id: stay.row.id };
     const nights = { from: stay.row.arrival, to: stay.row.departure };
-    if (stay.segments.some((s) => s.unitId)) await deps.ports.inventory.unassignUnit(tx, { ref, nights });
-    await deps.ports.inventory.assignUnit(tx, { unitId: unit.id, ref, nights });
+    if (stay.segments.some((s) => s.unitId))
+      await deps.ports.inventory.unassignUnit(tx, { propertyId: stay.row.property_id, ref, nights });
+    await deps.ports.inventory.assignUnit(tx, {
+      propertyId: stay.row.property_id,
+      unitId: unit.id,
+      ref,
+      nights,
+    });
     await replaceSegments(
       tx,
       stay.row.id,
@@ -404,7 +410,7 @@ async function stepGuarantee(
   // ALWAYS read the authoritative status first (RES-I09, S05, R-11). Payments is two-phase: an authorization we
   // requested may still be `processing` (provider call after commit) or `pending_verification` (no answer). Never
   // authorize again while one is processing, pending or held — wait and read again.
-  const status = await payments.getPaymentStatus(tx, stayRef);
+  const status = await payments.getPaymentStatus(tx, stayRef, { propertyId: stay.row.property_id });
   const auths = status.authorizations;
   const declined = auths.filter((a) => authorizationState(a) === 'failed');
   // A NEW key only after the provider DECLINED an attempt (counted from payments' own records, so a lost step
@@ -450,7 +456,11 @@ async function stepGuarantee(
       idempotencyKey: step.idempotencyKey ?? keyFor(declined.length),
     };
   }
-  const bookingStatus = await payments.getPaymentStatus(tx, { type: 'booking', id: booking.row.id });
+  const bookingStatus = await payments.getPaymentStatus(
+    tx,
+    { type: 'booking', id: booking.row.id },
+    { propertyId: stay.row.property_id },
+  );
   if (
     bookingStatus.status === 'paid' ||
     bookingStatus.status === 'partially_paid' ||
@@ -568,7 +578,7 @@ function guaranteeResult(
 
 async function stayFolio(deps: Deps, tx: TxContext, stay: StayRecord): Promise<string> {
   const owner: EntityRef = { type: 'stay', id: stay.row.id };
-  const folios = await deps.ports.finance.listFolios(tx, { owner });
+  const folios = await deps.ports.finance.listFolios(tx, { propertyId: stay.row.property_id, owner });
   const def = folios.find((f) => f.isDefault) ?? folios[0];
   if (def) return def.folioId;
   const booking = await loadBooking(tx, stay.row.booking_id);
@@ -592,6 +602,7 @@ async function stayFolio(deps: Deps, tx: TxContext, stay: StayRecord): Promise<s
 async function stepDeposits(deps: Deps, tx: TxContext, stay: StayRecord): Promise<Outcome> {
   const folioId = await stayFolio(deps, tx, stay);
   const applied = await deps.ports.finance.applyDeposits(tx, {
+    propertyId: stay.row.property_id,
     bookingId: stay.row.booking_id,
     toFolioId: folioId,
   });
@@ -697,7 +708,10 @@ async function stepAccess(
 // ───────────────────────────── check-out steps ─────────────────────────────
 
 async function stepCharges(deps: Deps, tx: TxContext, stay: StayRecord): Promise<Outcome> {
-  const folios = await deps.ports.finance.listFolios(tx, { owner: { type: 'stay', id: stay.row.id } });
+  const folios = await deps.ports.finance.listFolios(tx, {
+    propertyId: stay.row.property_id,
+    owner: { type: 'stay', id: stay.row.id },
+  });
   return {
     status: 'done',
     message: `Reviewed ${folios.length} folio${folios.length === 1 ? '' : 's'}. Outlet charges arriving after departure are accepted as late charges.`,
@@ -713,7 +727,10 @@ async function stepSettle(
   stay: StayRecord,
   input: CheckOutInputs['settle'],
 ): Promise<Outcome> {
-  const folios = await deps.ports.finance.listFolios(tx, { owner: { type: 'stay', id: stay.row.id } });
+  const folios = await deps.ports.finance.listFolios(tx, {
+    propertyId: stay.row.property_id,
+    owner: { type: 'stay', id: stay.row.id },
+  });
   const open = folios.filter((f) => f.balance.amountMinor !== 0);
   if (open.length === 0)
     return { status: 'done', message: 'All folios are settled.', result: { folios: folios.length } };
@@ -903,9 +920,14 @@ async function confirmCheckOut(
   // Early departure: release nights from the business date (they were never posted) and apply agreed penalty.
   if (businessDate < fresh.row.departure && businessDate > fresh.row.arrival) {
     const releasedFrom = businessDate;
-    await deps.ports.inventory.release(tx, { ref, nights: { from: releasedFrom, to: fresh.row.departure } });
+    await deps.ports.inventory.release(tx, {
+      propertyId: stay.row.property_id,
+      ref,
+      nights: { from: releasedFrom, to: fresh.row.departure },
+    });
     if (fresh.segments.some((s) => s.unitId && s.to > releasedFrom)) {
       await deps.ports.inventory.unassignUnit(tx, {
+        propertyId: stay.row.property_id,
         ref,
         nights: { from: releasedFrom, to: fresh.row.departure },
       });

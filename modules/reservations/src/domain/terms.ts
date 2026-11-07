@@ -138,12 +138,17 @@ export function nightlyGross(doc: TermsSnapshot, range: DateRange): Money[] {
     .map((l) => add(l.net, ...l.taxes.map((t) => t.amount)));
 }
 
-/** Digest of agreed terms for preview tokens: the document minus volatile quote metadata (RES-R12, R-04). */
+/**
+ * Digest of agreed terms for preview tokens: the document minus volatile quote metadata (RES-R12, R-04). The
+ * provider's own sealed document is excluded too — its quote id, timestamps and seal change on every quote, while
+ * everything the guest agrees to (nights, taxes, totals, policies) is in the view.
+ */
 export function termsDigest(doc: TermsSnapshot): string {
   const {
     hash: _h,
     quotedAt: _q,
     quoteId: _i,
+    providerDocument: _p,
     ...rest
   } = doc as TermsSnapshot & { hash?: unknown; quoteId?: unknown };
   return sha256Hex(canonicalJson(rest));

@@ -5,12 +5,14 @@ import {
   BusinessRuleError,
   canonicalJson,
   type DateRange,
+  Decimal,
   DomainError,
   diffDays,
   type EntityRef,
   eachNight,
   type LocalDate,
   type Money,
+  multiply,
   NotFoundError,
   newId,
   type RequestContext,
@@ -47,7 +49,6 @@ import {
   describeCancellationPolicy,
   nightlyGross,
   rangeTotals,
-  requiredDeposit,
   termsDigest,
   zeroTotals,
 } from '../domain/terms';
@@ -192,15 +193,49 @@ function inclusionNames(targets: ReadonlyArray<{ terms: TermsSnapshot }>): strin
   return [...new Set(targets.flatMap((t) => t.terms.inclusions.map((i) => i.name)))].sort();
 }
 
+/**
+ * Deposit required by the agreed payment schedules — computed by rates (`instantiatePaymentSchedule`, R-03):
+ * reservations never computes deposits itself. A stay can carry several agreements (e.g. an extension agreed later);
+ * each agreement's deposit items count in proportion to the share of its gross that the stay's segments keep
+ * (Decimal, rounded once per agreement).
+ */
 function depositFor(
-  currency: string,
+  c: Ctx,
   targets: ReadonlyArray<{ from: LocalDate; to: LocalDate; terms: TermsSnapshot }>,
 ): Money {
-  const first = targets[0];
-  if (!first) return zero(currency);
-  const totals = totalsOf(currency, targets);
-  const gross = targets.flatMap((t) => nightlyGross(t.terms, { from: t.from, to: t.to }));
-  return requiredDeposit(first.terms.policies.deposit.items, totals, gross);
+  const groups = new Map<
+    string,
+    { terms: TermsSnapshot; ranges: Array<{ from: LocalDate; to: LocalDate }> }
+  >();
+  for (const t of targets) {
+    const key = termsDigest(t.terms);
+    const g = groups.get(key) ?? { terms: t.terms, ranges: [] };
+    g.ranges.push({ from: t.from, to: t.to });
+    groups.set(key, g);
+  }
+  let total = zero(c.currency);
+  for (const { terms, ranges } of groups.values()) {
+    const schedule = c.deps.ports.rates.instantiatePaymentSchedule(terms);
+    const deposit = sum(
+      c.currency,
+      schedule.filter((i) => i.kind === 'deposit').map((i) => i.amount),
+    );
+    if (deposit.amountMinor === 0) continue;
+    const allNights = terms.nights.map((n) => n.date).sort();
+    const first = allNights[0];
+    const last = allNights[allNights.length - 1];
+    if (!first || !last) continue;
+    const agreementGross = sum(c.currency, nightlyGross(terms, { from: first, to: addDays(last, 1) }));
+    const keptGross = sum(
+      c.currency,
+      ranges.flatMap((r) => nightlyGross(terms, r)),
+    );
+    total =
+      keptGross.amountMinor >= agreementGross.amountMinor || agreementGross.amountMinor === 0
+        ? add(total, deposit)
+        : add(total, multiply(deposit, new Decimal(keptGross.amountMinor).div(agreementGross.amountMinor)));
+  }
+  return total;
 }
 
 /** Agreed charges not yet posted by Day Close: every night for expected stays, from the business date in house. */
@@ -504,7 +539,9 @@ async function planModification(
       change = { kind: 'occupancy', occupancy: request.occupancy, fromDate: request.fromDate ?? defaultFrom };
       break;
     case 'move': {
-      const unit = await deps.ports.inventory.getUnit(tx, request.unitId);
+      const unit = await deps.ports.inventory.getUnit(tx, request.unitId, {
+        propertyId: stay.row.property_id,
+      });
       const fromDate = request.fromDate ?? defaultFrom;
       change = {
         kind: 'move',
@@ -850,11 +887,13 @@ async function folioBalances(
   try {
     const balances: Money[] = [];
     for (const s of stays) {
-      const folios = await finance.listFolios(c.tx, { owner: ref(s.row.id) });
+      const folios = await finance.listFolios(c.tx, { propertyId: s.row.property_id, owner: ref(s.row.id) });
       for (const f of folios) balances.push(f.balance);
     }
     const bookingId = stays[0]?.row.booking_id;
-    const held = bookingId ? await finance.getDepositBalance(c.tx, { bookingId }) : null;
+    const held = bookingId
+      ? await finance.getDepositBalance(c.tx, { propertyId: stays[0]?.row.property_id ?? '', bookingId })
+      : null;
     return { balance: sum(c.currency, balances), held, note: null };
   } catch (err) {
     if (!isModuleUnavailable(err)) throw err;
@@ -1114,11 +1153,11 @@ async function buildPlan(
   const heldAmount = held ?? zero(c.currency);
   const requiredBefore = sum(
     c.currency,
-    perStay.map((p) => depositFor(c.currency, p.before)),
+    perStay.map((p) => depositFor(c, p.before)),
   );
   const requiredAfter = sum(
     c.currency,
-    perStay.map((p) => depositFor(c.currency, p.after)),
+    perStay.map((p) => depositFor(c, p.after)),
   );
   const additionalDue =
     requiredAfter.amountMinor > heldAmount.amountMinor
@@ -1583,11 +1622,17 @@ async function applyPlan(
         segments.push({ ...t, termsSnapshotId: snapshotId });
       }
       for (const op of sp.inventoryOps) {
-        if (op.op === 'release') await inventory.release(tx, { ref: stayRef, nights: op.nights });
+        if (op.op === 'release')
+          await inventory.release(tx, { propertyId: plan.propertyId, ref: stayRef, nights: op.nights });
       }
       for (const op of sp.inventoryOps) {
         if (op.op === 'change')
-          await inventory.changeConsumption(tx, { ref: stayRef, from: op.from, to: op.to });
+          await inventory.changeConsumption(tx, {
+            propertyId: plan.propertyId,
+            ref: stayRef,
+            from: op.from,
+            to: op.to,
+          });
         if (op.op === 'consume')
           await inventory.consume(tx, {
             propertyId: plan.propertyId,
@@ -1598,10 +1643,16 @@ async function applyPlan(
           });
       }
       for (const op of sp.assignmentOps)
-        if (op.op === 'unassign') await inventory.unassignUnit(tx, { ref: stayRef, nights: op.nights });
+        if (op.op === 'unassign')
+          await inventory.unassignUnit(tx, { propertyId: plan.propertyId, ref: stayRef, nights: op.nights });
       for (const op of sp.assignmentOps)
         if (op.op === 'assign')
-          await inventory.assignUnit(tx, { unitId: op.unitId, ref: stayRef, nights: op.nights });
+          await inventory.assignUnit(tx, {
+            propertyId: plan.propertyId,
+            unitId: op.unitId,
+            ref: stayRef,
+            nights: op.nights,
+          });
       await replaceSegments(tx, sp.stay.row.id, segments);
       await updateStay(tx, sp.stay.row.id, { arrival: sp.arrival, departure: sp.departure });
       if (sp.roomMove) {
@@ -1672,10 +1723,11 @@ async function applyPlan(
       }
     } else if (sp.mode === 'cancel') {
       for (const op of sp.inventoryOps)
-        if (op.op === 'release') await inventory.release(tx, { ref: stayRef });
-      if (sp.stay.row.hold_id) await inventory.release(tx, { ref: stayRef });
+        if (op.op === 'release') await inventory.release(tx, { propertyId: plan.propertyId, ref: stayRef });
+      if (sp.stay.row.hold_id) await inventory.release(tx, { propertyId: plan.propertyId, ref: stayRef });
       for (const op of sp.assignmentOps)
-        if (op.op === 'unassign') await inventory.unassignUnit(tx, { ref: stayRef });
+        if (op.op === 'unassign')
+          await inventory.unassignUnit(tx, { propertyId: plan.propertyId, ref: stayRef });
       await updateStay(tx, sp.stay.row.id, { status: 'cancelled', hold_id: null });
     } else if (sp.mode === 'time_request' && sp.timeRequest) {
       const value = json({

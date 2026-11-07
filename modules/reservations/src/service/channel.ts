@@ -249,7 +249,7 @@ async function replaceStayFromChannel(
   const { inventory } = deps.ports;
   const ref: EntityRef = { type: 'stay', id: stay.row.id };
   const s = priced.input;
-  await inventory.release(tx, { ref });
+  await inventory.release(tx, { propertyId, ref });
   const result = await inventory.consume(tx, {
     propertyId,
     unitTypeId: s.unitTypeId,
@@ -262,7 +262,7 @@ async function replaceStayFromChannel(
   const oldUnit = stay.segments.find((g) => g.unitId)?.unitId ?? null;
   let keepUnit: string | null = null;
   if (oldUnit) {
-    await inventory.unassignUnit(tx, { ref });
+    await inventory.unassignUnit(tx, { propertyId, ref });
     if (stay.segments.every((g) => g.unitTypeId === s.unitTypeId)) {
       const candidates = await inventory.findAssignableUnits(tx, {
         propertyId,
@@ -272,6 +272,7 @@ async function replaceStayFromChannel(
       });
       if (candidates.find((u) => u.unitId === oldUnit)?.assignable) {
         await inventory.assignUnit(tx, {
+          propertyId,
           unitId: oldUnit,
           ref,
           nights: { from: s.arrival, to: s.departure },

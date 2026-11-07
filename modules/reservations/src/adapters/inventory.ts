@@ -10,9 +10,10 @@ import type {
 } from '../ports';
 
 /**
- * The inventory module's provider functions that reservations binds, described STRUCTURALLY (a module never
- * imports another module). The composition root passes the real `inventoryService`; TypeScript checks that it
- * fits this shape, so a drift in inventory's contract fails the build instead of a booking (review R-13).
+ * The inventory module's PORT surface that reservations binds, described STRUCTURALLY (a module never imports
+ * another module). The composition root passes `inventoryProvider(inventoryService)` (ADR-0015: every call carries
+ * the property reservations authorized; inventory does not re-check its own keys but refuses records of another
+ * property). TypeScript checks the shape, so a drift in inventory's contract fails the build (review R-13).
  */
 export interface InventoryProvider {
   consume(
@@ -27,10 +28,11 @@ export interface InventoryProvider {
       onShortfall?: 'reject' | 'record_conflict';
     },
   ): Promise<{ conflictIds: string[]; assignedUnitId: string | null }>;
-  release(tx: TxContext, input: { ref: EntityRef; nights?: DateRange }): Promise<unknown>;
+  release(tx: TxContext, input: { propertyId: string; ref: EntityRef; nights?: DateRange }): Promise<unknown>;
   changeConsumption(
     tx: TxContext,
     input: {
+      propertyId: string;
       ref: EntityRef;
       from: { unitTypeId: string; nights: DateRange };
       to: { unitTypeId: string; nights: DateRange };
@@ -47,12 +49,22 @@ export interface InventoryProvider {
       ref: EntityRef;
     },
   ): Promise<{ holdId: string }>;
-  convertHold(tx: TxContext, input: { holdId: string; ref: EntityRef }): Promise<unknown>;
+  convertHold(tx: TxContext, input: { propertyId: string; holdId: string; ref: EntityRef }): Promise<unknown>;
   assignUnit(
     tx: TxContext,
-    input: { unitId: string; ref: EntityRef; nights: DateRange; locked?: boolean; lockReason?: string },
+    input: {
+      propertyId: string;
+      unitId: string;
+      ref: EntityRef;
+      nights: DateRange;
+      locked?: boolean;
+      lockReason?: string;
+    },
   ): Promise<unknown>;
-  unassignUnit(tx: TxContext, input: { ref: EntityRef; nights?: DateRange }): Promise<unknown>;
+  unassignUnit(
+    tx: TxContext,
+    input: { propertyId: string; ref: EntityRef; nights?: DateRange },
+  ): Promise<unknown>;
   findAssignableUnits(
     tx: TxContext,
     input: { propertyId: string; unitTypeId: string; nights: DateRange; ref?: EntityRef },
@@ -83,6 +95,7 @@ export interface InventoryProvider {
   getUnit(
     tx: TxContext,
     id: string,
+    scope: { propertyId: string },
   ): Promise<{ id: string; propertyId: string; unitTypeId: string; number: string; name: string | null }>;
   listUnits(
     tx: TxContext,
@@ -110,25 +123,11 @@ function unitSummary(u: {
 }
 
 /**
- * Bind reservations' InventoryPort to the inventory module's provider functions (§4.1 of the steward review).
- * `scope` (ADR-0015): the composition root may run provider calls with system scope, because reservations has
- * already authorized the user's intent for the command (inventory still enforces integrity and data authority).
+ * Bind reservations' InventoryPort to the inventory module's port surface (§4.1 of the steward review). ADR-0015:
+ * reservations authorizes the user's intent on every command and passes the booking's property on every call;
+ * inventory enforces integrity, property ownership and data authority (no system scope).
  */
-export function inventoryPortFrom(
-  provider: InventoryProvider,
-  opts: { scope?: (tx: TxContext) => TxContext } = {},
-): InventoryPort {
-  const scoped = opts.scope;
-  const p: InventoryProvider = scoped
-    ? (new Proxy(provider, {
-        get(target, key, receiver) {
-          const value = Reflect.get(target, key, receiver);
-          return typeof value === 'function'
-            ? (tx: TxContext, ...rest: unknown[]) => value.call(target, scoped(tx), ...rest)
-            : value;
-        },
-      }) as InventoryProvider)
-    : provider;
+export function inventoryPortFrom(p: InventoryProvider): InventoryPort {
   return {
     async consume(tx, input) {
       const r = await p.consume(tx, input);
@@ -174,8 +173,8 @@ export function inventoryPortFrom(
       const e = await p.explainAvailability(tx, input);
       return { unitTypeId: e.unitTypeId, date: e.date, available: e.available, sold: e.sold };
     },
-    async getUnit(tx, unitId) {
-      return unitSummary(await p.getUnit(tx, unitId));
+    async getUnit(tx, unitId, scope) {
+      return unitSummary(await p.getUnit(tx, unitId, scope));
     },
     async listUnits(tx, input) {
       return (await p.listUnits(tx, input.propertyId)).map(unitSummary);
