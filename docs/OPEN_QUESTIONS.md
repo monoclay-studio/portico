@@ -408,3 +408,27 @@ billing is not activated for live customers until this is answered.
 **Blocks:** live channel activation (already gated by Q23); nothing in development.
 **Raised by / date:** parity researcher (front cluster), 2026-11-07
 
+### Q130 — Maldives foreign-exchange rules for tourism businesses          Status: open
+**Context:** Resorts price in USD, take USD and MVR cash, and settle cards and bank transfers in either currency. Finance converts with a business-date rate and checks MVR conversions against the MMA reference rate (±2%, from `docs/readiness/maldives-tax-rules.md`). We have not verified whether Maldivian law or Maldives Monetary Authority rules oblige tourism businesses to convert or deposit a share of foreign-currency receipts through local banks, which rate is authoritative for accounting (MMA mid rate, bank buy/sell), or whether cash change may be given in USD.
+**Question:** With the Maldivian adviser (Q20/Q106 scope): what foreign-currency obligations apply to tourism establishments (conversion/deposit duties, rate source for accounting, limits on USD cash handling and change)?
+**Default we are proceeding with:** no conversion or deposit duty is modelled; FX rates are data per business date with source; MMA ±2% check marked `unverified`; cash exchange at the desk allowed with configurable limits; a rate older than the business date is used only with a visible stale-rate warning.
+**If the answer differs:** policy/data changes in finance FX (FIN-R40/R41) and accounting cash management (ACC-R25); possibly a reporting export.
+**Blocks:** nothing in development; live Maldives FX configuration.
+**Raised by / date:** finance-cluster parity research, 2026-11-07
+
+### Q131 — Liability for offline card and room-charge acceptance            Status: open
+**Context:** Island connectivity drops. `fnb-pos` allows room charges offline up to an exposure limit (default USD 200 per stay, FNB-R20) and record-only card tenders; some acquirers offer store-and-forward offline card authorisation where the merchant carries the decline risk. These are the hotel's commercial risks, but the defaults Portico ships shape them.
+**Question:** Are you comfortable shipping the default offline exposure limit (USD 200 per stay, hotel-configurable, 0 allowed) and keeping acquirer store-and-forward card acceptance off by default, enabled only by a hotel admin who acknowledges the risk in-product?
+**Default we are proceeding with:** yes as described; acknowledgement recorded in the audit log; never enabled in demo/trial.
+**If the answer differs:** policy default changes only.
+**Blocks:** nothing in development; live POS pilot configuration.
+**Raised by / date:** finance-cluster parity research, 2026-11-07
+
+### Q132 — Unclaimed guest credits and expired deposits                      Status: open
+**Context:** Finance can keep a cancelled booking's deposit "as guest credit" (FIN-R24) and folios can end with credit balances that guests never claim; receivables accounts can hold unallocated payments. Whether a hotel may recognise unclaimed balances as income after a period, must refund them, or must hold them indefinitely is a legal/tax question per market (Q83 covers vouchers only).
+**Question:** What rule should the Maldives pack apply to unclaimed guest credits, retained deposits kept as credit, and unallocated receivables payments?
+**Default we are proceeding with:** balances remain liabilities indefinitely; an aging report lists them with owners; release to income only by an explicit, approved journal with reason (no automatic breakage).
+**If the answer differs:** a configurable expiry/breakage policy per balance type (data change plus a small Day Close/period task).
+**Blocks:** nothing.
+**Raised by / date:** finance-cluster parity research, 2026-11-07
+
