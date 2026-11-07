@@ -496,6 +496,43 @@ export async function importStatement(
   const feesByCurrency = new Map<string, number>();
   for (const l of lines) feesByCurrency.set(l.currency, (feesByCurrency.get(l.currency) ?? 0) + l.feeMinor);
   const totalFees = [...feesByCurrency.values()].reduce((a, b) => a + b, 0);
+  // P1-9: acquirer fees are an expense of the hotel (finance), never a correction of the guest's payment.
+  let feesLedgerStatus: 'not_required' | 'posted' | 'failed' = 'not_required';
+  if (totalFees > 0) {
+    for (const [currency, fee] of feesByCurrency) {
+      if (fee <= 0) continue;
+      const posted = await tryLedger(tx, () =>
+        d.ledger.recordSettlementFees(tx, {
+          propertyId: input.propertyId,
+          legalEntityId: property.legalEntityId,
+          statementRef: { type: 'statement', id: statementId },
+          amount: money(fee, currency),
+          clearing: {
+            provider: account?.provider ?? 'external_terminal',
+            accountId: input.accountId ?? null,
+          },
+          idempotencyKey: `${ledgerKey.fees(statementId)}:${currency}`,
+        }),
+      );
+      if (!posted.ok) feesLedgerStatus = 'failed';
+      else if (feesLedgerStatus !== 'failed') feesLedgerStatus = 'posted';
+      if (!posted.ok) {
+        exceptionIds.push(
+          await raiseException(tx, {
+            propertyId: input.propertyId,
+            kind: 'ledger_posting_failed',
+            severity: 'routine',
+            problem: `Acquirer fees of ${formatMoney(money(fee, currency))} from statement ${input.fileName} could not be posted: ${posted.error}`,
+            businessImpact: 'The books do not show the card processing cost.',
+            nextStep: 'Finance posts the fees as an expense manually.',
+            ownerRole: 'finance',
+            responsibleParty: 'hotel',
+            dedupeKey: `settlement-fees:${statementId}:${currency}`,
+          }),
+        );
+      }
+    }
+  }
   await db(tx)
     .insertInto('payments.statements')
     .values({
@@ -512,6 +549,7 @@ export async function importStatement(
       matched_count: match.verifiedItemIds.length,
       exception_count: issueInputs.length,
       fees_minor: totalFees,
+      fees_ledger_status: feesLedgerStatus,
       imported_by: actorKey(tx),
       imported_at: tx.now,
     })
@@ -609,45 +647,6 @@ export async function importStatement(
         `settlement-missing:${input.propertyId}:${id}`,
         `Matched in statement ${input.fileName}.`,
       );
-    }
-  }
-  // P1-9: acquirer fees are an expense of the hotel (finance), never a correction of the guest's payment.
-  if (totalFees > 0) {
-    for (const [currency, fee] of feesByCurrency) {
-      if (fee <= 0) continue;
-      const posted = await tryLedger(tx, () =>
-        d.ledger.recordSettlementFees(tx, {
-          propertyId: input.propertyId,
-          legalEntityId: property.legalEntityId,
-          statementRef: { type: 'statement', id: statementId },
-          amount: money(fee, currency),
-          clearing: {
-            provider: account?.provider ?? 'external_terminal',
-            accountId: input.accountId ?? null,
-          },
-          idempotencyKey: `${ledgerKey.fees(statementId)}:${currency}`,
-        }),
-      );
-      await db(tx)
-        .updateTable('payments.statements')
-        .set({ fees_ledger_status: posted.ok ? 'posted' : 'failed' })
-        .where('id', '=', statementId)
-        .execute();
-      if (!posted.ok) {
-        exceptionIds.push(
-          await raiseException(tx, {
-            propertyId: input.propertyId,
-            kind: 'ledger_posting_failed',
-            severity: 'routine',
-            problem: `Acquirer fees of ${formatMoney(money(fee, currency))} from statement ${input.fileName} could not be posted: ${posted.error}`,
-            businessImpact: 'The books do not show the card processing cost.',
-            nextStep: 'Finance posts the fees as an expense manually.',
-            ownerRole: 'finance',
-            responsibleParty: 'hotel',
-            dedupeKey: `settlement-fees:${statementId}:${currency}`,
-          }),
-        );
-      }
     }
   }
   for (const e of issueInputs) exceptionIds.push(await raiseException(tx, e));
