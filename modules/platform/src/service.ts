@@ -1,9 +1,11 @@
 import { explainVersionMiss, type Selectable, sql, type TxContext, typed } from '@portico/db';
 import {
+  actorId,
   addDays,
   assertCurrency,
   BusinessRuleError,
   ConflictError,
+  DomainError,
   EntitlementError,
   isValidTimeZone,
   type LocalDate,
@@ -21,10 +23,28 @@ import type {
   PropertyInput,
   ResolvedPolicy,
 } from './contracts';
-import { planByCode } from './domain/plans';
+import { authorityCombinationProblem, DATA_DOMAINS, SECOND_APPROVER_DOMAINS } from './domain/data-authority';
+import { featuresOfGrant, planByCode } from './domain/plans';
 import type { LegalEntitiesTable, PlatformDB, PropertiesTable } from './tables';
 
 const db = (tx: TxContext) => typed<PlatformDB>(tx.db);
+
+/** Stable actor reference stored on records and compared for separation of duties. */
+export function actorKey(tx: Pick<TxContext, 'actor'>): string {
+  return `${tx.actor.kind}:${actorId(tx.actor)}`;
+}
+
+/** Organization-level policy value (scope_type organization, scope_id = tenant id), or the default. */
+export async function organizationPolicy<T>(tx: TxContext, key: string, defaultValue: T): Promise<T> {
+  const row = await db(tx)
+    .selectFrom('platform.policies')
+    .select('value')
+    .where('key', '=', key)
+    .where('scope_type', '=', 'organization')
+    .where('scope_id', '=', tx.tenantId)
+    .executeTakeFirst();
+  return row ? (row.value as T) : defaultValue;
+}
 
 // ───────────────────────────── Organizations ─────────────────────────────
 
@@ -111,7 +131,15 @@ export async function getOrganization(tx: TxContext): Promise<Organization> {
 
 // ───────────────────────────── Entitlements ─────────────────────────────
 
-export async function hasEntitlement(tx: TxContext, feature: string): Promise<boolean> {
+/**
+ * Whether the organization may use a feature: contract override, else plan, else an active add-on or Connect pack
+ * grant — organization-wide, or for `opts.propertyId` when the grant is property-scoped (PLT-R22).
+ */
+export async function hasEntitlement(
+  tx: TxContext,
+  feature: string,
+  opts: { propertyId?: string } = {},
+): Promise<boolean> {
   const org = await getOrganization(tx);
   const override = await db(tx)
     .selectFrom('platform.entitlement_overrides')
@@ -119,11 +147,26 @@ export async function hasEntitlement(tx: TxContext, feature: string): Promise<bo
     .where('feature', '=', feature)
     .executeTakeFirst();
   if (override?.enabled !== null && override?.enabled !== undefined) return override.enabled;
-  return planByCode(org.planCode)?.features.includes(feature) ?? false;
+  if (planByCode(org.planCode)?.features.includes(feature)) return true;
+  let q = db(tx)
+    .selectFrom('platform.entitlement_grants')
+    .select(['kind', 'key'])
+    .where('revoked_at', 'is', null);
+  q = opts.propertyId
+    ? q.where((eb) =>
+        eb.or([eb('property_id', 'is', null), eb('property_id', '=', opts.propertyId as string)]),
+      )
+    : q.where('property_id', 'is', null);
+  const grants = await q.execute();
+  return grants.some((g) => featuresOfGrant(g.kind, g.key).includes(feature));
 }
 
-export async function requireEntitlement(tx: TxContext, feature: string): Promise<void> {
-  if (!(await hasEntitlement(tx, feature))) throw new EntitlementError(feature);
+export async function requireEntitlement(
+  tx: TxContext,
+  feature: string,
+  opts: { propertyId?: string } = {},
+): Promise<void> {
+  if (!(await hasEntitlement(tx, feature, opts))) throw new EntitlementError(feature);
 }
 
 export async function getLimit(tx: TxContext, limitKey: string): Promise<number | null> {
@@ -320,6 +363,13 @@ export async function updateProperty(
 ): Promise<Property> {
   requirePermission(tx, 'platform.property.update', { propertyId: id });
   const before = await getProperty(tx, id);
+  if (patch.status !== undefined && patch.status !== before.status) {
+    throw new BusinessRuleError(
+      'use_activation_workflow',
+      `Property status cannot be edited directly (it is ${before.status}). Request the change on the activation page: entering pilot or production needs a second person's approval, stopping a pilot or deactivating is a separate recorded action.`,
+      { currentStatus: before.status, requestedStatus: patch.status },
+    );
+  }
   if (patch.timezone && !isValidTimeZone(patch.timezone)) {
     throw new ValidationError('invalid_timezone', `"${patch.timezone}" is not a recognised time zone.`);
   }
@@ -333,7 +383,6 @@ export async function updateProperty(
       ...(patch.timezone !== undefined ? { timezone: patch.timezone } : {}),
       ...(patch.baseCurrency !== undefined ? { base_currency: patch.baseCurrency } : {}),
       ...(patch.classification !== undefined ? { classification: JSON.stringify(patch.classification) } : {}),
-      ...(patch.status !== undefined ? { status: patch.status } : {}),
       ...(patch.checkInTime !== undefined ? { check_in_time: patch.checkInTime } : {}),
       ...(patch.checkOutTime !== undefined ? { check_out_time: patch.checkOutTime } : {}),
       version: sql`version + 1`,
@@ -731,18 +780,35 @@ export async function getDataAuthority(
 
 export async function listDataAuthority(tx: TxContext, propertyId: string): Promise<DataAuthority[]> {
   requirePermission(tx, 'platform.property.read', { propertyId });
-  const domains: DataDomain[] = [
-    'reservations',
-    'availability',
-    'rates',
-    'guestProfiles',
-    'charges',
-    'payments',
-    'roomStatus',
-    'maintenance',
-    'accounting',
-  ];
-  return Promise.all(domains.map((d) => getDataAuthority(tx, propertyId, d)));
+  return Promise.all(DATA_DOMAINS.map((d) => getDataAuthority(tx, propertyId, d)));
+}
+
+/** Open (planned or frozen) authority transition for a property and domain, if any (G-02). */
+export async function openTransitionFor(tx: TxContext, propertyId: string, domain: DataDomain) {
+  return db(tx)
+    .selectFrom('platform.data_authority_transition_domains as d')
+    .innerJoin('platform.data_authority_transitions as t', 't.id', 'd.transition_id')
+    .select(['t.id', 't.status', 't.expected_end_at', 't.planned_start_at'])
+    .where('d.property_id', '=', propertyId)
+    .where('d.domain', '=', domain)
+    .where('d.open', '=', true)
+    .executeTakeFirst();
+}
+
+export function transitionInProgressError(
+  domain: string,
+  t: { id: string; expected_end_at: Date | null },
+): DomainError {
+  const until = t.expected_end_at ? ` until about ${t.expected_end_at.toISOString()}` : '';
+  return new DomainError(
+    'authority_transition_in_progress',
+    `The system of record for ${domain} is being moved at this property, so neither system may change it${until}. Record the change on the cutover freeze log and enter it after the switch, or try again later.`,
+    {
+      status: 409,
+      retryable: true,
+      details: { domain, transitionId: t.id, expectedEndAt: t.expected_end_at?.toISOString() ?? null },
+    },
+  );
 }
 
 /**
@@ -755,6 +821,8 @@ export async function assertWritable(
   propertyId: string,
   domain: DataDomain,
 ): Promise<'portico' | 'forward'> {
+  const open = await openTransitionFor(tx, propertyId, domain);
+  if (open?.status === 'frozen') throw transitionInProgressError(domain, open);
   const a = await getDataAuthority(tx, propertyId, domain);
   if (a.authority === 'portico') return 'portico';
   if (a.writeMode === 'forward') return 'forward';
@@ -765,7 +833,108 @@ export async function assertWritable(
   );
 }
 
-/** Change the system of record for a domain. Sensitive: affects which system staff must use. */
+/**
+ * Write a new authority version: upsert the current row, close the previous history row and append the new one.
+ * Shared by the direct change (`setDataAuthority`) and authority transitions. Caller checks permissions.
+ */
+export async function writeAuthorityVersion(
+  tx: TxContext,
+  input: {
+    propertyId: string;
+    domain: DataDomain;
+    authority: 'portico' | 'external';
+    connectionId?: string | undefined;
+    systemName?: string | undefined;
+    writeMode: 'exclusive' | 'forward' | 'read_only';
+    reason: string;
+    approvedBy?: string | null;
+    transitionId?: string | null;
+  },
+): Promise<{ before: DataAuthority; after: DataAuthority; version: number }> {
+  const problem = authorityCombinationProblem(input);
+  if (problem) throw new ValidationError(problem.code, problem.message, { domain: input.domain });
+  const before = await getDataAuthority(tx, input.propertyId, input.domain);
+  const row = await db(tx)
+    .insertInto('platform.data_authority')
+    .values({
+      id: newId(),
+      tenant_id: tx.tenantId,
+      property_id: input.propertyId,
+      domain: input.domain,
+      authority: input.authority,
+      connection_id: input.connectionId ?? null,
+      system_name: input.systemName ?? null,
+      write_mode: input.writeMode,
+      effective_from: tx.now,
+      updated_by: actorKey(tx),
+      reason: input.reason,
+    })
+    .onConflict((oc) =>
+      oc.columns(['property_id', 'domain']).doUpdateSet({
+        authority: input.authority,
+        connection_id: input.connectionId ?? null,
+        system_name: input.systemName ?? null,
+        write_mode: input.writeMode,
+        effective_from: tx.now,
+        updated_by: actorKey(tx),
+        reason: input.reason,
+        version: sql`platform.data_authority.version + 1`,
+      }),
+    )
+    .returning(['version'])
+    .executeTakeFirstOrThrow();
+  await db(tx)
+    .updateTable('platform.data_authority_history')
+    .set({ effective_to: tx.now })
+    .where('property_id', '=', input.propertyId)
+    .where('domain', '=', input.domain)
+    .where('effective_to', 'is', null)
+    .execute();
+  await db(tx)
+    .insertInto('platform.data_authority_history')
+    .values({
+      id: newId(),
+      tenant_id: tx.tenantId,
+      property_id: input.propertyId,
+      domain: input.domain,
+      version: row.version,
+      authority: input.authority,
+      connection_id: input.connectionId ?? null,
+      system_name: input.systemName ?? null,
+      write_mode: input.writeMode,
+      effective_from: tx.now,
+      effective_to: null,
+      changed_by: actorKey(tx),
+      approved_by: input.approvedBy ?? null,
+      reason: input.reason,
+      transition_id: input.transitionId ?? null,
+    })
+    .execute();
+  const after = await getDataAuthority(tx, input.propertyId, input.domain);
+  await tx.audit({
+    action: 'platform.dataAuthority.set',
+    target: { type: 'property', id: input.propertyId },
+    propertyId: input.propertyId,
+    reason: input.reason,
+    before,
+    after,
+    metadata: { domain: input.domain, version: row.version, transitionId: input.transitionId ?? null },
+  });
+  await tx.emit({
+    type: 'platform.dataAuthority.changed',
+    propertyId: input.propertyId,
+    aggregate: { type: 'property', id: input.propertyId },
+    payload: { propertyId: input.propertyId, domain: input.domain, before, after, version: row.version },
+  });
+  return { before, after, version: row.version };
+}
+
+/**
+ * Change the system of record for a domain directly. Sensitive: affects which system staff must use.
+ * Rejected while an authority transition is open for the domain, and for `charges`, `payments`, `accounting`
+ * and `availability` (which need a second person's approval — use an authority transition; CR-10) unless the
+ * actor is a trusted system process (provisioning, import).
+ */
 export async function setDataAuthority(
   tx: TxContext,
   input: {
@@ -779,60 +948,50 @@ export async function setDataAuthority(
   },
 ): Promise<DataAuthority> {
   requirePermission(tx, 'platform.dataAuthority.manage', { propertyId: input.propertyId });
-  if (input.authority === 'external' && !input.connectionId) {
-    throw new ValidationError(
-      'connection_required',
-      'An external system of record must be linked to an integration connection.',
+  const problem = authorityCombinationProblem(input);
+  if (problem) throw new ValidationError(problem.code, problem.message, { domain: input.domain });
+  const open = await openTransitionFor(tx, input.propertyId, input.domain);
+  if (open) {
+    throw new ConflictError(
+      'authority_transition_open',
+      `An authority transition for ${input.domain} is ${open.status} at this property. Complete or cancel it before changing the system of record another way.`,
+      { transitionId: open.id, domain: input.domain },
     );
   }
-  if (input.authority === 'portico' && input.writeMode !== 'exclusive') {
-    throw new ValidationError(
-      'invalid_write_mode',
-      'When Portico is the system of record its write mode is exclusive.',
+  if (SECOND_APPROVER_DOMAINS.includes(input.domain) && tx.actor.kind !== 'system') {
+    throw new BusinessRuleError(
+      'second_approval_required',
+      `Changing the system of record for ${input.domain} needs a second person's approval. Plan an authority transition (plan, approve, freeze, make effective) instead.`,
+      { domain: input.domain },
     );
   }
-  const before = await getDataAuthority(tx, input.propertyId, input.domain);
-  await db(tx)
-    .insertInto('platform.data_authority')
-    .values({
-      id: newId(),
-      tenant_id: tx.tenantId,
-      property_id: input.propertyId,
-      domain: input.domain,
-      authority: input.authority,
-      connection_id: input.connectionId ?? null,
-      system_name: input.systemName ?? null,
-      write_mode: input.writeMode,
-      effective_from: tx.now,
-      updated_by: tx.actor.kind,
-      reason: input.reason,
-    })
-    .onConflict((oc) =>
-      oc.columns(['property_id', 'domain']).doUpdateSet({
-        authority: input.authority,
-        connection_id: input.connectionId ?? null,
-        system_name: input.systemName ?? null,
-        write_mode: input.writeMode,
-        effective_from: tx.now,
-        reason: input.reason,
-        version: sql`platform.data_authority.version + 1`,
-      }),
-    )
-    .execute();
-  const after = await getDataAuthority(tx, input.propertyId, input.domain);
-  await tx.audit({
-    action: 'platform.dataAuthority.set',
-    target: { type: 'property', id: input.propertyId },
-    propertyId: input.propertyId,
-    reason: input.reason,
-    before,
-    after,
-  });
-  await tx.emit({
-    type: 'platform.dataAuthority.changed',
-    propertyId: input.propertyId,
-    aggregate: { type: 'property', id: input.propertyId },
-    payload: { propertyId: input.propertyId, domain: input.domain, before, after },
-  });
+  const { after } = await writeAuthorityVersion(tx, input);
   return after;
+}
+
+/** Version history of the system of record for a property (G-02, ST-13). */
+export async function listDataAuthorityHistory(tx: TxContext, propertyId: string, domain?: DataDomain) {
+  requirePermission(tx, 'platform.property.read', { propertyId });
+  let q = db(tx)
+    .selectFrom('platform.data_authority_history')
+    .selectAll()
+    .where('property_id', '=', propertyId)
+    .orderBy('domain')
+    .orderBy('version');
+  if (domain) q = q.where('domain', '=', domain);
+  const rows = await q.execute();
+  return rows.map((r) => ({
+    domain: r.domain as DataDomain,
+    version: r.version,
+    authority: r.authority,
+    connectionId: r.connection_id,
+    systemName: r.system_name,
+    writeMode: r.write_mode,
+    effectiveFrom: r.effective_from.toISOString(),
+    effectiveTo: r.effective_to?.toISOString() ?? null,
+    changedBy: r.changed_by,
+    approvedBy: r.approved_by,
+    reason: r.reason,
+    transitionId: r.transition_id,
+  }));
 }
