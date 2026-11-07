@@ -597,3 +597,16 @@ Nothing is deployed until you authorize spend.
 **If the answer differs:** a variable change in `infra/terraform/envs/*`; no rework.
 **Blocks:** the hosted pilot only.
 **Raised by / date:** infrastructure workstream, 2026-11-07
+
+### Q159 — May Portico implement a compatible interface for legacy hotel devices?      Status: open
+**Context:** Many door locks, phone systems (PBX), minibars, in-room TVs and POS terminals connect to hotel PMSs
+through a long-established vendor interface protocol (gap-plan M16). A compatible interface would connect them without
+one integration each. The protocol's ownership, licensing and any partner-programme requirements are unconfirmed.
+**Question:** Will you have counsel review whether Portico may implement a compatible interface (and under which
+terms), together with the patent review (Q145/Q150)?
+**Default we are proceeding with:** no work on the legacy protocol. Open standards (HTNG/OpenTravel-aligned APIs) and
+direct vendor APIs only.
+**If the answer differs:** M16 becomes a build item (an interface gateway in the integration module).
+**Blocks:** M16 only.
+**Raised by / date:** orchestrator (owner D14 follow-up), 2026-11-07
+

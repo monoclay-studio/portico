@@ -291,4 +291,8 @@ Each agent's brief and report are in `agents/`.
   - The focused re-review (re-check #3) is queued for the next window, because the 5-hour window is ≥ 80%.
 - **19:29 — Window closing** <!-- t: now @ 2026-11-07T19:29:00Z -->. 5-hour usage is 85% and no agents are running; everything is pushed. The resume is
   scheduled for 21:13 UTC with the Channex/distribution build first.
+- **19:35 — Owner decision D14** <!-- t: now @ 2026-11-07T19:35:24Z -->: "i don't care how long the whole project takes, as long as the final product
+  is in its most powerful form". Yes to the partner platform and open API after Channex (gap-plan M15), and keep adding
+  capabilities that aren't overkill. Standing capability scouting with a vision-fit test was added. M16 (legacy device
+  interface) is gated on counsel (Q159).
 

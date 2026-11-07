@@ -142,7 +142,8 @@
   6. **Quality steward round 3** after items 2–4 report.
   7. **Module round 2 from the `docs/strategy/` briefs**, gap-plan order: backoffice wired to the real APIs plus
      reservations front-desk flows; payments collection plans plus finance receipts; day-close.
-  8. **If the owner agrees:** a partner platform (public API docs, sandbox, webhooks, partner keys, MCP agent access).
+  8. **Partner platform and open API (owner D14: yes)**, gap-plan M15, right after the Channex build. The gap
+     strategist re-scans for further additions after each wave (capability scouting, vision-fit test).
 
 ## 1. Owner, product and how to work with the owner
 
