@@ -539,7 +539,13 @@ export interface Org {
 
 export async function setupOrg(
   h: Harness,
-  opts: { environment?: TenantEnvironment; code?: string; capacity?: number; businessDate?: LocalDate } = {},
+  opts: {
+    environment?: TenantEnvironment;
+    code?: string;
+    capacity?: number;
+    businessDate?: LocalDate;
+    planCode?: string;
+  } = {},
 ): Promise<Org> {
   const environment = opts.environment ?? 'live';
   const admin = testContext({ environment, actor: { kind: 'user', userId: newId(), displayName: 'Admin' } });
@@ -550,7 +556,7 @@ export async function setupOrg(
       name: 'Kandu Atoll',
       slug: `kandu-${admin.tenantId.slice(-12)}`,
       environment,
-      planCode: 'enterprise',
+      planCode: opts.planCode ?? 'enterprise',
     }),
   );
   const le = await run((tx) =>

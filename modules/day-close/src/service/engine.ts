@@ -57,7 +57,10 @@ async function claim(
   tx: TxContext,
   runId: string,
   owner: string,
-): Promise<{ run: RunRow; ok: true } | { run: RunRow; ok: false; reason: 'not_active' | 'in_progress' }> {
+): Promise<
+  | { run: RunRow; ok: true; previousBlockers: string[] }
+  | { run: RunRow; ok: false; reason: 'not_active' | 'in_progress' }
+> {
   const run = await lockRun(tx, runId);
   if (!isActive(run.status as RunStatus)) return { run, ok: false, reason: 'not_active' };
   if (run.lease_owner && run.lease_until && (run.lease_until as Date).getTime() > tx.now.getTime()) {
@@ -106,7 +109,8 @@ async function claim(
       after: { owner, resumedAt: next },
     });
   }
-  return { run: updated, ok: true };
+  const previousBlockers = ((run.failure as { blockers?: string[] } | null)?.blockers ?? []).slice().sort();
+  return { run: updated, ok: true, previousBlockers };
 }
 
 async function release(
@@ -202,7 +206,11 @@ export async function executeRun(
           propertyId: run.property_id,
           after: { blockers: outcome.blockers.map((b) => ({ key: b.key, code: b.code })) },
         });
-        if (r) await notify(tx, r, DAY_CLOSE_EVENTS.runBlocked, { blocking: outcome.blockers.length });
+        // Tell the duty roles when the list of blockers changes — not on every automatic re-check.
+        const keys = outcome.blockers.map((b) => b.key).sort();
+        const changed = keys.join('|') !== claimed.previousBlockers.join('|');
+        if (r && changed)
+          await notify(tx, r, DAY_CLOSE_EVENTS.runBlocked, { blocking: outcome.blockers.length });
       });
       return { executed: true, status: 'blocked' };
     }
