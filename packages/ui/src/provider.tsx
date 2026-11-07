@@ -8,6 +8,8 @@ export interface UiContextValue {
   dir: 'ltr' | 'rtl';
   /** Week start for calendars: 0 Sunday, 1 Monday, 6 Saturday. Maldives commonly uses Sunday–Thursday work weeks. */
   weekStartsOn: number;
+  /** Compact (desk boards, tables, timeline) or comfortable (dashboards, touch). User-selectable. */
+  density: 'compact' | 'comfortable';
 }
 
 const UiContext = createContext<UiContextValue>({
@@ -15,6 +17,7 @@ const UiContext = createContext<UiContextValue>({
   locale: 'en',
   dir: 'ltr',
   weekStartsOn: 1,
+  density: 'compact',
 });
 
 export interface UiProviderProps {
@@ -23,6 +26,7 @@ export interface UiProviderProps {
   locale?: string;
   dir?: 'ltr' | 'rtl';
   weekStartsOn?: number;
+  density?: 'compact' | 'comfortable';
 }
 
 /**
@@ -35,10 +39,11 @@ export function UiProvider({
   locale = 'en',
   dir = 'ltr',
   weekStartsOn = 1,
+  density = 'compact',
 }: UiProviderProps) {
   const value = useMemo<UiContextValue>(
-    () => ({ strings: mergeStrings(defaultUiStrings, strings), locale, dir, weekStartsOn }),
-    [strings, locale, dir, weekStartsOn],
+    () => ({ strings: mergeStrings(defaultUiStrings, strings), locale, dir, weekStartsOn, density }),
+    [strings, locale, dir, weekStartsOn, density],
   );
   return (
     <UiContext.Provider value={value}>

@@ -80,6 +80,26 @@ export const defaultUiStrings = {
       pending_verification: 'Pending verification',
     },
   },
+  kpi: {
+    definition: 'About {{metric}}',
+    of: '{{numerator}} of {{denominator}}',
+    up: 'up',
+    down: 'down',
+    flat: 'no change',
+    vs: 'vs {{period}}',
+    openRecords: 'Open the records behind {{metric}}',
+  },
+  chart: {
+    showTable: 'Show as table',
+    showChart: 'Show as chart',
+    legend: 'Legend',
+    value: 'Value',
+  },
+  chips: {
+    remove: 'Remove filter {{label}}',
+    view: 'View',
+    clearAll: 'Clear all',
+  },
   dataTable: {
     filterRows: 'Filter rows',
     filterPlaceholder: 'Filter…',

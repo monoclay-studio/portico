@@ -45,8 +45,10 @@ export interface DataTableProps<Row> {
   initialViewId?: string;
   onSaveView?: (view: SavedView) => void;
   onDeleteView?: (id: string) => void;
-  /** Row height in px (fixed: required for virtualization). Touch layouts should use >= 48. */
+  /** Row height in px (fixed: required for virtualization). Defaults from density and `rowLines`. */
   rowHeight?: number;
+  /** One- or two-line rows; with density this picks the row height (compact 40/52, comfortable 48/60). */
+  rowLines?: 1 | 2;
   /** Max height of the scrolling body (CSS length). */
   maxHeight?: string;
   /** Rendered when no rows match. */
@@ -72,15 +74,19 @@ export function DataTable<Row>({
   initialViewId,
   onSaveView,
   onDeleteView,
-  rowHeight = 40,
+  rowHeight: rowHeightProp,
+  rowLines = 1,
   maxHeight = '70vh',
   empty,
   toolbar,
   rowClassName,
   selectedRowId,
 }: DataTableProps<Row>) {
-  const { strings, dir } = useUi();
+  const { strings, dir, density } = useUi();
   const s = strings.dataTable;
+  const coarse = typeof window !== 'undefined' && Boolean(window.matchMedia?.('(pointer: coarse)').matches);
+  const rowHeight =
+    rowHeightProp ?? (density === 'comfortable' || coarse ? (rowLines === 2 ? 60 : 48) : rowLines === 2 ? 52 : 40);
   const initialView = views.find((v) => v.id === initialViewId) ?? views[0];
   const [viewId, setViewId] = useState<string | null>(initialView?.id ?? null);
   const [state, setState] = useState<TableViewState>(initialView?.state ?? EMPTY_VIEW_STATE);

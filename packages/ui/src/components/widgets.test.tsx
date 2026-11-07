@@ -76,6 +76,20 @@ describe('Combobox', () => {
   });
 });
 
+function PaletteHost({ go }: { go: (where: string) => void }) {
+  const [open, setOpen] = useState(true);
+  return (
+    <CommandPalette
+      open={open}
+      onOpenChange={setOpen}
+      commands={[
+        { id: 'arr', label: 'Arrivals board', group: 'Go to', onSelect: () => go('arrivals') },
+        { id: 'hk', label: 'Housekeeping board', group: 'Go to', onSelect: () => go('hk') },
+      ]}
+    />
+  );
+}
+
 describe('CommandPalette', () => {
   it('ranks prefix matches first and matches keywords', () => {
     const cmds = [
@@ -89,20 +103,7 @@ describe('CommandPalette', () => {
 
   it('runs the highlighted command with the keyboard', async () => {
     const go = vi.fn();
-    function Host() {
-      const [open, setOpen] = useState(true);
-      return (
-        <CommandPalette
-          open={open}
-          onOpenChange={setOpen}
-          commands={[
-            { id: 'arr', label: 'Arrivals board', group: 'Go to', onSelect: () => go('arrivals') },
-            { id: 'hk', label: 'Housekeeping board', group: 'Go to', onSelect: () => go('hk') },
-          ]}
-        />
-      );
-    }
-    renderUi(<Host />);
+    renderUi(<PaletteHost go={go} />);
     const input = screen.getByRole('combobox', { name: 'Command palette' });
     await userEvent.type(input, 'board');
     await userEvent.keyboard('{ArrowDown}{Enter}');

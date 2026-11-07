@@ -56,6 +56,17 @@
   --color-simulated-fg: var(--pt-simulated-fg);
   --color-simulated-bg: var(--pt-simulated-bg);
 
+  --color-viz-seq: var(--pt-viz-seq);
+  --color-viz-seq-track: var(--pt-viz-seq-track);
+  --color-viz-neutral: var(--pt-viz-neutral);
+  --color-viz-good: var(--pt-viz-good);
+  --color-viz-warning: var(--pt-viz-warning);
+  --color-viz-critical: var(--pt-viz-critical);
+  --color-viz-grid: var(--pt-viz-grid);
+
+  --text-display: var(--pt-text-display);
+  --text-display--line-height: 1.1;
+
   --font-sans: var(--pt-font-sans);
   --font-mono: var(--pt-font-mono);
 

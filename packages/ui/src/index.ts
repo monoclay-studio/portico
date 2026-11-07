@@ -42,3 +42,8 @@ export {
 } from './lib/hooks';
 export { UiProvider, type UiProviderProps, useUi } from './provider';
 export { defaultUiStrings, fmt, mergeStrings, type UiStrings, type UiStringsOverride } from './strings';
+export * from './components/data-text';
+export * from './components/filter-chips';
+export * from './components/kpi-tile';
+export * from './components/segmented-bar';
+export * from './components/small-multiples';

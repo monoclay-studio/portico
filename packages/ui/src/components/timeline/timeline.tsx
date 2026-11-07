@@ -79,13 +79,14 @@ export function Timeline({
   onItemActivate,
   onCellActivate,
   cellWidth = 44,
-  rowHeight = 36,
+  rowHeight: rowHeightProp,
   maxHeight = '70vh',
   isWeekend,
   describeItem,
 }: TimelineProps) {
-  const { strings, locale, dir } = useUi();
+  const { strings, locale, dir, density } = useUi();
   const s = strings.timeline;
+  const rowHeight = rowHeightProp ?? (density === 'comfortable' ? 44 : 36);
   const dates = useMemo(() => dateSeries(from, days), [from, days]);
   const rows = useMemo(() => buildRows(units), [units]);
   const placed = useMemo(() => placeItems(items, from, days), [items, from, days]);

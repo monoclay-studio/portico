@@ -102,3 +102,19 @@
 [dir="rtl"] {
   --pt-slide-from: -100%;
 }
+
+@layer base {
+  /* Data voice — counts, codes and IDs read as data, never as controls. */
+  .pt-data {
+    font-family: var(--pt-font-mono);
+    font-size: var(--pt-data-size);
+    letter-spacing: var(--pt-data-tracking);
+    text-transform: uppercase;
+    font-variant-numeric: tabular-nums;
+  }
+  .pt-code {
+    font-family: var(--pt-font-mono);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.01em;
+  }
+}
