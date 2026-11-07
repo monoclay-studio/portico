@@ -1,7 +1,7 @@
 # Agent run: Integration step: bind module ports
 
-- Started: 2026-11-07T16:16:26.294Z · last activity: 2026-11-07T17:04:17.628Z
-- Turns: 533 · tool uses: 331 · output tokens: 492,418
+- Started: 2026-11-07T16:16:26.294Z · last activity: 2026-11-07T17:31:30.337Z
+- Turns: 588 · tool uses: 365 · output tokens: 529,519
 - Type: general-purpose
 
 ## Brief (2026-11-07T16:16:26.294Z)
@@ -47,6 +47,56 @@ Reply with:
 - contract bugs you fixed;
 - command results;
 - anything that needs an owner decision. Don't block on it: add it to docs/OPEN_QUESTIONS.md with a default.
+````
+
+## Follow-up message (2026-11-07T17:27:08.129Z)
+
+````text
+The coordinator sent a message while you were working:
+The steward review of feat/integration-step says **merge after fixes**: P0 0 · P1 3 · P2 7 · P3 9.
+- Report: /home/user/portico/docs/orchestration/reviews/review-integration-step.md (main working tree; read the latest file).
+- PoCs: docs/orchestration/reviews/integration-step-poc/*.ts.txt. Each one passes today because it asserts the buggy behaviour; turn every one into a regression test asserting the fix.
+
+Fix the P1s:
+- **P1-1:** a deposit for another property's booking, or for a booking that exists nowhere, is accepted and posted to the wrong legal entity.
+  - Add a booking-directory port from reservations for payments and finance.
+  - Refuse unknown and other-property bookings exactly like folios.
+  - Finance must never bind a booking to "whichever property takes the first deposit".
+- **P1-2:** check-in could hold any card for any amount without payments permission.
+  - Require `payments.payment.collect` when the card or amount is overridden.
+  - Verify the card belongs to the booking's guest or payer.
+  - Cap the amount by policy.
+- **P1-3:** late-charge collection must request at most what the folio actually owes, never the full charge on a folio in credit. Also fix the bindings test so it asserts the amount.
+
+Fix the P2s:
+- **FD-15:** hide the money-derived payment-check status, and totals and payment status on booking and stay reads, for roles without money permissions.
+- **Finance delegation:** make the property parameter REQUIRED; no all-properties grant.
+- **Rates adapter:** verify the terms seal before using a stored document.
+- **S04:** make it truly prove child ages and Green Tax drive the price.
+- **Your report:** correct the "every stubbed port bound" claim. Integration inbound handlers and catalogs, and rates' `affectedAgreements`, are still stubbed; list them.
+- **Rates and guests port re-checks (ADR-0015):** remove them, or record the decision in pending-fixes with a real reason. Pending-fixes points to an OPEN_QUESTIONS entry that doesn't exist; fix that reference.
+- Cheap P3s.
+
+New process (on main under docs/quality, after you merge main):
+- Before you report done, run docs/quality/playbooks/module-builder-self-check.md and include its tables in your reply.
+- Follow docs/quality/playbooks/scenario-tests.md v2: each scenario states which ports were real and which assertion proves each expected outcome.
+- For every P1 fix, attack your own fix once more (the re-attack table) before reporting.
+
+Merge main first: backoffice and the quality system are now on main. Conflicts in OPEN_QUESTIONS.md and pending-fixes.md are append-only, so keep both sides. If your late-charge question collides with identity-plus's Q146–Q149, renumber yours to the next free number above Q155.
+
+Gates:
+`pnpm lint && pnpm turbo run typecheck --force && pnpm turbo run test --force --concurrency=2`
+Use PORTICO_TEST_DB_PREFIX=w1_intstep_fix and check the exit codes.
+
+Commit (Conventional Commits) and don't push. Reply with finding → commit → test, the self-check tables and the command results.
+
+Address this before completing your current task.
+````
+
+## Follow-up message (2026-11-07T17:31:30.337Z)
+
+````text
+[Request interrupted by user]
 ````
 
 ## Report (2026-11-07T17:04:17.381Z)

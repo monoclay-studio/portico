@@ -1,7 +1,7 @@
 # Agent run: Third steward review: identity-plus
 
-- Started: 2026-11-07T17:09:31.338Z · last activity: 2026-11-07T17:23:00.226Z
-- Turns: 111 · tool uses: 65 · output tokens: 151,386
+- Started: 2026-11-07T17:09:31.338Z · last activity: 2026-11-07T17:30:16.306Z
+- Turns: 144 · tool uses: 82 · output tokens: 254,826
 - Type: general-purpose
 
 ## Brief (2026-11-07T17:09:31.338Z)
@@ -55,5 +55,75 @@ Write the report to /home/user/portico/docs/orchestration/reviews/review-identit
 Save any new proven attack as a .ts.txt PoC in docs/orchestration/reviews/identity-plus-poc/.
 
 Reply with the verdict, counts, the top findings in plain English and the report path.
+````
+
+## Report (2026-11-07T17:30:16.191Z)
+
+````text
+## Third review of `feat/identity-platform-enterprise` @ 3f72a15: merge after fixes
+
+There is no P0 left, but two new P1s must be fixed before merge. New findings: **P0 0 · P1 2 · P2 3 · P3 5**.
+
+Report: `/home/user/portico/docs/orchestration/reviews/review-identity-plus-3.md` (not committed).
+
+### Old attacks
+Everything the second review proved is now refused, and so are the first review's attacks. I rewrote each attack test for the new API and ran it:
+- the 9 attacks N-1 to N-9;
+- the HTTP takeover of a new hotel's first administrator;
+- the 11 attacks from the first review.
+
+Every second-review finding is closed except the ones the author documented as remaining (R2-P2-4 and R2-P3-7). R2-P3-5, "domain verification is never re-checked", is only partly fixed and now matters more (R3-P2-2 below).
+
+### New findings
+1. **R3-P1-1: the wipe on first email verification can be raced.**
+   - An attacker org with its own SSO pre-creates the GM's identity and keeps a half-finished authenticator set-up for it.
+   - It finishes that set-up at the moment the real GM accepts the hotel's invitation.
+   - The attacker's authenticator becomes the GM's active second factor after the wipe. The GM is locked out at onboarding, and the hotel's admin cannot reset it.
+   - If the GM is the hotel's only administrator, nobody can administer the hotel, and there is no recovery runbook yet. The attacker also holds the GM's second factor, so only the password remains to phish.
+   - Cause: `confirmTotp` reads the pending factor before taking the person's row lock and activates it by id alone. The SSO sign-in never locks that row either.
+   - Fix: take the row lock before reading credential state; add a "credential epoch" so the wipe invalidates everything older; hash the password before the transaction.
+2. **R3-P1-2: the root-change rule misses the groups claim.**
+   - Someone holding only `identity.sso.manage` cannot map a group to `org_admin`.
+   - They can change which claim carries the groups, for example to `nickname`, which people edit themselves in many identity providers. That is not treated as a root change, and they become `org_admin`.
+   - Fix: treat the groups claim, `jit_provisioning` and `client_id` as root changes.
+3. **R3-P2-1:** an SSO manager can delete group mappings they could never have created. Only new mappings are checked, so they can strip other admins' mapped roles.
+4. **R3-P2-2:** domain verification is checked once and kept forever, and two orgs can hold the same domain. Rule 12 now makes it a global email-verification authority. An org that once controlled the DNS can:
+   - mark a newly invited person's email verified;
+   - accept another hotel's invitation on their behalf;
+   - kill the person's own invitation link;
+   - stop them setting a first password from any other invitation (bypassing rule 14).
+
+   It still gains no access to the other hotel.
+5. **R3-P2-3:** a person who signs in only through SSO at an org that requires SSO and has not verified its domain is locked out for good once they verify their email anywhere else. The README says verifying the domain fixes this; it does not.
+6. **P3s:**
+   - The hourly orphan-link purge is tenant-safe only because production's owner role is subject to RLS. Its SQL has no tenant predicates, and tests run as superuser, so tests cannot catch a scoping error.
+   - The migration backfill treats passwords that organizations set as verified.
+   - Simulated (non-live) links still verify an email.
+   - The link-start state does not record the issuer.
+   - Merging `main` conflicts in `docs/OPEN_QUESTIONS.md`; keeping both sides resolves it.
+
+### Your specific questions
+- **Passwords before proof:** no path can still set a password for an email before the person proves it. I checked seeding, SCIM, JIT, trial creation, API clients, support sessions and test-only paths; there is no trial-conversion path. SSO links, sessions and authenticators can still be created for an email nobody has proved, and they can survive the wipe only through the R3-P1-1 race.
+- **Org IdP and unverified domains:** an org's identity provider cannot verify an email for a domain the org has not verified.
+- **`/v1/me/sso/link`:** it is CSRF-safe, because authentication is a bearer header only.
+
+### Gates
+Run on a copy merged with current `main`:
+- `pnpm lint`: exit 0.
+- `pnpm turbo run typecheck --force`: exit 0, 16/16, nothing cached.
+- `pnpm turbo run test --force --concurrency=2`: exit 0, 14/14 packages, 1,334 tests.
+- Zero `review3_idplus%` databases remain afterwards. Both scratch worktrees are removed, and `/home/user/wt/identity-plus` was not touched.
+
+### Merge condition
+The W-1, W-2 and W-3 attack tests must fail (attack refused) and be committed as regression tests. A steward spot-check of those three is enough; a fourth full review is not needed.
+
+### Files
+The attack tests are in `/home/user/portico/docs/orchestration/reviews/identity-plus-poc/`. All four were already committed in `3decba7` by someone else while I worked; their content matches the final versions.
+- `identity-zz-review3-poc.test.ts.txt`: the six new attacks W-1 to W-6; each test passes when the attack works.
+- `identity-zz-review3-rerun.test.ts.txt`: N-1 to N-9; passes when refused.
+- `identity-zz-review3-original.test.ts.txt`: the 11 originals; passes when refused.
+- `api-zz-review3-http.test.ts.txt`: the HTTP first-admin takeover; passes when refused.
+
+W-1 uses a test-only database trigger that only slows the email-verification step, so the race happens every run. In production the window is about 50–100 ms.
 ````
 

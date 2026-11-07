@@ -67,7 +67,7 @@ loop's playbook is improved. A loop that is never measured cannot improve, so ev
 | `escapes.md` | Every late-found defect: where found, where it should have been caught, why it was missed, the check added |
 | `patterns.md` | Attack, test and UX-trap patterns that worked, reusable across modules |
 | `canaries.md` | Seeded-defect catalogue, canary runs and results |
-| `playbooks/*.md` | Versioned playbooks: steward reviewer, black-box tester, UX refiner, scenario tests, parity researcher, gap strategist, module builder (self-check before "done") |
+| `playbooks/*.md` | Versioned playbooks: steward reviewer, black-box tester, UX refiner, scenario tests, parity researcher, gap strategist, module builder (self-check before "done"), and the orchestrator itself (loop `L-orch`, from round 1) |
 | `retros/*.md` | Per-round retrospectives |
 
 ## Guardrails

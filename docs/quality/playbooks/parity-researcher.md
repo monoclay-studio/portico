@@ -20,7 +20,8 @@
 
 - **v3, journey cross-check.** Cross-check each matrix against the journey walks in the gap strategist's plan
   (GS2-1), so that no step has a matrix row in no module.
-- **v4, refreshing after merge.** When a module merges, re-verify its `built` and `tested` rows within the same merge
+- *(Round 1: the evidence for this item, E-060, showed the refresh is a merge-procedure step. It moved to the orchestrator
+  playbook, O2-4.)* **v4, refreshing after merge.** When a module merges, re-verify its `built` and `tested` rows within the same merge
   batch. Rows that cite branches are re-pointed to `main`, or downgraded.
 
 ---

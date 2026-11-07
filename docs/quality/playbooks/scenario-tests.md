@@ -32,7 +32,19 @@ L3 exists to catch cross-module breaks. It can do that only if it never runs on 
 
 ### Queued for later versions (one theme each)
 
-- **v3, consistency as invariants everywhere.** Run the global consistency checks after **every** scenario, and also
+- **Round-1 evidence for v2 (no version change).** The integration step ran under v1. Its S04 overclaimed child-age and
+  Green Tax pricing, S01's "nothing posted" was not asserted, and S05 used the port rather than the user path (E-042,
+  the first L3 escape). That is exactly what ST2-2's assertion map targets. The fix round now runs under v2, and round
+  2 measures it.
+- **v3, consistency as invariants everywhere, now including cross-module ownership and money invariants.** Add to
+  `assertGlobalConsistency`:
+  - every `finance.deposit_accounts` booking belongs to a reservations booking of the same property and legal entity;
+  - every open payment request is ≤ its folio's debit balance;
+  - no payment state is visible to a role without money permissions.
+
+  The integration-step review (§ 7) showed that today's checks would not catch P1-1 or P1-3 (E-039, E-041); canary
+  C-L3-03 tests this. Also run the checks after the demo seed and each L4 lab refresh.
+- *(Superseded wording, kept for history:)* **v3, consistency as invariants everywhere.** Run the global consistency checks after **every** scenario, and also
   after the demo seed and after each L4 lab refresh. A seed that breaks an invariant is caught before a tester sees
   contradictory numbers (cf. the simulator contradictions in round 1, `review-backoffice.md` P2-1).
 - **v4, a negative path per binding.** For each bound port, a scenario variant runs the AP-01 wrong-property probe and

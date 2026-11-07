@@ -1,7 +1,7 @@
 # Agent run: Identity and platform enterprise features
 
-- Started: 2026-11-07T07:38:12.649Z · last activity: 2026-11-07T17:09:14.503Z
-- Turns: 1045 · tool uses: 583 · output tokens: 2,398,647
+- Started: 2026-11-07T07:38:12.649Z · last activity: 2026-11-07T17:31:30.717Z
+- Turns: 1055 · tool uses: 590 · output tokens: 2,401,601
 - Type: general-purpose
 
 ## Brief (2026-11-07T07:38:12.649Z)
@@ -548,6 +548,52 @@ Use PORTICO_TEST_DB_PREFIX=w1_idplus_fix3 and check the exit codes.
 Commit (Conventional Commits) and don't push. Reply with finding → commit → test, the command results, and any deviations with reasons. A third, short review will verify before merge.
 
 Address this before completing your current task.
+````
+
+## Follow-up message (2026-11-07T17:30:36.017Z)
+
+````text
+The coordinator sent a message while you were working:
+The third steward review of feat/identity-platform-enterprise says **merge after fixes**. There is no P0. All N-1…N-9 attacks, the HTTP first-admin takeover and the 11 originals are refused. New findings: P1 2 · P2 3 · P3 5.
+- Report (on main): docs/orchestration/reviews/review-identity-plus-3.md
+- PoCs (on main): docs/orchestration/reviews/identity-plus-poc/identity-zz-review3-poc.test.ts.txt, attacks W-1…W-6. Each passes today because the attack works.
+
+Fix:
+- **R3-P1-1 (W-1), race on the first-verification wipe.** A pending authenticator confirmed concurrently survives the wipe.
+  - Take the person's row lock BEFORE reading any credential state, in confirmTotp, the SSO sign-in, and every credential write.
+  - Add a credential epoch, so the wipe invalidates everything created before it, pending factors included.
+  - Hash the password before the transaction.
+  - Keep W-1's test-only delay trigger, so the race is deterministic in the regression test.
+- **R3-P1-2 (W-2), root changes.** The groups claim name, `jit_provisioning` and `client_id` are root changes too, just like issuer and allow-list.
+- **R3-P2-1:** deleting a group mapping needs the same power as creating it.
+- **R3-P2-2, domain verification.** It is re-checked on a schedule and expires. Two organizations can't both hold the same domain as an email-verification authority: first verified wins, and a conflict needs Monoclay support. A lapsed verification stops verifying emails.
+- **R3-P2-3, SSO-only lockout.** Fix the lockout of SSO-only people at an org that requires SSO but has no verified domain, or make the README honest and give a working recovery path.
+- **Cheap P3s:**
+  - add tenant predicates to the orphan-link purge SQL, and test it as the app role, not superuser;
+  - the backfill must not treat org-set passwords as verified;
+  - simulated (non-live) links must not verify emails;
+  - record the issuer in the link-start state.
+
+Merge condition (the reviewer's): W-1, W-2 and W-3 must be refused and committed as regression tests. I will spot-check those three myself; there is no fourth full review.
+
+New process on main:
+- Run docs/quality/playbooks/module-builder-self-check.md before you report, and include its tables.
+- Re-attack each P1 fix once more yourself.
+- When you merge main, OPEN_QUESTIONS.md conflicts are append-only, so keep both sides. If your Q146–Q149 collide with anything, keep yours and I'll renumber the other.
+
+Gates:
+`pnpm lint && pnpm turbo run typecheck --force && pnpm turbo run test --force --concurrency=2`
+Use PORTICO_TEST_DB_PREFIX=w1_idplus_fix4 and check the exit codes.
+
+Commit and don't push. Reply with finding → commit → test, the self-check tables and the command results.
+
+Address this before completing your current task.
+````
+
+## Follow-up message (2026-11-07T17:31:30.717Z)
+
+````text
+[Request interrupted by user]
 ````
 
 ## Report (2026-11-07T11:24:15.114Z)

@@ -78,11 +78,33 @@
   (late-charge auto card). Renumber integration-step's question to the next free number (≥ Q156) when merging.
 
 - **2026-11-07 17:32 UTC — quality-driven queue additions** (`docs/quality/retros/2026-11-07-day1.md`):
-  - (1) **P0 re-attack sweep**: one review agent from `playbooks/steward-reviewer.md` re-attacks the 14 P0 fixes
-    already on main (none were re-attacked after fixing). Launch after the identity third review and the
-    integration-step fix round.
+  - (1) **P0/P1 fix re-attack sweep**: LAUNCHED 17:59 from steward playbook v2.1 → `reviews/review-fix-sweep.md`.
   - (2) Resume the quality steward after that batch: integration-step review, backoffice merge, identity review 3.
   - (3) Canaries C-L1-02 and C-L1-03 at the next merge batch (CPU only).
+
+- **2026-11-07 17:31 UTC — OWNER-REQUESTED CHECKPOINT** (the owner is logging out and back in to refresh the
+  usage display). Usage at 17:30: 5-hour 33%, seven-day 62%. Four agents were stopped mid-work, and
+  `tools/checkpoint.sh` committed WIP, refreshed the chronicle and pushed every branch. The pending usage-check
+  trigger was deleted. **The 3-hourly UX + quality heartbeat is still scheduled** (next 18:43 UTC).
+  **Resume exactly these, in this order:**
+  1. **Integration-step fix round** (`feat/integration-step`, wt/integration-step; WIP committed). Brief: the
+     integration-step review P1-1 to P1-3 plus the P2s (`reviews/review-integration-step.md`, PoCs in
+     `reviews/integration-step-poc/`), the self-check playbook, and scenario-tests v2. It had begun reading the
+     check-in guarantee step for P1-2.
+  2. **Identity fix round 4** (`feat/identity-platform-enterprise`, wt/identity-plus; clean tree, it had just
+     started). Brief: `reviews/review-identity-plus-3.md` (R3-P1-1 wipe race with row lock and credential epoch;
+     R3-P1-2 groups claim, jit_provisioning and client_id as root changes; R3-P2-1/2/3; P3s). Merge condition: the
+     orchestrator spot-checks the W-1..W-3 regression tests.
+  3. **Parity-ops** (`docs/parity-ops`; WIP committed; it was on the crm module). Remaining: crm, ai, and whatever
+     is unfinished of comms, resort, access, guest-experience, identity and integration. Run from
+     `docs/quality/playbooks/parity-researcher.md`.
+  4. **Quality steward meta-loop round 1** (`docs/quality`; clean, it had just started). Inputs: the
+     integration-step review, identity review 3, the backoffice merge verification, the orchestrator's process
+     escapes, and a new `playbooks/orchestrator.md`.
+
+  Then the queue: the P0 re-attack sweep, module round 2 from `docs/strategy/` briefs, and canaries C-L1-02/03.
+  Agents can be resumed by message if the session keeps their transcripts; otherwise start new agents on the same
+  branches from these briefs. Restart Postgres first if needed (`pnpm db:up`), and recreate the usage-check chain.
 
 ## 1. Owner, product and how to work with the owner
 
@@ -139,10 +161,10 @@ direction, experience architecture, parity framework, this orchestration folder.
 | `feat/operations-core` | wt/operations | housekeeping, maintenance, tasks, offline sync | **MERGED** to main (9296305) — both P0 + most P1 fixed; P1-5/6/8 deferred with reasons (README) | — |
 | `feat/integration-core` | wt/integration | connector framework, setup, health, webhooks | **MERGED** to main (4d90c6a) — P0 SSRF fixed (`safeFetch`), F2–F9 fixed | bind platform transitions after identity-plus merges (FR-2) |
 | `feat/backoffice-core` | wt/backoffice | packages/ui + apps/backoffice | **MERGED** to main (40a832c) — P0 cache leak + all P1 fixed; Playwright 11/11 incl. axe (WCAG 2.2 AA, light+dark); UX round-1 decisions recorded | next round: wire to real APIs (after integration-step merges) + UX shell items (NAV-01/02/09, phone bottom bar) |
-| `feat/identity-platform-enterprise` | wt/identity-plus | MFA, SSO, SCIM, custom roles, break-glass, trials, activation | 2nd review: **do not merge** (R2-P0-1 pre-hijacking + 3 P1) → ADR-0017 Amendment 1 → **fix round 3 running** | short 3rd review → merge |
-| `feat/infra-aws` | wt/infra | Terraform, Dockerfiles, runbooks | **paused** — nothing consumes it until the owner authorizes AWS work; resume when seven-day usage < 60% | `TRUSTED_PROXY_CIDRS`, `PORTICO_TERMS_SEAL_KEY`, worker DB role |
+| `feat/identity-platform-enterprise` | wt/identity-plus | MFA, SSO, SCIM, custom roles, break-glass, trials, activation | 3rd review: **merge after fixes** (R3-P1-1 wipe race, R3-P1-2 groups-claim root change) → **fix round 4 running** | orchestrator spot-checks W-1..W-3 regression tests → merge |
+| `feat/infra-aws` | wt/infra | Terraform, Dockerfiles, runbooks | **paused** — resume when 5-hour usage < 60% (owner: checks use the 5-hour window only) | `TRUSTED_PROXY_CIDRS`, `PORTICO_TERMS_SEAL_KEY`, worker DB role |
 | `feat/integration-step` | wt/integration-step | bind every port for real; ADR-0015 delegation; S01–S20 scenarios | **done** (pushed): all ports bound; 12/20 scenarios pass; 5 contract bugs fixed | **steward review running** → merge → tell identity-plus/backoffice to merge main |
-| `docs/parity-ops` | wt/parity-ops | parity: operations, guests, comms, resort, access, guest-experience, crm, identity, integration, ai | **running** (new agent from the original brief; first agent's log lost in the 11:11 container restart) — operations/guests done, statuses updated to real code | merge → feed gap strategist and module rounds |
+| `docs/parity-ops` | wt/parity-ops | parity: 10 ops-cluster modules | **MERGED** to main (03ec772) — all matrices done; every `tested` row quotes its asserting test; no module passes the gate yet (open P0 rows) | decisions recorded (Q157, pending-fixes); foundation P0 items queued |
 | journey, back-of-house, parity-front, parity-finance, readiness, product, adoption docs | — | docs | **MERGED** to main | spec change requests folded in at integration step |
 | market deep dive → gap strategist | wt/market, wt/strategy | research + 10x briefs | **MERGED** (`docs/research/05-*`, `docs/strategy/`: gap plan + 32 module briefs; Q140–Q145, Q150–Q155) | module round 2 from briefs |
 | UX loop round 1 | wt/ux-round-1 | tester → refiner | **refinements MERGED** (`docs/ux/round-1/`: 83 refinements, C1–C12) → backoffice (22 shell items, next round), integration step (API surface for 44 wiring items), module owners record decisions | round 2 after modules are bound to the UI |
@@ -159,19 +181,24 @@ expected — the readiness register and README state exactly what is and isn't b
 Pending cross-module fixes awaiting the next round for each author: `docs/orchestration/pending-fixes.md`.
 
 
-1. Branch reports done → launch steward review from `docs/quality/playbooks/steward-reviewer.md` (latest) → report in
+1. Branch reports done → launch steward review strictly from the launch brief in `docs/quality/playbooks/steward-reviewer.md`
+   (latest), quoting the builder's claims verbatim → report in
    `docs/orchestration/reviews/`; its PoC and probe files are saved as `reviews/<module>-poc/*.ts.txt` next to it.
 2. Every cross-module note in the review becomes a `pending-fixes.md` entry with an owner before the fix round
-   starts. Every P0 fix needs the builder's re-attack table plus a targeted re-check on the merged copy before merge.
+   starts. Every P0 **and P1** fix needs the builder's re-attack table (self-check §3), an audit of every exemption the fix
+   leaves (early returns, "first X is accepted"), and a targeted re-check that attacks the fix itself on the merged copy.
    Send P0/P1 (and cheap P2) findings back to the module author (resume the same agent if available, else a new
    agent on the same branch with the playbook + findings) → fix → re-run checks.
 3. In the worktree: `git merge --no-edit main`, resolve, `pnpm lint && pnpm typecheck && pnpm test`.
-4. On main: `git merge --no-ff feat/<m>-core`; update `docs/architecture/domain-map.md` with the module's
+4. On main: `git merge --no-ff feat/<m>-core`; regenerate `docs/parity/COVERAGE.md` and queue the parity owner to update
+   the merged module's rows; update `docs/architecture/domain-map.md` with the module's
    "Contract changes"; register its demo seed in `apps/api/src/seed/demo.ts` `DEMO_SEED_STEPS`, its search
    provider and jobs in `composition.ts`; bind ports provided by already-merged modules; update role templates
    (`modules/identity/src/domain/role-templates.ts`) with the module's permissions; update
    `docs/readiness/readiness-register.md`.
-5. Run full checks on main (`pnpm lint && pnpm turbo run typecheck --force && pnpm turbo run test --force --concurrency=2`), push.
+5. Run full checks on main (`pnpm lint && pnpm turbo run typecheck --force && pnpm turbo run test --force --concurrency=2`);
+   for UI branches also run Playwright on the merged copy with non-default `PORTICO_E2E_WEB_PORT`/`API_PORT`. Commit by
+   exact paths only (`tools/commit-checked.sh`). Push.
 6. Chronicle: append the merge to `docs/chronicle/01-timeline.md`; refresh with `tools/chronicle/extract.py` +
    `snapshot.py` (pass the test log); commit `docs(chronicle): …`.
 7. Quality meta loop: after every steward review / fix round / scenario run / UX round, resume the quality steward
