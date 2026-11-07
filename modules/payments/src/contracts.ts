@@ -233,7 +233,9 @@ export const recordParts = {
   links: z.array(
     z.object({ rel: z.string(), type: z.string(), id: z.string(), title: z.string().optional() }),
   ),
-  provenance: z.enum(['live', 'simulated', 'copied', 'delayed', 'incomplete', 'external']).optional(),
+  provenance: z
+    .enum(['live', 'simulated', 'sandbox', 'copied', 'delayed', 'incomplete', 'external'])
+    .optional(),
 };
 
 export const authorizeInput = z

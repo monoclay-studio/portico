@@ -18,7 +18,15 @@ export type EntityRefDto = z.infer<typeof entityRef>;
 export const unitKind = z.enum(['room', 'villa', 'suite', 'apartment', 'bed', 'tent', 'pitch', 'other']);
 export type UnitKind = z.infer<typeof unitKind>;
 
-export const provenance = z.enum(['live', 'simulated', 'copied', 'delayed', 'incomplete', 'external']);
+export const provenance = z.enum([
+  'live',
+  'simulated',
+  'sandbox',
+  'copied',
+  'delayed',
+  'incomplete',
+  'external',
+]);
 
 export const dataAuthoritySummary = z.object({
   authority: z.enum(['portico', 'external']),
