@@ -39,6 +39,17 @@ travel-selling APIs (not a PMS concern — research 04 §A3).
 
 ### 3.2 ARI outbound
 
+> **Channex readiness (owner direction 2026-11-07):** the first hub adapter is Channex. Owner-stated requirements:
+> - an ARI engine that tracks and batches changes from events, with no database polling loops;
+> - an outbox queue that batches into Channex API calls within the **20 ARI requests per minute** limit (owner-provided;
+>   verify against Channex docs and keep it as configuration per connection);
+> - a live webhook endpoint that receives, parses and durably stores booking revisions;
+> - an acknowledgement flow back to Channex after each revision is saved.
+>
+> DST-R04/R05/R08/R09 below and the integration framework (inbound exchange log, ack-after-commit, outbound queue)
+> are the design. The rate limit is a token bucket per connection; coalescing merges pending deltas per (room, rate,
+> date range) while waiting for budget, so a burst of changes becomes a few large calls, never a backlog of small ones.
+
 - **DST-R04** [MUST] `inventory.availability.changed`, `rates.prices.changed`, `rates.restrictions.changed` →
   coalesced deltas per (channel, room, rate, date range) → sent with idempotent message ids; **target** ≤ 60 s from
   commit to channel acceptance (TARGET, measured); acceptance recorded per message; rejection classified

@@ -12,13 +12,18 @@ import {
   propertyInput,
   propertyUpdate,
 } from './contracts';
+import type { PlatformPorts } from './ports';
+import { registerEnterpriseRoutes } from './routes-enterprise';
 import * as svc from './service';
 
-export function platformHttp(deps: { database: PorticoDatabase }): HttpModule {
+export function platformHttp(deps: { database: PorticoDatabase; ports?: PlatformPorts }): HttpModule {
   const { database } = deps;
+  const ports = deps.ports ?? {};
   return {
     name: 'platform',
     routes(app) {
+      registerEnterpriseRoutes(app, database, ports);
+
       app.get(
         '/organization',
         { schema: { tags: ['Organization'], response: { 200: organization } } },

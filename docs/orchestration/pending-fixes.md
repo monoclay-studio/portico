@@ -54,3 +54,13 @@
 - finance (fix sweep SW-FIN-1, P2; next finance round): editing a billing rule's codes or target folio must not reset its spending limit
 - backoffice (fix sweep SW-BO-1, P2; next backoffice round): the shared-tab cache-leak e2e test reloads the page, so it passes even without the fix — rewrite it so it fails when query keys/cache clearing are removed
 - quality (fix sweep lesson): builders' regression tests replay only the reviewer's exact path — the self-check must require one test per SIBLING entry point of each fixed P0/P1
+- backoffice (next round): users page still offers "Initial password" (server refuses `password_not_allowed`); add in-app step-up prompt and a security settings page (MFA, recovery codes, sessions); SSO callback route in router.tsx; 409 conflict flow can render "Your changes were re-applied…" twice under load (flaky e2e strict-mode failure at smoke.spec.ts:209) — render once
+- ux lab: `tools/ux-lab.sh` / UX lab instructions need the demo authenticator secret (identity rule 16) for tester sign-in
+- identity (P3): refuse inviting `*.portico.invalid` addresses into live organizations
+- guests (erasure re-review R2-P2-2, P2): every write to a person's data (contacts, identity documents, special needs, notes, consents) locks the profile row before checking its status — an edit racing an erasure must not survive it
+- guests (R2-P2-3, P2): erasure redaction must not scan every stored response per value — tag idempotency records with subject ids and index the tags (current design times out around 340k stored responses / 30 days)
+- finance, payments, reservations (R2-P2-4, P2): consume `guests.profile.anonymized` and erase their copies (finance folio payer names, payments card-holder name and payer details, reservations occupant names); adopt idempotency replay plans for responses that embed guest PII
+- guests (R2-P3s): request hash lets the original user confirm a guess after erasure; cross-module in-flight request can commit after erasure; duplicate-suggestion replay served from the stored copy; removed contacts not searched; reason scrubbing misses two-letter surnames
+- foundation (quality round 2): extend the duplicated-enum lint with platform `contracts.ts` lines 12, 111, 123, 157, 426, 428, 444 (environment, data-authority domains, effect modes, provenance copies); replace the 3 duplicated payer-type mappings with one kernel `payerRef` codec; kernel exports runtime constant lists for its vocabularies (types alone can't be imported by Zod)
+- flaky tests are tracked defects with an owner, never a silent rerun (orchestrator v3): backoffice 409-toast strict-mode flake (smoke.spec.ts:209) — owner backoffice
+

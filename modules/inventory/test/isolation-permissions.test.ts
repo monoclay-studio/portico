@@ -262,11 +262,11 @@ describe('connected mode: an external system is the system of record for availab
     const p = await setupProperty(t);
     const { type, unitIds } = await unitTypeWithUnits(p, { code: 'WV', count: 2 });
     const connectionId = newId();
-    for (const domain of maintenance ? (['maintenance'] as const) : (['availability'] as const)) {
+    if (maintenance) {
       await p.run((tx) =>
         platform.setDataAuthority(tx, {
           propertyId: p.propertyId,
-          domain,
+          domain: 'maintenance',
           authority: 'external',
           connectionId,
           systemName: 'Legacy PMS',
@@ -274,6 +274,29 @@ describe('connected mode: an external system is the system of record for availab
           reason: 'Connect alongside: PMS keeps selling',
         }),
       );
+    } else {
+      // Availability is a governed domain (CR-10): it moves to the external system through an authority transition
+      // planned by one person and approved by another (plan → approve → freeze → effective).
+      const plan = await p.run((tx) =>
+        platform.planAuthorityTransition(tx, p.propertyId, {
+          changes: [
+            {
+              domain: 'availability',
+              authority: 'external',
+              connectionId,
+              systemName: 'Legacy PMS',
+              writeMode,
+            },
+          ],
+          reason: 'Connect alongside: PMS keeps selling',
+          freezeMinutes: 5,
+        }),
+      );
+      await withTenantTx(t.db, p.ctxWith(['platform.dataAuthority.manage']), (tx) =>
+        platform.approveAuthorityTransition(tx, plan.id, 'second approver'),
+      );
+      await p.run((tx) => platform.freezeAuthorityTransition(tx, plan.id));
+      await p.run((tx) => platform.completeAuthorityTransition(tx, {}, plan.id));
     }
     return { p, type, unitIds, connectionId };
   }

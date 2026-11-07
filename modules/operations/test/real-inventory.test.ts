@@ -173,17 +173,27 @@ describe('operations × real inventory', () => {
 
   it('R2: availability managed externally (forward) — the out-of-order request is forwarded, the work order kept', async () => {
     const s = await setup();
-    await s.run(s.admin, (tx) =>
-      platform.setDataAuthority(tx, {
-        propertyId: s.propertyId,
-        domain: 'availability',
-        authority: 'external',
-        connectionId: newId(),
-        systemName: 'OPERA Cloud',
-        writeMode: 'forward',
+    // Availability is a governed domain (CR-10): it moves through an authority transition approved by a second person.
+    const plan = await s.run(s.admin, (tx) =>
+      platform.planAuthorityTransition(tx, s.propertyId, {
+        changes: [
+          {
+            domain: 'availability',
+            authority: 'external',
+            connectionId: newId(),
+            systemName: 'OPERA Cloud',
+            writeMode: 'forward',
+          },
+        ],
         reason: 'Housekeeping & maintenance alongside OPERA',
+        freezeMinutes: 5,
       }),
     );
+    await s.run(s.as(['platform.dataAuthority.manage']), (tx) =>
+      platform.approveAuthorityTransition(tx, plan.id, 'second approver'),
+    );
+    await s.run(s.admin, (tx) => platform.freezeAuthorityTransition(tx, plan.id));
+    await s.run(s.admin, (tx) => platform.completeAuthorityTransition(tx, {}, plan.id));
     const wo = await s.run(s.as(ENGINEER), (tx) =>
       ops.createWorkOrder(tx, {
         propertyId: s.propertyId,

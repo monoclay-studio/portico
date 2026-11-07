@@ -481,6 +481,38 @@ billing is not activated for live customers until this is answered.
 **Blocks:** ML-based room assignment only.
 **Raised by / date:** market deep dive, 2026-11-07
 
+### Q146 — MFA enrolment grace and step-up window defaults      Status: open
+**Context:** ADR-0017 §8 fixed the rule that sensitive (⚑) permissions never work without MFA. What remains a policy choice is how long a new member may keep working on everyday (non-sensitive) tasks before enrolling when an organization requires MFA for everyone (the "grace", capped at 72 hours), and how long a verification stays fresh for sensitive actions (the "step-up window"). A desk agent who posts corrections or refunds several times a shift will be asked for a code each time the window lapses.
+**Question:** Keep the defaults — grace 72 hours (maximum 72) and step-up window 15 minutes — or choose others (e.g. 24-hour grace; 30–60 minutes for desk roles)?
+**Default we are proceeding with:** grace 72 h (policy may lower it, never above 72), step-up window 15 min, both per-organization policy.
+**If the answer differs:** configuration defaults only; no rework.
+**Blocks:** nothing in development; affects pilot staff experience.
+**Raised by / date:** identity module agent (steward review P1-2, P3-11), 2026-11-07
+
+### Q147 — Identity provider for the Monoclay operator console     Status: open
+**Context:** Monoclay operators (support sessions, trial provisioning, the simulated-message mailbox, credential recovery) authenticate today with static configured tokens that have no expiry and no MFA. The console is therefore switched off when `NODE_ENV=production` (review P2-17). ADR-0017 also needs an operator procedure for support-led credential recovery (identity check, dual control).
+**Question:** Confirm AWS IAM Identity Center (SSO with MFA) as the operator identity provider, and who owns the credential-recovery procedure and its SLA.
+**Default we are proceeding with:** AWS IAM Identity Center; console disabled in production until it is wired; recovery procedure listed as a launch-gate item without an owner.
+**If the answer differs:** the operator authenticator adapter changes; tenant identity is unaffected.
+**Blocks:** Monoclay support access and operator-created trials in production; support-led recovery of a person who lost every factor or an organization that lost every administrator.
+**Raised by / date:** identity module agent (steward review P2-17, ADR-0017), 2026-11-07
+
+### Q148 — MFA in demo and training organizations; delivery for prospect trials     Status: open
+**Context:** Sensitive permissions now always need MFA, so seeded demo and training administrators must enrol an authenticator before they can, for example, manage roles or legal entities. Separately, a trial the operator creates for a prospect is a non-live organization, so its invitation and reset emails are simulated (they appear only in the operator mailbox) and the prospect receives nothing.
+**Question:** (a) Should demo/training seeds stay subject to MFA like every organization (secure, slightly more friction in demos), or may demo organizations relax it? (b) May staff onboarding emails from trial organizations be delivered for real (an exception to "non-live never sends"), or should operators onboard prospects another way?
+**Default we are proceeding with:** (a) no exemption: demo and training follow the same MFA rule; (b) no real delivery from non-live organizations; operators onboard prospects manually.
+**If the answer differs:** (a) a demo policy flag in identity; (b) an environment-safety exception for `message.staff` in trials (kernel policy) — small changes.
+**Blocks:** smooth self-guided demos and prospect trials; nothing in development.
+**Raised by / date:** identity module agent (steward review P3-12), 2026-11-07
+
+### Q149 — Open trials per live organization                       Status: open
+**Context:** Any live customer with `platform.trial.manage` can create trial organizations. Unlimited trials cost hosting and widen the surface for abuse (review P3-10).
+**Question:** How many open trials may a live organization hold, and should the number depend on the plan?
+**Default we are proceeding with:** at most 3 open trials per live organization, all plans; closing a trial frees a slot.
+**If the answer differs:** a constant or a plan limit (`limits.environments.trial`).
+**Blocks:** nothing.
+**Raised by / date:** platform module agent (steward review P3-10), 2026-11-07
+
 ### Q150 — Counsel review of the remaining patent watch list (extends Q40, Q145)    Status: open
 **Context:** Market research found granted patents near features Portico plans beyond room assignment (Q145) and billing rules (Q40): guests choosing housekeeping time windows (US 12,586,008; US 12,265,929), machine-learned upgrade pricing (US 10,387,795; Nor1 PRiME), phone-to-kiosk key printing and encoder multiplexing (US 10,735,201; US 12,113,911; US 11,257,315), QR-activated key cards (US 9,342,939), passport-photo face matching at check-in (US 12,056,779), an AI hotel demand model (US 12,014,310) and price-parity enforcement (US 8,458,010). Status, scope and validity are unconfirmed (`docs/research/05-market-deep-dive/04-patents.md`). This is not legal advice.
 **Question:** Will you include these items in the counsel review already planned for Q40/Q145, before Portico ships guest self-service windows, upsell offers, kiosks, mobile keys or identity checks?

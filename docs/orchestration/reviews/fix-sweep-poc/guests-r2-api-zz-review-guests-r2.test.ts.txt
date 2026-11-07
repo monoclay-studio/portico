@@ -1,0 +1,141 @@
+/**
+ * Focused re-review of SW-GUE-1 over HTTP (review-guests-erasure-fix.md).
+ * 1. The fix-sweep PoC, inverted: after erasure no stored response holds the guest, and the replay answers 410.
+ * 2. Collateral: a guest's address contact that is a substring of an unrelated record redacts that record's stored
+ *    response (property create) — the replay of an unrelated, successful request answers 410.
+ */
+import { sql } from '@portico/db';
+import { newId } from '@portico/kernel';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { type ApiHarness, signedInOrg, startApi } from './helpers';
+
+let h: ApiHarness;
+beforeAll(async () => {
+  h = await startApi();
+});
+afterAll(async () => h?.close());
+
+async function setup() {
+  const org = await signedInOrg(h, 'Sweep Resorts');
+  const leKey = newId();
+  const lePayload = { name: 'Sweep', legalName: 'Sweep Pvt Ltd', countryCode: 'MV', baseCurrency: 'USD' };
+  const le = await h.app.inject({
+    method: 'POST',
+    url: '/v1/legal-entities',
+    headers: { ...org.auth, 'idempotency-key': leKey },
+    payload: lePayload,
+  });
+  const propKey = newId();
+  const propPayload = {
+    code: `S${newId().slice(-5).toUpperCase()}`,
+    name: 'Sweep Island',
+    profile: 'resort',
+    legalEntityId: le.json().id,
+    countryCode: 'MV',
+    timezone: 'Indian/Maldives',
+    baseCurrency: 'USD',
+    businessDate: '2026-11-07',
+  };
+  const prop = await h.app.inject({
+    method: 'POST',
+    url: '/v1/properties',
+    headers: { ...org.auth, 'idempotency-key': propKey },
+    payload: propPayload,
+  });
+  expect(prop.statusCode).toBe(201);
+  return { org, propertyId: prop.json().id as string, propKey, propPayload, leKey, lePayload };
+}
+
+describe('SW-GUE-1 re-review (inverted PoC + collateral)', () => {
+  it('inverted PoC: no stored response holds the erased guest; the replay answers 410 without the data', async () => {
+    const { org, propertyId } = await setup();
+    const key = newId();
+    const payload = {
+      propertyId,
+      givenName: 'Quilla',
+      familyName: 'Erasemeplease',
+      dateOfBirth: '1981-02-03',
+      contactPoints: [{ kind: 'email', value: 'quilla.erasemeplease@guest.example' }],
+    };
+    const created = await h.app.inject({
+      method: 'POST',
+      url: '/v1/guests/profiles',
+      headers: { ...org.auth, 'idempotency-key': key },
+      payload,
+    });
+    expect(created.statusCode).toBe(201);
+    const profileId = created.json().profile.id as string;
+    const before = await sql<{ body: string }>`
+      select response_body::text as body from core.idempotency_keys
+      where tenant_id = ${org.tenantId} and key = ${key}`.execute(h.t.admin.kysely);
+    console.log('stored create response before erasure:', before.rows[0]?.body);
+    const erase = await h.app.inject({
+      method: 'POST',
+      url: '/v1/guests/privacy-requests',
+      headers: { ...org.auth, 'idempotency-key': newId() },
+      payload: { kind: 'erasure', profileId, reason: 'Erasure request' },
+    });
+    expect(erase.json().status).toBe('completed');
+    const { rows } = await sql<{ scope: string; body: string }>`
+      select scope, response_body::text as body from core.idempotency_keys where tenant_id = ${org.tenantId}`.execute(
+      h.t.admin.kysely,
+    );
+    const hits = rows.filter((r) => /Erasemeplease|erasemeplease|1981-02-03|Quilla/.test(r.body)).map((r) => r.scope);
+    const replay = await h.app.inject({
+      method: 'POST',
+      url: '/v1/guests/profiles',
+      headers: { ...org.auth, 'idempotency-key': key },
+      payload,
+    });
+    console.log('inverted PoC: hits', hits, '| replay', replay.statusCode, replay.json().code);
+    expect(hits).toEqual([]);
+    expect(replay.statusCode).toBe(410);
+    expect(replay.body).not.toMatch(/Erasemeplease|1981-02-03|Quilla/);
+  });
+
+  it('FINDING R2-P2-1: erasing a guest whose address is "Maldives" makes the property-create replay answer 410', async () => {
+    const { org, propertyId, propKey, propPayload, leKey, lePayload } = await setup();
+    const created = await h.app.inject({
+      method: 'POST',
+      url: '/v1/guests/profiles',
+      headers: { ...org.auth, 'idempotency-key': newId() },
+      payload: {
+        propertyId,
+        givenName: 'Local',
+        familyName: 'Walkin',
+        matchStrategy: 'create_new',
+        contactPoints: [{ kind: 'address', value: 'Maldives' }],
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    const erase = await h.app.inject({
+      method: 'POST',
+      url: '/v1/guests/privacy-requests',
+      headers: { ...org.auth, 'idempotency-key': newId() },
+      payload: { kind: 'erasure', profileId: created.json().profile.id, reason: 'Erasure request' },
+    });
+    expect(erase.json().status).toBe('completed');
+    const propReplay = await h.app.inject({
+      method: 'POST',
+      url: '/v1/properties',
+      headers: { ...org.auth, 'idempotency-key': propKey },
+      payload: propPayload,
+    });
+    const leReplay = await h.app.inject({
+      method: 'POST',
+      url: '/v1/legal-entities',
+      headers: { ...org.auth, 'idempotency-key': leKey },
+      payload: lePayload,
+    });
+    console.log(
+      'R2-P2-1 erasure counts',
+      JSON.stringify(erase.json().result.counts),
+      '| property replay',
+      propReplay.statusCode,
+      propReplay.json().code ?? '',
+      '| legal entity replay',
+      leReplay.statusCode,
+    );
+    expect(propReplay.statusCode).toBe(410);
+  });
+});

@@ -26,6 +26,24 @@ export function isApiError(e: unknown): e is ApiError {
  */
 export function problemFromUnknown(e: unknown, where: string): ProblemDetails {
   if (e instanceof ApiError) {
+    // Granted by role, but sensitive (⚑) actions need two-step verification (ADR-0017 §8): say what to do, not
+    // "no access". Signing in again asks for the code, and offers the set-up to people who have none yet.
+    if (e.problem.status === 403 && e.problem.code === 'mfa_enrollment_required')
+      return {
+        ...e.problem,
+        title: 'Set up two-step verification first',
+        detail:
+          'Your role allows this, but it is a sensitive action that needs a code from an authenticator app. Sign out, sign in again and choose “Set up now” — it takes about a minute.',
+        details: { ...(e.problem.details ?? {}), serverDetail: e.problem.detail },
+      };
+    if (e.problem.status === 403 && e.problem.code === 'mfa_required')
+      return {
+        ...e.problem,
+        title: 'Confirm it’s you',
+        detail:
+          'This is a sensitive action, so it needs a recent code from your authenticator app. Sign out and sign in again with your code, then repeat the action.',
+        details: { ...(e.problem.details ?? {}), serverDetail: e.problem.detail },
+      };
     // Staff language (NAV-08): no permission codes; the server's wording stays in details for support.
     if (e.problem.status === 403)
       return {

@@ -2,7 +2,18 @@
  * Typed endpoints for the modules on main (platform, identity). Request and response shapes come from the
  * modules' contracts.ts — the same Zod schemas the API validates with.
  */
-import { createUserRequest, loginRequest, loginResponse, me, userSummary } from '@portico/identity/contracts';
+import {
+  createUserRequest,
+  credentialProof,
+  loginRequest,
+  loginResponse,
+  me,
+  mfaChallengeRequest,
+  recoveryCodesResponse,
+  totpConfirmRequest,
+  totpEnrolResponse,
+  userSummary,
+} from '@portico/identity/contracts';
 import {
   legalEntity,
   legalEntityInput,
@@ -15,6 +26,14 @@ import type { ApiClient } from './client';
 
 export type LoginRequest = z.input<typeof loginRequest>;
 export type LoginResponse = z.infer<typeof loginResponse>;
+/** The signed-in answer (password sign-in without a second step, or the completed second step). */
+export const signedIn = loginResponse.options[0];
+export type SignedIn = z.infer<typeof signedIn>;
+/** Sign-in waits for the code from the person's authenticator app (or a recovery code). */
+export type SecondStep = Extract<LoginResponse, { status: 'mfa_required' }>;
+export type SecondStepRequest = z.input<typeof mfaChallengeRequest>;
+export type CredentialProof = z.input<typeof credentialProof>;
+export type AuthenticatorSetup = z.infer<typeof totpEnrolResponse>;
 export type Me = z.infer<typeof me>;
 export type Organization = z.infer<typeof organization>;
 export type Property = z.infer<typeof property>;
@@ -81,6 +100,31 @@ export function endpoints(api: ApiClient) {
         body: loginRequest.parse(body),
         schema: loginResponse,
         expectUnauthenticated: true,
+      }),
+    /** POST /v1/auth/login/mfa — the second sign-in step. 401 `details.reason`: invalid_code | challenge_expired. */
+    loginSecondStep: (body: SecondStepRequest) =>
+      api.request({
+        method: 'POST',
+        path: '/auth/login/mfa',
+        body: mfaChallengeRequest.parse(body),
+        schema: signedIn,
+        expectUnauthenticated: true,
+      }),
+    /** POST /v1/me/mfa/totp — start authenticator set-up (proof: the current password). */
+    startAuthenticatorSetup: (proof: CredentialProof) =>
+      api.request({
+        method: 'POST',
+        path: '/me/mfa/totp',
+        body: credentialProof.parse(proof),
+        schema: totpEnrolResponse,
+      }),
+    /** POST /v1/me/mfa/totp/confirm — first code; returns the recovery codes (shown once). */
+    confirmAuthenticatorSetup: (code: string) =>
+      api.request({
+        method: 'POST',
+        path: '/me/mfa/totp/confirm',
+        body: totpConfirmRequest.parse({ code }),
+        schema: recoveryCodesResponse,
       }),
     logout: () => api.request({ method: 'POST', path: '/auth/logout', schema: null }),
     me: () => api.request({ path: '/me', schema: me }),

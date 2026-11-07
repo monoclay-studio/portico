@@ -6,8 +6,7 @@
  */
 import { newId } from '@portico/kernel';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { provisionOrganization } from '../src';
-import { type ApiHarness, signedInOrg, startApi } from './helpers';
+import { type ApiHarness, enrolMfa, provisionWithAdmin, signedInOrg, startApi } from './helpers';
 
 let h: ApiHarness;
 beforeAll(async () => {
@@ -44,17 +43,24 @@ async function makeProperty(auth: Record<string, string>) {
 async function signedInSandboxOrg(name = 'Sandbox hotel') {
   const email = `admin-${newId()}@example.mv`;
   const password = 'correct horse battery staple';
-  await provisionOrganization(h.t.db, {
-    name,
-    slug: `org-${newId().slice(-12)}`,
-    environment: 'sandbox',
-    planCode: 'enterprise',
-    admin: { email, displayName: 'Admin', password },
-  });
+  await provisionWithAdmin(
+    h,
+    {
+      name,
+      slug: `org-${newId().slice(-12)}`,
+      environment: 'sandbox',
+      planCode: 'enterprise',
+      admin: { email, displayName: 'Admin' },
+    },
+    password,
+  );
   const res = await h.app.inject({ method: 'POST', url: '/v1/auth/login', payload: { email, password } });
   const body = res.json();
   if (body.status !== 'signed_in') throw new Error(`login failed: ${res.body}`);
-  return { auth: { authorization: `Bearer ${body.token}` } };
+  const auth = { authorization: `Bearer ${body.token}` };
+  // Sensitive (⚑) permissions such as legal entities need MFA (ADR-0017 §8).
+  await enrolMfa(h.app, auth, password);
+  return { auth };
 }
 
 describe('integration API', () => {

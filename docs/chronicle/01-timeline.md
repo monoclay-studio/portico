@@ -235,4 +235,43 @@ Each agent's brief and report are in `agents/`.
     regression test per sibling entry point.
 - **18:16 — Guests fix launched** (`fix/guests-erasure-idempotency`). The payments fix waits for the integration-step
   merge, because the two overlap. The rates, finance and backoffice P2s go to their next rounds.
+- **18:29 — Integration-step focused re-review: merge after fixes.** All 9 original PoCs are refused, but attacking each
+  fix found a new P1 one step beyond it (card guarantee by linking the cardholder; only one late charge collected; the
+  opening-deposit import skips ownership). ADR-0015 Amendment 1 defines the agreed card guarantee (supplied by the
+  cardholder, or a recorded mandate). Fix round 2 goes to the integration engineer, together with the payments
+  residuals from the sweep (same code).
+- **18:36 — Identity-plus MERGED to main** after 3 steward reviews, 4 fix rounds and the orchestrator's spot-check:
+  - the W-1..W-3 regression tests assert refusal;
+  - gates green on the merged copy (1,494 tests);
+  - Playwright 12/12 on default ports, and 11/12 on non-default ports with one flaky 409-toast test that passed twice
+    on rerun (logged for backoffice).
+  - It includes the staff-app sign-in code step and the demo second factor (ADR-0017 Amendment 2).
+- **18:37 — Guests erasure fix done** (replay plans store ids only; a redaction net; replays wait for an erasure). A
+  focused re-review launches before merge.
+- **18:43 — Heartbeat (5-hour 72%).**
+  - UX round 2 is deliberately deferred: round 1 is in its module-owner stage, and the refiner's plan re-runs the 34
+    tasks only once the UI uses real data. Re-testing simulated screens would waste a round.
+  - Quality steward meta-loop round 2 starts on the fix sweep, the integration re-review, the identity merge, the
+    parity-ops merge and the orchestrator's escapes.
+- **18:52 — Guests erasure fix re-review: merge after fixes** <!-- t: agent-ab5e454c050d97666 @ 2026-11-07T18:52:45.371Z (Focused re-review: guests erasure fix) -->. P0 0, P1 0, P2 4, P3 5. The redaction net
+  matched too broadly: erasing a guest with the address "Maldives" broke an unrelated stored response that contained
+  the time zone "Indian/Maldives". Exact-identifier matching is required before merge; the race, scale and
+  other-module copies are tracked.
+- **18:57 — Quality steward round 2 done** <!-- t: agent-ae7e0c581d1429f84 @ 2026-11-07T18:57:16.308Z (Quality steward (meta loop) round 0) -->.
+  - 23 new escapes; 74% are fix-related (7/38 → 12/24 → 17/23).
+  - Steward v2.1 works: every re-review P1 came from a named v2.1 step.
+  - The missing builder technique is **invariant closure**: state each fix as an invariant over stored data, then
+    test every writer of its inputs, repeats and inverses, its own records, and its exemptions (builder self-check
+    v4).
+  - Recall was measured for the first time: payments about 0.94, guests about 0.80.
+  - Orchestrator v3: times are derived by `tools/chronicle/when.py`; `verify-times.py` refuses typed times at commit.
+  - A focused UX round 2a is due on the merged UI changes.
+  - Merged 18:57 <!-- t: commit:e46c024 @ 2026-11-07T18:57:28Z -->.
+- Correction (18:57): the first integration-step review reported at 17:26:51, not 17:27 <!-- t: agent-aef8923307daf19e5 @ 2026-11-07T17:26:51.854Z (Steward review: integration step) -->.
+- **19:09 — Owner: make Portico Channex-ready** <!-- t: now @ 2026-11-07T19:09:42Z --> — ARI engine, outbox and queue within 20 ARI/min, a booking-revision
+  webhook, and an acknowledgement flow. The distribution spec already covers all four. The build (distribution module +
+  Channex adapter) is queued first for the next usage window.
+- **19:09 — Guests erasure fix merged** <!-- t: commit:096a038 @ 2026-11-07T19:09:03Z -->. Exact-identifier redaction; every writer of a guest's data locks the
+  profile first. The builder proved its tests with 14 mutations: each fix removed one at a time turns its test red.
+  This is the first full use of invariant closure (self-check v4 § 5).
 

@@ -3,14 +3,22 @@
  * personal data and keeps the pseudonymous profile id with its stay/folio references and revenue, which finance
  * must retain for the statutory period (research 04 §C1, Q44). Blocked by legal hold.
  */
-import { sql, type TxContext } from '@portico/db';
+import { redactIdempotencyResponses, sql, type TxContext } from '@portico/db';
 import { BusinessRuleError, NotFoundError, newId, requirePermission } from '@portico/kernel';
 import type { PrivacyRequestInput } from '../contracts';
 import { anonymizedName, ERASURE_PLAN } from '../domain/privacy';
 import type { GuestsPorts } from '../ports';
 import { consentHistory } from './consent';
 import { getStayHistory } from './history';
-import { actingProperty, actorKey, db, iso, linkedPropertyIds, requireVisibleProfile } from './internal';
+import {
+  actingProperty,
+  actorKey,
+  db,
+  iso,
+  linkedPropertyIds,
+  requireVisibleProfile,
+  scrubReason,
+} from './internal';
 import { listMergesForProfile, snapshotProfile } from './merge';
 import { getProfile } from './profiles';
 
@@ -76,7 +84,8 @@ export async function submitPrivacyRequest(
 
 /**
  * Download a completed export. The data is rebuilt on each download (never stored), and every download is
- * audited — personal data does not sit in request logs or idempotency records.
+ * audited — personal data never sits in request logs, and the export request's idempotency record holds only
+ * the request id (see replay.ts).
  */
 export async function downloadExport(tx: TxContext, ports: GuestsPorts, requestId: string): Promise<unknown> {
   const req = await getPrivacyRequest(tx, ports, requestId);
@@ -109,6 +118,7 @@ export async function exportProfile(
 ): Promise<{ requestId: string; data: unknown }> {
   const vp = await requireVisibleProfile(tx, ports, input.profileId);
   actingProperty(tx, 'guests.privacy.export', vp.row, vp.links);
+  input = { ...input, reason: await scrubReason(tx, input.reason, [vp.row.id]) };
   const requestId = await insertRequest(tx, input, vp.row.id);
   const data = await buildExport(tx, ports, vp.row.id, requestId);
   await finish(tx, requestId, 'completed', {
@@ -329,6 +339,44 @@ async function buildExport(tx: TxContext, ports: GuestsPorts, profileId: string,
 }
 
 /**
+ * The identifiers that let erasure find copies of a person in stored API responses (R2-P2-1). Only values that
+ * identify the subject exactly, matched later as whole JSON string values: profile ids (the survivor and every
+ * profile merged into it), normalized emails and E.164 phone numbers. Never addresses, names or numbers as typed.
+ * An email or phone the person shares with another guest who is on LEGAL HOLD is left out, and that guest's id is
+ * kept, so the held guest's records are never redacted by someone else's erasure.
+ */
+export async function erasureIdentifiers(
+  tx: TxContext,
+  profileIds: readonly string[],
+): Promise<{ identifiers: string[]; keep: string[] }> {
+  const ids = [...profileIds];
+  const own = await db(tx)
+    .selectFrom('guests.contact_points')
+    .select(['normalized'])
+    .where('profile_id', 'in', ids)
+    .where('kind', 'in', ['email', 'phone', 'whatsapp'])
+    .where('normalized', 'is not', null)
+    .execute();
+  const values = [...new Set(own.map((c) => c.normalized as string))];
+  const held =
+    values.length === 0
+      ? []
+      : await db(tx)
+          .selectFrom('guests.contact_points as c')
+          .innerJoin('guests.profiles as p', 'p.id', 'c.profile_id')
+          .select(['c.profile_id', 'c.normalized'])
+          .where('c.normalized', 'in', values)
+          .where('c.profile_id', 'not in', ids)
+          .where('p.legal_hold', '=', true)
+          .execute();
+  const heldValues = new Set(held.map((h) => h.normalized));
+  return {
+    identifiers: [...ids, ...values.filter((v) => !heldValues.has(v))],
+    keep: [...new Set(held.map((h) => h.profile_id))],
+  };
+}
+
+/**
  * Erasure = anonymization (GUE-R18). Profiles merged into this one (same person by staff decision) are
  * anonymized with it and the merge snapshots are redacted — those merges become irreversible (status erased).
  */
@@ -349,14 +397,15 @@ export async function eraseProfile(
   if (vp.row.status === 'anonymized') {
     throw new BusinessRuleError('already_anonymized', 'This profile has already been anonymized.');
   }
-  const requestId = await insertRequest(tx, input, vp.row.id);
-  // Lock the profile and everything merged into it (recursively).
+  // The profile and everything merged into it (recursively).
   const { rows: family } = await sql<{ id: string }>`
     with recursive chain as (
       select id from guests.profiles where id = ${vp.row.id}
       union all select p.id from guests.profiles p join chain c on p.merged_into = c.id
     ) select id from chain`.execute(tx.db);
   const ids = family.map((f) => f.id);
+  input = { ...input, reason: await scrubReason(tx, input.reason, ids) };
+  const requestId = await insertRequest(tx, input, vp.row.id);
   const locked = await db(tx)
     .selectFrom('guests.profiles')
     .select(['id', 'legal_hold'])
@@ -380,7 +429,11 @@ export async function eraseProfile(
     });
     return { requestId, result: onHold };
   }
-  const counts: Record<string, number> = {};
+  // Stored idempotent responses of ANY module that contain this person's exact identifiers are replaced by an
+  // erased marker; a replay then answers 410 instead of returning their data (SW-GUE-1). Guests' own endpoints
+  // store ids only (replay.ts); this safety net reaches other modules' responses and older records.
+  const idempotencyResponses = await redactIdempotencyResponses(tx, await erasureIdentifiers(tx, ids));
+  const counts: Record<string, number> = { idempotencyResponses };
   const count = async (k: string, p: Promise<{ numDeletedRows?: bigint; numUpdatedRows?: bigint }[]>) => {
     const r = await p;
     counts[k] =

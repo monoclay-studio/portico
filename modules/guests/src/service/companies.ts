@@ -23,7 +23,7 @@ import {
 import { normalizeLatin } from '../domain/names';
 import type { GuestsPorts } from '../ports';
 import type { CompaniesTable } from '../tables';
-import { db, forwardingUnavailable, pgCode, requireVisibleProfile } from './internal';
+import { db, forwardingUnavailable, lockProfileForWrite, pgCode, requireVisibleProfile } from './internal';
 import { companyRecord } from './record';
 
 function requireCompanyRead(tx: TxContext): void {
@@ -357,6 +357,7 @@ export async function addCompanyContact(
   if (!company) throw new NotFoundError('company', companyId);
   requireCompanyManage(tx, company.home_property_id);
   const vp = await requireVisibleProfile(tx, ports, input.profileId);
+  await lockProfileForWrite(tx, vp.row.id);
   await db(tx)
     .insertInto('guests.company_contacts')
     .values({

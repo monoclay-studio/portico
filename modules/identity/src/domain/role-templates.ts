@@ -29,7 +29,17 @@ export const ROLE_TEMPLATES: readonly RoleTemplate[] = [
       'platform.businessDate.advance',
       'inventory.*',
       'rates.*',
-      'guests.*',
+      // Explicit guest permissions: no identity-document, special-needs/health, privacy export or erasure access
+      // by default — organizations grant those separately (guests review; readiness brief §12).
+      'guests.profile.read',
+      'guests.profile.readShared',
+      'guests.profile.update',
+      'guests.profile.merge',
+      'guests.profile.unmerge',
+      'guests.alert.manage',
+      'guests.note.readPrivate',
+      'guests.company.read',
+      'guests.company.manage',
       'reservations.*',
       'finance.*',
       'payments.*',

@@ -1,12 +1,36 @@
 import { sourcesFromManifests, withTenantTx } from '@portico/db';
-import { newId, systemAuthorizer } from '@portico/kernel';
+import { newId, type RequestContext, systemAuthorizer } from '@portico/kernel';
 import { platform, platformManifest } from '@portico/platform';
 import { createTestDatabase, type TestDatabase, testContext } from '@portico/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { identity, identityManifest } from '../src';
+import type { Notifier, StaffMessage } from '../src/ports';
 
 let t: TestDatabase;
-const ports = { propertyIdsInScope: platform.propertyIdsInScope };
+const sent: StaffMessage[] = [];
+const notifier: Notifier = {
+  async send(tx, message) {
+    sent.push(message);
+    // Live organizations deliver to the person's address (which is what proves the email, R3-P3-3).
+    return { mode: tx.environment === 'live' ? 'queued' : 'simulated' };
+  },
+};
+const ports = { propertyIdsInScope: platform.propertyIdsInScope, notifier };
+
+/** A person joins as in production (ADR-0017 rule 12): invited, then accepts from the emailed link with a password. */
+async function addMember(
+  ctx: RequestContext,
+  input: Parameters<typeof identity.createUser>[1],
+  password: string,
+): Promise<{ userId: string }> {
+  const { userId } = await withTenantTx(t.db, ctx, (tx) => identity.createUser(tx, input, ports));
+  const link = [...sent].reverse().find((m) => m.to === input.email && m.kind === 'staff.invitation')?.link;
+  await identity.acceptInvitation(t.db, ports, {
+    token: decodeURIComponent((link ?? '').split('token=')[1] as string),
+    password,
+  });
+  return { userId };
+}
 
 beforeAll(async () => {
   t = await createTestDatabase(sourcesFromManifests([platformManifest, identityManifest]));
@@ -45,13 +69,14 @@ describe('sign-in and sessions', () => {
     const p1 = await prop('P1');
     const p2 = await prop('P2');
     const email = `desk-${newId()}@example.mv`;
-    await withTenantTx(t.db, ctx, (tx) =>
-      identity.createUser(tx, {
+    await addMember(
+      ctx,
+      {
         email,
         displayName: 'Aisha',
-        initialPassword: 'correct horse battery',
         roles: [{ roleKey: 'front_desk', scopeType: 'property', scopeId: p1.id }],
-      }),
+      },
+      'correct horse battery',
     );
     const res = await identity.login(t.db, { email, password: 'correct horse battery' });
     expect(res.status).toBe('signed_in');
@@ -72,14 +97,7 @@ describe('sign-in and sessions', () => {
   it('gives the same error for unknown email and wrong password, and locks after repeated failures', async () => {
     const { ctx } = await org();
     const email = `lock-${newId()}@example.mv`;
-    await withTenantTx(t.db, ctx, (tx) =>
-      identity.createUser(tx, {
-        email,
-        displayName: 'L',
-        initialPassword: 'a-very-long-password',
-        roles: [],
-      }),
-    );
+    await addMember(ctx, { email, displayName: 'L', roles: [] }, 'a-very-long-password');
     const unknown = await identity
       .login(t.db, { email: `nobody-${newId()}@example.mv`, password: 'x' })
       .catch((e: Error) => e.message);
@@ -95,15 +113,24 @@ describe('sign-in and sessions', () => {
     const a = await org('Org A');
     const b = await org('Org B');
     const email = `multi-${newId()}@example.mv`;
-    await withTenantTx(t.db, a.ctx, (tx) =>
-      identity.createUser(tx, {
-        email,
-        displayName: 'M',
-        initialPassword: 'a-very-long-password',
-        roles: [{ roleKey: 'org_admin', scopeType: 'organization' }],
-      }),
+    await addMember(
+      a.ctx,
+      { email, displayName: 'M', roles: [{ roleKey: 'org_admin', scopeType: 'organization' }] },
+      'a-very-long-password',
     );
-    await withTenantTx(t.db, b.ctx, (tx) => identity.createUser(tx, { email, displayName: 'M', roles: [] }));
+    // ADR-0017 §2: B can only INVITE an existing person; they accept while signed in as themselves.
+    const added = await withTenantTx(t.db, b.ctx, (tx) =>
+      identity.createUser(tx, { email, displayName: 'M', roles: [] }),
+    );
+    expect(added.status).toBe('invited');
+    const onlyA = await identity.login(t.db, { email, password: 'a-very-long-password' });
+    if (onlyA.status !== 'signed_in') throw new Error('expected sign-in to the only active organization');
+    const self = await identity.authenticateToken(t.db, onlyA.token, ports);
+    if (!self) throw new Error('expected principal');
+    expect((await identity.listMyInvitations(t.db, self.actor)).map((i) => i.organizationId)).toEqual([
+      b.ctx.tenantId,
+    ]);
+    await identity.acceptMembershipAsSelf(t.db, self.actor, b.ctx.tenantId);
     const choice = await identity.login(t.db, { email, password: 'a-very-long-password' });
     expect(choice.status).toBe('select_organization');
     const inB = await identity.login(t.db, {
@@ -123,13 +150,10 @@ describe('sign-in and sessions', () => {
   it('suspending a member revokes sessions immediately (offboarding)', async () => {
     const { ctx } = await org();
     const email = `leaver-${newId()}@example.mv`;
-    const { userId } = await withTenantTx(t.db, ctx, (tx) =>
-      identity.createUser(tx, {
-        email,
-        displayName: 'Leaver',
-        initialPassword: 'a-very-long-password',
-        roles: [{ roleKey: 'read_only', scopeType: 'organization' }],
-      }),
+    const { userId } = await addMember(
+      ctx,
+      { email, displayName: 'Leaver', roles: [{ roleKey: 'read_only', scopeType: 'organization' }] },
+      'a-very-long-password',
     );
     const res = await identity.login(t.db, { email, password: 'a-very-long-password' });
     if (res.status !== 'signed_in') throw new Error('expected sign-in');
