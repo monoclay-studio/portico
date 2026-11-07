@@ -16,6 +16,7 @@ import {
   guestWithCard,
   hiyani,
   kandu,
+  makeExternal,
   organization,
   readyUnit,
   type Scenario,
@@ -597,4 +598,40 @@ describe('P2-6 — rates does not re-check its own quote key on port calls (ADR-
       ),
     ).rejects.toMatchObject({ status: 403 });
   });
+});
+
+describe('P3-9 — check-in in connected mode attests money steps handled by the external system', () => {
+  for (const domain of ['charges', 'payments'] as const) {
+    it(`${domain} external: check-in completes; the step names the system of record`, async () => {
+      const org = await organization(s);
+      const k = await kandu(s, org, '2027-03-10');
+      const { profileId, card } = await guestWithCard(s, org, k);
+      const desk = org.staff('front_desk', 'Hassan', [k.id]);
+      const { reservations } = s.c.services;
+      const b = applied<Booking>(
+        await org.run(desk, (tx) =>
+          reservations.createBooking(
+            tx,
+            bookingInput(
+              k,
+              { arrival: '2027-03-10', departure: '2027-03-12', unit: '214', guestProfileId: profileId },
+              { guarantee: { kind: 'card', paymentMethodId: card.id } },
+            ),
+          ),
+        ),
+      );
+      await s.drain();
+      await readyUnit(s, org, k.id, k.units['214'] as string);
+      await makeExternal(s, org, k.id, domain);
+      const r = await reservations.performWorkflow(s.t.db, desk, {
+        stayId: b.stays[0]?.id as string,
+        kind: 'check_in',
+        checkIn: { registration: { identityVerified: true }, access: { kind: 'card', count: 1 } },
+      });
+      expect(r.interrupted).toBeNull();
+      expect(r.run?.status).toBe('completed');
+      const step = r.run?.steps.find((x) => x.key === (domain === 'charges' ? 'deposits' : 'guarantee'));
+      expect(step).toMatchObject({ status: 'done', message: expect.stringMatching(/Legacy PMS/) });
+    });
+  }
 });

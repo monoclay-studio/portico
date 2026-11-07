@@ -271,6 +271,7 @@ export interface QuoteRequest {
   channelId?: string;
   companyId?: string;
   promoCode?: string;
+  /** Ignored by the rates binding (review P3-2): rates quotes "today" in the property time zone (no backdating). */
   bookingDate?: LocalDate;
 }
 
@@ -282,7 +283,11 @@ export interface StayChangeRequest {
   occupancy: Occupancy;
   /** `reservations.repricing.typeChange` policy outcome for unit-type changes. */
   typeChange?: 'keep_agreed' | 'difference' | 'reprice';
-  /** Business date the change is evaluated at (removed past nights are not repriced). */
+  /**
+   * Business date the change is evaluated at (removed past nights are not repriced). NOTE (review P3-2): the rates
+   * binding (`ratesPortFrom`) does not send it — rates evaluates changes "now" and needs `rates.quote.backdate` for
+   * any other instant; reservations computes penalties itself through `evaluateCancellationPenalty`.
+   */
   asOf: LocalDate;
 }
 

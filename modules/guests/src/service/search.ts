@@ -23,8 +23,13 @@ export function detectQueryKind(q: string): Kind {
   if (/^[A-Z]{2,5}-[0-9A-Z]{4,10}$/i.test(q.trim())) return 'booking';
   const digits = q.replace(/\D/g, '');
   if (/^[+\d][\d\s().-]{5,}$/.test(q) && digits.length >= 6) return 'phone';
-  // UX NAV-03: the desk searches by a phone fragment ("7712", "+960"): 3+ digits and nothing else.
-  if (/^\+?[\d\s().-]+$/.test(q.trim()) && digits.length >= 3) return 'phone';
+  // UX NAV-03: the desk searches by a phone fragment ("7712", "+960"): digits only, and either a leading "+" or at
+  // least 4 digits — a 3-digit query ("214") is a room number or a name part, not a phone (review P3-6).
+  if (
+    /^\+?[\d\s().-]+$/.test(q.trim()) &&
+    (q.trim().startsWith('+') ? digits.length >= 3 : digits.length >= 4)
+  )
+    return 'phone';
   return 'name';
 }
 

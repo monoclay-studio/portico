@@ -406,6 +406,8 @@ async function stepGuarantee(
       result: { guarantee: guarantee.kind },
     };
   }
+  const external = await externalAttestation(deps, tx, stay, 'payments', 'The guarantee is taken');
+  if (external) return external;
   const payments = deps.ports.payments;
   const stayRef: EntityRef = { type: 'stay', id: stay.row.id };
   // ALWAYS read the authoritative status first (RES-I09, S05, R-11). Payments is two-phase: an authorization we
@@ -637,7 +639,31 @@ async function stayFolio(deps: Deps, tx: TxContext, stay: StayRecord): Promise<s
   ).folioId;
 }
 
+/**
+ * Connected mode (ADR-0014, review P3-9): when another system is the system of record for a money domain, the step is
+ * attested as handled there (named) instead of failing — check-in is not a dead end for a hotel that keeps its PMS
+ * for billing or payments.
+ */
+async function externalAttestation(
+  deps: Deps,
+  tx: TxContext,
+  stay: StayRecord,
+  domain: 'payments' | 'charges',
+  what: string,
+): Promise<Outcome | null> {
+  const a = await deps.ports.platform.getDataAuthority(tx, stay.row.property_id, domain);
+  if (a.authority !== 'external') return null;
+  const system = a.systemName ?? 'the external system of record';
+  return {
+    status: 'done',
+    message: `${what} in ${system}, the system of record for ${domain} at this property — confirm it there.`,
+    result: { external: true, domain, systemName: a.systemName, connectionId: a.connectionId },
+  };
+}
+
 async function stepDeposits(deps: Deps, tx: TxContext, stay: StayRecord): Promise<Outcome> {
+  const external = await externalAttestation(deps, tx, stay, 'charges', 'Deposits are applied');
+  if (external) return external;
   const folioId = await stayFolio(deps, tx, stay);
   const applied = await deps.ports.finance.applyDeposits(tx, {
     propertyId: stay.row.property_id,

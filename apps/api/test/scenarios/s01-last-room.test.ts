@@ -2,6 +2,7 @@
  * S01 — Two reservation agents attempt to sell the final available room (+ parallel stress variant, E01).
  * Real composition: reservations previews and commits, inventory guards the last unit, rates prices the agreement.
  */
+import { sql } from '@portico/db';
 import type { Booking, ChangePreview, CommitResult } from '@portico/reservations';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
@@ -70,8 +71,13 @@ describe('S01 — the last Water Villa', () => {
     expect(fresh.alternatives.map((a) => a.label)).toEqual(
       expect.arrayContaining([expect.stringMatching(/Sunset Water Villa with Pool is available/)]),
     );
-    // Money: only the winner has agreed terms with a deposit item; nothing is posted at booking.
+    // Money: nothing is posted at booking (review P3-8: asserted, not just stated).
     expect(winner.status.booking).toBe('confirmed');
+    const entries = await sql<{ n: number }>`
+      select count(*)::int as n from finance.journal_entries where tenant_id = ${org.tenantId}`.execute(
+      s.t.admin.kysely,
+    );
+    expect(entries.rows[0]?.n).toBe(0);
     const cells = await org.run(aishath, (tx) =>
       inventory.getAvailability(tx, {
         propertyId: k.id,

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { chargeLine } from '../contracts';
 import {
   computeLine,
   computeTaxesPure,
@@ -777,6 +778,18 @@ describe('tax engine — commercial rules, levies and evidence', () => {
       { classification: RESORT },
     );
     expect(noFee.taxes.find((t) => t.ruleCode === 'SC')).toBeUndefined();
+  });
+
+  it('a line cannot be both levy-only and value-only (review P3-4)', () => {
+    const base = {
+      lineId: 'x',
+      chargeCode: 'ROOM',
+      taxCategory: 'accommodation',
+      amount: { amountMinor: 1_000, currency: 'USD' },
+      serviceDate: '2027-02-01',
+    };
+    expect(chargeLine.safeParse({ ...base, levyOnly: true, valueOnly: true }).success).toBe(false);
+    expect(chargeLine.safeParse({ ...base, valueOnly: true }).success).toBe(true);
   });
 
   it('value-only lines (prepayments) need no occupancy: per-guest levies are left to the stay (integration step)', () => {

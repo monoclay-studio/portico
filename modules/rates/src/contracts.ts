@@ -260,52 +260,57 @@ export const taxInclusion = z.discriminatedUnion('mode', [
 ]);
 export type TaxInclusion = z.infer<typeof taxInclusion>;
 
-export const chargeLine = z.object({
-  /** Caller's identifier, echoed on every tax line. */
-  lineId: z.string().min(1).max(200),
-  chargeCode: z.string().min(1).max(50),
-  taxCategory: z.string().min(1).max(50),
-  amount: money,
-  quantity: z.number().int().min(1).max(100_000).default(1),
-  serviceDate: localDate,
-  taxInclusion: taxInclusion.default({ mode: 'exclusive' }),
-  outletKind: z.string().max(50).optional(),
-  /** Nights covered by this line for per-night rules (default 1). */
-  nights: z.number().int().min(1).max(366).default(1),
-  /** Units covered by this line for per-unit rules (default 1). */
-  units: z.number().int().min(1).max(1000).default(1),
-  occupancy: occupancy.optional(),
-  /** Position in a stay (0 = first night) for per-stay rules and night caps. */
-  nightIndex: z.number().int().min(0).optional(),
-  /** Tax point already fixed for this amount (e.g. deposit taxed at payment). Overrides each rule's policy. */
-  taxPointDate: localDate.optional(),
-  /**
-   * Parts of the amount whose tax point is already fixed (e.g. a 30% deposit taxed at payment). Value-based rules
-   * are computed per part with the version in force at that part's tax point; quantity-based levies (Green Tax)
-   * are computed ONCE for the whole line. The remainder follows each rule's tax point policy.
-   */
-  taxPointSplits: z
-    .array(z.object({ amountMinor: minorAmount, taxPointDate: localDate }))
-    .max(20)
-    .optional(),
-  /**
-   * The line is posted under agreed terms: commercial rules (service charge, hotel fees) apply ONLY in these
-   * versions (TermsSnapshot.taxes.commercialRuleVersionIds). Omit for charges outside an agreement.
-   */
-  agreedRuleVersionIds: z.array(uuid).optional(),
-  /**
-   * supply (default for amount ≥ 0) · reversal (undoes a supply: every rule mirrors, per-guest levies included) ·
-   * price_adjustment (default for amount < 0: a rebate on price; per-guest levies are not touched).
-   */
-  adjustment: z.enum(['supply', 'reversal', 'price_adjustment']).optional(),
-  /** Only quantity-based levies apply (e.g. a Green Tax true-up for actual 24-hour blocks). */
-  levyOnly: z.boolean().default(false),
-  /**
-   * Only value-based rules apply (e.g. a prepayment / deposit taxed at receipt: per-guest levies fall due per
-   * guest-day, not on the payment, so no occupancy is needed). The opposite of `levyOnly`.
-   */
-  valueOnly: z.boolean().optional(),
-});
+export const chargeLine = z
+  .object({
+    /** Caller's identifier, echoed on every tax line. */
+    lineId: z.string().min(1).max(200),
+    chargeCode: z.string().min(1).max(50),
+    taxCategory: z.string().min(1).max(50),
+    amount: money,
+    quantity: z.number().int().min(1).max(100_000).default(1),
+    serviceDate: localDate,
+    taxInclusion: taxInclusion.default({ mode: 'exclusive' }),
+    outletKind: z.string().max(50).optional(),
+    /** Nights covered by this line for per-night rules (default 1). */
+    nights: z.number().int().min(1).max(366).default(1),
+    /** Units covered by this line for per-unit rules (default 1). */
+    units: z.number().int().min(1).max(1000).default(1),
+    occupancy: occupancy.optional(),
+    /** Position in a stay (0 = first night) for per-stay rules and night caps. */
+    nightIndex: z.number().int().min(0).optional(),
+    /** Tax point already fixed for this amount (e.g. deposit taxed at payment). Overrides each rule's policy. */
+    taxPointDate: localDate.optional(),
+    /**
+     * Parts of the amount whose tax point is already fixed (e.g. a 30% deposit taxed at payment). Value-based rules
+     * are computed per part with the version in force at that part's tax point; quantity-based levies (Green Tax)
+     * are computed ONCE for the whole line. The remainder follows each rule's tax point policy.
+     */
+    taxPointSplits: z
+      .array(z.object({ amountMinor: minorAmount, taxPointDate: localDate }))
+      .max(20)
+      .optional(),
+    /**
+     * The line is posted under agreed terms: commercial rules (service charge, hotel fees) apply ONLY in these
+     * versions (TermsSnapshot.taxes.commercialRuleVersionIds). Omit for charges outside an agreement.
+     */
+    agreedRuleVersionIds: z.array(uuid).optional(),
+    /**
+     * supply (default for amount ≥ 0) · reversal (undoes a supply: every rule mirrors, per-guest levies included) ·
+     * price_adjustment (default for amount < 0: a rebate on price; per-guest levies are not touched).
+     */
+    adjustment: z.enum(['supply', 'reversal', 'price_adjustment']).optional(),
+    /** Only quantity-based levies apply (e.g. a Green Tax true-up for actual 24-hour blocks). */
+    levyOnly: z.boolean().default(false),
+    /**
+     * Only value-based rules apply (e.g. a prepayment / deposit taxed at receipt: per-guest levies fall due per
+     * guest-day, not on the payment, so no occupancy is needed). The opposite of `levyOnly`.
+     */
+    valueOnly: z.boolean().optional(),
+  })
+  .refine((l) => !(l.levyOnly && l.valueOnly), {
+    message: 'A charge line cannot be both levy-only and value-only (it would carry no taxes at all).',
+    path: ['valueOnly'],
+  });
 export type ChargeLineInput = z.input<typeof chargeLine>;
 export type ChargeLine = z.output<typeof chargeLine>;
 

@@ -17,6 +17,7 @@ import {
   organization,
   readyUnit,
   type Scenario,
+  signIn,
   startScenario,
 } from './harness';
 
@@ -72,22 +73,28 @@ describe('S05 — payment timeout at check-in', () => {
     });
     const arrivals = await org.run(desk, (tx) => reservations.listArrivals(tx, { propertyId: k.id }));
     expect(arrivals.items[0]?.readiness?.blockingReason?.message).toMatch(/pending verification/);
-    // Pressing "charge" again is blocked with an explanation (never a second charge).
-    const again = await org
-      .run(desk, (tx) =>
-        reservations.deps.ports.payments.authorize(tx, {
-          propertyId: k.id,
-          methodId: card.id,
-          amount: { amountMinor: 50_000, currency: 'USD' },
-          ref: { type: 'stay', id: stayId },
-          idempotencyKey: `desk-retry:${stayId}`,
-        }),
-      )
-      .then(
-        () => null,
-        (e: unknown) => e,
-      );
-    expect(again).toMatchObject({ code: 'authorization_pending_verification', status: 409 });
+    // The desk resumes check-in (the user path, review P3-8): the guarantee step reads payments first and stays
+    // pending — no second authorization is sent.
+    const resumedWhilePending = await reservations.performWorkflow(s.t.db, desk, {
+      stayId,
+      kind: 'check_in',
+    });
+    expect(resumedWhilePending.run?.steps.find((st) => st.key === 'guarantee')?.status).toBe('pending');
+    // Pressing "authorize" again in payments (its own route) is blocked with an explanation, never a second hold.
+    const auth = await signIn(s, org);
+    const again = await s.app.inject({
+      method: 'POST',
+      url: '/v1/payments/authorizations',
+      headers: { ...auth, 'idempotency-key': `desk-retry:${stayId}` },
+      payload: {
+        propertyId: k.id,
+        methodId: card.id,
+        amount: { amountMinor: 50_000, currency: 'USD' },
+        ref: { type: 'stay', id: stayId },
+      },
+    });
+    expect(again.statusCode).toBe(409);
+    expect(again.json()).toMatchObject({ code: 'authorization_pending_verification' });
     // "Check now": payments looks the operation up with the provider → authorized.
     const status = await org.run(desk, (tx) =>
       payments.provider.getPaymentStatus(tx, { type: 'stay', id: stayId }, { propertyId: k.id }),
