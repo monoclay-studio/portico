@@ -195,6 +195,7 @@ export async function createOperation(tx: TxContext, input: OperationIntent): Pr
       sent_at: null,
       completed_at: null,
       next_check_at: null,
+      created_at: tx.now,
     })
     .execute();
   await tx.emit({

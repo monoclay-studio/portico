@@ -674,6 +674,7 @@ async function applyLinkEvent(
       payout_id: null,
       note: null,
       created_by: 'system:payments-webhook',
+      created_at: tx.now,
     })
     .execute();
   await postPaymentLedger(d, tx, id);

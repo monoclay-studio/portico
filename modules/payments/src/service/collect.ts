@@ -170,6 +170,7 @@ export async function authorize(
       expires_at: null,
       decline: null,
       created_by: actorKey(tx),
+      created_at: tx.now,
     })
     .execute();
   const operationId = await createOperation(tx, {
@@ -359,6 +360,7 @@ export async function capture(
       payout_id: null,
       note: null,
       created_by: actorKey(tx),
+      created_at: tx.now,
     })
     .execute();
   const operationId = await createOperation(tx, {
@@ -511,6 +513,7 @@ export async function charge(
       payout_id: null,
       note: input.description ?? null,
       created_by: actorKey(tx),
+      created_at: tx.now,
     })
     .execute();
   const operationId = await createOperation(tx, {
@@ -614,6 +617,7 @@ export async function refund(
       ledger_posting_id: null,
       ledger_error: null,
       created_by: actorKey(tx),
+      created_at: tx.now,
     })
     .execute();
   const operationId = await createOperation(tx, {
@@ -734,6 +738,7 @@ export async function recordPayment(
       payout_id: null,
       note: input.note ?? null,
       created_by: actorKey(tx),
+      created_at: tx.now,
     })
     .execute();
   if (authorization) {
@@ -824,6 +829,7 @@ export async function recordAuthorization(
         : new Date(tx.now.getTime() + Number(validity.value) * 86_400_000),
       decline: null,
       created_by: actorKey(tx),
+      created_at: tx.now,
     })
     .execute();
   await tx.audit({
@@ -881,6 +887,7 @@ export async function recordRefund(
       ledger_posting_id: null,
       ledger_error: null,
       created_by: actorKey(tx),
+      created_at: tx.now,
     })
     .execute();
   await db(tx)
@@ -973,12 +980,34 @@ export async function adjustRecordedPayment(
       exception_id: input.exceptionId ?? null,
       ledger_posting_id: ledger.value.postingId,
       created_by: actorKey(tx),
+      created_at: tx.now,
     })
     .returningAll()
     .executeTakeFirstOrThrow();
   if (input.exceptionId) {
     const ex = await db(tx).selectFrom('payments.exceptions').select(['dedupe_key']).where('id', '=', input.exceptionId).executeTakeFirst();
     if (ex) await resolveExceptionsByKey(tx, ex.dedupe_key, `Corrected by adjustment ${id}: ${input.reason}`);
+  }
+  // If a statement line disagreed only in amount and the correction makes them agree, the statement line is
+  // now the verification evidence for this payment.
+  const line = await db(tx)
+    .selectFrom('payments.statement_lines')
+    .select(['id'])
+    .where('matched_payment_id', '=', p.id)
+    .where('match_status', '=', 'amount_mismatch')
+    .where('amount_minor', '=', effective)
+    .executeTakeFirst();
+  if (line && p.status === 'recorded_unverified') {
+    await db(tx)
+      .updateTable('payments.statement_lines')
+      .set({ match_status: 'matched', match_basis: 'reference_after_adjustment' })
+      .where('id', '=', line.id)
+      .execute();
+    await db(tx)
+      .updateTable('payments.payments')
+      .set({ status: 'recorded_verified', version: p.version + 1 })
+      .where('id', '=', p.id)
+      .execute();
   }
   await tx.audit({
     action: 'payments.payment.adjust',

@@ -111,6 +111,7 @@ export async function createPaymentRequest(
       link_status: 'pending',
       cancelled_reason: null,
       created_by: actorKey(tx),
+      created_at: tx.now,
     })
     .execute();
   await tx.audit({
