@@ -35,6 +35,7 @@ import {
 import { nameKeys } from '../domain/names';
 import type { GuestsPorts } from '../ports';
 import type { ProfilesTable } from '../tables';
+import { recomputeDocumentRetention } from './documents';
 import { loadSubjects } from './duplicates';
 import {
   actorKey,
@@ -956,8 +957,10 @@ export async function unmergeProfiles(
     .where('id', '=', merge.merged_id)
     .execute();
 
-  // 6. Re-link properties from stays (post-merge stays may have moved).
+  // 6. Re-link properties from stays (post-merge stays may have moved) and recompute document retention from
+  //    each guest's own stays.
   for (const pid of [merge.survivor_id, merge.merged_id]) {
+    await recomputeDocumentRetention(tx, ports, pid);
     await sql`insert into guests.profile_properties (tenant_id, profile_id, property_id, first_seen_at, source)
       select distinct ${tx.tenantId}::uuid, profile_id, property_id, ${tx.now}::timestamptz, 'stay'
       from guests.stay_history where profile_id = ${pid}

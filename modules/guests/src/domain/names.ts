@@ -177,9 +177,17 @@ export interface NameKeys {
   searchNameNative: string | null;
 }
 
+/** Scripts written family-name-first without a space (王伟, 김민준, 山田太郎). */
+const EAST_ASIAN: readonly NameScript[] = ['Hani', 'Hang', 'Kana'];
+
 export function nameKeys(n: NameParts): NameKeys {
   const latin = [n.givenName, n.middleName, n.familyName].filter((p): p is string => !!p?.trim()).join(' ');
-  const native = [n.nativeGivenName, n.nativeFamilyName].filter((p): p is string => !!p?.trim()).join(' ');
+  const nativeParts = [n.nativeGivenName, n.nativeFamilyName].filter((p): p is string => !!p?.trim());
+  const script = nativeParts.length ? detectScript(nativeParts.join(' ')) : null;
+  const native =
+    script && EAST_ASIAN.includes(script)
+      ? `${n.nativeFamilyName ?? ''}${n.nativeGivenName ?? ''}`.replace(/\s+/g, '')
+      : nativeParts.join(' ');
   return {
     searchName: normalizeLatin(latin),
     searchNameNative: native ? normalizeNative(native) : null,

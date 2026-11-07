@@ -176,7 +176,7 @@ export async function buildProfileView(tx: TxContext, vp: VisibleProfile): Promi
         source: c.source,
         changedAt: iso(c.changed_at) as string,
         legalBasis: basis.basis,
-        mayProcess: mayProcess(basis, c.state),
+        mayProcess: row.status === 'active' && mayProcess(basis, c.state),
       };
     }),
     documents: docs

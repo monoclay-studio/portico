@@ -111,7 +111,8 @@ export async function searchProfiles(
         await sql<Hit>`
         select p.id, 'native_name' as matched_on, similarity(p.search_name_native, ${q})::float8 as score
         from guests.profiles p
-        where p.status = 'active' and (p.search_name_native % ${q} or p.search_name_native like ${`%${q}%`})
+        where p.status = 'active'
+          and (p.search_name_native % ${q} or replace(p.search_name_native, ' ', '') like ${`%${q.replace(/\s+/g, '')}%`})
           and ${visible}
         order by score desc limit ${limit}`.execute(tx.db)
       ).rows;

@@ -178,13 +178,19 @@ async function decide(
   }
   const basis = purposeBasis(purpose, { sharingRequiresConsent });
   const state = row?.state ?? 'unknown';
+  const profile = await db(tx)
+    .selectFrom('guests.profiles')
+    .select('status')
+    .where('id', '=', profileId)
+    .executeTakeFirst();
+  // An anonymized guest's retained consent rows are evidence only — nothing may be processed on them.
   return {
     profileId,
     legalEntityId,
     purpose,
     state,
     legalBasis: basis.basis,
-    mayProcess: mayProcess(basis, state),
+    mayProcess: profile?.status === 'active' && mayProcess(basis, state),
     changedAt: iso(row?.changed_at ?? null),
   };
 }

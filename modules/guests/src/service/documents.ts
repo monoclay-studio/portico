@@ -199,6 +199,42 @@ export async function extendDocumentRetention(
 }
 
 /**
+ * Recompute document retention from the profile's own stays (after an unmerge, stays that belonged to the other
+ * guest must no longer keep this guest's documents alive).
+ */
+export async function recomputeDocumentRetention(
+  tx: TxContext,
+  ports: GuestsPorts,
+  profileId: string,
+): Promise<void> {
+  const docs = await db(tx)
+    .selectFrom('guests.identity_documents')
+    .select(['id', 'property_id', sql<string>`created_at::date::text`.as('captured')])
+    .where('profile_id', '=', profileId)
+    .execute();
+  if (docs.length === 0) return;
+  const last = await db(tx)
+    .selectFrom('guests.stay_history')
+    .select(sql<string | null>`max(departure)::text`.as('d'))
+    .where('profile_id', '=', profileId)
+    .executeTakeFirst();
+  for (const d of docs) {
+    const days = await ports.platform.resolvePolicy(
+      tx,
+      d.property_id,
+      DOCUMENT_RETENTION_POLICY_KEY,
+      DOCUMENT_RETENTION_DEFAULT_DAYS,
+    );
+    const anchor = last?.d && last.d > d.captured ? last.d : d.captured;
+    await db(tx)
+      .updateTable('guests.identity_documents')
+      .set({ retain_until: retentionDate(anchor, Number(days.value)) })
+      .where('id', '=', d.id)
+      .execute();
+  }
+}
+
+/**
  * Retention job (GUE-R19, documents category): delete identity documents whose retention date has passed and
  * report what was removed. Scheduled daily by the worker (not wired in wave 1).
  */
