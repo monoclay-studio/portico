@@ -1,0 +1,315 @@
+import { hotp, timeStep } from '../src/domain/totp';
+import { base32Decode } from '../src/domain/totp';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { identity } from '../src';
+import { type Harness, harness, org, PASSWORD, principalContext, signIn } from './harness';
+
+let h: Harness;
+beforeAll(async () => {
+  h = await harness();
+});
+afterAll(async () => h?.t.drop());
+
+describe('REVIEW PoC: cross-organization account takeover via admin-sent password reset in a non-live org', () => {
+  it('a trial-org admin resets the global password of a live-org GM and signs in to the live org as them', async () => {
+    // Victim: general manager in a LIVE organization.
+    const live = await org(h, { name: 'Live resort' });
+    const victim = await live.member([{ roleKey: 'org_admin', scopeType: 'organization' }]);
+
+    // Attacker: administrator of a separate TRIAL organization (not related to the live org at all).
+    const trial = await org(h, { name: 'Attacker trial', environment: 'trial' });
+    const attacker = await trial.member([{ roleKey: 'org_admin', scopeType: 'organization' }]);
+    const a = await signIn(h, attacker.email);
+
+    // 1. Invite the victim's email into the attacker's org -> same global user id.
+    const inv = await trial.tx(
+      (tx) => identity.inviteMember(tx, h.ports, { email: victim.email, displayName: 'v', roles: [] }),
+      a.ctx,
+    );
+    expect(inv.userId).toBe(victim.userId);
+
+    // 2. Admin-sent password reset: in a non-live org the link comes back in the response.
+    const delivery = await trial.tx(
+      (tx) => identity.sendPasswordResetForMember(tx, h.ports, victim.userId),
+      a.ctx,
+    );
+    expect(delivery.mode).toBe('simulate');
+    const link = delivery.simulated?.link as string;
+    const token = decodeURIComponent(link.split('token=')[1] as string);
+
+    // 3. Complete the reset: the GLOBAL password changes.
+    await identity.completePasswordReset(h.t.db, { token, newPassword: 'attacker-chosen-password' });
+
+    // 4. Sign in to the LIVE organization as the victim.
+    const res = await identity.login(h.t.db, {
+      email: victim.email,
+      password: 'attacker-chosen-password',
+      organizationId: live.tenantId,
+    });
+    expect(res.status).toBe('signed_in');
+  });
+
+  it('a trial-org admin strips the MFA of a live-org member (invited membership is not counted)', async () => {
+    const live = await org(h, { name: 'Live resort 2' });
+    const victim = await live.member([{ roleKey: 'org_admin', scopeType: 'organization' }]);
+    const v = await signIn(h, victim.email);
+    const enrol = await live.tx((tx) => identity.enrolTotp(tx, h.ports), v.ctx);
+    const secret = base32Decode(enrol.secret);
+    await live.tx(
+      (tx) => identity.confirmTotp(tx, h.ports, { code: hotp(secret, timeStep(h.clock.now())) }),
+      v.ctx,
+    );
+    const pre = await identity.login(h.t.db, { email: victim.email, password: PASSWORD });
+    expect(pre.status).toBe('mfa_required');
+
+    const trial = await org(h, { name: 'Attacker trial 2', environment: 'trial' });
+    const attacker = await trial.member([{ roleKey: 'org_admin', scopeType: 'organization' }]);
+    const a = await signIn(h, attacker.email);
+    await trial.tx(
+      (tx) => identity.inviteMember(tx, h.ports, { email: victim.email, displayName: 'v', roles: [] }),
+      a.ctx,
+    );
+    await trial.tx((tx) => identity.resetMemberMfa(tx, victim.userId, 'lost phone, honest'), a.ctx);
+
+    // The victim's live-org sign-in no longer asks for a second factor.
+    const post = await identity.login(h.t.db, {
+      email: victim.email,
+      password: PASSWORD,
+      organizationId: live.tenantId,
+    });
+    expect(post.status).toBe('signed_in');
+  });
+
+  it('wave-0 createUser adds any existing person as an ACTIVE member of another org without consent', async () => {
+    const live = await org(h, { name: 'Live resort 3' });
+    const victim = await live.member([{ roleKey: 'front_desk', scopeType: 'organization' }]);
+    const other = await org(h, { name: 'Other org' });
+    const admin = await other.member([{ roleKey: 'org_admin', scopeType: 'organization' }]);
+    const a = await signIn(h, admin.email);
+    const r = await other.tx(
+      (tx) => identity.createUser(tx, { email: victim.email, displayName: 'x', roles: [] }),
+      a.ctx,
+    );
+    expect(r.userId).toBe(victim.userId);
+    const lr = await identity.login(h.t.db, { email: victim.email, password: PASSWORD });
+    expect(lr.status).toBe('select_organization');
+  });
+});
+
+describe('REVIEW PoC: grace period', () => {
+  it('a brand-new org_admin uses sensitive permissions with password only for 72h', async () => {
+    const o = await org(h);
+    const admin = await o.member([{ roleKey: 'org_admin', scopeType: 'organization' }]);
+    const s = await signIn(h, admin.email);
+    expect(s.ctx.authz.can('identity.role.assign')).toBe(true);
+    expect(s.ctx.authz.can('identity.sso.manage')).toBe(true);
+    void principalContext;
+  });
+});
+
+import { platform } from '@portico/platform';
+import { authenticate } from './harness';
+
+describe('REVIEW PoC: separation of duties bypassed through the requester\'s own API client', () => {
+  it('one person requests a pilot as a user and approves it with an API client they issued', async () => {
+    const o = await org(h);
+    const p = await o.property('SOD1');
+    const admin = await o.member([{ roleKey: 'org_admin', scopeType: 'organization' }]);
+    const s = await signIn(h, admin.email);
+    const req = await o.tx(
+      (tx) =>
+        platform.requestStatusChange(tx, {}, p.id, {
+          toStatus: 'pilot',
+          reason: 'pilot',
+          scope: {
+            effects: [{ effect: 'integration.read' }],
+            workflows: ['operations.housekeepingBoard'],
+            modules: ['operations'],
+            startsOn: '2026-11-01',
+            endsOn: '2027-01-31',
+            successCriteria: 'x',
+            rollbackPlan: 'y',
+          },
+        }),
+      s.ctx,
+    );
+    const client = await o.tx(
+      (tx) =>
+        identity.issueApiClient(tx, h.ports, {
+          name: 'my bot',
+          permissions: ['platform.property.activate', 'platform.property.read'],
+        }),
+      s.ctx,
+    );
+    const botCtx = await authenticate(h, client.token);
+    if (!botCtx) throw new Error('bot did not authenticate');
+    const approved = await o.tx((tx) => platform.approveActivationRequest(tx, {}, req.id), botCtx);
+    expect(approved.status).toBe('approved');
+    expect(approved.requestedBy).toBe(`user:${admin.userId}`);
+    expect(approved.decidedBy).toBe(`api_client:${client.clientId}`);
+  });
+});
+
+describe('REVIEW PoC: lower-privileged role assigner removes the only administrator', () => {
+  it('a person holding only identity.role.assign + platform.property.read revokes the org_admin role', async () => {
+    const o = await org(h);
+    const admin = await o.member([{ roleKey: 'org_admin', scopeType: 'organization' }]);
+    const a = await signIn(h, admin.email);
+    await o.tx(
+      (tx) =>
+        identity.createRole(tx, h.ports, {
+          key: 'hr_clerk',
+          name: 'HR clerk',
+          permissions: ['identity.role.assign', 'identity.user.read', 'platform.property.read'],
+        }),
+      a.ctx,
+    );
+    const clerk = await o.member([{ roleKey: 'hr_clerk', scopeType: 'organization' }]);
+    const c = await signIn(h, clerk.email);
+    const adminAssignments = await o.tx((tx) => identity.getMember(tx, admin.userId), a.ctx);
+    const orgAdmin = adminAssignments.assignments.find((x: { roleKey: string }) => x.roleKey === 'org_admin');
+    await o.tx((tx) => identity.revokeAssignment(tx, orgAdmin.assignmentId ?? orgAdmin.id, 'bye'), c.ctx);
+    const after = await authenticate(h, a.token);
+    expect(after?.authz.can('identity.role.assign')).toBe(false);
+  });
+});
+
+describe('REVIEW PoC: security-policy manager escalates to org_admin via self-designated break-glass', () => {
+  it('identity.security.manage alone is enough to become org_admin and mint a durable "*" API key', async () => {
+    const o = await org(h);
+    const admin = await o.member([{ roleKey: 'org_admin', scopeType: 'organization' }]);
+    const a = await signIn(h, admin.email);
+    await o.tx(
+      (tx) =>
+        identity.createRole(tx, h.ports, {
+          key: 'sec_officer',
+          name: 'Security officer',
+          permissions: ['identity.security.manage', 'identity.user.read'],
+        }),
+      a.ctx,
+    );
+    const officer = await o.member([{ roleKey: 'sec_officer', scopeType: 'organization' }]);
+    const s = await signIn(h, officer.email);
+    expect(s.ctx.authz.can('identity.apiClient.manage')).toBe(false);
+    const pol = await o.tx((tx) => identity.getSecurityPolicy(tx), s.ctx);
+    await o.tx(
+      (tx) =>
+        identity.updateSecurityPolicy(tx, pol.version, {
+          breakGlassUserIds: [officer.userId],
+          breakGlassRoleKey: 'org_admin',
+        }),
+      s.ctx,
+    );
+    await o.tx(
+      (tx) =>
+        identity.startElevation(tx, h.ports, {
+          reason: 'I would like to be an administrator now please',
+          durationMinutes: 240,
+        }),
+      s.ctx,
+    );
+    const elevated = await authenticate(h, s.token);
+    if (!elevated) throw new Error('no session');
+    const key = await o.tx(
+      (tx) => identity.issueApiClient(tx, h.ports, { name: 'forever', permissions: ['*'] }),
+      elevated,
+    );
+    // After the elevation window the API key still holds '*'.
+    h.clock.advance?.(5 * 3600_000);
+    const bot = await authenticate(h, key.token);
+    expect(bot?.authz.can('identity.role.assign')).toBe(true);
+  });
+});
+
+describe('REVIEW PoC: no per-account second-factor failure limit', () => {
+  it('50 wrong TOTP codes over 10 fresh challenges: the account is never locked and a new challenge is always issued', async () => {
+    const o = await org(h);
+    const m = await o.member([{ roleKey: 'front_desk', scopeType: 'organization' }]);
+    const s = await signIn(h, m.email);
+    const enrol = await o.tx((tx) => identity.enrolTotp(tx, h.ports), s.ctx);
+    const secret = base32Decode(enrol.secret);
+    await o.tx((tx) => identity.confirmTotp(tx, h.ports, { code: hotp(secret, timeStep(h.clock.now())) }), s.ctx);
+    let wrong = 0;
+    for (let i = 0; i < 10; i++) {
+      const r = await identity.login(h.t.db, { email: m.email, password: PASSWORD });
+      expect(r.status).toBe('mfa_required');
+      if (r.status !== 'mfa_required') return;
+      for (let k = 0; k < 5; k++) {
+        await expect(
+          identity.completeMfaChallenge(h.t.db, h.ports, { challengeToken: r.challengeToken, code: '000000' }),
+        ).rejects.toMatchObject({ code: 'unauthenticated' });
+        wrong++;
+      }
+    }
+    expect(wrong).toBe(50);
+    const again = await identity.login(h.t.db, { email: m.email, password: PASSWORD });
+    expect(again.status).toBe('mfa_required');
+  });
+});
+
+describe('REVIEW PoC: any LIVE org admin sets the first password of another org\'s SSO/SCIM-provisioned member', () => {
+  it('createUser with initialPassword on an existing password-less global user sets the global password', async () => {
+    const live = await org(h, { name: 'Victim resort' });
+    // Member provisioned without a password (as SCIM/SSO/invitation-pending members are).
+    const victimEmail = `scim-${Date.now()}@victim.mv`;
+    const { userId: victimId } = await live.tx((tx) =>
+      identity.createUser(tx, {
+        email: victimEmail,
+        displayName: 'GM',
+        roles: [{ roleKey: 'org_admin', scopeType: 'organization' }],
+      }),
+    );
+    const attackerOrg = await org(h, { name: 'Other live org' });
+    const admin = await attackerOrg.member([{ roleKey: 'org_admin', scopeType: 'organization' }]);
+    const a = await signIn(h, admin.email);
+    const r = await attackerOrg.tx(
+      (tx) =>
+        identity.createUser(tx, {
+          email: victimEmail,
+          displayName: 'x',
+          initialPassword: 'attacker-chosen-password',
+          roles: [],
+        }),
+      a.ctx,
+    );
+    expect(r.userId).toBe(victimId);
+    const res = await identity.login(h.t.db, {
+      email: victimEmail,
+      password: 'attacker-chosen-password',
+      organizationId: live.tenantId,
+    });
+    expect(res.status).toBe('signed_in');
+  });
+});
+
+describe('REVIEW: concurrent replay of the same TOTP code / recovery code', () => {
+  it('two parallel challenges with the same code: exactly one signs in', async () => {
+    const o = await org(h);
+    const m = await o.member([{ roleKey: 'front_desk', scopeType: 'organization' }]);
+    const s = await signIn(h, m.email);
+    const enrol = await o.tx((tx) => identity.enrolTotp(tx, h.ports), s.ctx);
+    const secret = base32Decode(enrol.secret);
+    const conf = await o.tx(
+      (tx) => identity.confirmTotp(tx, h.ports, { code: hotp(secret, timeStep(h.clock.now()) - 1) }),
+      s.ctx,
+    );
+    const code = hotp(secret, timeStep(h.clock.now()));
+    const c1 = await identity.login(h.t.db, { email: m.email, password: PASSWORD });
+    const c2 = await identity.login(h.t.db, { email: m.email, password: PASSWORD });
+    if (c1.status !== 'mfa_required' || c2.status !== 'mfa_required') throw new Error('x');
+    const r = await Promise.allSettled([
+      identity.completeMfaChallenge(h.t.db, h.ports, { challengeToken: c1.challengeToken, code }),
+      identity.completeMfaChallenge(h.t.db, h.ports, { challengeToken: c2.challengeToken, code }),
+    ]);
+    expect(r.filter((x) => x.status === 'fulfilled')).toHaveLength(1);
+    const rc = conf.recoveryCodes[0] as string;
+    const c3 = await identity.login(h.t.db, { email: m.email, password: PASSWORD });
+    const c4 = await identity.login(h.t.db, { email: m.email, password: PASSWORD });
+    if (c3.status !== 'mfa_required' || c4.status !== 'mfa_required') throw new Error('x');
+    const r2 = await Promise.allSettled([
+      identity.completeMfaChallenge(h.t.db, h.ports, { challengeToken: c3.challengeToken, recoveryCode: rc }),
+      identity.completeMfaChallenge(h.t.db, h.ports, { challengeToken: c4.challengeToken, recoveryCode: rc }),
+    ]);
+    expect(r2.filter((x) => x.status === 'fulfilled')).toHaveLength(1);
+  });
+});

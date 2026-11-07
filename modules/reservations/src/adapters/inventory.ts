@@ -109,8 +109,26 @@ function unitSummary(u: {
   return { id: u.id, propertyId: u.propertyId, unitTypeId: u.unitTypeId, name: u.name ?? u.number };
 }
 
-/** Bind reservations' InventoryPort to the inventory module's provider functions (§4.1 of the steward review). */
-export function inventoryPortFrom(p: InventoryProvider): InventoryPort {
+/**
+ * Bind reservations' InventoryPort to the inventory module's provider functions (§4.1 of the steward review).
+ * `scope` (ADR-0015): the composition root may run provider calls with system scope, because reservations has
+ * already authorized the user's intent for the command (inventory still enforces integrity and data authority).
+ */
+export function inventoryPortFrom(
+  provider: InventoryProvider,
+  opts: { scope?: (tx: TxContext) => TxContext } = {},
+): InventoryPort {
+  const scoped = opts.scope;
+  const p: InventoryProvider = scoped
+    ? (new Proxy(provider, {
+        get(target, key, receiver) {
+          const value = Reflect.get(target, key, receiver);
+          return typeof value === 'function'
+            ? (tx: TxContext, ...rest: unknown[]) => value.call(target, scoped(tx), ...rest)
+            : value;
+        },
+      }) as InventoryProvider)
+    : provider;
   return {
     async consume(tx, input) {
       const r = await p.consume(tx, input);
