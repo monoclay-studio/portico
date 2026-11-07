@@ -1655,3 +1655,31 @@ export async function applyWorkOrderForward(
     .where('id', '=', wo.id)
     .execute();
 }
+
+export async function getResolutionItem(_d: Deps, tx: TxContext, id: string): Promise<ResolutionItemView> {
+  const r = await db(tx)
+    .selectFrom('operations.resolution_items as r')
+    .leftJoin('operations.unit_status as u', 'u.id', 'r.unit_id')
+    .selectAll('r')
+    .select('u.unit_number')
+    .where('r.id', '=', id)
+    .executeTakeFirst();
+  if (!r) throw new NotFoundError('resolution_item', id);
+  requireAny(tx, [P.unitRead, P.read, 'operations.housekeeping.read'], r.property_id);
+  return toResolutionItem(r, r.unit_number ?? null);
+}
+
+export async function getPreventiveSchedule(
+  _d: Deps,
+  tx: TxContext,
+  id: string,
+): Promise<PreventiveScheduleView> {
+  const r = await db(tx)
+    .selectFrom('operations.preventive_schedules')
+    .selectAll()
+    .where('id', '=', id)
+    .executeTakeFirst();
+  if (!r) throw new NotFoundError('preventive_schedule', id);
+  requireAny(tx, [P.read, P.manage, P.unitRead], r.property_id);
+  return toSchedule(r);
+}

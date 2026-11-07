@@ -21,6 +21,7 @@ export const OPERATIONS_PERMISSIONS = {
   maintenanceSetInventoryImpact: 'operations.maintenance.setInventoryImpact',
   assetManage: 'operations.asset.manage',
   syncConflictResolve: 'operations.syncConflict.resolve',
+  housekeepingOverrideCondition: 'operations.housekeeping.overrideCondition',
 } as const;
 
 export const operationsManifest: ModuleManifest = {
@@ -112,6 +113,13 @@ export const operationsManifest: ModuleManifest = {
       key: OPERATIONS_PERMISSIONS.assetManage,
       description: 'Maintain the asset register and preventive maintenance schedules',
       scope: 'property',
+    },
+    {
+      key: OPERATIONS_PERMISSIONS.housekeepingOverrideCondition,
+      description:
+        'Change a unit that is inspected or failed inspection directly (outside cleaning tasks and inspections), with a reason',
+      scope: 'property',
+      sensitive: true,
     },
     {
       key: OPERATIONS_PERMISSIONS.syncConflictResolve,

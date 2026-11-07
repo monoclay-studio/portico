@@ -695,6 +695,21 @@ export async function setCondition(
   requirePermission(tx, P.update, { propertyId: row.property_id });
   assertVersion(row, meta.expectedVersion);
   assertManualConditionChange(row.condition as UnitCondition, input.condition);
+  // Leaving an inspection result directly (inspected → dirty, failed inspection → clean…) bypasses the re-clean /
+  // inspection loop: supervisors (inspect) or holders of the override permission only, always with a reason.
+  if (row.condition === 'inspected' || row.condition === 'failed_inspection') {
+    requireAny(
+      tx,
+      ['operations.housekeeping.inspect', 'operations.housekeeping.overrideCondition'],
+      row.property_id,
+    );
+    if (!input.reason?.trim()) {
+      throw new ValidationError(
+        'reason_required',
+        `Say why the ${row.condition === 'inspected' ? 'inspected' : 'failed-inspection'} unit is being changed directly (e.g. "guest used the bathroom during viewing").`,
+      );
+    }
+  }
   const r = await writeRoomStatus(
     d,
     tx,

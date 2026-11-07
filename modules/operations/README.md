@@ -2,14 +2,12 @@
 
 ## Checkpoint
 
-- **Done:** everything listed below is implemented, committed and green: `pnpm lint`, `pnpm typecheck`,
-  `pnpm --filter @portico/operations test` (unit + integration), `pnpm --filter @portico/api test`.
-- **Fixed:** the intermittent s13 failure — the delta-pull cursor is a cluster-wide snapshot xmin, so a long
-  transaction in *another* test database could cause rows to be re-sent (at-least-once by design); the test now
-  asserts "nothing new" instead of "empty".
-- **Next steps (for the orchestrator):** bind `InventoryPort` to `@portico/inventory` in the composition root;
-  register `createOperationsDemoSeed(operationsService)` in `DEMO_SEED_STEPS`; align reservations/inventory event
-  payloads with *Events → expected payload fields* below; add `operations.task.read` to identity role templates.
+- **Done:** module complete per the original brief, plus the steward review fixes (see *Review fixes* below).
+  Green: `pnpm lint`, `pnpm typecheck`, `pnpm --filter @portico/operations test`, `pnpm --filter @portico/api test`.
+- **Next steps (orchestrator / other workstreams):** bind `InventoryPort` to `@portico/inventory` in the composition
+  root (shapes now match the inventory branch; run S08 against the real provider); decide the composite-unit model
+  (P1-8); integration wave 2: inbound PMS stays contract + CR-6 (see *Adoption modes*); reservations to version stay
+  events (`aggregateVersion`) and send `stays[]` in booking events; identity templates: `operations.task.read`.
 - **Known failing tests:** none.
 
 Operations makes the physical hotel legible and the work in it accountable: unit condition and readiness,
@@ -112,9 +110,10 @@ eta?, guestLabel? }]` to those payloads (additive), or call `setGuestWaiting`/a 
 | Port | Needs | Binding in `apps/api/src/composition.ts` |
 |---|---|---|
 | `PlatformPort` | property facts (system-scope read), `assertWritable`, `getDataAuthority`, `resolvePolicy`, departments | bound to `@portico/platform` |
-| `InventoryPort` | `blockUnit`, `releaseBlock`, `listUnits` | **`unavailable('inventory')` — orchestrator binds at merge** |
+| `InventoryPort` | `blockUnit`, `releaseBlock(tx, { blockId, reason? })`, `listUnits(tx, propertyId, { status? })` — shapes of the inventory branch provider (`createInventoryService`) | **`unavailable('inventory')` — orchestrator binds at merge.** Per ADR-0015 operations authorizes the user's intent (`operations.maintenance.setInventoryImpact` at the property); the provider must not re-check `inventory.block.manage` on port calls. A refusal by inventory (already blocked, past dates, external system of record, unavailable) keeps the work order with `block.status = 'refused'`, the reason and the next step (`withSavepoint`). Composite units are not mirrored. |
 
-Provider functions (domain map): `getUnitCondition(tx, unitId)`, `listUnitConditions(tx, { propertyId })`,
+Provider functions (domain map; per ADR-0015 they do not re-check the caller's operations permissions — the
+calling module authorizes its own action): `getUnitCondition(tx, unitId)`, `listUnitConditions(tx, { propertyId })`,
 `setGuestWaiting(tx, { stayId, waiting })` (new, for reservations' waiting-guest flow),
 `createTask(tx, { propertyId, departmentId?, departmentKind?, kind, title, ref?, dueAt?, priority, dedupeKey? })` on
 `createOperationsService(ports)`. Also `listMyWork` (cross-module inbox), `operationsSearch`, `operationsJobs`,
@@ -126,34 +125,95 @@ Provider functions (domain map): `getUnitCondition(tx, unitId)`, `listUnitCondit
 - `createTask` accepts `departmentKind`, `description`, `dedupeKey` and returns `{ taskId, created }`.
 - Room-status writes in forward mode are recorded as pending (`status_forwards`) — integration acknowledges via
   `acknowledgeForward` / mirrors inbound via `applyExternalRoomStatus`.
-- PlatformPort `getProperty` reads `profile` (profile-dependent defaults).
+- PlatformPort `getProperty` reads `profile` (profile-dependent defaults); `getDataAuthority` also reads `availability`.
+- Readiness uses reservations' policy `reservations.checkIn.requiredCondition` when it is set (one policy for one
+  concept); `operations.settings.readinessCondition` is the fallback.
+- Own events carry `aggregateVersion` (unit, task, work order). Consumers of `reservations.stay.*` honour the stay's
+  `aggregateVersion` when present; without it, stay status only moves forward (late events never regress it).
+- Spec vocabulary deviations (P2-17, to reconcile in the spec/domain map): task kinds are concrete
+  (`departure_clean`, `vacant_clean`, `stayover`, `turndown`, `deep_clean`, `inspection`, `reclean`, `service_request`,
+  `work_order`, `guest_commitment`, `general`) instead of `housekeeping/maintenance/follow_up/custom`; events
+  `task.statusChanged` (not `task.completed|verified|cancelled`), `unit.discrepancyReported` (not
+  `discrepancy.detected`), `workOrder.unitBlocked` (not `inventoryImpactChanged`); no `dnd.changed` /
+  `discrepancy.resolved` events.
 
 ## Adoption modes
 
-Standalone next to an external PMS: yes. Hard dependencies: platform, identity, inventory (unit catalog — via
-`syncUnitsFromInventory` or `upsertUnits` from integration mappings). Stays arrive as events (from reservations or
-an integration mirror) into `stay_projection`; without a feed, maintenance, tasks and manual housekeeping still work.
-Data authority: `roomStatus` external + `forward` ⇒ changes pending until acknowledged; `read_only` ⇒ refused with the
-system name; Portico-originated system changes (checkout → dirty) are not written when room status is external.
-`maintenance` external + `forward` ⇒ work orders and OOO requests forwarded, inventory not touched.
+**Honest status (review P1-5/P1-6):** next to an external PMS, operations works today for **manual housekeeping
+lists, tasks, service requests, lost & found and maintenance without out-of-order** (R3 with internal tests). The
+**automatic loop** (PMS checkout → dirty → departure clean → inspection → ready in the PMS) is **not end to end yet
+(R1)**. What is missing, exactly:
+
+1. **Inbound stay contract for a mirrored PMS (integration wave 2).** Operations exposes `upsertStayProjection`
+   (requires `operations.external.sync`, order-tolerant) but a connector still has no operations-owned API that
+   also triggers the checkout effects (dirty + departure clean), carries source timestamps / external revision for
+   idempotency, records last-sync time and yields `delayed` provenance past a freshness SLA (A03).
+2. **CR-6 (Path B, Portico authoritative for room status).** `applyExternalRoomStatus` refuses inbound PMS status
+   with `not_system_of_record`; the direction rules (discrepancy for a "more ready" edit, task for a "less ready"
+   edit, re-send of Portico's value), CR-2 timeout → pending verification and CR-3 expected/"from" value on forwards
+   are not implemented.
+3. **Delivery** of `operations.statusForward.requested` to the PMS/CMMS and calling `acknowledgeForward` is the
+   integration module's job (not built). Operations' side is complete: room-status and work-order forwards
+   (create / block / release) become effective only on acknowledgement, and rejections are shown with reasons.
+
+Hard dependencies: platform, identity, inventory (unit catalog via `syncUnitsFromInventory`, composites excluded).
+Data authority: `roomStatus` external + `forward` ⇒ changes pending until acknowledged; `read_only` ⇒ refused with
+the system name; checkout → dirty is not written by Portico when room status is external. `maintenance` external +
+`forward` ⇒ work orders and OOO requests forwarded, effective on acknowledgement. `availability` external ⇒ OOO is
+forwarded (forward mode) or refused with "set it in <system>" (read-only); the work order is always kept.
+
+## Review fixes (steward review 2026-11-07)
+
+| Finding | Fix | Regression test |
+|---|---|---|
+| P0-1 stale offline change applied via "no change" | version check first; no-op only when base = current; chain never advances past a server version the device did not produce | `review-regressions` E1, E1b |
+| P0-2 `/sync/mutations` without authorization | per-mutation permission at the property **before any read**; foreign-property ids answer not-found; response and delta pull filtered by read permission (other departments' tasks hidden); conflicts only for authorized callers | E2/E2b, wrong-property, delta pull |
+| P1-1 late `inventory.unit.blocked` re-blocks | `operations.unit_blocks` mirror keyed by block id; released blocks are never re-applied | R5 |
+| P1-2 out-of-order stay events | `aggregateVersion` guard per stay + monotonic status; booking modifications never reset status | E3, E9, versioned |
+| P1-3 InventoryPort ≠ provider; rollback loses work order | port shapes aligned; `withSavepoint`; refusal kept with reason + next step | R3 |
+| P1-4 maintenance forward dead end | acknowledged work-order forwards apply (create/block/release); availability authority checked | E6 |
+| P1-7 acknowledgement escalation on creation time | anchor = max(created, service-day start in property time); no acknowledgement step for work without a due time | E4 |
+| P1-9 OPS-R22(c) | offline clean for a unit occupied meanwhile applies and creates a front-office check task | OPS-R22(c) test |
+| P1-10 next-best units | `alternatives` (ready vacant units of the same type) in `operations.inspection.failed` and arrival readiness | s07 |
+| P1-12 block released directly in inventory | work order flagged `releasedExternallyAt` with a blocking issue | R4 |
+| P2-1/P3-1 time zones | preventive due = 23:59 property time (`zonedTimeToInstant`); private helper removed | — |
+| P2-2 DND after checkout | cleared on checkout; welfare check only for occupied units | E5 |
+| P2-3 completion policy / offline inspection time | completion is an invariant; inspection compared by performed (device) time | E8, domain test |
+| P2-4 transient failures | sync result `retryable: true` for unexpected failures | — |
+| P2-8 sleep discrepancy | not ready (`reported_occupied`) | domain test |
+| P2-9 two readiness policies | reservations' `reservations.checkIn.requiredCondition` wins when set | — |
+| P2-11 cancellation / no-show | unstarted in-room service of the stay cancelled | cancellation test |
+| P2-14 stale readiness across business date | refreshed on `platform.property.businessDateAdvanced` | business-date test |
+| P2-15 condition override | `operations.housekeeping.overrideCondition` ⚑ (or inspect) + mandatory reason to leave inspected/failed directly | override test |
+| P2-16 unauthorized stay mirroring | `upsertStayProjection` requires `operations.external.sync` | — |
+| P3-4/6/7/8/13 | GET routes for resolution items and schedules; discrepancy task dedupe per stay; audit target `stay`; `house_use` readiness code; release reason passed | — |
+
+**Not fixed (documented):** P1-5/P1-6 (integration wave 2, above); P1-8 composite units (cross-module decision;
+composites are excluded from the mirror and assignment events for unmirrored units are ignored, so a composite stay
+occupies no operations unit yet); P1-11 parity file (owned by the parity workstream — claims corrected below);
+P2-5 (conflict list lacks the device's attempted value and resolve actions), P2-10 (time-based priority rescoring),
+P2-12/P2-13 (one owner for "stays affected by a block"; several blocks per unit), P2-18/P2-19 (partial MUSTs below),
+P2-21 (re-send window), P3-5/P3-9/P3-10/P3-11/P3-12/P3-14.
 
 ## Parity rows evidenced by tests (for `docs/parity/operations.md`, maintained by the parity workstream)
 
-PAR-OPS-001, 003 (`readinessCondition` policy), 004, 007, 009 (welfare check; no "service later"), 010, 016 (deep
-clean manual/preventive only), 020, 024, 026, 030, 031, 044, 047 (API), 048, 052, 053, 055, 056, 060 (provider),
-063 (`/operations/my-work`), 064, 066, 067, 076, 084 (settings policy), 085, 086, 093 (check-out, move, extension,
-shortening, cancellation). EC-OPS-001 (s07), 002 (If-Match 409), 003/005 (s13), 012/013 (discrepancy test),
-015 (DND welfare), 017 (room move), 019/020 (s08), 021 (HTTP test: inventory failure ⇒ nothing created), 022 (s08),
-026 (rejected forward), 031 (manual dirty with history), 032 (`escalation.test.ts`), 034 (domain test: downtime ⇒
-all overdue steps fire once). Not covered: EC-OPS-004, 008, 009, 028, 045; PAR-OPS-011 (business-date driven
-stayover once per night is via the day plan, no Day Close hook), 017, 022, 027 (device push), 036/042 (UI), 040
-(photo routing UI), 061 (handover is reservations'), 092 (Day Close `listExceptions` not built), 098.
+Tested: PAR-OPS-001, 003, 004, 007, 010, 020, 024, 026, 030, 031, 044, 048, 052, 056, 060 (provider), 063
+(`/operations/my-work`), 064, 066 (fake inventory), 067, 076, 084 (settings policy). EC-OPS-001 (s07), 002 (If-Match
+409), 003/005 (s13), 004 (OPS-R22(c) test), 012/013 (discrepancy test), 015 (welfare check, occupied units only),
+019 (s08, fake inventory), 021 (work order kept with refusal), 022 (s08), 026 (rejected forward), 031 (override with
+reason), 032 (`escalation.test.ts`), 034 (domain: downtime ⇒ overdue steps fire once).
+**Partial (not to be marked tested):** PAR-OPS-009 (no "service later at"), 016 (no deep clean from schedules),
+047 (API board only, no "ready vs needed by hour"), 053 (links, no task checklists), 055 (per department, not per
+priority), 085 (no assignment-scoped attendant rights), 086 (see *Adoption modes*), 093 (checkout, move, extension,
+shortening, cancellation, no-show re-plan; tested: checkout, move, extension, cancellation). EC-OPS-017: in-progress
+service tasks follow the guest to the new unit (the matrix expects them to stay) — a deliberate difference to
+review with product. EC-OPS-020: OOO on an in-house unit is not refused; the stay becomes a resolution item.
+Not covered: EC-OPS-008, 009, 028, 045; PAR-OPS-011, 017, 022, 027, 036/042 (UI), 040, 061, 092, 098.
 
 ## Known gaps / open questions
 
 - Spec work-order states `reported/triaged/scheduled/on_hold` map onto task states (`open`/`blocked`); urgency
   `P1..P4` ↔ `emergency/high/normal/low`. Lost-item `returned|shipped` ↔ `released` + `releaseMethod`.
-- OPS-R22(c) (clean reported for a unit that became occupied ⇒ apply + discrepancy) not implemented.
 - Minibar posting (SHOULD), "service later at HH:MM", forward plan for tomorrow, sampled inspections,
   stayover frequency policy, `listExceptions` for Day Close/handover: not built.
 - Monthly preventive schedules drift to the clamped day after a short month (no anchor day stored).

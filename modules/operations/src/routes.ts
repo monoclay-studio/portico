@@ -504,6 +504,17 @@ export function operationsHttp(deps: { database: PorticoDatabase; service: Opera
           items: await tx(req, (t) => ops.listResolutionItems(t, req.params.propertyId, req.query.status)),
         }),
       );
+      app.get(
+        '/operations/resolution-items/:id',
+        { schema: { tags: T.mx, params: c.idParams, response: { 200: c.resolutionItem } } },
+        async (req, reply) => versioned(reply, await tx(req, (t) => ops.getResolutionItem(t, req.params.id))),
+      );
+      app.get(
+        '/operations/preventive-schedules/:id',
+        { schema: { tags: T.mx, params: c.idParams, response: { 200: c.preventiveSchedule } } },
+        async (req, reply) =>
+          versioned(reply, await tx(req, (t) => ops.getPreventiveSchedule(t, req.params.id))),
+      );
       app.post(
         '/operations/resolution-items/:id/resolve',
         {

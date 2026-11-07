@@ -100,6 +100,8 @@ export function createOperationsService(ports: OperationsPorts) {
       'completeWorkOrder',
       'returnToService',
       'listResolutionItems',
+      'getResolutionItem',
+      'getPreventiveSchedule',
       'resolveResolutionItem',
       'createPreventiveSchedule',
       'listPreventiveSchedules',

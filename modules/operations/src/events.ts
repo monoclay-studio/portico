@@ -6,7 +6,13 @@ import type { OperationsPorts } from './ports';
 import { type Deps, db, feedMark, logTask, propertyFacts } from './service/internal';
 import { mirrorUnitBlock, noteBlockReleased, recordResolutionItems } from './service/maintenance';
 import { housekeepingPriorityFor, insertTask, rescoreUnitTasks, transitionTask } from './service/tasks';
-import { loadUnit, projectStay, systemConditionChange, writeRoomStatus } from './service/units';
+import {
+  loadUnit,
+  projectStay,
+  refreshReadiness,
+  systemConditionChange,
+  writeRoomStatus,
+} from './service/units';
 
 /** Events emitted by operations (`<module>.<aggregate>.<pastTenseVerb>`). Payloads are documented in README. */
 export const OPERATIONS_EVENTS = {
@@ -44,6 +50,7 @@ export const CONSUMED_EVENTS = [
   'inventory.unit.blocked',
   'inventory.unit.unblocked',
   'inventory.assignment.changed',
+  'platform.property.businessDateAdvanced',
 ] as const;
 
 // Tolerant payload schemas: reservations/inventory are built in parallel; unknown fields are ignored and only
@@ -521,6 +528,21 @@ export function operationsSubscriptions(ports: OperationsPorts): TxEventSubscrip
     'inventory.assignment.changed': (tx, e) => onAssignmentChanged(d, tx, e),
   };
   return [
+    {
+      // Stored readiness depends on the business date (blocks are night ranges): refresh it when the day changes.
+      consumer: 'operations.businessDate',
+      types: ['platform.property.businessDateAdvanced'],
+      handle: async (tx, e) => {
+        if (!e.propertyId) return;
+        const units = await db(tx)
+          .selectFrom('operations.unit_status')
+          .select('id')
+          .where('property_id', '=', e.propertyId)
+          .where('active', '=', true)
+          .execute();
+        for (const u of units) await refreshReadiness(d, tx, u.id);
+      },
+    },
     {
       consumer: 'operations.stays',
       types: Object.keys(reservationHandlers),

@@ -22,6 +22,8 @@ export interface Deps {
 }
 
 export const SETTINGS_POLICY_KEY = 'operations.settings';
+/** Reservations' policy (spec RES-R24 / OPS-R04): condition required to check a guest in. */
+export const CHECK_IN_CONDITION_POLICY_KEY = 'reservations.checkIn.requiredCondition';
 
 // Per-transaction caches (a TxContext lives for exactly one transaction).
 const settingsCache = new WeakMap<TxContext, Map<string, OperationsSettings>>();
@@ -41,6 +43,10 @@ export async function loadSettings(d: Deps, tx: TxContext, propertyId: string): 
   const raw = await d.ports.platform.resolvePolicy(tx, propertyId, SETTINGS_POLICY_KEY);
   const facts = await propertyFacts(d, tx, propertyId);
   const s = mergeSettings(raw, defaultsForProfile(facts.profile));
+  // One concept, one policy: when reservations' check-in requirement is configured it decides readiness too, so
+  // the board never says "ready" while check-in refuses (or the reverse).
+  const checkIn = await d.ports.platform.resolvePolicy(tx, propertyId, CHECK_IN_CONDITION_POLICY_KEY);
+  if (checkIn === 'clean' || checkIn === 'inspected') s.readinessCondition = checkIn;
   m.set(propertyId, s);
   return s;
 }

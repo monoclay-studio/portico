@@ -48,12 +48,14 @@ describe('P0-1 offline sync never applies a stale change through a "no change" s
     v = (
       await org.tx(hussain, (tx) => h.ops.setCondition(tx, u, { condition: 'clean' }, { expectedVersion: v }))
     ).unit.version;
-    await org.tx(supervisor, (tx) =>
+    const failed = await org.tx(supervisor, (tx) =>
       h.ops.recordInspection(tx, u, { items: [], failureReasons: ['Hair in drain'] }),
     );
-    v = (await org.tx(hussain, (tx) => h.ops.getUnit(tx, u))).version;
+    // Hussain starts the re-clean task (the normal path; direct condition edits need an override).
+    const reclean = failed.recleanTask;
+    if (!reclean) throw new Error('reclean');
     await org.tx(hussain, (tx) =>
-      h.ops.setCondition(tx, u, { condition: 'cleaning' }, { expectedVersion: v }),
+      h.ops.transitionTask(tx, reclean.id, { to: 'in_progress' }, { expectedVersion: reclean.version }),
     );
     const res = await h.ops.applySyncBatch(h.t.db, mariyam, {
       propertyId: org.propertyId,
@@ -658,5 +660,84 @@ describe('P1-9 OPS-R22(c): offline "clean" for a unit that became occupied meanw
       h.ops.listMyWork(tx, { propertyId: org.propertyId, departments: ['front_office'], limit: 10 }),
     );
     expect(work.some((w) => w.title.startsWith('Check unit: reported clean offline'))).toBe(true);
+  });
+});
+
+describe('P2-15 / P2-11 / P2-14 smaller review fixes', () => {
+  it('leaving an inspection result directly needs inspect/override permission and a reason', async () => {
+    const org = await setupOrg(h);
+    const [u] = await seedUnits(h, org, [{ number: 'O1', condition: 'inspected' }]);
+    if (!u) throw new Error('unit');
+    const attendant = org.as(ATTENDANT_GRANTS);
+    const supervisor = org.as(SUPERVISOR_GRANTS);
+    const v = (await org.tx(attendant, (tx) => h.ops.getUnit(tx, u))).version;
+    await expect(
+      org.tx(attendant, (tx) => h.ops.setCondition(tx, u, { condition: 'dirty' }, { expectedVersion: v })),
+    ).rejects.toMatchObject({ code: 'forbidden' });
+    await expect(
+      org.tx(supervisor, (tx) => h.ops.setCondition(tx, u, { condition: 'dirty' }, { expectedVersion: v })),
+    ).rejects.toMatchObject({ code: 'reason_required' });
+    const r = await org.tx(supervisor, (tx) =>
+      h.ops.setCondition(
+        tx,
+        u,
+        { condition: 'dirty', reason: 'Guest viewed the villa and used the bathroom' },
+        { expectedVersion: v },
+      ),
+    );
+    expect(r.unit.condition).toBe('dirty');
+  });
+
+  it('a cancelled booking cancels the planned in-room service for its stay', async () => {
+    const org = await setupOrg(h); // resort profile: turndown planned for tonight's arrivals
+    const [u] = await seedUnits(h, org, [{ number: 'X1', condition: 'inspected' }]);
+    if (!u) throw new Error('unit');
+    const stayId = newId();
+    const bookingId = newId();
+    await publish(h, org, {
+      type: 'reservations.booking.confirmed',
+      aggregate: { type: 'booking', id: bookingId },
+      payload: { bookingId, stays: [{ stayId, unitId: u, arrival: BUSINESS_DATE, departure: '2026-11-09' }] },
+    });
+    const plan = await org.tx(org.admin, (tx) => h.ops.generateDayPlan(tx, org.propertyId, {}));
+    const turndown = plan.created.find((t) => t.kind === 'turndown' && t.stayId === stayId);
+    expect(turndown).toBeDefined();
+    await publish(h, org, {
+      type: 'reservations.booking.cancelled',
+      aggregate: { type: 'booking', id: bookingId },
+      payload: { bookingId, stayIds: [stayId] },
+    });
+    const after = await org.tx(org.admin, (tx) => h.ops.getTask(tx, turndown?.id ?? ''));
+    expect(after).toMatchObject({ status: { task: 'cancelled' }, cancelledReason: 'Booking cancelled' });
+  });
+
+  it('readiness is refreshed when the business date advances (a future block becomes active)', async () => {
+    const org = await setupOrg(h);
+    const [u] = await seedUnits(h, org, [{ number: 'BD1', condition: 'inspected' }]);
+    if (!u) throw new Error('unit');
+    const engineer = org.as(ENGINEER);
+    await org.tx(engineer, (tx) =>
+      h.ops.createWorkOrder(tx, {
+        propertyId: org.propertyId,
+        unitId: u,
+        title: 'Planned repaint',
+        faultCategory: 'painting',
+        block: { kind: 'out_of_service', from: '2026-11-08', to: '2026-11-10', reason: 'Repaint' },
+      }),
+    );
+    expect(
+      (await org.tx(engineer, (tx) => h.ops.listUnitConditions(tx, { propertyId: org.propertyId })))[0]
+        ?.ready,
+    ).toBe(true);
+    await org.tx(org.admin, (tx) => platform.advanceBusinessDate(tx, org.propertyId, BUSINESS_DATE));
+    await publish(h, org, {
+      type: 'platform.property.businessDateAdvanced',
+      aggregate: { type: 'property', id: org.propertyId },
+      payload: { propertyId: org.propertyId, from: BUSINESS_DATE, to: '2026-11-08' },
+    });
+    expect(
+      (await org.tx(engineer, (tx) => h.ops.listUnitConditions(tx, { propertyId: org.propertyId })))[0]
+        ?.ready,
+    ).toBe(false);
   });
 });
