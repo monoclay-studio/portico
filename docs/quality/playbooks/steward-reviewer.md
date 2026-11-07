@@ -22,6 +22,25 @@
 | v2.1 | 2026-11-07 | **SR2-2a** | Inside "attack the fix": write every recommended fix as a **principle with its known instances**, and attack the principle's boundary. Exact text added to Pattern sweep step 3: "State the fix as a rule with examples (for example 'root change = anything that decides who signs in or which roles a sign-in grants: issuer, allow-list, groups claim, client id, …'), never as a closed list, and say which boundary case you attacked." | Review 2's fix for R2-P1-1 listed four root-change fields. ADR-0017 rule 15 copied the list, the builder implemented exactly that list, and review 3 then found the groups claim (R3-P1-2) | E-048 | No list-shaped recommendation leaves a sibling that the next review finds; canary C-L2-13 |
 | v2.1 | 2026-11-07 | **SR2-6** | **Load-bearing check (AP-54)**, new step 6 of the pattern sweep. Exact text: "List the mechanisms your recommended fix newly relies on. If any has an open lower-severity finding or known gap (in this review or earlier ones), re-rate it at the fix's severity and include it in the fix." | Review 2 rated stale domain verification as P3 (R2-P3-5), while its own P0 fix made that verification the global proof of email ownership (R3-P2-2) | E-050 | Load-bearing weaknesses that a later review finds (round 1: 1) |
 
+### Round-3 measurement: v2.1 works again (no version change)
+
+- **Runs on v2.1:** 2 (integration-step re-review #3; the first infra review). Coverage declaration **2 of 2**:
+  re-review #3 § 7; infra § 3 (57 patterns, 38 applicable, 0 applicable left unprobed, 19 not applicable with reasons).
+- **What the v2.1 steps found.**
+  - Re-review #3: both P1s came from going one step beyond the builder's own § 5 table: the record's exits
+    (R3-P1-1) and the readers of a stored control fact (R3-P1-2, via the load-bearing step). Its § 4 re-attacked all
+    7 builder exemptions; 3 were unsafe.
+  - Infra: P1-1 came from privilege equivalence (SR2-3) plus reverse order (a name-squatted repository); P1-2 from
+    checking a recorded default against the code; P1-3 from attacking the monitoring claim itself.
+- **A technique worth keeping.** The infra reviewer ran **mutation against the builder's own checks** (the drill's
+  verify SQL: 14 planted defects, 6 missed; P2-4). The quality steward's mutation canary on the integration-step
+  fix round found one more untested guard (E-114) that re-review #3 did not look for. Queued as v3 below; builder v5
+  BS5-7 now asks builders for the mutation table, so a reviewer only spot-checks it.
+- **Recommendation defects (RC-9):** none confirmed from v2.1 recommendations. One possible: ADR-0015 Amendment 1's
+  wording ("any other use … is an explicit capability") made staff permission look like consent; re-review #3 § 8
+  flagged it, and Amendment 2 corrected it.
+- **Precision:** every P0/P1 from the two round-2 v2.1 runs was fixed (sweep 4/4; re-review #2 3/3).
+
 ### Round-2 measurement: v2.1 works for reviewers (no version change)
 
 - **Runs on v2.1:** 3 (fix sweep; integration-step re-review; guests erasure re-review). All were launched from
@@ -61,6 +80,10 @@ v2 is first measured in round 2.
   Run `pnpm test` (CI concurrency) **and** `pnpm turbo run test --force`. Prompted by E-008, E-009, E-015, E-016, E-017
   and E-038. Deferred because the merge gate already forces typecheck (STATUS.md § 5), and the RC-1 fix is in
   `1be3ddc`. Promote to v3 immediately if canary C-L1-01 fails, or another cache escape appears.
+- **v3 (round 3), verify the proof.** In a focused re-review, re-run 2 of the builder's mutants (builder v5 § 5.4) and
+  plant 1 of your own on the guard you judge riskiest; a survivor is a finding. Evidence: E-114 (an untested lock in a
+  fix round that re-review #3 passed on this point); infra P2-4 (the reviewer's mutation run on the builder's checks).
+  Promote when builders' mutation tables exist to be checked.
 - **v4, tracked cross-module output.** "Notes for the orchestrator" become findings with an owner and a proposed
   pending-fixes line, in a machine-readable table. Prompted by E-011 and RC-3.
 - **Later, severity calibration.** Add worked examples: a latent P0 such as payments P0-2 ("not exploitable until keys

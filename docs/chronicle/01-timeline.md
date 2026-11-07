@@ -302,4 +302,44 @@ Each agent's brief and report are in `agents/`.
   - the parity evidence re-run for inventory and reservations;
   - **UX round 2a**, a focused black-box run from tester playbook v2 with stable finding IDs, on a lab rebuilt from
     main. A demo authenticator command (`tools/demo-authenticator.mjs`) stands in for the tester's phone app.
+- **21:37 — Integration-step re-review #3: merge after fixes** <!-- t: agent-ab1275ea4fe3cfee6 @ 2026-11-07T21:37:42.248Z (Focused re-review #3: integration-step) --> (P1 2). Every earlier PoC is refused.
+  - New P1s: a payment link for a departed guest outlives settlement and failure, and a superseded link stays payable
+    at the provider. The cardholder's mandate scope was stored but not enforced.
+  - **ADR-0015 Amendment 2:** staff permission never exceeds cardholder consent; payment links have external writers.
+  - Fix round 3 is sent.
+  - Day-close build launched (gap-plan M6) on `feat/day-close`.
+- Note (21:38): money paths have needed 3 re-reviews. Each round closes the reported invariant and the next finds a
+  writer outside it (the provider, settlement, payment failure). This is evidence for the quality steward that
+  external systems must be listed as writers in invariant closure. <!-- t: now @ 2026-11-07T21:38:41Z -->
+- **21:42 — Parity evidence re-run merged** <!-- t: commit:81b97ad @ 2026-11-07T21:42:31Z -->.
+  - Inventory: 1% → 42% of capabilities tested, open P0 53 → 22. Reservations: 1% → 9%; P0 rows stay at 100,
+    because many outcomes are decided by stubs until integration-step merges.
+  - 49 edge cases were added by the failure-class sweep, and the inventory README's 13 over-claimed rows were
+    corrected.
+  - EC-INV-017 decided: lowering an allowance below sales is refused, with the affected cells listed.
+- **21:49 — UX round 2a done** <!-- t: agent-a81ad3b20abc5995c @ 2026-11-07T21:49:12.661Z (Black-box UX tester, round 2a) -->. The first tester run on playbook v2: 74 cited files, all present, 0 duplicates.
+  Praised: one-line blockers with owner and ETA, the Extend preview with Maldives taxes, and honest labelling.
+  Friction is mostly simulated-data contradictions (housekeeping and front desk disagree) and dead-end actions. Two
+  LIVE defects: a generic error on an empty required field, and the property switcher picking the wrong hotel. No
+  refiner run: the LIVE findings go to backoffice, and the SIM findings become acceptance checks for the real-data
+  round.
+- **21:50 — Infra security review: merge after fixes** <!-- t: agent-a44b6c8e4ea2a81aa @ 2026-11-07T21:50:37.793Z (Steward security review: infra) --> (P1 3, P2 11, P3 12).
+  - The deploy role was effectively cell-admin, with a trust policy pinned only by repository name, and the runbook
+    claimed otherwise.
+  - The lean-tier default contradicted Q158 (resolved: NAT and private tasks is the default).
+  - The restore drill could silently never run.
+  - Clean: XFF spoofing through the deployed chain, SECURITY DEFINER hygiene, secrets kept out of plans, read-only
+    non-root images.
+  - The fix round goes back to the infra engineer. The quality steward's round 3 starts on the whole batch.
+- **22:00 — Migration module build launched** <!-- t: now @ 2026-11-07T22:00:37Z -->: gap-plan M8 increments 1–2, the guesthouse same-day path. CSV and
+  SMB sources, a rehearsal in a trial org, reconciliation, freeze and cutover through data-authority transitions,
+  rollback, and a guided checklist of the unavoidable human steps. Money-module rounds and the staff-app real-data
+  wiring wait for the integration-step merge.
+- **22:07 — Integration-step fix round 3 done** <!-- t: agent-a29fdf2e9c7d0e9dc @ 2026-11-07T22:07:37.353Z (Integration step: bind module ports) -->.
+  - Consent is enforced on every money movement, and mandate amounts are running totals.
+  - The payment request is rebuilt as a state machine with the provider as an external writer: deactivate first,
+    then replace.
+  - New tests on the pre-fix commit: r3 11/12 failed (the 12th is a lock probe that also passed pre-fix), lifecycle
+    5/5 failed.
+  - Focused re-review #4 launched.
 

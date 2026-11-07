@@ -1,0 +1,8 @@
+tests/zz-review-probes.tftest.hcl... in progress
+  run "zz_review_live_secret_under_test_name_in_staging"... pass
+  run "zz_review_live_secret_under_test_name_in_demo_deployment_lean_tier"... pass
+  run "zz_review_staging_operator_secrets_accepted_but_node_env_production"... pass
+tests/zz-review-probes.tftest.hcl... tearing down
+tests/zz-review-probes.tftest.hcl... pass
+
+Success! 3 passed, 0 failed.

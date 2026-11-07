@@ -1,0 +1,14 @@
+# AP-13 probe: API from the production runtime layout, TRUSTED_PROXY_CIDRS = 127.0.0.1/32 (stands in for the ALB subnets)
+# + 13.32.0.0/15 (a CloudFront origin-facing range). Chain as deployed: <viewer-supplied XFF>, <viewer>, <CloudFront edge>.
+# POST /v1/auth/password-reset is limited to 5/min per req.ip.
+## A. one viewer (203.0.113.7) rotates the forged left-most entry on every request:
+202 202 202 202 202 429 429 429 
+## B. control: 8 different viewers behind the same edge:
+202 202 202 202 202 202 202 202 
+## C. residual (CloudFront-in-front-of-CloudFront): if a customer-owned distribution forwarded a forged XFF WITHOUT
+## appending the real address, its origin-facing IP is trusted and the forged value becomes the client:
+202 202 202 202 202 202 202 202 
+## (C only matters if CloudFront lets a distribution rewrite X-Forwarded-For; not verifiable offline.)
+## D. CloudFront has is_ipv6_enabled = true: one IPv6 viewer rotating addresses inside its own /64 (2001:db8:1:2::/64):
+202 202 202 202 202 429 429 429 
+## Result D: CLEAN at the app — @fastify/rate-limit normalizes IPv6 to a subnet (ipv6Subnet), so the rotation is limited.

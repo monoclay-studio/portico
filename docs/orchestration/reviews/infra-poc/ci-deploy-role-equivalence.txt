@@ -1,0 +1,37 @@
+# Code-read chain (no AWS calls possible): the cell's GitHub OIDC deploy role is equivalent to the RDS master and to
+# every secret of its cell. Reviewer, infra @ 0facbba (merged with main 2b1d1a6 in the scratch copy).
+
+Claim under test — docs/runbooks/deploy.md:20-21:
+  "The deploy role cannot change infrastructure, read secret values or touch the database directly; it can only run
+   the task definitions Terraform registered (modules/ci-deploy-role)."
+
+Permissions actually granted (infra/terraform/modules/ci-deploy-role/main.tf):
+  :81-88   ecs:RegisterTaskDefinition, ecs:DescribeTaskDefinition on "*"  (any family, any image, any command, any env)
+  :89-100  ecs:RunTask / UpdateService / StopTask on task-definition/<prefix>-*  (includes <prefix>-db-bootstrap)
+  :101-113 iam:PassRole on var.pass_role_arns, which infra/terraform/modules/cell/main.tf:286 sets to EVERY task role
+           AND EVERY execution role of the cell, including <prefix>-db-bootstrap-exec
+  :114-121 logs:GetLogEvents, logs:FilterLogEvents on "*"
+
+What the db-bootstrap execution role injects (infra/terraform/modules/compute/iam.tf:32-36, main.tf:314-320):
+  MASTER_USERNAME/MASTER_PASSWORD (RDS-managed master secret), OWNER_SECRET_JSON, APP_SECRET_JSON, WORKER_SECRET_JSON.
+The api/worker execution roles inject PORTICO_FIELD_KEY, PORTICO_BLIND_INDEX_KEY, PORTICO_TERMS_SEAL_KEY and every
+injected integration secret (e.g. PAYMENTS_STRIPE_SECRET_KEY_LIVE) — compute/iam.tf:16-26.
+
+Chain A (no new task definition needed; the deploy script itself uses --overrides for the grants step):
+  aws ecs run-task --cluster <prefix> --task-definition <prefix>-db-bootstrap --launch-type FARGATE \
+    --network-configuration <ops subnets/SG from the deploy-config parameter> \
+    --overrides '{"containerOverrides":[{"name":"db-bootstrap","command":["node","-e","console.log(process.env.MASTER_PASSWORD)"]}]}'
+  aws logs filter-log-events --log-group-name /portico/<prefix>/db-bootstrap        # allowed on "*"
+  => RDS master password (rds_superuser) in the deploy role's hands; same with the migrate task for portico_owner.
+Chain B: register a revision of <prefix>-api with any public image and the api execution role (PassRole allowed),
+  run it once => the three irreplaceable application keys and every injected provider key leave the cell.
+Chain C (restore-drill repository): the role may ecr:PutImage to every cell repository (registry ARNs incl.
+  restore-drill). Nothing else ever pushes the drill's tag `latest-drill` (deploy-cell.sh:95 and deploy.yml.example:95
+  push/build api and worker only), so the first push of that tag decides what the monthly drill runs with the drill
+  task role (restore production + reset the copy's master password + public-IP egress).
+
+Who can obtain the role (ci-deploy-role/main.tf:25-43): any workflow job of repo:<github_repository> that runs in
+GitHub Environment <name>. Not pinned: branch/ref, workflow file (job_workflow_ref), repository_id/owner_id.
+GitHub-side controls (required reviewers, deployment-branch policy) are not codified; docs/runbooks/deploy.md:48-50
+asks only for required reviewers on production. Every example tfvars (envs/*/terraform.tfvars.example) and the cell
+test use "monoclay/portico", while this repository's remote is github.com/monoclay-studio/portico.

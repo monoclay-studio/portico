@@ -1,0 +1,30 @@
+# PoC: portico_ops_readonly as created by bootstrap-roles.mjs:286-299 (ENABLE_IAM_READONLY_ROLE=true, resilient tier).
+# On RDS it signs in with an IAM token; here a password stands in for the token. Same grants: pg_read_all_data,
+# CONNECT, default_transaction_read_only=on. Demo seed loaded.
+# Runbook claims (database-roles.md:20,88): 'read-only ... RLS still applies ... set app.tenant_id to look at one
+# tenant ... Every session is an audit event'.
+
+## 1. RLS tables: unreadable even with app.tenant_id set (no EXECUTE on core.current_tenant_id)
+ 01a1b7e9-81c1-76eb-b336-cd9123fad6ee
+ERROR:  permission denied for function current_tenant_id
+
+## 2. Non-RLS cross-tenant tables: all readable, every tenant at once
+identity.user_tenants                13 rows
+identity.dev_mailbox                 0 rows
+identity.login_attempts              0 rows
+identity.verified_domains            0 rows
+identity.platform_security_alerts    0 rows
+payments.account_directory           4 rows
+platform.tenant_directory            2 rows
+operations.property_directory        4 rows
+   columns of identity.dev_mailbox: recipient, subject, body, link_enc (staff emails and message bodies, all tenants)
+   columns of identity.login_attempts: ip, email_hash, success
+
+## 3. These are exactly the tables verify.sql check 3 forbids portico_app to read.
+
+## 4. Auditing: the database module sets log_statement=ddl (no SELECTs), no pgaudit, no log_connections;
+##    rds-db:connect tokens are signed client-side (no per-session CloudTrail event). Nothing records what was read.
+
+## 5. default_transaction_read_only is only a session default:
+SET
+off
