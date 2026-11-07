@@ -536,3 +536,11 @@ billing is not activated for live customers until this is answered.
 **If the answer differs:** payments adds a merchant-initiated collection path that checks the stay's agreed terms and the card mandate (medium change in payments; finance unchanged).
 **Blocks:** nothing in development; the automatic MIT variant of S10.
 **Raised by / date:** integration step, 2026-11-07
+
+### Q157 — Which consent wins when two guest profiles are merged?            Status: open
+**Context:** When duplicate guest profiles are merged, their marketing and data-processing consents can disagree. For example, one profile opted out of marketing last year and the other opted in yesterday. The guests module currently keeps the **most recent** statement. The parity research (EC-GUE-006) flags this as a privacy risk: a merge could silently restore marketing consent that someone withdrew.
+**Question:** With a privacy adviser: on merge, should the most restrictive consent win per purpose, should the most recent statement win, or should staff ask the guest?
+**Default we are proceeding with:** **the most restrictive consent wins per purpose** (withdrawals and opt-outs always survive), and the merge preview shows the consent outcome. The guests module is changed to this default.
+**If the answer differs:** a policy switch in the guests module's merge rules; no data loss either way, because every original statement is kept in the consent history.
+**Blocks:** nothing in development; live guest marketing.
+**Raised by / date:** parity research (operations cluster), 2026-11-07

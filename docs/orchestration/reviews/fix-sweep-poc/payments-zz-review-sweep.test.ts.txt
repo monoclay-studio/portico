@@ -1,0 +1,190 @@
+/**
+ * Fix re-attack sweep (review-fix-sweep.md) — payments. Each test asserts the SAFE outcome; a failing test is a
+ * residual. Run: pnpm --filter @portico/payments exec vitest run test/zz-review-sweep.test.ts
+ */
+import { sql, withTenantTx } from '@portico/db';
+import { newId } from '@portico/kernel';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { addMethod, type Harness, type Org, postings, setupOrg, startHarness } from './harness';
+
+let h: Harness;
+beforeAll(async () => {
+  h = await startHarness();
+});
+afterAll(async () => h?.close());
+
+async function paidDepositLink(org: Org, booking: { type: 'booking'; id: string }, amountMinor = 50_000) {
+  const svc = h.module.service;
+  const req = await org.tx((tx) =>
+    svc.tx.createPaymentRequest(tx, {
+      propertyId: org.propertyId,
+      payer: { type: 'other', name: 'Guest' },
+      amount: { amountMinor, currency: 'USD' },
+      purpose: 'deposit',
+      ref: booking,
+      expiresAt: new Date(h.clock.now().getTime() + 86_400_000).toISOString(),
+      businessKey: newId(),
+    }),
+  );
+  await svc.ensurePaymentLink(org.ctx, req.id);
+  await svc.simulateRequestPayment(org.ctx, req.id);
+  await svc.deliverSimulatorWebhooks(org.ctx, org.simAccountId);
+  expect(await postings(h, org, 'deposit')).toHaveLength(1);
+}
+
+describe('SW-PAY-1 (P1-2 sibling): authorize + capture collects a deposit a paid link already owns', () => {
+  it('refuses the capture (or the hold) without a stated reason', async () => {
+    const org = await setupOrg(h);
+    const svc = h.module.service;
+    const booking = { type: 'booking' as const, id: newId() };
+    await paidDepositLink(org, booking);
+    const methodId = await addMethod(h, org);
+    // The original E2b attack (desk charge) is refused on main:
+    await expect(
+      svc.chargeNow(org.ctx, {
+        propertyId: org.propertyId,
+        methodId,
+        amount: { amountMinor: 50_000, currency: 'USD' },
+        ref: booking,
+        businessKey: newId(),
+      }),
+    ).rejects.toMatchObject({ code: 'collection_owned_by_payment_request' });
+    // Sibling path: hold the card on the same booking, then capture it.
+    let refused: unknown = null;
+    try {
+      const a = await org.tx((tx) =>
+        svc.tx.authorize(tx, {
+          propertyId: org.propertyId,
+          methodId,
+          amount: { amountMinor: 50_000, currency: 'USD' },
+          ref: booking,
+          businessKey: newId(),
+        }),
+      );
+      await svc.settle(org.ctx, { type: 'authorization', id: a.id });
+      const c = await org.tx((tx) =>
+        svc.tx.capture(tx, { authorizationId: a.id, businessKey: newId() }),
+      );
+      await svc.settle(org.ctx, { type: 'payment', id: c.id });
+    } catch (err) {
+      refused = err;
+    }
+    const deposits = await postings(h, org, 'deposit');
+    console.log('SW-PAY-1 deposits posted:', deposits.length, 'refused:', (refused as { code?: string })?.code);
+    expect(deposits).toHaveLength(1);
+  });
+});
+
+describe("SW-PAY-2 (P1-2 exemption): purpose 'custom' skips the link-ownership guard with no reason", () => {
+  it('a desk charge labelled custom on a booking with a paid deposit link needs a reason', async () => {
+    const org = await setupOrg(h);
+    const svc = h.module.service;
+    const booking = { type: 'booking' as const, id: newId() };
+    await paidDepositLink(org, booking);
+    const methodId = await addMethod(h, org);
+    let code: string | undefined;
+    try {
+      await svc.chargeNow(org.ctx, {
+        propertyId: org.propertyId,
+        methodId,
+        amount: { amountMinor: 50_000, currency: 'USD' },
+        ref: booking,
+        purpose: 'custom',
+        businessKey: newId(),
+      });
+    } catch (err) {
+      code = (err as { code?: string }).code;
+    }
+    const deposits = await postings(h, org, 'deposit');
+    const audits = await sql<{ n: number }>`
+      select count(*)::int as n from core.audit_log
+       where tenant_id = ${org.tenantId} and action = 'payments.collection.ownershipOverride'`.execute(
+      h.t.admin.kysely,
+    );
+    console.log('SW-PAY-2 code:', code, 'deposit postings:', deposits.length, 'override audits:', audits.rows[0]?.n);
+    expect(code).toBe('collection_owned_by_payment_request');
+  });
+});
+
+describe('SW-PAY-3 (P0-1 sibling, AP-01 on the method record): a card saved at property B, used by a user of A', () => {
+  it('a desk user scoped to A cannot read B’s card, so it must not be able to charge it either', async () => {
+    const org = await setupOrg(h);
+    const svc = h.module.service;
+    // Card captured at property B (the sister resort), for a guest staff at A cannot see.
+    const m = await org.tx((tx) =>
+      svc.tx.createMethod(tx, {
+        accountId: org.simAccountId,
+        propertyId: org.otherPropertyId,
+        kind: 'card',
+        providerToken: 'pm_card_visa',
+        brand: 'visa',
+        last4: '4242',
+        expMonth: 12,
+        expYear: 2030,
+        holderName: 'Guest at B',
+        owner: { type: 'guest_profile', id: newId() },
+        entryChannel: 'hosted_entry',
+        mitAgreement: true,
+        mandate: { termsVersion: 'T-2026-1', acceptedAt: h.clock.now().toISOString(), channel: 'booking_engine' },
+      }),
+    );
+    const deskA = org.as(['payments.payment.collect', 'payments.payment.read']);
+    await expect(withTenantTx(h.db, deskA, (tx) => svc.tx.getMethod(tx, m.id))).rejects.toThrow(/not found|Payment method/i);
+    let code: string | undefined;
+    try {
+      // Advance past the customer-present window so the charge is merchant-initiated with a mandate.
+      await svc.chargeNow(deskA, {
+        propertyId: org.propertyId,
+        methodId: m.id,
+        amount: { amountMinor: 250_000, currency: 'USD' },
+        ref: { type: 'folio', id: newId() },
+        businessKey: newId(),
+      });
+    } catch (err) {
+      code = (err as { code?: string }).code;
+    }
+    const payments = await postings(h, org, 'payment');
+    console.log('SW-PAY-3 code:', code, 'payment postings:', payments.map((p) => p.amount_minor));
+    expect(payments).toHaveLength(0);
+  });
+});
+
+describe('SW-PAY-4 (P1-8 fix, AP-04/AP-54): the "customer present" fact is the client-declared entryChannel', () => {
+  it('a card saved by staff with no mandate and no entryChannel is charged twice as customer-initiated', async () => {
+    const org = await setupOrg(h);
+    const svc = h.module.service;
+    // Staff save a token (no MIT agreement, no mandate); entryChannel is omitted → defaults to hosted_entry.
+    const m = await org.tx((tx) =>
+      svc.tx.createMethod(tx, {
+        accountId: org.simAccountId,
+        propertyId: org.propertyId,
+        kind: 'card',
+        providerToken: 'pm_card_visa',
+        brand: 'visa',
+        last4: '4242',
+        expMonth: 12,
+        expYear: 2030,
+        holderName: 'Card holder',
+        owner: { type: 'guest_profile', id: newId() },
+        mitAgreement: false,
+      }),
+    );
+    const results: string[] = [];
+    for (const amountMinor of [90_000, 90_000]) {
+      try {
+        const p = await svc.chargeNow(org.ctx, {
+          propertyId: org.propertyId,
+          methodId: m.id,
+          amount: { amountMinor, currency: 'USD' },
+          ref: { type: 'folio', id: newId() },
+          businessKey: newId(),
+        });
+        results.push(`${p.status.payment}/${(p as unknown as { initiator?: string }).initiator ?? '?'}`);
+      } catch (err) {
+        results.push((err as { code?: string }).code ?? 'error');
+      }
+    }
+    console.log('SW-PAY-4 charges without a mandate:', results);
+    expect(results.every((r) => r === 'mit_not_agreed')).toBe(true);
+  });
+});

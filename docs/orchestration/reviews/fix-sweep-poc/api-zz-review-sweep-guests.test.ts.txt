@@ -1,0 +1,87 @@
+/**
+ * Fix re-attack sweep (review-fix-sweep.md) — guests G-P0-1 (AP-17 / AP-15): after erasure, no store may still
+ * hold the guest's personal data. The GUE-I06 test scans guests.*, core.outbox and core.audit_log; this probe adds
+ * core.idempotency_keys (stored HTTP responses) and the replay path.
+ */
+import { sql } from '@portico/db';
+import { newId } from '@portico/kernel';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { type ApiHarness, signedInOrg, startApi } from './helpers';
+
+let h: ApiHarness;
+beforeAll(async () => {
+  h = await startApi();
+});
+afterAll(async () => h?.close());
+
+describe('SW-GUE-1: erasure vs stored idempotent responses', () => {
+  it('no stored response still holds the erased guest’s name, email or date of birth', async () => {
+    const org = await signedInOrg(h, 'Sweep Resorts');
+    const le = await h.app.inject({
+      method: 'POST',
+      url: '/v1/legal-entities',
+      headers: { ...org.auth, 'idempotency-key': newId() },
+      payload: { name: 'Sweep', legalName: 'Sweep Pvt Ltd', countryCode: 'MV', baseCurrency: 'USD' },
+    });
+    const prop = await h.app.inject({
+      method: 'POST',
+      url: '/v1/properties',
+      headers: { ...org.auth, 'idempotency-key': newId() },
+      payload: {
+        code: `S${newId().slice(-5).toUpperCase()}`,
+        name: 'Sweep Island',
+        profile: 'resort',
+        legalEntityId: le.json().id,
+        countryCode: 'MV',
+        timezone: 'Indian/Maldives',
+        baseCurrency: 'USD',
+        businessDate: '2026-11-07',
+      },
+    });
+    const propertyId = prop.json().id as string;
+    const key = newId();
+    const payload = {
+      propertyId,
+      givenName: 'Quilla',
+      familyName: 'Erasemeplease',
+      dateOfBirth: '1981-02-03',
+      contactPoints: [{ kind: 'email', value: 'quilla.erasemeplease@guest.example' }],
+    };
+    const created = await h.app.inject({
+      method: 'POST',
+      url: '/v1/guests/profiles',
+      headers: { ...org.auth, 'idempotency-key': key },
+      payload,
+    });
+    expect(created.statusCode).toBe(201);
+    const profileId = created.json().profile.id as string;
+    const erase = await h.app.inject({
+      method: 'POST',
+      url: '/v1/guests/privacy-requests',
+      headers: { ...org.auth, 'idempotency-key': newId() },
+      payload: { kind: 'erasure', profileId, reason: 'Erasure request' },
+    });
+    console.log('SW-GUE-1 erasure status', erase.statusCode, erase.json().status);
+    const { rows } = await sql<{ scope: string; body: string }>`
+      select scope, response_body::text as body from core.idempotency_keys where tenant_id = ${org.tenantId}`.execute(
+      h.t.admin.kysely,
+    );
+    const hits = rows.filter((r) => /Erasemeplease|erasemeplease|1981-02-03/.test(r.body)).map((r) => r.scope);
+    console.log('SW-GUE-1 idempotency rows still holding PII:', hits);
+    // Replay by the same user returns the stored body.
+    const replay = await h.app.inject({
+      method: 'POST',
+      url: '/v1/guests/profiles',
+      headers: { ...org.auth, 'idempotency-key': key },
+      payload,
+    });
+    console.log(
+      'SW-GUE-1 replay',
+      replay.statusCode,
+      replay.headers['idempotent-replayed'],
+      /Erasemeplease/.test(replay.body) ? 'returns erased name' : 'no name',
+      /1981-02-03/.test(replay.body) ? 'returns erased DOB' : 'no DOB',
+    );
+    expect(hits).toEqual([]);
+  });
+});

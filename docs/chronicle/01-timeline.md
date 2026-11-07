@@ -210,4 +210,29 @@ Each agent's brief and report are in `agents/`.
   playbook v2.1. It is the first run that measures v2.
 - **18:00 — Owner: "only check 5hour window on checks".** The seven-day pacing rule is retired; the guardrail checks
   and the heartbeat now read only the 5-hour window.
+- **18:02 — Parity research for the operations cluster merged.**
+  - Ten matrices: operations, guests, integration, identity, comms, resort, access, guest experience, CRM, AI.
+  - All 179 `tested` rows quote their asserting test on main; 17 over-claimed rows were downgraded.
+  - No module passes the gate yet.
+  - Decisions: consent on profile merge goes to the owner as Q157 (default: the most restrictive wins). Room-move task
+    split and out-of-order on an occupied unit were decided by the orchestrator.
+  - A new P0 foundation gap: trial → live effect re-checks at execution, and cross-tenant uniqueness of external
+    identifiers.
+- **18:06 — Usage check (5-hour 57%):** infra resumes as a new agent on `feat/infra-aws` from its saved checkpoint and
+  original brief. Deploy nothing.
+- **18:07 — Integration-step fix round done.**
+  - All 3 P1s, 7 P2s and 6 P3s are fixed; every PoC is now a regression test.
+  - The builder corrected its own earlier overclaim and listed the remaining stubs.
+  - It filled the re-attack table and declared its own gaps: no concurrent late-charge test, no cap-boundary test.
+  - Under the new rule (re-attack P0/P1 fixes before merge), a focused re-review launches from steward playbook v2.1
+    before merge.
+- **18:15 — Fix re-attack sweep done** (from steward playbook v2.1; the first measured v2 run).
+  - 56 original P0/P1 attacks re-run on main: 48 refused, 4 still succeed by a sibling path, 2 held only by
+    detection or fail-closed, 2 not re-probed.
+  - Residual P1s: payments ×3 (double collection via hold and capture; a card from a sister property; a
+    client-chosen "guest present" field) and guests ×1 (PII survives erasure in stored idempotency responses).
+  - Pattern: three of the four fixes guarded only the exact path the reviewer named. New self-check rule: one
+    regression test per sibling entry point.
+- **18:16 — Guests fix launched** (`fix/guests-erasure-idempotency`). The payments fix waits for the integration-step
+  merge, because the two overlap. The rates, finance and backoffice P2s go to their next rounds.
 

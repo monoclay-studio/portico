@@ -1,0 +1,611 @@
+// Copy to apps/api/test/r2-fix-attacks.test.ts (imports ./scenarios/harness). Run: PORTICO_TEST_DB_PREFIX=<prefix> npx vitest run --silent=false test/r2-fix-attacks.test.ts
+/**
+ * Focused re-review (round 2): attacks on the P1 fixes themselves, the builder's declared gaps, and exemptions.
+ */
+import { sql } from '@portico/db';
+import { financeForReservations } from '@portico/finance';
+import { newId, type RequestContext, staticAuthorizer } from '@portico/kernel';
+import { platform } from '@portico/platform';
+import type { Booking } from '@portico/reservations';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import {
+  applied,
+  bookingInput,
+  cardOnFile,
+  guestWithCard,
+  hiyani,
+  kandu,
+  organization,
+  readyUnit,
+  type Scenario,
+  startScenario,
+} from './scenarios/harness';
+
+let s: Scenario;
+beforeAll(async () => {
+  s = await startScenario();
+});
+afterAll(async () => s?.close());
+
+const settle = <T>(p: Promise<T>) =>
+  p.then(
+    (v) => ({ ok: true as const, v }),
+    (e: unknown) => ({ ok: false as const, e }),
+  );
+const nightRole = (tenantId: string, environment: RequestContext['environment'], propertyId: string) => {
+  const perms = [
+    'platform.property.read',
+    'reservations.booking.read',
+    'reservations.stay.checkIn',
+    'guests.profile.read',
+    'guests.profile.update',
+    'operations.unit.read',
+    'inventory.unit.read',
+  ];
+  return {
+    tenantId,
+    environment,
+    actor: { kind: 'user' as const, userId: newId(), displayName: 'Night receptionist' },
+    authz: staticAuthorizer(perms.map((permission) => ({ permission, propertyIds: [propertyId] }))),
+    correlationId: newId(),
+  } satisfies RequestContext;
+};
+
+describe('R2-A — P1-2 reverse order: link the card owner to the booking first', () => {
+  for (const variant of ['booker', 'sharing occupant'] as const) {
+    it(`a reservations agent (no payments.payment.collect) makes the victim the ${variant}; a plain check-in holds the victim's card`, async () => {
+      const org = await organization(s);
+      const k = await kandu(s, org, '2027-03-10');
+      const { reservations } = s.c.services;
+      const desk = org.staff('front_desk', 'Hassan', [k.id]);
+      // The victim: a returning guest whose card is on file from their own earlier booking.
+      const { profileId: victim, card } = await guestWithCard(s, org, k, {
+        firstName: 'Vera',
+        lastName: 'Victim',
+      });
+      const own = applied<Booking>(
+        await org.run(desk, (tx) =>
+          reservations.createBooking(
+            tx,
+            bookingInput(
+              k,
+              {
+                arrival: '2027-05-01',
+                departure: '2027-05-03',
+                guestProfileId: victim,
+                guest: { firstName: 'Vera', lastName: 'Victim' },
+              },
+              { guarantee: { kind: 'card', paymentMethodId: card.id } },
+            ),
+          ),
+        ),
+      );
+      const agent = org.staff('reservations_agent', 'Insider', [k.id]);
+      expect(agent.authz.can('payments.payment.collect', { propertyId: k.id })).toBe(false);
+      // Discovery: the agent reads the victim's booking and learns the profile id and the card's method id.
+      const seen = await org.run(agent, (tx) => reservations.getBooking(tx, own.id));
+      expect(seen.guarantee.paymentMethodId).toBe(card.id);
+      expect(seen.booker.profileId).toBe(victim);
+      // The agent books a long stay for an accomplice and links the victim.
+      const base = bookingInput(k, {
+        arrival: '2027-03-10',
+        departure: '2027-03-17',
+        unit: '214',
+        guest: { firstName: 'Acc', lastName: 'Omplice' },
+      });
+      const stay0 = base.stays[0] as (typeof base.stays)[number];
+      const input =
+        variant === 'booker'
+          ? {
+              ...base,
+              booker: {
+                kind: 'profile' as const,
+                profileId: victim,
+                profile: { firstName: 'Vera', lastName: 'Victim' },
+              },
+              guarantee: { kind: 'card' as const, paymentMethodId: card.id },
+            }
+          : {
+              ...base,
+              guarantee: { kind: 'card' as const, paymentMethodId: card.id },
+              stays: [
+                {
+                  ...stay0,
+                  occupants: [
+                    ...stay0.occupants,
+                    {
+                      profileId: victim,
+                      profile: { firstName: 'Vera', lastName: 'Victim' },
+                      kind: 'adult' as const,
+                      primary: false,
+                    },
+                  ],
+                },
+              ],
+            };
+      const b = applied<Booking>(await org.run(agent, (tx) => reservations.createBooking(tx, input)));
+      const stayId = b.stays[0]?.id as string;
+      await s.drain();
+      await readyUnit(s, org, k.id, k.units['214'] as string);
+      // An ordinary check-in by a role with NO payments key, choosing nothing.
+      const night = nightRole(org.tenantId, org.environment, k.id);
+      const run = await reservations.performWorkflow(s.t.db, night, {
+        stayId,
+        kind: 'check_in',
+        checkIn: { registration: { identityVerified: true }, access: { kind: 'card', count: 1 } },
+      });
+      const step = run.run?.steps.find((x) => x.key === 'guarantee');
+      const gross = (await org.run(desk, (tx) => reservations.getBooking(tx, b.id))).stays[0]?.totals?.gross
+        .amountMinor as number;
+      const auths = await sql<{ method_id: string; amount_minor: number; status: string }>`
+        select method_id, amount_minor, status from payments.authorizations where ref_id = ${stayId}`.execute(
+        s.t.admin.kysely,
+      );
+      console.log(`R2-A ${variant}:`, JSON.stringify({ step, gross, auths: auths.rows }));
+      // FINDING: the victim's card is held for the accomplice's 7-night stay, chosen by a role without payments keys.
+      expect(step?.status).toBe('done');
+      expect(auths.rows).toHaveLength(1);
+      expect(auths.rows[0]).toMatchObject({ method_id: card.id, amount_minor: gross });
+    });
+  }
+});
+
+describe('R2-B — P1-2 guarantee cap: ±1 boundary and a non-numeric policy', () => {
+  it('cap is allowed, cap + 1 is refused (nothing held)', async () => {
+    const org = await organization(s);
+    const k = await kandu(s, org, '2027-03-10');
+    const { reservations } = s.c.services;
+    const desk = org.staff('front_desk', 'Hassan', [k.id]);
+    const { profileId, card } = await guestWithCard(s, org, k);
+    const b = applied<Booking>(
+      await org.run(desk, (tx) =>
+        reservations.createBooking(
+          tx,
+          bookingInput(
+            k,
+            { arrival: '2027-03-10', departure: '2027-03-12', unit: '214', guestProfileId: profileId },
+            { guarantee: { kind: 'card', paymentMethodId: card.id } },
+          ),
+        ),
+      ),
+    );
+    const stayId = b.stays[0]?.id as string;
+    const gross = b.stays[0]?.totals?.gross.amountMinor as number;
+    const cap = Math.floor((gross * 150) / 100);
+    await s.drain();
+    await readyUnit(s, org, k.id, k.units['214'] as string);
+    const auths = async () =>
+      (
+        await sql<{
+          amount_minor: number;
+        }>`select amount_minor from payments.authorizations where ref_id = ${stayId}`.execute(
+          s.t.admin.kysely,
+        )
+      ).rows;
+    const over = await reservations.performWorkflow(s.t.db, desk, {
+      stayId,
+      kind: 'check_in',
+      checkIn: {
+        registration: { identityVerified: true },
+        guarantee: { amount: { amountMinor: cap + 1, currency: 'USD' } },
+      },
+    });
+    expect(over.run?.steps.find((x) => x.key === 'guarantee')).toMatchObject({ status: 'failed' });
+    expect(await auths()).toEqual([]);
+    const at = await reservations.performWorkflow(s.t.db, desk, {
+      stayId,
+      kind: 'check_in',
+      checkIn: {
+        guarantee: { amount: { amountMinor: cap, currency: 'USD' } },
+        access: { kind: 'card', count: 1 },
+      },
+    });
+    expect(at.run?.steps.find((x) => x.key === 'guarantee')?.status).toBe('done');
+    expect(await auths()).toEqual([{ amount_minor: cap }]);
+  });
+
+  it('a property policy value that is not a number removes the cap (fails open)', async () => {
+    const org = await organization(s);
+    const k = await kandu(s, org, '2027-03-10');
+    const { reservations } = s.c.services;
+    const desk = org.staff('front_desk', 'Hassan', [k.id]);
+    const gm = org.staff('general_manager', 'GM', [k.id]);
+    await org.run(gm, (tx) =>
+      platform.setPolicy(tx, {
+        key: 'reservations.checkIn.guaranteeCapPercent',
+        scopeType: 'property',
+        scopeId: k.id,
+        value: 'no cap for VIPs',
+        reason: 'typo in the settings screen',
+      }),
+    );
+    const { profileId, card } = await guestWithCard(s, org, k);
+    const b = applied<Booking>(
+      await org.run(desk, (tx) =>
+        reservations.createBooking(
+          tx,
+          bookingInput(
+            k,
+            { arrival: '2027-03-10', departure: '2027-03-11', unit: '214', guestProfileId: profileId },
+            { guarantee: { kind: 'card', paymentMethodId: card.id } },
+          ),
+        ),
+      ),
+    );
+    const stayId = b.stays[0]?.id as string;
+    await s.drain();
+    await readyUnit(s, org, k.id, k.units['214'] as string);
+    const run = await reservations.performWorkflow(s.t.db, desk, {
+      stayId,
+      kind: 'check_in',
+      checkIn: {
+        registration: { identityVerified: true },
+        guarantee: { amount: { amountMinor: 2_500_000, currency: 'USD' } },
+        access: { kind: 'card', count: 1 },
+      },
+    });
+    const a = await sql<{
+      amount_minor: number;
+    }>`select amount_minor from payments.authorizations where ref_id = ${stayId}`.execute(s.t.admin.kysely);
+    console.log(
+      'R2-B NaN policy:',
+      JSON.stringify({ step: run.run?.steps.find((x) => x.key === 'guarantee'), auths: a.rows }),
+    );
+    // FINDING: USD 25,000 held on a 1-night stay; the cap compares against NaN.
+    expect(a.rows).toEqual([{ amount_minor: 2_500_000 }]);
+  });
+});
+
+describe('R2-C — declared gap: a second guest saving the same card token', () => {
+  it("in a demo/trial organization the second guest gets the first guest's method and cannot secure their own booking", async () => {
+    const org = await organization(s);
+    const k = await kandu(s, org, '2027-03-10');
+    const { reservations } = s.c.services;
+    const desk = org.staff('front_desk', 'Hassan', [k.id]);
+    const a = await guestWithCard(s, org, k, { firstName: 'Ana', lastName: 'First' });
+    const bGuest = await guestWithCard(s, org, k, { firstName: 'Ben', lastName: 'Second' });
+    console.log('R2-C methods:', JSON.stringify({ a: a.card, b: bGuest.card }).slice(0, 600));
+    expect(bGuest.card.id).toBe(a.card.id);
+    expect(bGuest.card.owner.id).toBe(a.profileId);
+    const r = await settle(
+      org.run(desk, (tx) =>
+        reservations.createBooking(
+          tx,
+          bookingInput(
+            k,
+            {
+              arrival: '2027-03-10',
+              departure: '2027-03-12',
+              guestProfileId: bGuest.profileId,
+              guest: { firstName: 'Ben', lastName: 'Second' },
+            },
+            { guarantee: { kind: 'card', paymentMethodId: bGuest.card.id } },
+          ),
+        ),
+      ),
+    );
+    // FINDING: Ben's booking is refused with "This card belongs to someone who is not a guest…".
+    expect(r.ok ? null : r.e).toMatchObject({ code: 'guarantee_method_not_allowed' });
+  });
+});
+
+describe('R2-D — declared gap: several late charges on the same folio (concurrent and sequential)', () => {
+  for (const sequential of [false, true])
+    it(`${sequential ? 'sequential' : 'concurrent'}: three late charges on a folio in credit — requested total vs owed`, async () => {
+      const org = await organization(s);
+      const k = await kandu(s, org, '2027-03-10');
+      const desk = org.staff('front_desk', 'Hassan', [k.id]);
+      const { reservations, payments, finance } = s.c.services;
+      const { profileId, card } = await guestWithCard(s, org, k);
+      const b = applied<Booking>(
+        await org.run(desk, (tx) =>
+          reservations.createBooking(
+            tx,
+            bookingInput(
+              k,
+              { arrival: '2027-03-10', departure: '2027-03-12', unit: '214', guestProfileId: profileId },
+              { guarantee: { kind: 'card', paymentMethodId: card.id } },
+            ),
+          ),
+        ),
+      );
+      const stay = b.stays[0];
+      if (!stay) throw new Error('no stay');
+      await s.drain();
+      await readyUnit(s, org, k.id, k.units['214'] as string);
+      await payments.chargeNow(desk, {
+        propertyId: k.id,
+        methodId: card.id,
+        amount: { amountMinor: 50_000, currency: 'USD' },
+        ref: { type: 'booking', id: b.id },
+        businessKey: `deposit:${b.id}:1`,
+      });
+      const checkIn = await reservations.performWorkflow(s.t.db, desk, {
+        stayId: stay.id,
+        kind: 'check_in',
+        checkIn: { registration: { identityVerified: true }, access: { kind: 'card', count: 1 } },
+      });
+      expect(checkIn.run?.status).toBe('completed');
+      await org.run(org.setup, (tx) => platform.advanceBusinessDate(tx, k.id, '2027-03-10'));
+      await org.run(org.setup, (tx) => platform.advanceBusinessDate(tx, k.id, '2027-03-11'));
+      const manager = org.staff('general_manager', 'Duty manager', [k.id]);
+      await reservations.performWorkflow(s.t.db, manager, {
+        stayId: stay.id,
+        kind: 'check_out',
+        checkOut: { settle: { leaveOpenReason: 'Deposit credit to be refunded' } },
+      });
+      await s.drain();
+      const folioOf = async () =>
+        (await org.run(desk, (tx) => finance.listFolios(tx, { owner: { type: 'stay', id: stay.id } })))[0];
+      const folio = await folioOf();
+      expect(folio?.balance.amountMinor).toBe(-50_000);
+      const late = (amountMinor: number, what: string) =>
+        org.run(desk, (tx) =>
+          finance.postCharge(tx, {
+            propertyId: k.id,
+            target: { type: 'stay', id: stay.id },
+            chargeCode: 'MISC',
+            amount: { amountMinor, currency: 'USD' },
+            description: what,
+            serviceDate: '2027-03-12',
+            sourceRef: { type: 'pos_check', id: newId() },
+            idempotencyKey: `pos:${newId()}`,
+          }),
+        );
+      // Each charge alone stays covered by the credit; together they exceed it.
+      const results = sequential
+        ? [
+            { status: 'fulfilled' as const, value: await late(35_000, 'Spa A') },
+            { status: 'fulfilled' as const, value: await late(35_000, 'Spa B') },
+            { status: 'fulfilled' as const, value: await late(35_000, 'Spa C') },
+          ]
+        : await Promise.allSettled([late(35_000, 'Spa A'), late(35_000, 'Spa B'), late(35_000, 'Spa C')]);
+      const exc = await sql<{ severity: string; message: string; details: unknown }>`
+      select severity, message, details from finance.exceptions where kind = 'late_charge' and ref_id = ${folio?.id} order by created_at`.execute(
+        s.t.admin.kysely,
+      );
+      console.log(
+        'R2-D mode',
+        sequential ? 'sequential' : 'concurrent',
+        'exceptions:',
+        JSON.stringify(exc.rows),
+      );
+      expect(results.every((r) => r.status === 'fulfilled')).toBe(true);
+      const owed = (await folioOf())?.balance.amountMinor as number;
+      const reqs = await sql<{ amount_minor: number }>`
+      select amount_minor from payments.payment_requests where ref_type = 'folio' and ref_id = ${folio?.id}`.execute(
+        s.t.admin.kysely,
+      );
+      const requested = reqs.rows.reduce((x, r) => x + Number(r.amount_minor), 0);
+      console.log(
+        `R2-D ${sequential ? 'sequential' : 'concurrent'} late charges:`,
+        JSON.stringify({ owed, requests: reqs.rows }),
+      );
+      expect(owed).toBeGreaterThan(0);
+      // FINDING: the 3rd charge's request is refused (an open balance link exists); the folio owes more than requested,
+      // and the single open exception keeps the 'routine' severity of the first (covered-by-credit) charge.
+      expect(requested).toBeLessThan(owed);
+      expect(exc.rows).toEqual([expect.objectContaining({ severity: 'routine' })]);
+    });
+});
+
+describe('R2-E — P1-3 sibling: the late charge is corrected after the request was sent', () => {
+  it('reversing the late charge leaves the payment request open for money no longer owed', async () => {
+    const org = await organization(s);
+    const k = await kandu(s, org, '2027-03-10');
+    const desk = org.staff('front_desk', 'Hassan', [k.id]);
+    const { reservations, finance } = s.c.services;
+    const { profileId, card } = await guestWithCard(s, org, k);
+    const b = applied<Booking>(
+      await org.run(desk, (tx) =>
+        reservations.createBooking(
+          tx,
+          bookingInput(
+            k,
+            { arrival: '2027-03-10', departure: '2027-03-11', unit: '214', guestProfileId: profileId },
+            { guarantee: { kind: 'card', paymentMethodId: card.id } },
+          ),
+        ),
+      ),
+    );
+    const stay = b.stays[0];
+    if (!stay) throw new Error('no stay');
+    await s.drain();
+    await readyUnit(s, org, k.id, k.units['214'] as string);
+    const manager = org.staff('general_manager', 'Duty manager', [k.id]);
+    await reservations.performWorkflow(s.t.db, desk, {
+      stayId: stay.id,
+      kind: 'check_in',
+      checkIn: { registration: { identityVerified: true }, access: { kind: 'card', count: 1 } },
+    });
+    await org.run(org.setup, (tx) => platform.advanceBusinessDate(tx, k.id, '2027-03-10'));
+    const out = await reservations.performWorkflow(s.t.db, manager, {
+      stayId: stay.id,
+      kind: 'check_out',
+      checkOut: { settle: { leaveOpenReason: 'City ledger' } },
+    });
+    await s.drain();
+    const [folio] = await org.run(desk, (tx) =>
+      finance.listFolios(tx, { owner: { type: 'stay', id: stay.id } }),
+    );
+    const before = folio?.balance.amountMinor as number;
+    console.log('R2-E checkout:', out.run?.status, 'balance', before);
+    const posted = await org.run(desk, (tx) =>
+      finance.postCharge(tx, {
+        propertyId: k.id,
+        target: { type: 'stay', id: stay.id },
+        chargeCode: 'MISC',
+        amount: { amountMinor: 20_000, currency: 'USD' },
+        description: 'Minibar (wrong room)',
+        serviceDate: '2027-03-11',
+        sourceRef: { type: 'pos_check', id: newId() },
+        idempotencyKey: `pos:${newId()}`,
+      }),
+    );
+    const auditor = org.staff('night_auditor', 'Auditor', [k.id]);
+    await org.run(auditor, (tx) =>
+      finance.reverseEntry(tx, {
+        entryId: posted.entryId,
+        reasonCode: 'posting_error',
+        note: 'Charged to the wrong room',
+        idempotencyKey: `rev:${newId()}`,
+      }),
+    );
+    const [after] = await org.run(desk, (tx) =>
+      finance.listFolios(tx, { owner: { type: 'stay', id: stay.id } }),
+    );
+    const reqs = await sql<{ amount_minor: number; status: string }>`
+      select amount_minor, status from payments.payment_requests where ref_type = 'folio' and ref_id = ${folio?.id}`.execute(
+      s.t.admin.kysely,
+    );
+    console.log(
+      'R2-E after reversal:',
+      JSON.stringify({ before, after: after?.balance, requests: reqs.rows }),
+    );
+    expect(after?.balance.amountMinor).toBe(before);
+    // FINDING: the request for the reversed charge is still open.
+    expect(reqs.rows.filter((r) => r.status === 'open').length).toBeGreaterThan(0);
+  });
+});
+
+describe('R2-F — P1-1 sibling: opening deposits are imported without asking reservations who owns the booking', () => {
+  it("Hiyani's finance user imports a deposit for Kandu's booking; Kandu's own deposit then cannot post", async () => {
+    const org = await organization(s);
+    const k = await kandu(s, org, '2027-03-10');
+    const h = await hiyani(s, org, '2027-03-10');
+    const { reservations, payments, finance } = s.c.services;
+    const kAgent = org.staff('reservations_agent', 'Aishath', [k.id]);
+    const b = applied<Booking>(
+      await org.run(kAgent, (tx) =>
+        reservations.createBooking(tx, bookingInput(k, { arrival: '2027-03-12', departure: '2027-03-14' })),
+      ),
+    );
+    const hFinance = org.staff('finance', 'Hiyani accounts', [h.id]);
+    const report = await org.run(hFinance, (tx) =>
+      finance.importOpeningDeposits(tx, {
+        propertyId: h.id,
+        importRef: `legacy-${newId()}`,
+        currency: 'USD',
+        providedClosingMinor: 100,
+        items: [{ bookingId: b.id, amountMinor: 100 }],
+        idempotencyKey: `imp:${newId()}`,
+      }),
+    );
+    const acct = await sql<{ property_id: string }>`
+      select property_id from finance.deposit_accounts where booking_id = ${b.id}`.execute(s.t.admin.kysely);
+    console.log(
+      'R2-F import:',
+      JSON.stringify({ imported: report.importedCount, rejected: report.rejected, acct: acct.rows }),
+    );
+    expect(report.importedCount).toBe(1); // FINDING: accepted for another property's booking
+    expect(acct.rows).toEqual([{ property_id: h.id }]);
+    // Kandu's desk now takes the real deposit for its own booking.
+    const kDesk = org.staff('front_desk', 'Kandu desk', [k.id]);
+    const { profileId: _p, card } = await guestWithCard(s, org, k);
+    const r = await settle(
+      payments.chargeNow(kDesk, {
+        propertyId: k.id,
+        methodId: card.id,
+        amount: { amountMinor: 50_000, currency: 'USD' },
+        ref: { type: 'booking', id: b.id },
+        businessKey: `deposit:${b.id}:k`,
+      }),
+    );
+    await s.drain();
+    const pay = await sql<{ status: string; ledger_status: string | null }>`
+      select status, ledger_status from payments.payments where ref_id = ${b.id}`.execute(s.t.admin.kysely);
+    console.log('R2-F Kandu deposit:', JSON.stringify({ r: r.ok ? r.v.status : r.e, payments: pay.rows }));
+  });
+});
+
+describe('R2-G — P2-1 sibling: the check-in run is readable by any booking reader', () => {
+  it('housekeeping reads the guarantee step: amount held and card authorization', async () => {
+    const org = await organization(s);
+    const k = await kandu(s, org, '2027-03-10');
+    const { reservations } = s.c.services;
+    const desk = org.staff('front_desk', 'Hassan', [k.id]);
+    const { profileId, card } = await guestWithCard(s, org, k);
+    const b = applied<Booking>(
+      await org.run(desk, (tx) =>
+        reservations.createBooking(
+          tx,
+          bookingInput(
+            k,
+            { arrival: '2027-03-10', departure: '2027-03-12', unit: '214', guestProfileId: profileId },
+            { guarantee: { kind: 'card', paymentMethodId: card.id } },
+          ),
+        ),
+      ),
+    );
+    const stayId = b.stays[0]?.id as string;
+    await s.drain();
+    await readyUnit(s, org, k.id, k.units['214'] as string);
+    await reservations.performWorkflow(s.t.db, desk, {
+      stayId,
+      kind: 'check_in',
+      checkIn: { registration: { identityVerified: true }, access: { kind: 'card', count: 1 } },
+    });
+    const hk = org.staff('housekeeping_supervisor', 'Mariyam', [k.id]);
+    const run = await org.run(hk, (tx) => reservations.getWorkflow(tx, { stayId, kind: 'check_in' }));
+    const g = run.steps.find((x) => x.key === 'guarantee');
+    console.log('R2-G housekeeping sees:', JSON.stringify(g));
+    expect(g?.result).toMatchObject({ paymentStatus: 'authorized' }); // FINDING: payment state for a non-money role
+  });
+});
+
+describe('R2-H — exemption: payments checks only stay/booking refs; other ref types skip the owner check', () => {
+  it("Hiyani holds a card 'for' Kandu's folio; Kandu's own folio status then fails", async () => {
+    const org = await organization(s);
+    const k = await kandu(s, org, '2027-03-10');
+    const h = await hiyani(s, org, '2027-03-10');
+    const { reservations, payments, finance } = s.c.services;
+    const desk = org.staff('front_desk', 'Hassan', [k.id]);
+    const b = applied<Booking>(
+      await org.run(desk, (tx) =>
+        reservations.createBooking(
+          tx,
+          bookingInput(k, { arrival: '2027-03-10', departure: '2027-03-12', unit: '214' }),
+        ),
+      ),
+    );
+    await s.drain();
+    await readyUnit(s, org, k.id, k.units['214'] as string);
+    await reservations.performWorkflow(s.t.db, desk, {
+      stayId: b.stays[0]?.id as string,
+      kind: 'check_in',
+      checkIn: { registration: { identityVerified: true }, access: { kind: 'card', count: 1 } },
+    });
+    void finance;
+    const { folioId } = await org.run(org.setup, (tx) =>
+      financeForReservations(s.c.services.finance).openFolio(tx, {
+        propertyId: k.id,
+        owner: { type: 'stay', id: b.stays[0]?.id as string },
+        payer: { type: 'house', id: newId() },
+      }),
+    );
+    const kFolio = { id: folioId };
+    const { card } = await guestWithCard(s, org, h);
+    const hDesk = org.staff('front_desk', 'Hiyani desk', [h.id]);
+    const r = await settle(
+      org.run(hDesk, (tx) =>
+        payments.tx.authorize(tx, {
+          propertyId: h.id,
+          methodId: card.id,
+          amount: { amountMinor: 10_000, currency: 'USD' },
+          ref: { type: 'folio', id: kFolio?.id as string },
+          businessKey: `a:${newId()}`,
+        }),
+      ),
+    );
+    const status = await settle(
+      org.run(desk, (tx) => payments.tx.getPaymentStatus(tx, { type: 'folio', id: kFolio?.id as string })),
+    );
+    console.log(
+      'R2-H:',
+      JSON.stringify({ hold: r.ok ? 'accepted' : r.e, kanduStatus: status.ok ? 'ok' : status.e }).slice(
+        0,
+        700,
+      ),
+    );
+  });
+});
