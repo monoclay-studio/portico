@@ -57,7 +57,7 @@ const propertyQuery = z.object({ propertyId: z.uuid() });
 const refQuery = z.object({ refType: z.string().min(1).max(40), refId: z.uuid() });
 
 function replyPayment(reply: FastifyReply, p: Payment): FastifyReply {
-  if (p.status === 'failed') {
+  if (p.status.payment === 'failed') {
     throw new DomainError(
       'payment_declined',
       `${p.decline?.message ?? 'The payment did not go through.'} ${p.decline?.recovery ?? ''} Nothing was collected.`.trim(),
@@ -65,11 +65,11 @@ function replyPayment(reply: FastifyReply, p: Payment): FastifyReply {
     );
   }
   setVersion(reply, p.version);
-  return reply.status(p.status === 'processing' || p.status === 'pending_verification' ? 202 : 201).send(p);
+  return reply.status(p.status.payment === 'processing' || p.status.payment === 'pending_verification' ? 202 : 201).send(p);
 }
 
 function replyAuthorization(reply: FastifyReply, a: AuthorizationView, created = true): FastifyReply {
-  if (a.status === 'failed') {
+  if (a.status.authorization === 'failed') {
     throw new DomainError(
       'authorization_declined',
       `${a.decline?.message ?? 'The hold was declined.'} ${a.decline?.recovery ?? ''} No funds are held.`.trim(),
@@ -77,11 +77,13 @@ function replyAuthorization(reply: FastifyReply, a: AuthorizationView, created =
     );
   }
   setVersion(reply, a.version);
-  return reply.status(a.status === 'processing' || a.status === 'pending_verification' ? 202 : created ? 201 : 200).send(a);
+  return reply
+    .status(a.status.authorization === 'processing' || a.status.authorization === 'pending_verification' ? 202 : created ? 201 : 200)
+    .send(a);
 }
 
 function replyRefund(reply: FastifyReply, r: Refund): FastifyReply {
-  if (r.status === 'failed') {
+  if (r.status.refund === 'failed') {
     throw new DomainError(
       'refund_failed',
       `${r.failure?.message ?? 'The refund did not go through.'} No money left the hotel. ${r.failure?.recovery ?? ''}`.trim(),
@@ -89,7 +91,7 @@ function replyRefund(reply: FastifyReply, r: Refund): FastifyReply {
     );
   }
   setVersion(reply, r.version);
-  return reply.status(r.status === 'processing' || r.status === 'pending_verification' ? 202 : 201).send(r);
+  return reply.status(r.status.refund === 'processing' || r.status.refund === 'pending_verification' ? 202 : 201).send(r);
 }
 
 export function paymentsHttp(deps: { database: PorticoDatabase; service: PaymentsService }): HttpModule {
@@ -344,7 +346,7 @@ export function paymentsHttp(deps: { database: PorticoDatabase; service: Payment
           await svc.checkNow(req.ctx, { type: 'payment', id: req.params.id });
           const p = await svc.view.payment(req.ctx, req.params.id);
           setVersion(reply, p.version);
-          return reply.status(p.status === 'pending_verification' || p.status === 'processing' ? 202 : 200).send(p);
+          return reply.status(p.status.payment === 'pending_verification' || p.status.payment === 'processing' ? 202 : 200).send(p);
         },
       );
       app.get('/payments/status-by-ref', { schema: { tags, querystring: refQuery } }, async (req) =>
@@ -400,7 +402,7 @@ export function paymentsHttp(deps: { database: PorticoDatabase; service: Payment
           await svc.checkNow(req.ctx, { type: 'refund', id: req.params.id });
           const r = await svc.view.refund(req.ctx, req.params.id);
           setVersion(reply, r.version);
-          return reply.status(r.status === 'pending_verification' || r.status === 'processing' ? 202 : 200).send(r);
+          return reply.status(r.status.refund === 'pending_verification' || r.status.refund === 'processing' ? 202 : 200).send(r);
         },
       );
 

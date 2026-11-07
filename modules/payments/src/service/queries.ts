@@ -4,6 +4,7 @@ import { ForbiddenError, NotFoundError, requirePermission } from '@portico/kerne
 import type { Authorization, Payment, PaymentException, PaymentsStatus, Refund } from '../contracts';
 import { PaymentsEvents } from '../events';
 import { accountHealth } from './accounts';
+import { recordContext } from './records';
 import {
   actorKey,
   db,
@@ -20,21 +21,28 @@ export async function getPayment(tx: TxContext, id: string): Promise<Payment> {
   const p = await db(tx).selectFrom('payments.payments').selectAll().where('id', '=', id).executeTakeFirst();
   if (!p) throw new NotFoundError('payment', id);
   requireRead(tx, p.property_id);
-  return toPaymentView(p);
+  return toPaymentView(p, await recordContext(tx, [{ type: 'payment', id }]));
+}
+
+async function capabilitiesByAccount(tx: TxContext, accountIds: string[]): Promise<Map<string, string[]>> {
+  if (!accountIds.length) return new Map();
+  const rows = await db(tx).selectFrom('payments.accounts').select(['id', 'capabilities']).where('id', 'in', accountIds).execute();
+  return new Map(rows.map((r) => [r.id, (r.capabilities as string[]) ?? []]));
 }
 
 export async function getAuthorization(tx: TxContext, id: string): Promise<Authorization> {
   const a = await db(tx).selectFrom('payments.authorizations').selectAll().where('id', '=', id).executeTakeFirst();
   if (!a) throw new NotFoundError('authorization', id);
   requireRead(tx, a.property_id);
-  return toAuthorizationView(a);
+  const caps = await capabilitiesByAccount(tx, [a.account_id]);
+  return toAuthorizationView(a, await recordContext(tx, [{ type: 'authorization', id }]), caps.get(a.account_id) ?? []);
 }
 
 export async function getRefund(tx: TxContext, id: string): Promise<Refund> {
   const r = await db(tx).selectFrom('payments.refunds').selectAll().where('id', '=', id).executeTakeFirst();
   if (!r) throw new NotFoundError('refund', id);
   requireRead(tx, r.property_id);
-  return toRefundView(r);
+  return toRefundView(r, await recordContext(tx, [{ type: 'refund', id }]));
 }
 
 /** History of provider interactions for a record (journal): what was sent, when, and what came back. */
@@ -148,12 +156,18 @@ export async function getPaymentStatus(tx: TxContext, ref: { type: string; id: s
   for (const a of authRows) {
     if (a.status === 'authorized' || a.status === 'partially_captured') t(a.currency).heldMinor += a.amount_minor - a.captured_minor;
   }
+  const rc = await recordContext(tx, [
+    ...paymentRows.map((p) => ({ type: 'payment', id: p.id })),
+    ...authRows.map((a) => ({ type: 'authorization', id: a.id })),
+    ...refundRows.map((r) => ({ type: 'refund', id: r.id })),
+  ]);
+  const caps = await capabilitiesByAccount(tx, [...new Set(authRows.map((a) => a.account_id))]);
   return {
     ref,
     totals: [...totals.values()],
-    payments: paymentRows.map(toPaymentView),
-    authorizations: authRows.map(toAuthorizationView),
-    refunds: refundRows.map(toRefundView),
+    payments: paymentRows.map((p) => toPaymentView(p, rc)),
+    authorizations: authRows.map((a) => toAuthorizationView(a, rc, caps.get(a.account_id) ?? [])),
+    refunds: refundRows.map((r) => toRefundView(r, rc)),
     hasPendingVerification:
       paymentRows.some((p) => p.status === 'pending_verification' || p.status === 'processing') ||
       authRows.some((a) => a.status === 'pending_verification' || a.status === 'processing') ||
@@ -250,7 +264,7 @@ export async function listExceptions(
   const rows = await q.execute();
   return rows
     .filter((e) => (e.property_id === null ? true : scope === 'all' || scope.includes(e.property_id)))
-    .map(toExceptionView);
+    .map((e) => toExceptionView(e, tx.authz));
 }
 
 export async function resolveException(
@@ -286,5 +300,5 @@ export async function resolveException(
     aggregate: { type: 'payment_exception', id },
     payload: { exceptionId: id, resolution },
   });
-  return toExceptionView(row);
+  return toExceptionView(row, tx.authz);
 }

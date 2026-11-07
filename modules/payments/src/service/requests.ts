@@ -27,6 +27,7 @@ import { vccIsActive } from '../domain/schedule';
 import { PaymentsEvents } from '../events';
 import { isSimulatorTestToken } from '../providers/simulator';
 import { charge } from './collect';
+import { recordContext } from './records';
 import { executeOperation, loadBreaker } from './operations';
 import {
   actorKey,
@@ -173,7 +174,7 @@ export async function getPaymentRequest(tx: TxContext, id: string): Promise<Paym
   const r = await db(tx).selectFrom('payments.payment_requests').selectAll().where('id', '=', id).executeTakeFirst();
   if (!r) throw new NotFoundError('payment_request', id);
   if (!tx.authz.can('payments.paymentRequest.create', { propertyId: r.property_id })) requireRead(tx, r.property_id);
-  return toRequestView(r);
+  return toRequestView(r, await recordContext(tx, [{ type: 'payment_request', id }]));
 }
 
 export async function listPaymentRequests(tx: TxContext, ref: { type: string; id: string }): Promise<PaymentRequest[]> {
@@ -184,13 +185,16 @@ export async function listPaymentRequests(tx: TxContext, ref: { type: string; id
     .where('ref_id', '=', ref.id)
     .orderBy('created_at')
     .execute();
-  return rows
-    .filter(
-      (r) =>
-        tx.authz.can('payments.payment.read', { propertyId: r.property_id }) ||
-        tx.authz.can('payments.paymentRequest.create', { propertyId: r.property_id }),
-    )
-    .map(toRequestView);
+  const visible = rows.filter(
+    (r) =>
+      tx.authz.can('payments.payment.read', { propertyId: r.property_id }) ||
+      tx.authz.can('payments.paymentRequest.create', { propertyId: r.property_id }),
+  );
+  const rc = await recordContext(
+    tx,
+    visible.map((r) => ({ type: 'payment_request', id: r.id })),
+  );
+  return visible.map((r) => toRequestView(r, rc));
 }
 
 export async function cancelPaymentRequest(
@@ -229,7 +233,7 @@ export async function cancelPaymentRequest(
     aggregate: { type: 'payment_request', id },
     payload: { paymentRequestId: id, reason },
   });
-  return toRequestView(row);
+  return toRequestView(row, await recordContext(tx, [{ type: 'payment_request', id }]));
 }
 
 /** Demo/test: the guest pays the simulated link (only in simulated mode). */

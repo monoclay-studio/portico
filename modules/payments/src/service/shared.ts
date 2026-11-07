@@ -1,6 +1,7 @@
 /** Shared helpers for the payments services: dependencies, loaders, guards, mappers, exceptions, journal. */
 import { type PorticoDatabase, type Selectable, type TxContext, typed } from '@portico/db';
 import {
+  type Authorizer,
   BusinessRuleError,
   ConflictError,
   DomainError,
@@ -26,6 +27,14 @@ import { PaymentsEvents } from '../events';
 import type { LedgerPort, PlatformPort, PropertyInfo } from '../ports';
 import type { ProviderAccount, SimulatorControls } from '../providers/provider';
 import type { ProviderRegistry } from '../providers/registry';
+import {
+  authorizationRecord,
+  exceptionRecord,
+  paymentRecord,
+  type RecordContext,
+  refundRecord,
+  requestRecord,
+} from './records';
 import type {
   AccountsTable,
   AuthorizationsTable,
@@ -364,7 +373,7 @@ export function toMethodView(m: MethodRow): PaymentMethod {
   };
 }
 
-export function toAuthorizationView(a: AuthorizationRow): Authorization {
+export function toAuthorizationView(a: AuthorizationRow, rc: RecordContext, capabilities: readonly string[]): Authorization {
   return {
     id: a.id,
     propertyId: a.property_id,
@@ -378,7 +387,7 @@ export function toAuthorizationView(a: AuthorizationRow): Authorization {
       capturedMinor: a.captured_minor,
       captureReservedMinor: a.capture_reserved_minor,
     }),
-    status: a.status,
+    ...authorizationRecord(a, rc, capabilities),
     mode: a.mode,
     providerRef: a.provider_ref,
     externalReference: a.external_reference,
@@ -389,7 +398,7 @@ export function toAuthorizationView(a: AuthorizationRow): Authorization {
   };
 }
 
-export function toPaymentView(p: PaymentRow): Payment {
+export function toPaymentView(p: PaymentRow, rc: RecordContext): Payment {
   return {
     id: p.id,
     propertyId: p.property_id,
@@ -408,7 +417,7 @@ export function toPaymentView(p: PaymentRow): Payment {
             refundReservedMinor: p.refund_reserved_minor,
           })
         : 0,
-    status: p.status,
+    ...paymentRecord(p, rc),
     mode: p.mode,
     providerVerified: p.status === 'succeeded' && p.mode !== 'recorded',
     providerRef: p.provider_ref,
@@ -426,14 +435,14 @@ export function toPaymentView(p: PaymentRow): Payment {
   };
 }
 
-export function toRefundView(r: RefundRow): Refund {
+export function toRefundView(r: RefundRow, rc: RecordContext): Refund {
   return {
     id: r.id,
     paymentId: r.payment_id,
     propertyId: r.property_id,
     amount: { amountMinor: r.amount_minor, currency: r.currency },
     reason: r.reason,
-    status: r.status,
+    ...refundRecord(r, rc),
     mode: r.mode,
     providerVerified: r.status === 'succeeded' && r.mode !== 'recorded',
     providerRef: r.provider_ref,
@@ -446,7 +455,7 @@ export function toRefundView(r: RefundRow): Refund {
   };
 }
 
-export function toRequestView(r: RequestRow): PaymentRequest {
+export function toRequestView(r: RequestRow, rc: RecordContext): PaymentRequest {
   return {
     id: r.id,
     propertyId: r.property_id,
@@ -459,7 +468,7 @@ export function toRequestView(r: RequestRow): PaymentRequest {
     description: r.description,
     ref: { type: r.ref_type, id: r.ref_id },
     expiresAt: iso(r.expires_at) as string,
-    status: r.status,
+    ...requestRecord(r, rc),
     mode: r.mode,
     link: { status: r.link_status, url: r.link_url },
     presentation: presentRequest(r.status, r.paid_minor),
@@ -467,7 +476,7 @@ export function toRequestView(r: RequestRow): PaymentRequest {
   };
 }
 
-export function toExceptionView(e: ExceptionRow): PaymentException {
+export function toExceptionView(e: ExceptionRow, authz: Authorizer): PaymentException {
   return {
     id: e.id,
     propertyId: e.property_id,
@@ -479,7 +488,7 @@ export function toExceptionView(e: ExceptionRow): PaymentException {
     ownerRole: e.owner_role,
     responsibleParty: e.responsible_party,
     ref: e.ref_type && e.ref_id ? { type: e.ref_type, id: e.ref_id } : null,
-    status: e.status,
+    ...exceptionRecord(e, authz),
     resolution: e.resolution,
     createdAt: iso(e.created_at) as string,
     version: e.version,

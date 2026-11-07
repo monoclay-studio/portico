@@ -6,6 +6,8 @@ export const paymentsManifest: ModuleManifest = {
   name: 'payments',
   schema: 'payments',
   migrationsDir: join(dirname(fileURLToPath(import.meta.url)), '..', 'migrations'),
+  // payments.route_webhook() calls the platform.tenant_environment() SECURITY DEFINER lookup.
+  migrateAfter: ['platform'],
   permissions: [
     {
       key: 'payments.payment.read',
@@ -60,5 +62,19 @@ export const paymentsManifest: ModuleManifest = {
       scope: 'organization',
       sensitive: true,
     },
+  ],
+  // Universal record contract: `type` equals the audit `target.type` used by this module.
+  recordTypes: [
+    { type: 'payment', label: 'Payment', readPermission: 'payments.payment.read', route: '/payments/transactions/:id' },
+    { type: 'authorization', label: 'Card authorization (hold)', readPermission: 'payments.payment.read', route: '/payments/authorizations/:id' },
+    { type: 'refund', label: 'Refund', readPermission: 'payments.payment.read', route: '/payments/refunds/:id' },
+    { type: 'payment_request', label: 'Payment request', readPermission: 'payments.payment.read', route: '/payments/requests/:id' },
+    { type: 'payment_method', label: 'Saved payment method', readPermission: 'payments.payment.read' },
+    { type: 'virtual_card', label: 'Virtual card (OTA)', readPermission: 'payments.payment.read', route: '/payments/virtual-cards/:id' },
+    { type: 'dispute', label: 'Dispute (chargeback)', readPermission: 'payments.payment.read', route: '/payments/disputes/:id' },
+    { type: 'payment_exception', label: 'Payment exception', readPermission: 'payments.payment.read' },
+    { type: 'payment_account', label: 'Payment account', readPermission: 'payments.account.read', route: '/payments/accounts/:id' },
+    { type: 'payout', label: 'Payout', readPermission: 'payments.account.read' },
+    { type: 'statement', label: 'Settlement statement import', readPermission: 'payments.reconciliation.manage' },
   ],
 };

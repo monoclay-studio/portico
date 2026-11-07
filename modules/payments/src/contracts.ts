@@ -183,6 +183,31 @@ export const declineView = z.object({
 
 const modeEnum = z.enum(['live', 'sandbox', 'simulate', 'recorded']);
 
+/** Universal record contract (domain-map § Universal record contract; types in @portico/kernel records.ts). */
+export const recordAction = z.object({
+  action: z.string(),
+  label: z.string(),
+  enabled: z.boolean(),
+  reason: z.string().optional(),
+  previewRequired: z.boolean().optional(),
+});
+export const recordIssue = z.object({
+  code: z.string(),
+  severity: z.enum(['blocking', 'warning', 'info']),
+  message: z.string(),
+  owner: z.object({ kind: z.enum(['user', 'department']), id: z.string(), name: z.string().optional() }).optional(),
+  since: z.string().optional(),
+});
+export const recordParts = {
+  /** One entry per status family (e.g. { payment: 'pending_verification', ledger: 'pending' }) — never merged. */
+  status: z.record(z.string(), z.string()),
+  allowedActions: z.array(recordAction),
+  issues: z.array(recordIssue),
+  owner: z.object({ kind: z.enum(['user', 'department']), id: z.string(), name: z.string().optional() }).optional(),
+  links: z.array(z.object({ rel: z.string(), type: z.string(), id: z.string(), title: z.string().optional() })),
+  provenance: z.enum(['live', 'simulated', 'copied', 'delayed', 'incomplete', 'external']).optional(),
+};
+
 export const authorizeInput = z
   .object({
     propertyId: z.uuid(),
@@ -218,7 +243,7 @@ export const authorization = z.object({
   amount: z.object({ amountMinor: z.number().int(), currency: z.string() }),
   capturedMinor: z.number().int(),
   capturableMinor: z.number().int(),
-  status: z.string(),
+  ...recordParts,
   mode: modeEnum,
   providerRef: z.string().nullable(),
   externalReference: z.string().nullable(),
@@ -270,7 +295,7 @@ export const payment = z.object({
   amount: z.object({ amountMinor: z.number().int(), currency: z.string() }),
   refundedMinor: z.number().int(),
   refundableMinor: z.number().int(),
-  status: z.string(),
+  ...recordParts,
   mode: modeEnum,
   providerVerified: z.boolean(),
   providerRef: z.string().nullable(),
@@ -305,7 +330,7 @@ export const refund = z.object({
   propertyId: z.uuid(),
   amount: z.object({ amountMinor: z.number().int(), currency: z.string() }),
   reason: z.string(),
-  status: z.string(),
+  ...recordParts,
   mode: modeEnum,
   providerVerified: z.boolean(),
   providerRef: z.string().nullable(),
@@ -366,7 +391,7 @@ export const paymentRequest = z.object({
   description: z.string().nullable(),
   ref: z.object({ type: z.string(), id: z.uuid() }),
   expiresAt: z.string(),
-  status: z.string(),
+  ...recordParts,
   mode: z.enum(['live', 'sandbox', 'simulate']),
   link: z.object({ status: z.string(), url: z.string().nullable() }),
   presentation: statusPresentation,
@@ -526,7 +551,7 @@ export const paymentException = z.object({
   ownerRole: z.string(),
   responsibleParty: z.string(),
   ref: z.object({ type: z.string(), id: z.uuid() }).nullable(),
-  status: z.enum(['open', 'resolved']),
+  ...recordParts,
   resolution: z.string().nullable(),
   createdAt: z.string(),
   version: z.number().int(),
