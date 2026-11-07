@@ -6,6 +6,11 @@ import { defineConfig, devices } from '@playwright/test';
  * pre-installed PLAYWRIGHT_BROWSERS_PATH; nothing is downloaded.
  */
 const DB = process.env.PORTICO_E2E_DB ?? 'portico_w1_ui';
+/** Ports are configurable so parallel worktrees never test each other's servers (P3-7). */
+const API_PORT = process.env.PORTICO_E2E_API_PORT ?? '4100';
+const WEB_PORT = process.env.PORTICO_E2E_WEB_PORT ?? '5180';
+/** Reuse an already running server only when asked (PORTICO_E2E_REUSE=1). */
+const reuse = process.env.PORTICO_E2E_REUSE === '1';
 export const E2E_ENV = {
   DATABASE_URL: process.env.DATABASE_URL ?? `postgres://postgres@127.0.0.1:5432/${DB}`,
   APP_DATABASE_URL:
@@ -21,7 +26,7 @@ export default defineConfig({
   reporter: [['list']],
   globalSetup: './e2e/global-setup.ts',
   use: {
-    baseURL: 'http://127.0.0.1:5180',
+    baseURL: `http://127.0.0.1:${WEB_PORT}`,
     trace: 'retain-on-failure',
     viewport: { width: 1440, height: 900 },
     locale: 'en-GB',
@@ -33,16 +38,17 @@ export default defineConfig({
   webServer: [
     {
       command: 'pnpm --filter @portico/api exec tsx src/main.ts',
-      url: 'http://127.0.0.1:4100/health/ready',
-      reuseExistingServer: true,
+      url: `http://127.0.0.1:${API_PORT}/health/ready`,
+      reuseExistingServer: reuse,
       timeout: 90_000,
-      env: { ...E2E_ENV, PORT: '4100', LOG_LEVEL: 'warn', NODE_ENV: 'development' },
+      env: { ...E2E_ENV, PORT: API_PORT, LOG_LEVEL: 'warn', NODE_ENV: 'development' },
     },
     {
-      command: 'pnpm exec vite --port 5180 --strictPort',
-      url: 'http://127.0.0.1:5180',
-      reuseExistingServer: true,
+      command: `pnpm exec vite --port ${WEB_PORT} --strictPort`,
+      url: `http://127.0.0.1:${WEB_PORT}`,
+      reuseExistingServer: reuse,
       timeout: 90_000,
+      env: { PORTICO_API_URL: `http://127.0.0.1:${API_PORT}` },
     },
   ],
 });

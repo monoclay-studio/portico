@@ -70,7 +70,9 @@ export function KpiTile({
   const body = (
     <>
       <span className="flex items-baseline gap-2">
-        <span className="text-display font-semibold tracking-tight text-ink">{value}</span>
+        <span data-kpi-value className="text-display font-semibold tracking-tight text-ink">
+          {value}
+        </span>
         {delta && (
           <span
             className={cn(

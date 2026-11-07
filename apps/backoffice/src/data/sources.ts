@@ -10,7 +10,6 @@
 import type { ProblemDetails, Provenance as ProvenanceKind } from '@portico/ui';
 import type { DeskList, DeskListKind, OperationsBoard } from './contracts';
 import type { PropertyContext } from './property';
-import { createSimulatedSources } from './simulated/adapter';
 import type {
   OverviewView,
   StayChangePreview,
@@ -87,11 +86,38 @@ export const DOMAINS: readonly DomainId[] = [
   'work',
 ];
 
-let simulated: WorkspaceSources | null = null;
-const simulatedSources = () => {
-  simulated ??= createSimulatedSources();
-  return simulated;
+/**
+ * The simulator is loaded only when a non-live organization first asks for data (its own chunk), so live
+ * organizations never download it.
+ */
+let simulatorModule: Promise<WorkspaceSources> | null = null;
+const loadSimulator = () => {
+  simulatorModule ??= import('./simulated/adapter').then((m) => m.createSimulatedSources());
+  return simulatorModule;
 };
+type AsyncMethods<T> = { [K in keyof T]: T[K] };
+function lazyDomain<D extends DomainId>(domain: D): WorkspaceSources[D] {
+  return new Proxy({} as AsyncMethods<WorkspaceSources[D]>, {
+    get:
+      (_t, method: string) =>
+      async (...args: unknown[]) => {
+        const sources = await loadSimulator();
+        const target = sources[domain] as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>;
+        const fn = target[method];
+        if (!fn) throw new Error(`Unknown ${domain} method ${method}`);
+        return fn(...args);
+      },
+  }) as WorkspaceSources[D];
+}
+const simulatedSources = (): WorkspaceSources => ({
+  frontDesk: lazyDomain('frontDesk'),
+  housekeeping: lazyDomain('housekeeping'),
+  timeline: lazyDomain('timeline'),
+  stayChanges: lazyDomain('stayChanges'),
+  records: lazyDomain('records'),
+  work: lazyDomain('work'),
+});
+let simulated: WorkspaceSources | null = null;
 
 /** Any environment other than exactly 'live' may use simulated data (fail closed for live). */
 export function bindWorkspaceSources(environment: string | null | undefined): Bound {
@@ -101,7 +127,8 @@ export function bindWorkspaceSources(environment: string | null | undefined): Bo
   for (const d of DOMAINS) {
     // No domain has a live adapter yet (reservations' ports to rates/finance are still stubbed).
     if (allowSimulation) {
-      Object.assign(sources, { [d]: simulatedSources()[d] });
+      simulated ??= simulatedSources();
+      Object.assign(sources, { [d]: simulated[d] });
       modes[d] = 'simulated';
     } else modes[d] = 'not_connected';
   }

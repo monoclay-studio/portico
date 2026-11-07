@@ -81,7 +81,7 @@ test.describe('back office smoke (real API on :4100)', () => {
     await switcher.click();
     await page.getByRole('menuitemradio', { name: /Azure Lagoon Hotel/ }).click();
     await expect(switcher).toContainText('Azure Lagoon Hotel');
-    await expect(page.getByText(/Azure Lagoon Hotel, Hulhumalé · Business date/)).toBeVisible();
+    await expect(switcher).toContainText(/Business date \d{4}-\d{2}-\d{2}/);
   });
 
   test('command palette (Ctrl+K) navigates; global search (/) finds real records and opens the drawer', async ({
@@ -123,7 +123,7 @@ test.describe('back office smoke (real API on :4100)', () => {
     await page.goto('/front-desk/arrivals');
     const grid = page.getByRole('grid', { name: /arrivals for/ });
     await expect(grid).toBeVisible();
-    await expect(page.getByRole('button', { name: /Data source: Simulated/ }).first()).toBeVisible();
+    await expect(page.getByRole('button', { name: /^Simulated/ }).first()).toBeVisible();
     const blocked = grid.locator('[role=row][data-row-id]').filter({ hasText: 'failed inspection' }).first();
     await expect(blocked).toBeVisible();
     await blocked.click();
@@ -174,30 +174,120 @@ test.describe('back office smoke (real API on :4100)', () => {
     expect(after.version).toBe(current.version + 2);
   });
 
-  test('key screens have no serious accessibility violations (axe, incl. colour contrast) in light and dark', async ({
+  test('keyboard: Enter opens the record with focus inside; j shows the next arrival; Esc returns to the row (C4, FD-13)', async ({
     page,
     demo,
   }) => {
+    await startSignedIn(page, demo);
+    await page.goto('/front-desk/arrivals');
+    const grid = page.getByRole('grid', { name: /arrivals for/ });
+    await grid.locator('[data-cell="0:0"]').focus();
+    await page.keyboard.press('Enter');
+    const drawer = page.locator('[data-record-drawer]');
+    await expect(drawer).toBeVisible();
+    // Focus moved into the record (not left behind on the board).
+    await expect
+      .poll(() => page.evaluate(() => Boolean(document.activeElement?.closest('[data-record-drawer]'))))
+      .toBe(true);
+    const first = await drawer.locator('h1, h2').first().innerText();
+    // Split view: the board stays usable beside the panel; j shows the next arrival without closing.
+    await page.keyboard.press('j');
+    await expect(drawer.locator('h1, h2').first()).not.toHaveText(first);
+    await expect(grid.locator('[role=row][aria-current="true"]')).toHaveCount(1);
+    await page.keyboard.press('Escape');
+    await expect(drawer).toHaveCount(0);
+    await expect
+      .poll(() => page.evaluate(() => Boolean(document.activeElement?.closest('[role=grid]'))))
+      .toBe(true);
+  });
+
+  test('Today tiles equal the lists they open; g d opens Departures, g i In house (NAV-07, C2)', async ({
+    page,
+    demo,
+  }) => {
+    await startSignedIn(page, demo);
+    await page.goto('/today');
+    const tile = page.locator('[data-kpi="Arrivals"]');
+    const value = (await tile.locator('[data-kpi-value]').innerText()).trim();
+    await tile.getByRole('button').first().click();
+    await expect(page).toHaveURL(/\/front-desk\/arrivals/);
+    await expect(page.locator('[data-desk-filter="all"]')).toContainText(value);
+    await page.locator('main').click({ position: { x: 5, y: 5 } });
+    await page.keyboard.press('g');
+    await page.keyboard.press('d');
+    await expect(page).toHaveURL(/\/front-desk\/departures/);
+    await expect(page.getByRole('heading', { name: 'Departures' })).toBeVisible();
+    await page.keyboard.press('g');
+    await page.keyboard.press('i');
+    await expect(page).toHaveURL(/\/front-desk\/in-house/);
+    // An in-house stay is never "Ready" (C3.2).
+    await expect(page.getByRole('grid').getByText('Ready for check-in')).toHaveCount(0);
+  });
+
+  test('no horizontal page scroll at 1024 px (tablet) on the boards (NAV-05, HK-09)', async ({
+    page,
+    demo,
+  }) => {
+    await page.setViewportSize({ width: 1024, height: 768 });
+    await startSignedIn(page, demo);
+    for (const path of ['/today', '/front-desk/arrivals', '/housekeeping', '/my-work', '/settings/users']) {
+      await page.goto(path);
+      await page.locator('main h1').first().waitFor();
+      await page.waitForTimeout(300);
+      const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+      expect(overflow, `${path} overflows by ${overflow}px`).toBeLessThanOrEqual(0);
+    }
+  });
+
+  test('axe: no violations of any impact on every screen, with the record drawer and the palette open, light and dark', async ({
+    page,
+    demo,
+  }) => {
+    const check = async (label: string) => {
+      const results = await new AxeBuilder({ page })
+        .withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'])
+        .analyze();
+      return results.violations.map(
+        (v) =>
+          `${label} ${v.impact} ${v.id}: ${v.nodes
+            .slice(0, 3)
+            .map((n) => n.target.join(' '))
+            .join(' | ')}`,
+      );
+    };
+    const found: string[] = [];
     for (const theme of ['light', 'dark'] as const) {
       await startSignedIn(page, demo, { theme });
-      for (const path of ['/today', '/front-desk/arrivals', '/housekeeping', '/settings/users']) {
+      for (const path of [
+        '/today',
+        '/my-work',
+        '/front-desk/arrivals',
+        '/front-desk/in-house',
+        '/front-desk/departures',
+        '/housekeeping',
+        '/reservations/timeline',
+        '/learn',
+        '/settings/users',
+      ]) {
         await page.goto(path);
         await page.locator('main h1').first().waitFor();
         await page.waitForTimeout(400);
-        const results = await new AxeBuilder({ page })
-          .withTags(['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa'])
-          .analyze();
-        const serious = results.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical');
-        expect(
-          serious.map(
-            (v) =>
-              `${theme} ${path} ${v.id}: ${v.nodes
-                .slice(0, 3)
-                .map((n) => n.target.join(' '))
-                .join(' | ')}`,
-          ),
-        ).toEqual([]);
+        found.push(...(await check(`${theme} ${path}`)));
       }
+      // Overlays: the record drawer over the arrivals board, then the command palette.
+      await page.goto('/front-desk/arrivals');
+      await page.locator('[role=row][data-row-id]').first().click();
+      await page.locator('[data-record-drawer] h1, [data-record-drawer] h2').first().waitFor();
+      await page.waitForTimeout(300);
+      found.push(...(await check(`${theme} drawer`)));
+      await page.keyboard.press('Escape');
+      await page.keyboard.press('Control+k');
+      await page.getByRole('dialog', { name: 'Command palette' }).waitFor();
+      await page.keyboard.type('arr');
+      await page.waitForTimeout(300);
+      found.push(...(await check(`${theme} palette`)));
+      await page.keyboard.press('Escape');
     }
+    expect(found).toEqual([]);
   });
 });

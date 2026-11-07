@@ -506,3 +506,7 @@ function nightIndex(r: DeskRowView, businessDate: string | undefined): number {
   if (!businessDate) return 1;
   return Math.round((Date.parse(businessDate) - Date.parse(r.arrival)) / 86_400_000) + 1;
 }
+
+export const ArrivalsScreen = () => <DeskPage kind="arrivals" />;
+export const InHouseScreen = () => <DeskPage kind="in-house" />;
+export const DeparturesScreen = () => <DeskPage kind="departures" />;

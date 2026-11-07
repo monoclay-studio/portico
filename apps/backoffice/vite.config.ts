@@ -20,5 +20,6 @@ export default defineConfig({
     },
   },
   preview: { port: 5180, strictPort: true, host: '127.0.0.1' },
-  build: { sourcemap: true, target: 'es2023' },
+  // Source maps are produced for error reporting but never referenced from (or served with) the bundle.
+  build: { sourcemap: 'hidden', target: 'es2023', chunkSizeWarningLimit: 600 },
 });

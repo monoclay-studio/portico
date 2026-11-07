@@ -9,20 +9,9 @@ import {
 } from '@tanstack/react-router';
 import { z } from 'zod';
 import { sessionStore } from '../api/session';
-import { LegalEntitiesPage } from '../features/admin/legal-entities-page';
-import { OrganizationPage } from '../features/admin/organization-page';
-import { PropertiesPage } from '../features/admin/properties-page';
-import { PropertyDetailPage } from '../features/admin/property-detail-page';
-import { UsersPage } from '../features/admin/users-page';
 import { SignInPage } from '../features/auth/sign-in-page';
-import { DeskPage } from '../features/front-desk/desk-page';
 import { HomeRedirect } from '../features/home';
-import { HousekeepingPage } from '../features/housekeeping/housekeeping-page';
-import { LearnPage } from '../features/learn/learn-page';
 import { NotFoundPage } from '../features/not-found';
-import { MyWorkPage } from '../features/overview/my-work-page';
-import { TodayPage } from '../features/overview/today-page';
-import { TimelinePage } from '../features/reservations/timeline-page';
 import { RouteError } from './error-boundary';
 import { AppShell } from './shell/app-shell';
 
@@ -65,60 +54,75 @@ const appRoute = createRoute({
 });
 
 const homeRoute = createRoute({ getParentRoute: () => appRoute, path: '/', component: HomeRedirect });
-const todayRoute = createRoute({ getParentRoute: () => appRoute, path: '/today', component: TodayPage });
-const myWorkRoute = createRoute({ getParentRoute: () => appRoute, path: '/my-work', component: MyWorkPage });
-const learnRoute = createRoute({ getParentRoute: () => appRoute, path: '/learn', component: LearnPage });
+const todayRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/today',
+  component: lazyRouteComponent(() => import('../features/overview/today-page'), 'TodayPage'),
+});
+const myWorkRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/my-work',
+  component: lazyRouteComponent(() => import('../features/overview/my-work-page'), 'MyWorkPage'),
+});
+const learnRoute = createRoute({
+  getParentRoute: () => appRoute,
+  path: '/learn',
+  component: lazyRouteComponent(() => import('../features/learn/learn-page'), 'LearnPage'),
+});
 const arrivalsRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/front-desk/arrivals',
-  component: () => <DeskPage kind="arrivals" />,
+  component: lazyRouteComponent(() => import('../features/front-desk/desk-page'), 'ArrivalsScreen'),
 });
 const inHouseRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/front-desk/in-house',
-  component: () => <DeskPage kind="in-house" />,
+  component: lazyRouteComponent(() => import('../features/front-desk/desk-page'), 'InHouseScreen'),
 });
 const departuresRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/front-desk/departures',
-  component: () => <DeskPage kind="departures" />,
+  component: lazyRouteComponent(() => import('../features/front-desk/desk-page'), 'DeparturesScreen'),
 });
 const housekeepingRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/housekeeping',
-  component: HousekeepingPage,
+  component: lazyRouteComponent(
+    () => import('../features/housekeeping/housekeeping-page'),
+    'HousekeepingPage',
+  ),
 });
 const timelineRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/reservations/timeline',
   validateSearch: z.object({ stay: z.string().optional(), from: z.iso.date().optional() }),
-  component: TimelinePage,
+  component: lazyRouteComponent(() => import('../features/reservations/timeline-page'), 'TimelinePage'),
 });
 const organizationRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/settings/organization',
-  component: OrganizationPage,
+  component: lazyRouteComponent(() => import('../features/admin/organization-page'), 'OrganizationPage'),
 });
 const propertiesRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/settings/properties',
-  component: PropertiesPage,
+  component: lazyRouteComponent(() => import('../features/admin/properties-page'), 'PropertiesPage'),
 });
 /** Matches the platform manifest's record route template ('/settings/properties/:id'). */
 const propertyDetailRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/settings/properties/$propertyId',
-  component: PropertyDetailPage,
+  component: lazyRouteComponent(() => import('../features/admin/property-detail-page'), 'PropertyDetailPage'),
 });
 const legalEntitiesRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/settings/legal-entities',
-  component: LegalEntitiesPage,
+  component: lazyRouteComponent(() => import('../features/admin/legal-entities-page'), 'LegalEntitiesPage'),
 });
 const usersRoute = createRoute({
   getParentRoute: () => appRoute,
   path: '/settings/users',
-  component: UsersPage,
+  component: lazyRouteComponent(() => import('../features/admin/users-page'), 'UsersPage'),
 });
 
 const routeTree = rootRoute.addChildren([
