@@ -356,6 +356,33 @@ Breaking changes (no consumer outside the composition root, all bound in the sam
 - **finance:** `PaymentsPort.lockCollections`; consumer `finance.departed-folio-payment-ended` (payments payment
   succeeded/failed) re-syncs a deferred balance request; `transferToReceivables` and `recordPaymentAdjustment` sync.
 
+### Integration-step fix round 4 (re-review #4, ADR-0015 Amendment 3)
+
+- **Lock order across modules (complete):** authorization row → saved-card row (payments: `consentProblem` re-reads the
+  card `FOR UPDATE` before the running total) → collection lock (one key per booking family) → deposit account / folio
+  row (finance) → payment request row (payments). Finance's `applyDeposits` takes the collection lock (through
+  `PaymentsPort.lockCollections`) before the deposit account (R4-P3-2).
+- **Consent coverage (Amendment 3):** an agreement covers exactly the bookings in `scope.bookingIds` and the folios in
+  `scope.folioIds`. Each named booking carries server-built evidence `scope.bookingEvidence[bookingId] = { at, channel,
+  stayIds }`: the booking's stays when the cardholder consented; a stay added later is not covered until the
+  cardholder confirms again. No reservations relationship (booker, occupant, payer, profile merge) extends coverage.
+  Only the cardholder adds a booking (`confirmCardForBooking`, guest actor). Q160 (a future-stays, payer-account scope)
+  is not offered; `scope.coverage` is `named_bookings` only.
+- **Running total:** merchant charges and captures (processing, pending verification, succeeded) + every open merchant
+  hold (amount − captured − reserved) + this use; a capture or increase counts its own hold once.
+- **payments ports:** `ReferenceDirectoryPort.describeReference` returns a stay's `stayCreatedAt` and a booking's
+  `stayIds` (reservations); `LedgerPort.balanceOf(tx, ref)` (what a folio owes; null when unknown) and
+  `LedgerPort.depositsHeldFor(tx, bookingId)` (deposits held, not yet applied) (finance).
+- **payments provider:** `confirmCardForBooking(tx, { methodId, bookingId })` (guest actor only, audited);
+  `confirmLinkStopped(tx, { requestId, reason })` and `POST /v1/payments/requests/:id/link-stopped`;
+  `syncBalanceRequest` returns `linkReady` and `oldLinkStopping`. Payment requests: `link_status` adds `completed`
+  (paid at the provider, payment not yet recorded) and `link_status_at` (migration 0004). Exception kind
+  `payment_link_not_stopped` (urgent, owner finance) after 30 minutes without the provider's confirmation.
+- **payments contracts:** charge and recorded-payment purposes add `no_show`; `maxAmount` is a total (not per use);
+  `scope.folioIds`, `scope.coverage`.
+- **finance:** `BalanceSyncResult.linkReady` / `oldLinkStopping` decide the late-charge item text (never "a link is
+  open" before one exists).
+
 ## Rules for changing a contract
 
 1. Update this file in the same commit as the provider change.
