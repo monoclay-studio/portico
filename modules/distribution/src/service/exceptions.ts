@@ -337,3 +337,32 @@ export async function autoResolveDiscrepancies(
   }
   return n;
 }
+
+/**
+ * The hub refused the API key (any call: ARI, acknowledgement, feed, verification). One rule for every path:
+ * publication and acknowledgements stop for THIS connection only, and one urgent exception says what to do (E04).
+ */
+export async function markCredentialsInvalid(
+  tx: TxContext,
+  conn: { id: string; property_id: string },
+  message: string,
+): Promise<void> {
+  await db(tx)
+    .updateTable('distribution.connections')
+    .set({ credential_state: 'invalid' })
+    .where('id', '=', conn.id)
+    .execute();
+  await raiseException(tx, {
+    connectionId: conn.id,
+    propertyId: conn.property_id,
+    code: 'credentials_invalid',
+    dedupeKey: 'credentials_invalid',
+    severity: 'urgent',
+    problem: message,
+    businessImpact:
+      'Availability and rates are NOT reaching this channel and new bookings are not acknowledged (other channels are unaffected). Changes are kept and sent once the key works; bookings stay at the hub.',
+    responsibleParty: 'hotel',
+    nextStep:
+      'Check at the hub whether the API key was revoked or the property access removed, then enter a valid key in the connection (Replace key) and verify it.',
+  });
+}

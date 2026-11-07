@@ -31,6 +31,8 @@ export const distributionManifest: ModuleManifest = {
   name: 'distribution',
   schema: 'distribution',
   migrationsDir: join(dirname(fileURLToPath(import.meta.url)), '..', 'migrations'),
+  // The webhook router and the scheduler read platform.tenant_environment() (routing metadata only).
+  migrateAfter: ['platform'],
   features: ['distribution.channelManager'],
   recordTypes: [
     {

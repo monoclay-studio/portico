@@ -48,7 +48,7 @@ import {
   settingsOf,
   targetForEnvironment,
 } from './common';
-import { autoResolve, raiseException } from './exceptions';
+import { autoResolve, markCredentialsInvalid, raiseException } from './exceptions';
 import { completeness } from './mappings';
 import { releaseProtection } from './stop-sell';
 import { webhookUrl } from './webhooks';
@@ -299,6 +299,7 @@ export async function verifyConnection(
       detail: failure ? { message: failure.message } : { propertyName },
       provenance: provenanceOfTarget(conn.target),
     });
+    if (failure?.failure.class === 'auth') await markCredentialsInvalid(tx, conn, failure.message);
     const state = failure ? (failure.failure.class === 'auth' ? 'invalid' : conn.credential_state) : 'valid';
     const updated = await db(tx)
       .updateTable('distribution.connections')

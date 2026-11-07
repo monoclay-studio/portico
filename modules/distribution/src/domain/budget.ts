@@ -44,7 +44,7 @@ export function reserveSlot(
   return {
     ok: false,
     sends,
-    retryAt: new Date(oldest.getTime() + windowMs + 1),
+    retryAt: new Date(oldest.getTime() + windowMs),
     reason: 'budget_exhausted',
   };
 }

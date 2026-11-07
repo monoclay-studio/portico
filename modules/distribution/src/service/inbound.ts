@@ -58,7 +58,7 @@ import {
   scheduleTenant,
   settingsOf,
 } from './common';
-import { autoResolve, raiseDiscrepancy, raiseException } from './exceptions';
+import { autoResolve, markCredentialsInvalid, raiseDiscrepancy, raiseException } from './exceptions';
 
 export const PARK_ESCALATION_MS = 15 * 60_000;
 const FINAL: readonly RevisionState[] = ['applied', 'duplicate', 'stale', 'rejected'];
@@ -877,13 +877,10 @@ export async function dispatchAcks(
         .where('revision_row_id', '=', row.revision_row_id)
         .execute();
       if (f.class === 'auth') {
-        await db(tx)
-          .updateTable('distribution.connections')
-          .set({ credential_state: 'invalid' })
-          .where('id', '=', conn.id)
-          .execute();
+        await markCredentialsInvalid(tx, conn, f.message);
+        continue;
       }
-      if (stop || isEscalated(firstFailed, tx.now) || f.class === 'auth') {
+      if (stop || isEscalated(firstFailed, tx.now)) {
         await raiseException(tx, {
           connectionId: conn.id,
           propertyId: conn.property_id,
@@ -917,7 +914,8 @@ export async function pullFeed(
 ): Promise<{ stored: number; duplicates: number; unparseable: number; failed: boolean }> {
   const pre = await withTenantTx(database, ctx, async (tx) => {
     const conn = await loadConnection(tx, connectionId);
-    if (conn.status === 'disconnected' || conn.status === 'setup') return null;
+    if (conn.status === 'disconnected' || conn.status === 'setup' || conn.credential_state === 'invalid')
+      return null;
     try {
       return { conn, hubCtx: await hubContext(tx, deps, conn) };
     } catch (err) {
@@ -962,13 +960,7 @@ export async function pullFeed(
         detail: { message: failure?.message ?? null },
         provenance,
       });
-      if (failure?.class === 'auth') {
-        await db(tx)
-          .updateTable('distribution.connections')
-          .set({ credential_state: 'invalid' })
-          .where('id', '=', conn.id)
-          .execute();
-      }
+      if (failure?.class === 'auth') await markCredentialsInvalid(tx, conn, failure.message);
       await db(tx)
         .updateTable('distribution.connections')
         .set({ next_feed_pull_at: new Date(tx.now.getTime() + 60_000) })

@@ -82,7 +82,9 @@ export function computeHealth(f: HealthFacts): HealthResult {
       staleSince: stale ?? failingSince?.toISOString() ?? f.now.toISOString(),
     };
   }
-  if (failingSince) {
+  // A short failure that a retry fixes within the freshness target does not degrade the connection (no flapping
+  // of stop-sell protection on a single 5xx); beyond the target the channel is behind and it does.
+  if (failingSince && age(failingSince, f.now) > f.freshnessTargetMs) {
     return {
       health: 'degraded',
       reason: 'Exchanges with the hub are failing and being retried.',

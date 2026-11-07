@@ -40,7 +40,7 @@ import {
   recordExchange,
   settingsOf,
 } from './common';
-import { autoResolve, raiseException } from './exceptions';
+import { autoResolve, markCredentialsInvalid, raiseException } from './exceptions';
 
 /** A cell as stored on a message: product, night, value sent, why it differs, and the wire value carrying it. */
 export interface StoredCell {
@@ -151,16 +151,25 @@ type Claim =
       provenance: 'live' | 'sandbox' | 'simulated';
     };
 
+/**
+ * DST-R15 / DST-I05: no ARI at all while another system is authoritative for availability (two systems would
+ * control live inventory); no rates or restrictions while another system is authoritative for rates.
+ */
 async function publicationBlockedBy(
   tx: TxContext,
   deps: DistributionDeps,
   conn: ConnectionRow,
   kind: AriKind,
 ): Promise<string | null> {
-  const domain = kind === 'availability' ? 'availability' : 'rates';
-  const a = await deps.ports.platform.getDataAuthority(tx, conn.property_id, domain);
-  if (a.authority === 'portico') return null;
-  return `${a.systemName ?? 'Another system'} is the system of record for ${domain} at this property, so Portico does not publish ${kind} to channels (no two systems control live inventory).`;
+  const domains =
+    kind === 'availability' ? (['availability'] as const) : (['availability', 'rates'] as const);
+  for (const domain of domains) {
+    const a = await deps.ports.platform.getDataAuthority(tx, conn.property_id, domain);
+    if (a.authority === 'external') {
+      return `${a.systemName ?? 'Another system'} is the system of record for ${domain} at this property, so Portico does not publish ${kind} to channels (no two systems control live inventory).`;
+    }
+  }
+  return null;
 }
 
 async function claim(
@@ -636,24 +645,7 @@ async function record(
       );
     }
     if (f.class === 'auth') {
-      await db(tx)
-        .updateTable('distribution.connections')
-        .set({ credential_state: 'invalid' })
-        .where('id', '=', conn.id)
-        .execute();
-      await raiseException(tx, {
-        connectionId: conn.id,
-        propertyId: conn.property_id,
-        code: 'credentials_invalid',
-        dedupeKey: 'credentials_invalid',
-        severity: 'urgent',
-        problem: f.message,
-        businessImpact:
-          'Availability and rates are NOT reaching this channel (other channels are unaffected). Changes are kept and sent once the key works.',
-        responsibleParty: 'hotel',
-        nextStep:
-          'Check at the hub whether the API key was revoked or the property access removed, then enter a valid key in the connection (Replace key) and verify it.',
-      });
+      await markCredentialsInvalid(tx, conn, f.message);
     } else {
       const urgent = isEscalated(firstFailed, tx.now);
       await raiseException(tx, {
