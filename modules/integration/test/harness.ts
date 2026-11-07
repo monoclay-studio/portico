@@ -40,6 +40,8 @@ export interface Harness {
   sent: WebhookRequest[];
   transport: { respond: (req: WebhookRequest) => Promise<{ status: number }> };
   scopeCalls: Array<{ propertyId: string; effect: string }>;
+  /** Authority transitions planned through the fake platform port (second-approval domains). */
+  planned: Array<{ id: string } & Parameters<NonNullable<AuthorityTransitionPort['plan']>>[1]>;
   /** Records applied by the fake owning-module handlers (in order). */
   applied: InboundRecordForHandler[];
   handlerMode: Map<string, 'apply' | 'reject' | 'hold' | 'throw'>;
@@ -70,10 +72,17 @@ export async function startHarness(): Promise<Harness> {
       scopeCalls.push({ propertyId: input.propertyId, effect: input.effect });
     },
   };
+  const planned: Harness['planned'] = [];
   const transitionsPort: AuthorityTransitionPort = {
     async activeTransition(_tx, input) {
       const s = transitions.get(`${input.propertyId}:${input.domain}`);
       return s ? { id: 'transition', state: s } : null;
+    },
+    // Fake platform transition planning (second approver happens in platform): recorded, nothing changes.
+    async plan(_tx, input) {
+      const id = newId();
+      planned.push({ id, ...input });
+      return { id };
     },
   };
   const deps: IntegrationDeps = {
@@ -142,6 +151,7 @@ export async function startHarness(): Promise<Harness> {
     transport,
     scopeCalls,
     applied,
+    planned,
     handlerMode,
     transitions,
     async close() {

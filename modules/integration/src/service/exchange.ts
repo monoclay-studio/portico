@@ -1077,6 +1077,23 @@ export async function reprocessHeld(
 }
 
 /** Review a mapping and, for an operational connection, re-apply updates held for it. */
+/** A change of system of record took effect at a property: apply what was held while it was being switched. */
+export async function reprocessAfterAuthoritySwitch(
+  tx: TxContext,
+  deps: IntegrationDeps,
+  propertyId: string,
+): Promise<number> {
+  const conns = await db(tx)
+    .selectFrom('integration.connections')
+    .selectAll()
+    .where(sql<boolean>`${propertyId}::uuid = any(property_ids)`)
+    .where('state', 'in', ['active', 'monitoring'])
+    .execute();
+  let applied = 0;
+  for (const c of conns) applied += (await reprocessHeld(tx, deps, c)).applied;
+  return applied;
+}
+
 export async function reviewMappingAndReprocess(
   tx: TxContext,
   deps: IntegrationDeps,

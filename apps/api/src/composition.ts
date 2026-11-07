@@ -182,6 +182,9 @@ export function compose(database: PorticoDatabase): Composition {
       // they merge; until then received records are stored as `accepted` and applied in order once bound.
       inbound: {},
       activationScope: unavailableActivationScope,
+      // When platform authority transitions are on main (identity-plus), bind: activeTransition ← openTransitionFor
+      // (status → state); plan ← planAuthorityTransition(tx, propertyId, { changes, reason, freezeMinutes }); and
+      // platform's transitionGuard ← createIntegrationProvider(integrationDeps).pendingOperations.
       transitions: noAuthorityTransitions,
     },
     connectors: createConnectorRegistry({ pmsSimulator: pmsSimulators }),
@@ -211,7 +214,7 @@ export function compose(database: PorticoDatabase): Composition {
       integrationModule,
       recordsModule,
     ],
-    subscriptions: [...integrationSubscriptions()],
+    subscriptions: [...integrationSubscriptions(integrationDeps)],
     searchProviders,
     jobs: [
       ...CORE_JOBS,

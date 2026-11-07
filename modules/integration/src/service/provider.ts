@@ -3,7 +3,7 @@
  * (docs/architecture/domain-map.md § integration), bound to this deployment's connectors and ports. Additive
  * functions (contract changes) are listed in the README.
  */
-import type { TxContext } from '@portico/db';
+import { sql, type TxContext } from '@portico/db';
 import type { EntityRef } from '@portico/kernel';
 import type {
   Connection,
@@ -13,6 +13,7 @@ import type {
   ResponsibleParty,
   Severity,
 } from '../contracts';
+import { workflowInfo } from '../domain/impact';
 import { db, type IntegrationDeps, loadConnection, parseScope, provenanceOf, registered } from './common';
 import { getConnection, listConnections } from './connections';
 import { listExceptions, raiseException, resolveException } from './exceptions';
@@ -82,6 +83,15 @@ export interface IntegrationProvider {
     ageSeconds: number | null;
     provenance: 'external' | 'simulated' | 'delayed' | 'incomplete';
   }>;
+  /**
+   * Platform `AuthorityTransitionGuard` (ST-08): forwarded or uncertain outbound actions at a property whose
+   * workflow belongs to one of the domains. A transition cannot become effective while any is unsettled.
+   */
+  pendingOperations(
+    tx: TxContext,
+    propertyId: string,
+    domains: readonly string[],
+  ): Promise<Array<{ ref: string; description: string }>>;
   /** Integration exceptions for the cross-module "My work" inbox. */
   listWorkItems(
     tx: TxContext,
@@ -130,6 +140,38 @@ export function createIntegrationProvider(deps: IntegrationDeps): IntegrationPro
             ? 'simulated'
             : 'external';
       return { lastSuccessAt: last ? last.toISOString() : null, ageSeconds: age, provenance };
+    },
+    async pendingOperations(tx, propertyId, domains) {
+      const rows = await db(tx)
+        .selectFrom('integration.outbound_commands as c')
+        .innerJoin('integration.connections as k', 'k.id', 'c.connection_id')
+        .select(['c.id', 'c.workflow', 'c.operation', 'c.status', 'k.name', 'k.connector_key'])
+        .where('c.status', 'in', ['queued', 'sending', 'pending_verification', 'needs_revalidation'])
+        .where((eb) =>
+          eb.or([
+            eb('c.property_id', '=', propertyId),
+            eb.and([
+              eb('c.property_id', 'is', null),
+              sql<boolean>`${propertyId}::uuid = any(k.property_ids)`,
+            ]),
+          ]),
+        )
+        .orderBy('c.enqueued_at')
+        .limit(500)
+        .execute();
+      const wanted = new Set(domains);
+      const out: Array<{ ref: string; description: string }> = [];
+      for (const r of rows) {
+        const reg = deps.connectors.get(r.connector_key);
+        const domain = reg?.definition.workflows.find((w) => w.workflow === r.workflow)?.dataDomain ?? null;
+        // A workflow with no known domain is reported too (fail closed).
+        if (domain !== null && !wanted.has(domain)) continue;
+        out.push({
+          ref: `integration_outbound_command:${r.id}`,
+          description: `${workflowInfo(r.workflow).label} ${r.operation} for ${r.name}: ${r.status.replace(/_/g, ' ')}`,
+        });
+      }
+      return out;
     },
     async listWorkItems(tx, input) {
       const all = await listExceptions(tx, { status: 'unresolved' });

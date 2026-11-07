@@ -30,7 +30,13 @@ import type {
   LifecyclePreview,
   ValidationRun,
 } from '../contracts';
-import { buildImpact, domainLabel, explainAuthorityChange, workflowInfo } from '../domain/impact';
+import {
+  buildImpact,
+  domainLabel,
+  explainAuthorityChange,
+  needsSecondApproval,
+  workflowInfo,
+} from '../domain/impact';
 import { canTransition, completedStep, isOperational } from '../domain/setup-journey';
 import { P } from '../manifest';
 import type { DataAuthorityView, PropertyInfo } from '../ports';
@@ -837,11 +843,12 @@ async function authorityChangesFor(
         domain: a.domain,
         before: { authority: before.authority, writeMode: before.writeMode, systemName: before.systemName },
         after: { authority: 'external', writeMode: a.writeMode, systemName: systemName(conn, def) },
-        explanation: explainAuthorityChange(
+        explanation: `${explainAuthorityChange(
           a.domain,
           { authority: 'external', writeMode: a.writeMode },
           conn.name,
-        ),
+        )}${needsSecondApproval(a.domain) ? ` This takes effect only after a second manager approves the change of system of record; until then ${before.authority === 'portico' ? 'Portico' : (before.systemName ?? 'the current system')} stays in charge.` : ''}`,
+        requiresSecondApproval: needsSecondApproval(a.domain),
       });
     }
   }
@@ -931,8 +938,15 @@ export async function previewActivation(
       warnings.push(
         'File exchange — not a live connection: information is only as current as the last file.',
       );
+    const approvals = [
+      ...new Set(authorityChanges.filter((c) => c.requiresSecondApproval).map((c) => domainLabel(c.domain))),
+    ];
+    if (approvals.length > 0)
+      warnings.push(
+        `Activation plans a change of system of record for ${approvals.join(', ')}: a second manager must approve it (Data authority) before ${conn.name} takes over.`,
+      );
     for (const c of authorityChanges) {
-      if (c.before.authority === 'portico')
+      if (c.before.authority === 'portico' && !c.requiresSecondApproval)
         warnings.push(
           `At ${c.propertyName}, staff must stop changing ${domainLabel(c.domain)} in Portico${c.after.writeMode === 'forward' ? ' directly; Portico will forward changes instead' : ''}.`,
         );
@@ -984,6 +998,11 @@ export async function previewActivation(
 
 // ───────────────────────────── Step 8: activation ─────────────────────────────
 
+/**
+ * Make the connection the system of record for its scope (F9). Domains that need a second person's approval
+ * (charges, payments, accounting, availability) are never changed here: a platform authority transition is planned
+ * for them, and the change happens when another manager approves and completes it.
+ */
 async function applyAuthority(
   tx: TxContext,
   deps: IntegrationDeps,
@@ -991,24 +1010,64 @@ async function applyAuthority(
   def: ConnectorDefinition,
   scope: ConnectionScope,
   reason: string,
-): Promise<DataAuthorityView[]> {
-  const out: DataAuthorityView[] = [];
+): Promise<{
+  changed: DataAuthorityView[];
+  planned: Array<{ propertyId: string; transitionId: string; domains: DataDomain[] }>;
+}> {
+  const changed: DataAuthorityView[] = [];
+  const planned: Array<{ propertyId: string; transitionId: string; domains: DataDomain[] }> = [];
+  const name = systemName(conn, def);
+  const plan = deps.ports.transitions.plan;
   for (const propertyId of conn.property_ids) {
+    const approval = plan ? scope.authority.filter((a) => needsSecondApproval(a.domain)) : [];
     for (const a of scope.authority) {
-      out.push(
-        await deps.ports.platform.setDataAuthority(tx, {
-          propertyId,
+      if (approval.includes(a)) continue;
+      try {
+        changed.push(
+          await deps.ports.platform.setDataAuthority(tx, {
+            propertyId,
+            domain: a.domain,
+            authority: 'external',
+            connectionId: conn.id,
+            systemName: name,
+            writeMode: a.writeMode,
+            reason,
+          }),
+        );
+      } catch (err) {
+        if (err instanceof DomainError && err.code === 'second_approval_required') {
+          throw new BusinessRuleError(
+            'second_approval_required',
+            `Making ${conn.name} the system of record for ${domainLabel(a.domain)} needs a second manager's approval, which this deployment cannot route from a connection yet. Remove ${domainLabel(a.domain)} from the system-of-record scope and activate; then plan the change under Data authority so another manager can approve it.`,
+            { domain: a.domain },
+          );
+        }
+        if (err instanceof DomainError && err.code === 'authority_transition_open') {
+          throw new BusinessRuleError(
+            'authority_transition_open',
+            `A change of system of record for ${domainLabel(a.domain)} is already in progress at this property. Finish or cancel it under Data authority, then activate.`,
+            { domain: a.domain },
+          );
+        }
+        throw err;
+      }
+    }
+    if (plan && approval.length > 0) {
+      const t = await plan(tx, {
+        propertyId,
+        changes: approval.map((a) => ({
           domain: a.domain,
-          authority: 'external',
+          authority: 'external' as const,
           connectionId: conn.id,
-          systemName: systemName(conn, def),
+          systemName: name,
           writeMode: a.writeMode,
-          reason,
-        }),
-      );
+        })),
+        reason: `${reason} (needs a second manager's approval)`,
+      });
+      planned.push({ propertyId, transitionId: t.id, domains: approval.map((a) => a.domain) });
     }
   }
-  return out;
+  return { changed, planned };
 }
 
 export async function activate(
@@ -1098,7 +1157,8 @@ export async function activate(
     },
     detail: {
       previewId: preview.id,
-      authority: authority.map((a) => ({ domain: a.domain, writeMode: a.writeMode })),
+      authority: authority.changed.map((a) => ({ domain: a.domain, writeMode: a.writeMode })),
+      awaitingSecondApproval: authority.planned,
     },
   });
   for (const s of scope.workflows) {
@@ -1112,7 +1172,12 @@ export async function activate(
   await tx.audit({
     action: 'integration.connection.activate',
     target: { type: 'integration_connection', id },
-    after: { scope, previewId: preview.id, authority },
+    after: {
+      scope,
+      previewId: preview.id,
+      authority: authority.changed,
+      awaitingSecondApproval: authority.planned,
+    },
   });
   await refreshHealth(tx, deps, moved);
   return connectionView(tx, deps, await loadConnection(tx, id));

@@ -411,6 +411,11 @@ export const authorityChange = z.object({
   before: z.object({ authority: z.string(), writeMode: z.string(), systemName: z.string().nullable() }),
   after: z.object({ authority: z.string(), writeMode: z.string(), systemName: z.string().nullable() }),
   explanation: z.string(),
+  /**
+   * charges, payments, accounting and availability move only after a second person approves the authority
+   * transition that activation plans (platform CR-10); until then the current system of record stays in place.
+   */
+  requiresSecondApproval: z.boolean(),
 });
 export type AuthorityChange = z.infer<typeof authorityChange>;
 

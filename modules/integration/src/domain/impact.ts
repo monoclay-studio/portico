@@ -219,6 +219,21 @@ export function domainLabel(domain: DataDomain): string {
   return DOMAIN_LABEL[domain];
 }
 
+/**
+ * Domains whose system of record changes only with a second person's approval (platform CR-10): integration plans an
+ * authority transition for these instead of changing them at activation.
+ */
+export const SECOND_APPROVAL_DOMAINS: readonly DataDomain[] = [
+  'charges',
+  'payments',
+  'accounting',
+  'availability',
+];
+
+export function needsSecondApproval(domain: DataDomain): boolean {
+  return SECOND_APPROVAL_DOMAINS.includes(domain);
+}
+
 /** One sentence explaining what a data-authority change means for staff. */
 export function explainAuthorityChange(
   domain: DataDomain,

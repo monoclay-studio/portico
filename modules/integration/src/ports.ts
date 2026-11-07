@@ -72,11 +72,35 @@ export interface ActivationScopePort {
  * Authority transitions (gap G-02; platform agent is adding planned → frozen → effective). While a domain is
  * frozen, inbound changes are held (not applied) and activation / replacement for that domain is refused.
  */
+/**
+ * Platform's data-authority transitions (planned → approved → frozen → effective). Platform names:
+ * `activeTransition` ← `openTransitionFor(tx, propertyId, domain)` (status → state); `plan` ←
+ * `planAuthorityTransition(tx, propertyId, { changes, reason, freezeMinutes })`.
+ */
 export interface AuthorityTransitionPort {
   activeTransition(
     tx: TxContext,
     input: { propertyId: string; domain: DataDomain },
   ): Promise<{ id: string; state: 'planned' | 'frozen' } | null>;
+  /**
+   * Plan a transition that makes a connection the system of record for domains that need a second person's
+   * approval. Unbound where the platform has no transitions: activation then changes authority directly and a
+   * platform refusal (`second_approval_required`) is explained to the person.
+   */
+  plan?(
+    tx: TxContext,
+    input: {
+      propertyId: string;
+      changes: Array<{
+        domain: DataDomain;
+        authority: 'external';
+        connectionId: string;
+        systemName: string;
+        writeMode: 'forward' | 'read_only';
+      }>;
+      reason: string;
+    },
+  ): Promise<{ id: string }>;
 }
 
 /** A translated external record handed to the module that owns its meaning (F6, spec proposal 1). */
