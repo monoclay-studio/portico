@@ -108,28 +108,30 @@ test.describe('back office smoke (real API on :4100)', () => {
     const target = list.items.find((p) => p.code === 'AZA') as Property;
     await page.goto(`/settings/properties/${target.id}`);
     await expect(page.getByRole('heading', { name: target.name })).toBeVisible();
+    // Values differ on every run so the test is repeatable against the same dev database.
+    const mine = target.checkInTime === '13:00' ? '13:30' : '13:00';
+    const theirsTime = target.checkInTime === '15:00' ? '15:30' : '15:00';
+    const theirsName = `${target.name.replace(/ \(edited [0-9]+\)$/, '')} (edited ${Date.now() % 100000})`;
     // I change the check-in time…
-    await page.getByLabel('Check-in time').fill('13:00');
+    await page.getByLabel('Check-in time').fill(mine);
     // …while a colleague saves a different check-in time and a new name first.
     const { body: current, etag } = await apiGet<Property>(request, demo, `/properties/${target.id}`);
     const theirs = await request.patch(`/v1/properties/${target.id}`, {
       headers: { authorization: `Bearer ${demo.token}`, 'if-match': etag ?? `W/"${current.version}"` },
-      data: {
-        checkInTime: current.checkInTime === '15:00' ? '15:30' : '15:00',
-        name: `${current.name.replace(/ \(edited\)$/, '')} (edited)`,
-      },
+      data: { checkInTime: theirsTime, name: theirsName },
     });
     expect(theirs.ok(), await theirs.text()).toBeTruthy();
     await page.getByRole('button', { name: 'Save changes' }).click();
     const dialog = page.getByRole('dialog', { name: 'Someone else changed this property' });
     await expect(dialog).toBeVisible();
-    await expect(dialog.locator('[data-conflict="both"]')).toContainText('13:00');
-    await expect(dialog.locator('[data-conflict="theirs"]')).toContainText('(edited)');
+    await expect(dialog.locator('[data-conflict="both"]')).toContainText(mine);
+    await expect(dialog.locator('[data-conflict="both"]')).toContainText(theirsTime);
+    await expect(dialog.locator('[data-conflict="theirs"]')).toContainText(theirsName);
     await dialog.getByRole('button', { name: 'Re-apply my changes' }).click();
     await expect(page.getByText('Your changes were re-applied on top of the latest version.')).toBeVisible();
     const { body: after } = await apiGet<Property>(request, demo, `/properties/${target.id}`);
-    expect(after.checkInTime).toBe('13:00');
-    expect(after.name).toContain('(edited)'); // their change survived: no lost update
+    expect(after.checkInTime).toBe(mine);
+    expect(after.name).toBe(theirsName); // their change survived: no lost update
     expect(after.version).toBe(current.version + 2);
   });
 

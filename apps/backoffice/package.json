@@ -11,7 +11,7 @@
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run --passWithNoTests",
     "seed:dev": "tsx scripts/seed-dev.ts",
-    "e2e": "playwright test",
+    "e2e": "playwright test e2e/smoke.spec.ts",
     "screenshots": "playwright test e2e/screenshots.spec.ts"
   },
   "dependencies": {
