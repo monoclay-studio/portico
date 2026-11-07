@@ -2,15 +2,15 @@
 
 ## Checkpoint
 
-- **Done:** schema (`migrations/0001_operations.sql`), pure domain (`src/domain/*` + 8 unit-test files), services,
-  HTTP routes, event consumers, scheduled jobs, search provider, universal record contract, seed helpers,
-  composition wiring (`apps/api/src/composition.ts`), HTTP e2e test (`apps/api/test/operations.test.ts`).
-  Scenario tests s07, s08, s13; escalation (fixed clock), housekeeping/workload, isolation/permissions,
-  connected mode, preventive maintenance / lost & found / search.
-- **In progress:** investigating an intermittent failure of `test/scenario-s13-offline-sync.test.ts` (main case)
-  that appears only when the whole package suite runs in parallel; passes 4/4 in isolation.
-- **Next steps:** pin the s13 flake; final re-read of the spec; README polish.
-- **Known failing tests:** none deterministic (see flake above).
+- **Done:** everything listed below is implemented, committed and green: `pnpm lint`, `pnpm typecheck`,
+  `pnpm --filter @portico/operations test` (unit + integration), `pnpm --filter @portico/api test`.
+- **Fixed:** the intermittent s13 failure — the delta-pull cursor is a cluster-wide snapshot xmin, so a long
+  transaction in *another* test database could cause rows to be re-sent (at-least-once by design); the test now
+  asserts "nothing new" instead of "empty".
+- **Next steps (for the orchestrator):** bind `InventoryPort` to `@portico/inventory` in the composition root;
+  register `createOperationsDemoSeed(operationsService)` in `DEMO_SEED_STEPS`; align reservations/inventory event
+  payloads with *Events → expected payload fields* below; add `operations.task.read` to identity role templates.
+- **Known failing tests:** none.
 
 Operations makes the physical hotel legible and the work in it accountable: unit condition and readiness,
 housekeeping planning and execution, inspections, generic tasks with SLA escalation, guest service requests,

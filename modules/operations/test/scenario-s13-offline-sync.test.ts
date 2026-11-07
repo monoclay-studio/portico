@@ -272,7 +272,12 @@ describe('scenario 13: an attendant loses connectivity while updating housekeepi
     const again = await org.tx(mariyam, (tx) =>
       h.ops.pullChanges(tx, { propertyId: org.propertyId, cursor: delta.cursor, limit: 500 }),
     );
-    expect(again).toMatchObject({ units: [], tasks: [], hasMore: false });
+    // At-least-once: the cursor is a cluster-wide snapshot xmin, so a long transaction anywhere (e.g. another
+    // test database on the same server) may cause rows to be re-sent — but never with anything new.
+    expect(again.hasMore).toBe(false);
+    for (const u of again.units)
+      expect(u.version).toBe(delta.units.find((x) => x.unitId === u.unitId)?.version);
+    for (const t of again.tasks) expect(t.version).toBe(delta.tasks.find((x) => x.id === t.id)?.version);
   });
 
   it('concurrent duplicate submissions apply each mutation exactly once', async () => {

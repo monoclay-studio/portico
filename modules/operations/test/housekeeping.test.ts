@@ -245,3 +245,36 @@ describe('housekeeping planning and workload balancing', () => {
     });
   });
 });
+
+describe('demo seed step', () => {
+  it('falls back to sample units when inventory is not available, for a resort and a guesthouse', async () => {
+    const { createOperationsDemoSeed, createOperationsService } = await import('../src');
+    const ops = createOperationsService({
+      ...h.ports,
+      inventory: {
+        ...h.ports.inventory,
+        listUnits: async () => {
+          throw new Error('inventory not available');
+        },
+      },
+    });
+    const resort = await setupOrg(h, { code: 'DEMO1' });
+    const step = createOperationsDemoSeed(ops);
+    await resort.tx(resort.admin, (tx) =>
+      step.run(tx, { tenantId: resort.tenantId, properties: [{ id: resort.propertyId, profile: 'resort' }] }),
+    );
+    const board = await resort.tx(resort.admin, (tx) => ops.board(tx, resort.propertyId, {}));
+    expect(board.rows.length).toBe(36);
+    const guesthouse = await setupOrg(h, { code: 'DEMO2', profile: 'guesthouse' });
+    await guesthouse.tx(guesthouse.admin, (tx) =>
+      step.run(tx, {
+        tenantId: guesthouse.tenantId,
+        properties: [{ id: guesthouse.propertyId, profile: 'guesthouse' }],
+      }),
+    );
+    const small = await guesthouse.tx(guesthouse.admin, (tx) => ops.board(tx, guesthouse.propertyId, {}));
+    expect(small.rows).toHaveLength(12);
+    // Guesthouse profile: clean is enough for arrival (inspection off by default).
+    expect(small.rows[0]?.unit.readiness).toMatchObject({ requiredCondition: 'clean', ready: true });
+  });
+});
