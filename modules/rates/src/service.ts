@@ -11,6 +11,7 @@ import * as calendar from './services/calendar';
 import * as catalog from './services/catalog';
 import * as quoting from './services/quote';
 import * as plans from './services/rate-plans';
+import * as records from './services/records';
 import * as taxes from './services/tax-rules';
 
 export function ratesService(ports: RatesPorts) {
@@ -28,6 +29,12 @@ export function ratesService(ports: RatesPorts) {
     /** Pure: charge lines to post for agreed terms (no configuration read). */
     postingPlan: (terms: TermsSnapshot, stayId: string) => postingPlan(terms, stayId),
     verifyTerms: (terms: TermsSnapshot) => verifyTerms(terms),
+
+    // ── Universal record views (status per family, next actions, issues, links) ──
+    ratePlanRecord: (tx: TxContext, plan: Parameters<typeof records.ratePlanRecord>[2]) => records.ratePlanRecord(ports, tx, plan),
+    ratePlanRecords: (tx: TxContext, propertyId: string, list: Parameters<typeof records.ratePlanRecords>[3]) =>
+      records.ratePlanRecords(ports, tx, propertyId, list),
+    taxRuleRecord: records.taxRuleRecord,
 
     // ── Rate plans ──
     createRatePlan: (tx: TxContext, input: unknown) => plans.createRatePlan(ports, tx, input),

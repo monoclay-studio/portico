@@ -1237,3 +1237,34 @@ export const restrictionQuery = z.object({
 });
 export const taxRuleActivation = z.object({ reason: z.string().min(3).max(500), acknowledgeReport: z.boolean() });
 export const taxTemplateInstall = z.object({ template: z.enum(['MV']), propertyIds: z.array(uuid).nullable().default(null) });
+
+// ───────────────────────────── Universal record contract (experience-architecture §1) ─────────────────────────────
+
+export const recordAction = z.object({
+  action: z.string(),
+  label: z.string(),
+  enabled: z.boolean(),
+  reason: z.string().optional(),
+  previewRequired: z.boolean().optional(),
+});
+export const recordIssue = z.object({
+  code: z.string(),
+  severity: z.enum(['blocking', 'warning', 'info']),
+  message: z.string(),
+  since: z.string().optional(),
+});
+export const recordLink = z.object({ rel: z.string(), type: z.string(), id: z.string(), title: z.string().optional() });
+const recordParts = {
+  status: z.record(z.string(), z.string()),
+  allowedActions: z.array(recordAction),
+  issues: z.array(recordIssue),
+  links: z.array(recordLink),
+};
+
+/** Rate plan as a record: `status` per family ({ ratePlan }), next actions, issues and related records. */
+export const ratePlanRecord = ratePlan.omit({ status: true }).extend(recordParts);
+export type RatePlanRecord = z.infer<typeof ratePlanRecord>;
+
+/** Tax/fee rule as a record: `status` = { taxRule, verification } of the version in force today. */
+export const taxRuleRecord = taxRule.omit({ status: true }).extend(recordParts);
+export type TaxRuleRecord = z.infer<typeof taxRuleRecord>;

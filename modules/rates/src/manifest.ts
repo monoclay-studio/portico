@@ -6,6 +6,15 @@ export const ratesManifest: ModuleManifest = {
   name: 'rates',
   schema: 'rates',
   migrationsDir: join(dirname(fileURLToPath(import.meta.url)), '..', 'migrations'),
+  recordTypes: [
+    { type: 'rate_plan', label: 'Rate plan', readPermission: 'rates.ratePlan.read', route: '/rates/plans/:id' },
+    { type: 'rate_policy', label: 'Rate policy', readPermission: 'rates.ratePlan.read', route: '/rates/policies/:id' },
+    { type: 'inclusion', label: 'Inclusion / allowance', readPermission: 'rates.ratePlan.read', route: '/rates/inclusions/:id' },
+    { type: 'package', label: 'Package', readPermission: 'rates.ratePlan.read', route: '/rates/packages/:id' },
+    { type: 'promotion', label: 'Promotion', readPermission: 'rates.ratePlan.read', route: '/rates/promotions/:id' },
+    { type: 'tax_rule', label: 'Tax & fee rule', readPermission: 'rates.taxRule.read', route: '/settings/tax-rules/:id' },
+    { type: 'tax_rule_version', label: 'Tax & fee rule version', readPermission: 'rates.taxRule.read' },
+  ],
   permissions: [
     { key: 'rates.ratePlan.read', description: 'View rate plans, prices, restrictions and policies', scope: 'property' },
     { key: 'rates.ratePlan.manage', description: 'Create and edit rate plans and their status', scope: 'property' },

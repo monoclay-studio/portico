@@ -11,3 +11,4 @@ export type { TaxActivationReport } from './services/tax-rules';
 export { loadTaxTemplate } from './services/tax-rules';
 export type { RatesDB } from './tables';
 export { createRatesDemoSeed, type SeededRates, seasonRanges, seedGuesthouseRates, seedResortRates } from './seed';
+export { ratesSearch } from './search';
