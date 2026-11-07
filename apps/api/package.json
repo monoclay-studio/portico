@@ -22,8 +22,9 @@
     "@portico/identity": "workspace:*",
     "@portico/kernel": "workspace:*",
     "@portico/platform": "workspace:*",
-    "zod": "catalog:",
-    "pg": "catalog:"
+    "@portico/reservations": "workspace:*",
+    "pg": "catalog:",
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@portico/testing": "workspace:*",

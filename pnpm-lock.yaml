@@ -101,6 +101,9 @@ importers:
       '@portico/platform':
         specifier: workspace:*
         version: link:../../modules/platform
+      '@portico/reservations':
+        specifier: workspace:*
+        version: link:../../modules/reservations
       pg:
         specifier: 'catalog:'
         version: 8.23.1
