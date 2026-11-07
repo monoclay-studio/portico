@@ -3,6 +3,7 @@
  * stays (child ages drive price and Green Tax via rates), billing instructions sent to finance (company folio +
  * routing rules per stay), a "who pays for what" preview, and postings routed exactly as previewed.
  */
+import { sql } from '@portico/db';
 import type { Booking } from '@portico/reservations';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
@@ -59,9 +60,45 @@ describe('S04 — family, company pays accommodation', () => {
       ),
     );
     expect(b.stays).toHaveLength(3);
-    // Child ages drive the price: the stay with two children costs more than a 2-adult stay of the cheaper type.
-    const [p1, , p3] = b.stays.map((st) => st.totals?.gross.amountMinor);
-    expect(p3).toBeGreaterThan(p1 as number);
+    // Child ages drive the price and the Green Tax (rates, MV pack: USD 12 per person-night, under-2s exempt) —
+    // same villa type, plan and dates, only the occupants differ (review P2-4).
+    const quoteFor = async (adults: number, childrenAges: number[]) => {
+      const [offer] = await org.run(assistant, (tx) =>
+        reservations.deps.ports.rates.quote(tx, {
+          propertyId: k.id,
+          nights: { from: '2027-03-10', to: '2027-03-13' },
+          occupancy: { adults, childrenAges },
+          unitTypeIds: [k.types.BV as string],
+          ratePlanIds: [k.plans.BAR as string],
+        }),
+      );
+      if (!offer) throw new Error('no offer');
+      const green = offer.terms.nights
+        .flatMap((n) => n.taxes)
+        .filter((t) => t.code === 'MV-GREEN-12')
+        .reduce((sum, t) => sum + t.amount.amountMinor, 0);
+      return { net: offer.totals.net.amountMinor, green };
+    };
+    const couple = await quoteFor(2, []);
+    const withChild = await quoteFor(2, [6]);
+    const withInfant = await quoteFor(2, [1]);
+    expect(couple.green).toBe(2 * 1_200 * 3);
+    expect(withChild.green).toBe(3 * 1_200 * 3);
+    expect(withInfant.green).toBe(2 * 1_200 * 3); // under 2: exempt
+    expect(withChild.net).toBeGreaterThan(couple.net); // child supplement
+    expect(withInfant.net).toBe(couple.net); // infants stay free
+    // The booked aunt-and-children stay (1 adult, children 6 and 12) pays Green Tax for three persons.
+    const auntTerms = await sql<{
+      document: { nights: Array<{ taxes: Array<{ code: string; amount: { amountMinor: number } }> }> };
+    }>`
+      select document from reservations.terms_snapshots where stay_id = ${b.stays[2]?.id}`.execute(
+      s.t.admin.kysely,
+    );
+    const auntGreen = (auntTerms.rows[0]?.document.nights ?? [])
+      .flatMap((n) => n.taxes)
+      .filter((t) => t.code === 'MV-GREEN-12')
+      .reduce((sum, t) => sum + t.amount.amountMinor, 0);
+    expect(auntGreen).toBe(3 * 1_200 * 3);
 
     // finance holds the instructions: per stay a company folio for accommodation and the guest's default folio.
     const desk = org.staff('front_desk', 'Hassan', [k.id]);
