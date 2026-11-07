@@ -176,6 +176,14 @@ billing is not activated for live customers until this is answered.
 **Blocks:** live SaaS billing. Nothing in development.
 **Raised by / date:** product strategy, 2026-11-07
 
+### Q48 — Tax treatment of package allowances and breakage on Maldives tax invoices    Status: open
+**Context:** All-inclusive and dining-credit packages include allowances (e.g. USD 100/day dining credit). Finance found that counting both the package and the food paid by the credit overstates value-before-tax, and breakage (unused credit) currently carries no separate tax.
+**Question:** For the Maldives adviser — how must a TGST tax invoice present a package with an allowance, consumption against it, and breakage?
+**Default we are proceeding with:** package price invoiced once; consumption shown as information only; breakage follows the tax already charged on the package (ADR-0016 §5), configurable.
+**If the answer differs:** rule-pack configuration change; invoices regenerated only for future documents.
+**Blocks:** live tax invoices for packages with allowances. Nothing in development.
+**Raised by / date:** orchestrator (finance review), 2026-11-07
+
 ### Q60 — Packaging and pricing for standalone modules and migration services    Status: open
 **Context:** The adoption brief lets hotels keep their PMS and use selected Portico capabilities (housekeeping, guest messaging, reporting, transfers — `docs/adoption/adoption-paths.md` §4). Every edition in `modules/platform/src/domain/plans.ts` is built on the full PMS core, and Essentials allows only 1 property, so a 3-property group adopting only housekeeping and messaging cannot be represented. Migration effort (rehearsals, OPERA imports) is also a cost: competitors sell reservation import separately (Cloudbeds) or include it.
 **Question:** (a) Do you approve selling standalone modules as separate "connected" packages (per property or per unit, with their own limits), independent of the PMS editions? (b) Is migration of future reservations, profiles and open balances included in onboarding, or a paid service?
