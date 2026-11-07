@@ -158,6 +158,23 @@ describe('two auditors at once', () => {
   });
 });
 
+describe('other properties keep working (EC-DCL-027)', () => {
+  it('two properties of one group close at the same time without waiting for each other', async () => {
+    const a = await setupOrg(h);
+    const b = await setupOrg(h);
+    for (const o of [a, b])
+      for (let i = 0; i < 3; i++) await addStay(h, o, { arrival: '2026-11-06', departure: '2026-11-09' });
+    h.clock.set(NIGHT);
+    const [ra, rb] = await Promise.all([
+      h.service.startRun(h.t.db, a.auditor, { propertyId: a.propertyId }),
+      h.service.startRun(h.t.db, b.auditor, { propertyId: b.propertyId }),
+    ]);
+    expect([ra.runStatus, rb.runStatus]).toEqual(['completed', 'completed']);
+    expect(await businessDate(a)).toBe('2026-11-08');
+    expect(await businessDate(b)).toBe('2026-11-08');
+  });
+});
+
 describe('postings arriving during the close (cut-over rule)', () => {
   it('lands before the advance on D, after it on D+1, and an in-flight posting is surfaced in the report', async () => {
     const org = await setupOrg(h);

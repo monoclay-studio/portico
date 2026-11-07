@@ -138,6 +138,61 @@ describe('readiness: one running list with owners and fixes', () => {
   });
 });
 
+describe("finance's Day Close checks in the readiness list", () => {
+  it('maps every finance check to an owner and a fix; ledger alarms block and can never be overridden', async () => {
+    const org = await setupOrg(h);
+    const original = h.ports.finance.getUnbalancedItems;
+    const folio = { type: 'folio', id: newId() };
+    h.ports.finance.getUnbalancedItems = async (tx, scope, date) => [
+      ...(await original(tx, scope, date)),
+      {
+        code: 'entry_unbalanced',
+        severity: 'blocking',
+        ref: { type: 'journal_entry', id: newId() },
+        message: 'A journal entry does not balance.',
+      },
+      {
+        code: 'settled_folio_with_balance',
+        severity: 'blocking',
+        ref: folio,
+        message: 'A settled folio has a balance.',
+      },
+      {
+        code: 'cashier_session_open',
+        severity: 'warning',
+        ref: { type: 'cashier_session', id: newId() },
+        message: "Mariyam's session is open.",
+      },
+      { code: 'invoice_overdue_for_issue', severity: 'warning', ref: folio, message: 'Issue the invoice.' },
+      {
+        code: 'payments_awaiting_verification',
+        severity: 'warning',
+        ref: folio,
+        message: '2 recorded payments.',
+      },
+      { code: 'suspense_balance', severity: 'warning', ref: null, message: 'Suspense holds 12.00.' },
+    ];
+    try {
+      const r = await org.run((tx) => h.service.getReadiness(tx, org.propertyId), nightAudit(h, org));
+      const by = new Map([...r.blocking, ...r.warnings].map((i) => [i.code, i]));
+      expect(by.get('entry_unbalanced')).toMatchObject({ blocking: true, overridable: false });
+      expect(by.get('entry_unbalanced')?.actions.map((a) => a.action)).toEqual(['reviewLedger']);
+      expect(by.get('settled_folio_with_balance')).toMatchObject({ blocking: true, overridable: true });
+      expect(by.get('cashier_session_open')?.actions.map((a) => a.action)).toEqual(['closeCashierSession']);
+      expect(by.get('invoice_overdue_for_issue')?.actions.map((a) => a.action)).toEqual(['issueInvoice']);
+      expect(by.get('payments_awaiting_verification')?.blocking).toBe(false);
+      expect(by.get('suspense_balance')).toMatchObject({ blocking: false, ref: null });
+      const fin = (await org.run((tx) => platform.listDepartments(tx, org.propertyId))).find(
+        (d) => d.kind === 'finance',
+      );
+      expect(by.get('entry_unbalanced')?.owner.id).toBe(fin?.id);
+      expect(by.get('cashier_session_open')?.owner.name).toBe('Front office');
+    } finally {
+      h.ports.finance.getUnbalancedItems = original;
+    }
+  });
+});
+
 describe('blocking, overrides and policy', () => {
   it('a blocking item stops the run; an override needs the permission and a reason; resume completes (EC-DCL-009)', async () => {
     const org = await setupOrg(h);
@@ -322,6 +377,30 @@ describe('integrity gate (DCL-I02, EC-DCL-006)', () => {
     const issues = await org.run((tx) => h.service.listIssues(tx, org.propertyId, 'open'), auditor);
     expect(issues.filter((i) => i.code === 'integrity_failed')).toEqual([]);
     expect(await businessDate(org)).toBe('2026-11-08');
+  });
+
+  it('the guest ledger off by USD 0.02: the run fails at integrity, the date stays, nothing is retried (EC-DCL-006)', async () => {
+    const org = await setupOrg(h);
+    await addStay(h, org, { arrival: '2026-11-06', departure: '2026-11-09' });
+    const original = h.ports.finance.integrityReport;
+    h.ports.finance.integrityReport = async (tx, scope) => {
+      const r = await original(tx, scope);
+      return {
+        ok: false,
+        checks: r.checks.map((c) =>
+          c.check === 'guest_ledger_equals_folios' ? { ...c, ok: false, actualMinor: c.actualMinor + 2 } : c,
+        ),
+      };
+    };
+    try {
+      const run = await h.service.startRun(h.t.db, nightAudit(h, org), { propertyId: org.propertyId });
+      expect(run.failure).toMatchObject({ step: 'integrity', code: 'integrity_failed', retryable: false });
+      expect(run.failure?.message).toMatch(/guest_ledger_equals_folios/);
+      expect(run.execution.nextRetryAt).toBeNull();
+      expect(await businessDate(org)).toBe(D);
+    } finally {
+      h.ports.finance.integrityReport = original;
+    }
   });
 
   it('the database refuses to complete the advance step unless integrity completed in the same run', async () => {

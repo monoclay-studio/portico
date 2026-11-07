@@ -105,6 +105,15 @@ describe('S09: Day Close interrupted after 67 of 112 room postings', () => {
     const breakfast = await entriesByKey(h, org.tenantId, 'inclusion:');
     expect(breakfast).toHaveLength(112);
     expect(breakfast.every((r) => r.n === 1)).toBe(true);
+    // Resume, never redo: every stay-night item was done exactly once (no item re-executed after the crash).
+    const items = await h.t.admin.kysely
+      .selectFrom('day_close.step_items')
+      .select(['attempts', 'status'])
+      .where('run_id', '=', runId)
+      .where('step_key', '=', 'room_and_package_postings')
+      .execute();
+    expect(items).toHaveLength(112);
+    expect(items.every((i) => i.status === 'done' && i.attempts === 1)).toBe(true);
     const posted = done.steps.find((s) => s.key === 'room_and_package_postings');
     expect(posted).toMatchObject({ status: 'completed', total: 112, done: 112, failed: 0, attempts: 2 });
 
@@ -123,7 +132,11 @@ describe('S09: Day Close interrupted after 67 of 112 room postings', () => {
     expect(actions).toContain('dayClose.businessDate.advanced');
     expect(actions.at(-1)).toBe('dayClose.run.complete');
     expect(done.execution.executions).toHaveLength(2);
-    expect(done.execution.executions[1]).toMatchObject({ fromStep: 'room_and_package_postings' });
+    // EC-DCL-031: each execution records the code that ran it.
+    expect(done.execution.executions[1]).toMatchObject({
+      fromStep: 'room_and_package_postings',
+      codeVersion: 'day-close@1',
+    });
     expect(done.execution.executions[1]?.tookOverFrom).toBeTruthy();
 
     // Global consistency: trial balance zero, control accounts = sub-ledgers; one business-date advance.
