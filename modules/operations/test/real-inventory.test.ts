@@ -1,11 +1,11 @@
 /**
  * Operations × the REAL inventory provider (review P1-3, R1–R5), bound exactly as in apps/api composition:
- * operations authorizes the intent, the adapter calls inventory with system scope (ADR-0015), refusals keep the
+ * operations authorizes the intent, inventory's port surface is property-scoped (ADR-0015), refusals keep the
  * work order, inventory events delivered late or reordered never corrupt operations' state.
  */
 import { drainOutbox, sourcesFromManifests, type TxContext, withTenantTx } from '@portico/db';
-import { createInventoryService, inventoryManifest } from '@portico/inventory';
-import { newId, type RequestContext, systemAuthorizer } from '@portico/kernel';
+import { createInventoryService, inventoryManifest, inventoryProvider } from '@portico/inventory';
+import { newId, type RequestContext } from '@portico/kernel';
 import { platform, platformManifest } from '@portico/platform';
 import { createTestDatabase, type TestDatabase, testContext } from '@portico/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -26,13 +26,14 @@ const inventory = createInventoryService({
     resolvePolicy: platform.resolvePolicy,
   },
 });
-const asSystem = (tx: TxContext): TxContext => ({ ...tx, authz: systemAuthorizer });
+// ADR-0015: inventory's port surface (property-scoped delegation), exactly as the composition root binds it.
+const inventoryPort = inventoryProvider(inventory);
 const ports: OperationsPorts = {
   platform: platformPort(),
   inventory: {
-    blockUnit: (tx, input) => inventory.blockUnit(asSystem(tx), input),
-    releaseBlock: (tx, input) => inventory.releaseBlock(asSystem(tx), input),
-    listUnits: (tx, propertyId, filter) => inventory.listUnits(asSystem(tx), propertyId, filter),
+    blockUnit: (tx, input) => inventoryPort.blockUnit(tx, input),
+    releaseBlock: (tx, input) => inventoryPort.releaseBlock(tx, input),
+    listUnits: (tx, propertyId, filter) => inventoryPort.listUnits(tx, propertyId, filter),
   },
 };
 const ops = createOperationsService(ports);

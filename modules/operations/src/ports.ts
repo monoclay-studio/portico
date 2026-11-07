@@ -59,9 +59,11 @@ export interface InventoryUnit {
  */
 export interface InventoryPort {
   /** Never fails for sold-out nights; refuses (DomainError) e.g. `unit_already_blocked`, `forwarding_not_available`. */
+  /** `propertyId` (ADR-0015): the property operations authorized; inventory refuses a unit of another property. */
   blockUnit(
     tx: TxContext,
     input: {
+      propertyId: string;
       unitId: string;
       nights: DateRange;
       kind: 'out_of_order' | 'out_of_service';
@@ -70,7 +72,7 @@ export interface InventoryPort {
     },
   ): Promise<{ blockId: string; affectedAssignments: Array<{ ref: EntityRef; nights: DateRange }> }>;
   /** Returns the released block (unused by operations). */
-  releaseBlock(tx: TxContext, input: { blockId: string; reason?: string }): Promise<unknown>;
+  releaseBlock(tx: TxContext, input: { propertyId: string; blockId: string; reason?: string }): Promise<unknown>;
   listUnits(
     tx: TxContext,
     propertyId: string,

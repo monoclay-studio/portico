@@ -1,4 +1,12 @@
 export { type InventoryProvider, inventoryPortFrom } from './adapters/inventory';
+export {
+  type RatesOffer,
+  type RatesProvider,
+  type RatesTermsDocument,
+  ratesDocumentOf,
+  ratesPortFrom,
+  termsView,
+} from './adapters/rates';
 export * from './contracts';
 export * from './errors';
 export * from './events';

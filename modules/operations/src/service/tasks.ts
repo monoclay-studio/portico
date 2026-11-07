@@ -395,7 +395,12 @@ export async function createTask(d: Deps, tx: TxContext, input: TaskCreateInput)
   return taskView(tx, row);
 }
 
-/** Domain-map provider: `createTask(tx, { propertyId, departmentId, kind, title, ref?, dueAt?, priority })`. */
+/**
+ * Domain-map provider: `createTask(tx, { propertyId, departmentId, kind, title, ref?, dueAt?, priority })`.
+ * ADR-0015: the calling module authorized its own command at `propertyId`, so operations does not re-check
+ * `operations.task.manage` for that user (its HTTP route `POST /operations/tasks` does); a referenced unit of
+ * another property is refused (`unit_property_mismatch`, insertTask).
+ */
 export async function createTaskForModule(
   d: Deps,
   tx: TxContext,
@@ -412,7 +417,6 @@ export async function createTaskForModule(
     dedupeKey?: string;
   },
 ): Promise<{ taskId: string; created: boolean }> {
-  requirePermission(tx, 'operations.task.manage', { propertyId: input.propertyId });
   const ref = input.ref;
   const { row, created } = await insertTask(d, tx, {
     propertyId: input.propertyId,

@@ -56,10 +56,10 @@ import {
   type InventoryService,
   inventoryHttp,
   inventoryManifest,
+  inventoryProvider,
   inventorySearch,
 } from '@portico/inventory';
 import {
-  DomainError,
   fieldCryptoFromEnv,
   type ModuleManifest,
   ModuleUnavailableError,
@@ -72,6 +72,7 @@ import {
   createOperationsService,
   type OperationsPorts,
   type OperationsService,
+  operationsForReservations,
   operationsHttp,
   operationsJobs,
   operationsManifest,
@@ -108,7 +109,7 @@ import {
   type OperationsPort,
   type PaymentsPort,
   type PlatformPort,
-  type RatesPort,
+  ratesPortFrom,
   reservationsHttp,
   reservationsJobs,
   reservationsManifest,
@@ -132,24 +133,9 @@ export const MANIFESTS: readonly ModuleManifest[] = [
   paymentsManifest,
 ];
 
-/**
- * Stub for a port whose provider is another wave-1 module not merged yet. Every call fails with a clear,
- * retryable error (except the operations given in `available`).
- */
-function unavailablePort<T extends object>(module: string, available: Partial<T> = {}): T {
-  return new Proxy({} as T, {
-    get: (_t, prop) => {
-      if (prop === 'then') return undefined; // not a thenable
-      if (prop in available) return available[prop as keyof T];
-      return () => {
-        throw new ModuleUnavailableError(module, String(prop));
-      };
-    },
-  });
-}
-
 // ── inventory ── bound once; inventory's only port is platform (exists on main), so nothing is stubbed.
-// Other modules (reservations, operations, groups, distribution, day-close) bind their inventory ports to this.
+// Other modules (reservations, operations, groups, distribution, day-close) bind their inventory ports to its PORT
+// surface `inventoryProvider(inventoryService)` (ADR-0015: property-scoped, no system scope).
 export const inventoryService: InventoryService = createInventoryService({
   platform: {
     getBusinessDate: platform.getBusinessDate,
@@ -267,47 +253,8 @@ export function compose(database: PorticoDatabase): Composition {
   const finance = createFinance(financePorts);
   const financeModule = financeHttp({ database, finance });
 
-  // ── reservations ──
-  // Platform is real. inventory, rates, guests, finance, payments, operations are wave-1 modules built in
-  // parallel: bound to stubs that answer 503 `module_not_available` until the orchestrator binds the providers.
-  // access (door locks / keys) is a later module: the environment-safe fallback adapter answers `simulated` in
-  // non-live environments and `unavailable` (manual fallback at the desk) in live.
-  const reservationsPlatform: PlatformPort = {
-    async getProperty(tx, propertyId) {
-      // Property facts for computation (time zone, currency) — not a user-facing read.
-      const p = await platform.getProperty({ ...tx, authz: systemAuthorizer }, propertyId);
-      return {
-        id: p.id,
-        name: p.name,
-        timezone: p.timezone,
-        baseCurrency: p.baseCurrency,
-        legalEntityId: p.legalEntityId,
-        businessDate: p.businessDate,
-        checkInTime: p.checkInTime,
-        checkOutTime: p.checkOutTime,
-      };
-    },
-    getBusinessDate: (tx, propertyId) => platform.getBusinessDate(tx, propertyId),
-    assertWritable: (tx, propertyId, domain) => platform.assertWritable(tx, propertyId, domain),
-    getDataAuthority: (tx, propertyId, domain) => platform.getDataAuthority(tx, propertyId, domain),
-    resolvePolicy: (tx, propertyId, key, def) => platform.resolvePolicy(tx, propertyId, key, def),
-  };
-  const reservations = reservationsService({
-    platform: reservationsPlatform,
-    // R-13: the real inventory module through reservations' structural adapter (unit number → name, exclusions →
-    // reasons/conflicting refs, sold[] for the who-sold-it explanation). Drift in inventory's contract fails tsc here.
-    // ADR-0015: reservations authorizes the user's intent on every command; inventory is called with system scope
-    // (like operations' binding) and still enforces integrity and the availability authority.
-    inventory: inventoryPortFrom(inventoryService, { scope: asSystem }),
-    rates: unavailablePort<RatesPort>('rates'),
-    guests: unavailablePort<GuestsPort>('guests'),
-    finance: unavailablePort<FinancePort>('finance'),
-    payments: unavailablePort<PaymentsPort>('payments'),
-    operations: unavailablePort<OperationsPort>('operations'),
-    access: environmentAccessAdapter() satisfies AccessPort,
-  });
-  const reservationsModule = reservationsHttp({ database, service: reservations });
   // ── operations (housekeeping, tasks, maintenance, lost & found, offline sync) ──
+  const inventoryPort = inventoryProvider(inventoryService);
   const operationsPorts: OperationsPorts = {
     platform: {
       // Reference reads (timezone, business date, departments) for internal computation use system scope;
@@ -341,14 +288,12 @@ export function compose(database: PorticoDatabase): Composition {
         })),
     },
     // ADR-0015: operations authorizes the user's intent (operations.maintenance.setInventoryImpact at the
-    // property); inventory enforces integrity and its data authority. Refusals are kept on the work order.
-    // Until inventory drops its own permission re-check on port calls (pending-fixes: ADR-0015), the adapter calls
-    // it with system scope AFTER operations authorized the intent; inventory still enforces integrity and the
-    // availability/maintenance authority of the property.
+    // property); inventory's port surface does not re-check its own keys but refuses units and blocks of another
+    // property and enforces the availability/maintenance authority. Refusals are kept on the work order.
     inventory: {
-      blockUnit: (tx, input) => inventoryService.blockUnit(asSystem(tx), input),
-      releaseBlock: (tx, input) => inventoryService.releaseBlock(asSystem(tx), input),
-      listUnits: (tx, propertyId, filter) => inventoryService.listUnits(asSystem(tx), propertyId, filter),
+      blockUnit: (tx, input) => inventoryPort.blockUnit(tx, input),
+      releaseBlock: (tx, input) => inventoryPort.releaseBlock(tx, input),
+      listUnits: (tx, propertyId, filter) => inventoryPort.listUnits(tx, propertyId, filter),
     },
   };
   const operationsService = createOperationsService(operationsPorts);
@@ -497,6 +442,45 @@ export function compose(database: PorticoDatabase): Composition {
   });
   paymentsRef = payments.service;
 
+  // ── reservations ──
+  // Every provider is a real module (ADR-0015: reservations authorizes the user's intent and property on every
+  // command; providers verify that referenced records belong to that property and enforce their data authority).
+  // access (door locks / keys) is a later module: the environment-safe fallback adapter answers `simulated` in
+  // non-live environments and `unavailable` (manual fallback at the desk) in live.
+  const reservationsPlatform: PlatformPort = {
+    async getProperty(tx, propertyId) {
+      // Property facts for computation (time zone, currency) — not a user-facing read.
+      const p = await platform.getProperty({ ...tx, authz: systemAuthorizer }, propertyId);
+      return {
+        id: p.id,
+        name: p.name,
+        timezone: p.timezone,
+        baseCurrency: p.baseCurrency,
+        legalEntityId: p.legalEntityId,
+        businessDate: p.businessDate,
+        checkInTime: p.checkInTime,
+        checkOutTime: p.checkOutTime,
+      };
+    },
+    getBusinessDate: (tx, propertyId) => platform.getBusinessDate(tx, propertyId),
+    assertWritable: (tx, propertyId, domain) => platform.assertWritable(tx, propertyId, domain),
+    getDataAuthority: (tx, propertyId, domain) => platform.getDataAuthority(tx, propertyId, domain),
+    resolvePolicy: (tx, propertyId, key, def) => platform.resolvePolicy(tx, propertyId, key, def),
+  };
+  const reservations = reservationsService({
+    platform: reservationsPlatform,
+    // R-13: inventory's port surface through reservations' structural adapter (unit number → name, exclusions →
+    // reasons/conflicting refs, sold[] for the who-sold-it explanation). Drift in inventory's contract fails tsc.
+    inventory: inventoryPortFrom(inventoryProvider(inventoryService)),
+    // Rates' sealed TermsSnapshot v1 stored verbatim inside reservations' view and passed back unchanged.
+    rates: ratesPortFrom(rates),
+    guests: guestsService satisfies GuestsPort,
+    finance: financeForReservations(finance) satisfies FinancePort,
+    payments: payments.service.provider satisfies PaymentsPort,
+    operations: operationsForReservations(operationsService) satisfies OperationsPort,
+    access: environmentAccessAdapter() satisfies AccessPort,
+  });
+  const reservationsModule = reservationsHttp({ database, service: reservations });
   // ── cross-module experience: global search, summaries, record history ──
   const searchProviders: SearchProvider[] = [
     platformSearch,

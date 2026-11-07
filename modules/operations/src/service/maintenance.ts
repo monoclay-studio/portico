@@ -762,6 +762,7 @@ export async function requestUnitBlock(
   try {
     res = await withSavepoint(tx, 'operations_block_unit', () =>
       d.ports.inventory.blockUnit(tx, {
+        propertyId: wo.property_id,
         unitId,
         nights: { from: input.from, to: input.to },
         kind: input.kind,
@@ -1347,6 +1348,7 @@ export async function returnToService(
     });
   } else if (wo.block_id) {
     await d.ports.inventory.releaseBlock(tx, {
+      propertyId: wo.property_id,
       blockId: wo.block_id,
       reason: `Returned to service (${wo.number})`,
     });

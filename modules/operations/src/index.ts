@@ -6,6 +6,7 @@ export { operationsJobs } from './jobs';
 export * from './manifest';
 export type * from './ports';
 export * from './routes';
+export { operationsForReservations } from './reservations-port';
 export { operationsSearch } from './search';
 export {
   createOperationsDemoSeed,
