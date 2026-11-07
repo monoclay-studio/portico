@@ -23,6 +23,7 @@ import { NotFoundPage } from '../features/not-found';
 import { MyWorkPage } from '../features/overview/my-work-page';
 import { TodayPage } from '../features/overview/today-page';
 import { TimelinePage } from '../features/reservations/timeline-page';
+import { RouteError } from './error-boundary';
 import { AppShell } from './shell/app-shell';
 
 const rootRoute = createRootRouteWithContext<{ queryClient: QueryClient }>()({
@@ -134,6 +135,8 @@ export function createAppRouter(queryClient: QueryClient) {
     routeTree,
     context: { queryClient },
     defaultPreload: 'intent',
+    // A screen that throws shows what happened and how to recover; the shell around it keeps working.
+    defaultErrorComponent: RouteError,
     scrollRestoration: true,
   });
 }

@@ -1,11 +1,12 @@
 import { type HistoryState, ProblemAlert, RecordDrawer, RecordView, useHotkey, useToast } from '@portico/ui';
-import { scopeKey } from '../api/queries';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from '@tanstack/react-router';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { problemFromUnknown } from '../api/errors';
+import { scopeKey } from '../api/queries';
 import { useApp } from '../app/app-context';
+import { ErrorBoundary } from '../app/error-boundary';
 import { ExtendStayDialog } from '../features/reservations/extend-stay-dialog';
 import { RecordLink } from './entity-link';
 import { definitionFor, type RecordCtx, serverHistory } from './registry';
@@ -88,7 +89,8 @@ export function RecordHost() {
           title:
             (model && model.type === e.type && model.id === e.id
               ? model.title
-              : titles.get(`${userId}:${e.type}:${e.id}`)) ?? t(`records.types.${e.type}`, { defaultValue: e.type }),
+              : titles.get(`${userId}:${e.type}:${e.id}`)) ??
+            t(`records.types.${e.type}`, { defaultValue: e.type }),
         }))}
         onNavigateTrail={nav.jump}
         onBack={nav.back}
@@ -103,23 +105,29 @@ export function RecordHost() {
         )}
         {record.isSuccess && !model && <p className="text-sm text-ink-muted">{t('records.notFound')}</p>}
         {model && (
-          <RecordView
-            model={model}
-            history={historyState}
-            describeAction={(a) => t(`records.history.${a}`, { defaultValue: a })}
-            pinned={isPinned}
-            onTogglePin={() =>
-              isPinned
-                ? pinnedRecords.remove(userId, model)
-                : pinnedRecords.add(userId, { type: model.type, id: model.id, title: safeRecordTitle(model) })
-            }
-            onAction={(a) => def?.onAction?.(ctx, model, a, handlers)}
-            renderLink={(l) => (
-              <RecordLink type={l.type} id={l.id}>
-                {l.title ?? l.id}
-              </RecordLink>
-            )}
-          />
+          <ErrorBoundary where="record" resetKey={`${model.type}:${model.id}`}>
+            <RecordView
+              model={model}
+              history={historyState}
+              describeAction={(a) => t(`records.history.${a}`, { defaultValue: a })}
+              pinned={isPinned}
+              onTogglePin={() =>
+                isPinned
+                  ? pinnedRecords.remove(userId, model)
+                  : pinnedRecords.add(userId, {
+                      type: model.type,
+                      id: model.id,
+                      title: safeRecordTitle(model),
+                    })
+              }
+              onAction={(a) => def?.onAction?.(ctx, model, a, handlers)}
+              renderLink={(l) => (
+                <RecordLink type={l.type} id={l.id}>
+                  {l.title ?? l.id}
+                </RecordLink>
+              )}
+            />
+          </ErrorBoundary>
         )}
       </RecordDrawer>
       {extendStay && app.property && (

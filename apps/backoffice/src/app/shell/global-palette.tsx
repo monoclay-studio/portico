@@ -1,5 +1,4 @@
 import { CommandPalette, type PaletteCommand, ProvenanceBadge } from '@portico/ui';
-import { scopeKey } from '../../api/queries';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import {
@@ -18,6 +17,7 @@ import {
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '../../api';
+import { scopeKey } from '../../api/queries';
 import { workspaceSource } from '../../data/sources';
 import { toSimProperty } from '../../features/common/sim-property';
 import { LOCALES, setLocale } from '../../i18n';

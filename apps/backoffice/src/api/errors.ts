@@ -33,7 +33,7 @@ export function problemFromUnknown(e: unknown, where: string): ProblemDetails {
     status: 0,
     code: 'client_error',
     detail:
-      'Something in this screen failed before anything was sent to Portico, so nothing was changed. Try again; if it happens again, reload this screen.',
+      'Part of this screen stopped working. Try again; if it happens again, reload this screen. If you were changing a record, check it before repeating the change.',
     retryable: true,
     correlationId: `client:${where}`,
     details: { message: e instanceof Error ? e.message : String(e) },
