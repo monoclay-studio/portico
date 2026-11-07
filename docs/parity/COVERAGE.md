@@ -2,6 +2,7 @@
 
 | Module | Capabilities | Tested/equivalent | Edge cases | Tested | P0 still open | P1 missing |
 |---|---|---|---|---|---|---|
+| access | 40 | 5% | 32 | 0% | 39 | 0 |
 | accounting | 89 | 0% | 37 | 0% | 68 | 5 |
 | analytics | 49 | 0% | 30 | 0% | 36 | 8 |
 | comms | 56 | 2% | 32 | 0% | 39 | 14 |
