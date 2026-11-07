@@ -1,7 +1,7 @@
 # Agent run: Integration step: bind module ports
 
-- Started: 2026-11-07T16:16:26.294Z · last activity: 2026-11-07T17:31:30.337Z
-- Turns: 588 · tool uses: 365 · output tokens: 529,519
+- Started: 2026-11-07T16:16:26.294Z · last activity: 2026-11-07T18:07:07.678Z
+- Turns: 813 · tool uses: 505 · output tokens: 729,876
 - Type: general-purpose
 
 ## Brief (2026-11-07T16:16:26.294Z)
@@ -99,6 +99,15 @@ Address this before completing your current task.
 [Request interrupted by user]
 ````
 
+## Follow-up message (2026-11-07T17:38:53.297Z)
+
+````text
+The coordinator sent a message while you were working:
+Resume after the owner's checkpoint. Your WIP is committed on feat/integration-step as "wip(...): usage-limit checkpoint". Run `git log -3` to confirm, and amend or keep it as you prefer. Continue the fix round exactly where you stopped: you were reading the check-in guarantee step for P1-2. The brief is unchanged: P1-1 to P1-3 and the P2s from reviews/review-integration-step.md, the self-check tables, and the scenario-tests v2 rules. The gates are unchanged too.
+
+Address this before completing your current task.
+````
+
 ## Report (2026-11-07T17:04:17.381Z)
 
 ````text
@@ -183,5 +192,91 @@ Every reservations, finance and payments port that was still a 503 stub now goes
     - NAV-03 ranking by stay status and the "why it matched" line;
     - money on booking and stay records beyond the boards (FD-15).
 - **Domain map:** the contract changes are recorded in `docs/architecture/domain-map.md` under "Integration step".
+````
+
+## Report (2026-11-07T18:07:07.577Z)
+
+````text
+## Integration-step fix round: all P1s and P2s fixed, gates green
+
+I fixed the 3 P1s, all 7 P2s, and six of the nine P3s: P3-1, P3-2, P3-4, P3-5, P3-6, P3-8 and P3-9. P3-3 and P3-7 are recorded in pending-fixes, not fixed. Every reviewer PoC is now a regression test in `apps/api/test/review-regressions.test.ts` that asserts the attack is refused. Branch `feat/integration-step` @ `6fb1d00`, worktree /home/user/wt/integration-step, not pushed.
+
+I merged main twice; conflicts were only in the append-only docs and were resolved as unions. My late-charge question is renumbered **Q156** (Q146–Q149 belong to identity-plus, Q150–Q155 were on main). I replaced the usage-limit WIP checkpoint with a proper commit. The pending-fixes reference to a non-existent OPEN_QUESTIONS entry is gone; it now records the rates and guests decisions below.
+
+### Correction to my previous report (P2-5)
+"Every port bound" was wrong. These are still stubs on main, now listed in pending-fixes:
+- **integration:** `inbound` handlers (`{}`: reservations, roomStatus, charges); catalogs for `taxRule`, `chargeCode`, `ledgerAccount` and `outlet`; `activationScope` and `transitions` (wait for identity-plus).
+- **rates:** `affectedAgreements` and `channelForApiClient`.
+- **guests:** `referenceCounters`, `personalDataContributors`, `bookingLookup`, `communications`.
+- **reservations:** `access` (environment fallback adapter; no access module exists).
+- **Reads still made with system scope** (routing metadata, not ADR-0015 port commands): integration's catalog reads of inventory and rates, rates' `getProperty`/`listUnitTypes`/`companyExists`, and platform `getProperty` reads in finance, guests and payments.
+
+### Finding → commit → test
+| Finding | Commit | Regression test |
+|---|---|---|
+| P1-1 deposit for another property's or an unknown booking | `6d0cae8` | review-regressions "P1-1" (2 tests); finance payments-ledger-port test (unknown → `ledger_target_unknown`) |
+| P1-2 check-in holds any card for any amount | `6d0cae8`, `e47ef37` | review-regressions "P1-2" (2 tests); reservations check-in-resume "review P1-2" |
+| P1-3 late charge over-collects | `4e061b3` | review-regressions "P1-3"; bindings test now asserts the requested amount |
+| P2-1 FD-15 money still visible | `7b81cc9` | review-regressions "P2-1"; reservations isolation-permissions FD-15 |
+| P2-2 organization-wide finance delegation | `8b3fdfb` | review-regressions "P2-2" (scoped → 403; omitted scope → refused, never widened) |
+| P2-3 rates seal not verified before use | `216200e` | review-regressions "P2-3" |
+| P2-4 S04 claim weaker than its test | `ee4fcb4` | s04: same villa type, with and without children; Green Tax 12 × persons × nights; infant exempt |
+| P2-5 stub list | `1b9cf7b` | pending-fixes entry; `apps/api/test/scenarios/README.md` binding manifest |
+| P2-6 rates and guests re-check their own keys | `e9e8b7d` (rates), `1b9cf7b` (guests decision) | review-regressions "P2-6" |
+| P2-7 misleading 403 at check-in | `6d0cae8` | guarantee step fails with the recovery instead of throwing |
+| P3-1 / P3-2 / P3-4 / P3-5 / P3-6 / P3-8 / P3-9 | `216200e` / `eaa99fc` / `eaa99fc` / `4e061b3` / `eaa99fc` / `eaa99fc` / `eaa99fc` | rates and guests unit tests; s05 (user path) and s01 (no postings asserted); review-regressions "P3-9" ×2 |
+
+What changed:
+- **P1-1:** reservations now answers "which property owns this booking or stay". Finance uses it before recording any deposit: unknown booking → `ledger_target_unknown`, another property → `scope_mismatch`. A booking is never bound to the first property that pays. Payments no longer lets unknown bookings through, and refuses holds for another property's or an unknown stay or booking.
+- **P1-2:** choosing another card or an amount at check-in needs `payments.payment.collect`. The card must belong to the booking's booker, an occupant, the company/agency or the billing payer; this is also checked when a booking records or patches its card. The amount is capped by policy `reservations.checkIn.guaranteeCapPercent` (default 150 % of the agreed stay total).
+- **P1-3:** finance requests `min(late charge, folio balance after posting)`. When the folio is still in credit nothing is requested and a routine exception records `covered_by_credit`. The payer type now reaches payments (P3-5).
+- **P2-1:** for roles without finance or payments read permissions, payments is not read at all. The payment check shows `unknown` / "not shown for your role" and does not count towards ready or the blocking reason. Booking and stay records and booking lists return no totals, deposit requirement, payment status or folio links (`moneyRedacted`). `totals` is now nullable on booking and stay views.
+- **P2-2:** finance's delegation helper always needs a property (or `null` for legal-entity-level calls) and throws otherwise. Every function of the reservations adapter requires `propertyId`.
+- **P2-3:** the reservations rates adapter verifies the seal before evaluating penalties, deposits, complimentary terms or price changes (`terms_seal_invalid`). For P3-1, the preview digest now includes the provider's policies verbatim.
+- **P2-6 rates:** a rates port surface grants `rates.quote.read` at the quoted property only. Complimentary terms and price overrides still need `rates.price.override`, and backdating still needs its own key.
+- **P2-6 guests (decided, not changed):** `resolveProfile` keeps checking `guests.profile.update`. Matching reveals whether a guest exists by email, phone or document, so delegating it would let roles without guest access probe for guests. Every booking role template already holds that key.
+- **P3-9:** when charges or payments are external, the deposits or guarantee step is marked done and names the system of record, instead of interrupting check-in.
+- **New global consistency check:** every deposit finance holds must belong to a reservations booking of the same property.
+
+### Re-attack table (self-check §3)
+| Finding | (a) reverse order | (b) siblings checked | (c) failure path | (d) griefing | (e) atomic |
+|---|---|---|---|---|---|
+| P1-1 | Ghost-booking deposit refused first, so nothing can be bound later; first deposit at the owner, later one from another property refused (finance test) | payments charge, capture, payment request, VCC (all through the ledger-target check); finance via payments and the reservations port; Route-D recorded authorization; hold for a stay ref | 0 new payments, 0 deposit accounts (row counts compared before and after) | Hiyani can no longer put Kandu's stay or booking into the refused state (stay/booking holds refused); owner's deposit and check-in still work | n/a (no counter) |
+| P1-2 | Stranger's card attached at booking creation or patch is refused before the desk acts | check-in override, booking create, patch booking, the payments route itself | 0 authorizations; booking count and version unchanged | No outside party can make a guest's own card fail; the guest's card succeeds | Cap is a fixed limit per stay; one authorization in flight per reference (payments unique index) |
+| P1-3 | Credit first, then a larger charge → exactly the remaining debt is requested | finance's collection request is the only caller | Folio in credit → no request row | n/a | Balance is read after posting, under the folio row lock; a concurrent second request is refused by payments (one in flight). **No concurrent test** |
+| P2-1 | n/a | arrivals board, booking and stay records, booking lists (departures were already done) | n/a | n/a | n/a |
+| P2-2 | n/a | finance: reservations adapter, credit notes, receivables invoices | omitted scope throws before any read | n/a | n/a |
+| P2-3 | n/a | penalties, schedule, complimentary terms, price changes | refused before any evaluation | n/a | n/a |
+
+### Self-check §2 (items 5–32): 19 yes · 5 N/A · 4 no
+- **Yes:** 5, 6, 7, 8, 10, 12, 14, 15, 16, 19, 20, 21, 22, 24, 25, 27, 30, 31, 32.
+- **N/A:** 18, 23, 26, 28, 29.
+- **No, each listed as a gap:**
+  - 9 and 11: no concurrent test for two late charges on the same folio.
+  - 13: payments events still carry no `aggregateVersion` (in pending-fixes).
+  - 17: no ±1 boundary test at the guarantee cap.
+
+### Scenario-tests v2
+- **Binding manifest** in `apps/api/test/scenarios/README.md`: no module fakes are imported. Every exercised port is real except access (simulated keys), which S03, S05 and S15 touch only in the check-in keys step. That step is outside their catalogue lines; they are marked accordingly, not as blocked.
+- **Assertion map:** every State, Money, Inventory, Audit and Recovery line of the 12 passing scenarios points to a file:line or a named `.todo`. Still todo: S02, S09–S12, S18–S20.
+
+### Commands (merged tree, exit codes read directly, `PORTICO_TEST_DB_PREFIX=w1_intstep_fix`)
+| Gate | Exit |
+|---|---|
+| `pnpm install --frozen-lockfile` | 0 |
+| `pnpm lint` | 0, boundaries OK, no warnings |
+| `pnpm turbo run typecheck --force` | 0, 18/18 |
+| `pnpm turbo run test --force --concurrency=2` | 0, 16/16 |
+| `pnpm turbo run test --force` (default concurrency) | 0, 16/16 |
+
+- **Test counts:** api 79 passed, 29 todo; reservations 149; payments 113; finance 85; rates 130; guests 174; operations 120; inventory 98; integration 173; ui 87; backoffice 36; kernel 26; db 12; platform 9; identity 5; http 3.
+- **Slowest API files (CI run):** review-regressions 7.7 s, rates 6.7 s, bindings 6.4 s, inventory 6.2 s, demo-seed 6.0 s, s01 4.8 s. All are within the 30 s per-test budget.
+- **Test databases:** none with the `w1_intstep_fix` prefix left behind.
+
+### Still open, recorded in pending-fixes
+- **P3-3:** operations' `getUnitCondition` and provider `createTask` do not check stay, guest or department refs against the property.
+- **P3-7:** `booking.depositRequirement` should come from the agreed payment schedule, not client input.
+- **Saved-card ownership:** payments returns an already-saved token's method with its original owner. With the new owner check, a second guest saving the same token gets a card they cannot use; payments needs to decide refuse vs owner link.
+- **Q156** (owner): automatic charging of a departed guest's card for late charges. Default: always a payment request.
 ````
 

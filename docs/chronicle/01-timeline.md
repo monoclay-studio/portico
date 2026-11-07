@@ -226,4 +226,13 @@ Each agent's brief and report are in `agents/`.
   - It filled the re-attack table and declared its own gaps: no concurrent late-charge test, no cap-boundary test.
   - Under the new rule (re-attack P0/P1 fixes before merge), a focused re-review launches from steward playbook v2.1
     before merge.
+- **18:15 — Fix re-attack sweep done** (from steward playbook v2.1; the first measured v2 run).
+  - 56 original P0/P1 attacks re-run on main: 48 refused, 4 still succeed by a sibling path, 2 held only by
+    detection or fail-closed, 2 not re-probed.
+  - Residual P1s: payments ×3 (double collection via hold and capture; a card from a sister property; a
+    client-chosen "guest present" field) and guests ×1 (PII survives erasure in stored idempotency responses).
+  - Pattern: three of the four fixes guarded only the exact path the reviewer named. New self-check rule: one
+    regression test per sibling entry point.
+- **18:16 — Guests fix launched** (`fix/guests-erasure-idempotency`). The payments fix waits for the integration-step
+  merge, because the two overlap. The rates, finance and backoffice P2s go to their next rounds.
 
