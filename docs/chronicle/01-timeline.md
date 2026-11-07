@@ -289,4 +289,6 @@ Each agent's brief and report are in `agents/`.
   - One invariant is declared not yet closed: "card owned by the payer" on payments' own routes, which needs a payer
     directory.
   - The focused re-review (re-check #3) is queued for the next window, because the 5-hour window is ≥ 80%.
+- **19:29 — Window closing** <!-- t: now @ 2026-11-07T19:29:00Z -->. 5-hour usage is 85% and no agents are running; everything is pushed. The resume is
+  scheduled for 21:13 UTC with the Channex/distribution build first.
 

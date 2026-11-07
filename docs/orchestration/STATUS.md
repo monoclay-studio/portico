@@ -127,6 +127,23 @@
   free staging account and API key from the owner, requested via `request_credential` for the Channex staging host.
   Channex certification (R5–R6) is an external step. Production activation needs owner authorization (platform fee).
 
+- **2026-11-07 19:29 UTC — window closing (5-hour 85%, no agents running, everything pushed).** NEXT WINDOW
+  (resume scheduled 21:13 UTC), launch in this order, each from its latest playbook:
+  1. **Distribution module + Channex adapter** (owner direction; `docs/specs/distribution.md` §3.2–3.3 with the Channex
+     note): an event-driven ARI engine with coalescing, an outbox with a 20/min token bucket per connection, a
+     booking-revision webhook with a durable log and a recovery pull, ack after commit, mappings, last-acked state,
+     health. Simulator first (R3); Channex staging needs the owner's staging key (`request_credential`).
+  2. **Integration-step focused re-review #3** (steward v2.1, re-review variant) of `feat/integration-step` @ db6ae8c,
+     then merge if clean.
+  3. **Infra security review** (steward v2.1) of `feat/infra-aws`, then merge.
+  4. **UX round 2a** (focused; blackbox-tester playbook): the 8 "Done" refinements, the sign-in code step, C8/C11.
+     Update the UX lab with the demo authenticator first.
+  5. **Parity evidence re-run** for inventory and reservations.
+  6. **Quality steward round 3** after items 2–4 report.
+  7. **Module round 2 from the `docs/strategy/` briefs**, gap-plan order: backoffice wired to the real APIs plus
+     reservations front-desk flows; payments collection plans plus finance receipts; day-close.
+  8. **If the owner agrees:** a partner platform (public API docs, sandbox, webhooks, partner keys, MCP agent access).
+
 ## 1. Owner, product and how to work with the owner
 
 - Owner: founder of **Monoclay LLC** (Delaware, Stripe Atlas), based in the Maldives. Product: **Portico** (final name).
