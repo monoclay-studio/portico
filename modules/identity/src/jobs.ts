@@ -15,4 +15,12 @@ export const IDENTITY_JOBS: readonly ScheduledJob[] = [
       }
     },
   },
+  {
+    // ADR-0017 rule 15: SSO links of people who no longer have a membership in the linking organization.
+    name: 'identity.purgeOrphanSsoLinks',
+    intervalSeconds: 3600,
+    async run(database) {
+      await sql`select identity.purge_orphan_sso_links()`.execute(database.kysely);
+    },
+  },
 ];

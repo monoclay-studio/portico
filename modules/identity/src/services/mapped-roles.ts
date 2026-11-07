@@ -1,5 +1,5 @@
 import { type TxContext, typed } from '@portico/db';
-import { actorId, newId } from '@portico/kernel';
+import { actorId, BusinessRuleError, newId } from '@portico/kernel';
 import {
   desiredAssignments,
   type GroupRoleMapping,
@@ -7,6 +7,8 @@ import {
   type ScopeType,
 } from '../domain/role-mapping';
 import type { IdentityDB } from '../tables';
+import { assertAdministratorRemains } from './guard';
+import { raiseSecurityAlert } from './security';
 
 /**
  * Applies the organization's group → role mappings to one member. The privileged act is configuring the mappings
@@ -81,13 +83,32 @@ export async function reconcileMappedRoles(
       })
       .execute();
   }
+  const kept: string[] = [];
   for (const r of plan.revoke) {
+    // Review R2-P2-3 / ADR-0017 §6: a group change never removes the organization's last administrator. The
+    // assignment is kept and the organization's administrators are alerted to fix the identity provider's groups.
+    try {
+      await assertAdministratorRemains(tx, { assignmentIds: [r.assignmentId] });
+    } catch (err) {
+      if (!(err instanceof BusinessRuleError)) throw err;
+      kept.push(r.assignmentId);
+      await raiseSecurityAlert(tx, {
+        rule: 'last_administrator_kept',
+        severity: 'high',
+        summary: `A ${source.toUpperCase()} group change would have removed the organization's last administrator; the role was kept. Make someone else an administrator or fix the group membership in the identity provider.`,
+        subjectUserId: userId,
+        details: { source, roleKey: r.roleKey },
+        dedupeKey: `last_administrator_kept:${userId}:${r.assignmentId}`,
+      });
+      continue;
+    }
     await db(tx)
       .updateTable('identity.role_assignments')
       .set({ revoked_at: tx.now, revoked_by: by, revoke_reason: `no longer in a mapped ${source} group` })
       .where('id', '=', r.assignmentId)
       .execute();
   }
+  plan.revoke = plan.revoke.filter((r) => !kept.includes(r.assignmentId));
   if (plan.grant.length || plan.revoke.length) {
     await tx.audit({
       action: 'identity.role.reconcile',

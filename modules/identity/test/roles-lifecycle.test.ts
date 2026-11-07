@@ -313,7 +313,7 @@ describe('staff lifecycle', () => {
       .where('target_id', '=', admin.userId)
       .execute();
     expect(audit.map((a) => a.action)).toEqual(
-      expect.arrayContaining(['identity.user.create', 'identity.user.remove']),
+      expect.arrayContaining(['identity.user.invite', 'identity.user.remove']),
     );
     // Rehire: a new invitation reuses the membership.
     const again = await o.tx((tx) =>

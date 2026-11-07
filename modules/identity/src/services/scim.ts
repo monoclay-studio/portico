@@ -386,6 +386,7 @@ export async function scimDeleteUser(
     .where('user_id', '=', userId)
     .execute();
   await db(tx).deleteFrom('identity.scim_group_members').where('user_id', '=', userId).execute();
+  await db(tx).deleteFrom('identity.sso_identities').where('user_id', '=', userId).execute();
   await tx.audit({ action: 'identity.scim.deleteUser', target: { type: 'user', id: userId } });
   await tx.emit({
     type: 'identity.membership.removed',

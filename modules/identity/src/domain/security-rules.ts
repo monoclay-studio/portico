@@ -22,7 +22,9 @@ export type SecurityAlertRule =
   | 'break_glass_activated'
   | 'break_glass_designation_changed'
   | 'mfa_bruteforce_suspected'
-  | 'support_session_started';
+  | 'support_session_started'
+  | 'sso_root_change'
+  | 'last_administrator_kept';
 
 export type AlertSeverity = 'low' | 'medium' | 'high';
 

@@ -27,19 +27,21 @@ import { assignRole, hashPassword } from '../service';
 import type { IdentityDB } from '../tables';
 import {
   assertAdministratorRemains,
+  assertCanGrantRole,
   assertNotElevated,
   assertPowerOver,
   assertSoleOrganizationMember,
+  credentialSummary,
+  hasAnyCredential,
   isHumanSelf,
-  membershipsElsewhere,
+  verifyEmailOwnership,
 } from './guard';
 import {
-  hasActiveTotp,
   mfaStatus,
   recordSecondFactorFailure,
   recordSecondFactorSuccess,
+  reserveSecondFactorAttempt,
   SecondFactorLockedError,
-  secondFactorLock,
   verifySecondFactor,
 } from './mfa';
 
@@ -114,13 +116,105 @@ function link(ports: Pick<IdentityPorts, 'config'>, path: string, token: string)
   return `${base.replace(/\/$/, '')}${path}?token=${encodeURIComponent(token)}`;
 }
 
+/** Ports an invitation needs (the notifier delivers the link to the person only). */
+export type InvitePorts = Pick<IdentityPorts, 'notifier' | 'config' | 'organizationName'> &
+  Partial<Pick<IdentityPorts, 'propertyIdsInScope' | 'assertPropertyExists'>>;
+
+export interface CreateUserInput {
+  email: string;
+  displayName: string;
+  jobTitle?: string | undefined;
+  roles: Array<{
+    roleKey: string;
+    scopeType: 'organization' | 'brand' | 'region' | 'property';
+    scopeId?: string | undefined;
+  }>;
+}
+
+const NO_ORG_SET_PASSWORDS =
+  'Portico never lets an organization choose a person’s password. Add them without one: they receive an invitation by email and choose their own password.';
+
+/**
+ * Add a staff member (ADR-0017 rules 2 and 12). No organization ever sets a password: every person — new or existing
+ * — gets an `invited` membership and an invitation link sent to their own email; the membership becomes active when
+ * they accept it (a new person chooses their first password there, which also verifies their email). The answer has
+ * the same shape whether or not the email already had a Portico identity (no account enumeration, R2-P3-6).
+ */
+export async function createUser(
+  tx: TxContext,
+  input: CreateUserInput,
+  ports: InvitePorts = {},
+): Promise<{ userId: string; status: 'invited'; invitationExpiresAt: string; delivery: NotifierResult }> {
+  if ((input as { initialPassword?: unknown }).initialPassword !== undefined)
+    throw new ValidationError('password_not_allowed', NO_ORG_SET_PASSWORDS);
+  const r = await inviteMember(tx, ports, input);
+  await tx.audit({
+    action: 'identity.user.create',
+    target: { type: 'user', id: r.userId },
+    after: { displayName: input.displayName, roles: input.roles, status: 'invited' },
+  });
+  return {
+    userId: r.userId,
+    status: 'invited',
+    invitationExpiresAt: r.invitationExpiresAt,
+    delivery: r.delivery,
+  };
+}
+
+/**
+ * Demo and test seeding only (ADR-0017 rule 12): a system process may give a person a password ONLY in a `demo`
+ * organization and ONLY for a reserved fictitious address (`*.portico.invalid`). Never routed over HTTP. The person
+ * is active immediately with a verified (fictitious) email.
+ */
+export async function seedDemoMember(
+  tx: TxContext,
+  input: CreateUserInput & { password: string },
+): Promise<{ userId: string }> {
+  const domain = input.email.toLowerCase().split('@').at(-1) ?? '';
+  if (
+    tx.actor.kind !== 'system' ||
+    tx.environment !== 'demo' ||
+    !(domain === 'portico.invalid' || domain.endsWith('.portico.invalid'))
+  )
+    throw new ValidationError(
+      'password_not_allowed',
+      'Passwords may be seeded only by a system process, in a demo organization, for *.portico.invalid addresses.',
+    );
+  const { rows } = await sql<{
+    id: string;
+  }>`select identity.ensure_user(${newId()}::uuid, ${input.email}) as id`.execute(tx.db);
+  const userId = rows[0]?.id as string;
+  await db(tx)
+    .insertInto('identity.memberships')
+    .values({
+      id: newId(),
+      tenant_id: tx.tenantId,
+      user_id: userId,
+      display_name: input.displayName,
+      job_title: input.jobTitle ?? null,
+      status: 'active',
+      activated_at: tx.now,
+      provisioned_by: 'manual',
+    })
+    .execute();
+  await db(tx)
+    .updateTable('identity.users')
+    .set({ password_hash: await hashPassword(input.password), email_verified_at: tx.now })
+    .where('id', '=', userId)
+    .execute();
+  for (const r of input.roles) await assignRole(tx, { userId, ...r });
+  await tx.audit({
+    action: 'identity.user.seedDemo',
+    target: { type: 'user', id: userId },
+    after: { displayName: input.displayName, roles: input.roles },
+  });
+  return { userId };
+}
+
 /** Invite a person: membership `invited`, roles granted (effective once accepted), invitation link sent. */
 export async function inviteMember(
   tx: TxContext,
-  ports: Pick<
-    IdentityPorts,
-    'notifier' | 'config' | 'organizationName' | 'propertyIdsInScope' | 'assertPropertyExists'
-  >,
+  ports: InvitePorts,
   input: { email: string; displayName: string; jobTitle?: string | undefined; roles: RoleInput[] },
 ) {
   requirePermission(tx, 'identity.user.manage');
@@ -185,7 +279,9 @@ export async function inviteMember(
         ...(r.startsAt ? { startsAt: r.startsAt } : {}),
         ...(r.endsAt ? { endsAt: r.endsAt } : {}),
       },
-      ports,
+      ports.propertyIdsInScope
+        ? (ports as Pick<IdentityPorts, 'propertyIdsInScope' | 'assertPropertyExists'>)
+        : undefined,
     );
   }
   const sent = await sendInvitation(tx, ports, {
@@ -306,14 +402,30 @@ export async function acceptInvitation(
         .where('user_id', '=', t.user_id)
         .executeTakeFirst();
       if (m?.status !== 'invited') throw new UnauthenticatedError(INVALID_TOKEN);
-      const u = await db(tx)
-        .selectFrom('identity.users')
-        .select('password_hash')
-        .where('id', '=', t.user_id)
-        .executeTakeFirstOrThrow();
-      if (u.password_hash) {
-        const lock = await secondFactorLock(tx, t.user_id);
-        if (lock) return { ok: false, error: new SecondFactorLockedError(lock) };
+      const creds = await credentialSummary(tx, t.user_id);
+      const sso = await db(tx)
+        .selectFrom('identity.sso_connections')
+        .select(['sso_required', 'status'])
+        .executeTakeFirst();
+      const ssoOnly = sso?.status === 'active' && sso.sso_required;
+      if (!creds.emailVerified || !hasAnyCredential(creds)) {
+        // ADR-0017 rules 12 and 14: this link proves control of the email. A person whose email was never verified,
+        // or who holds no credential at all, chooses their first password here — whatever invitations they hold
+        // elsewhere. The first verification wipes every credential set before it (pre-hijacking defence).
+        if (!ssoOnly && (input.password ?? '').length < 12)
+          throw new ValidationError(
+            'password_required',
+            'Choose a password (at least 12 characters) to finish joining.',
+          );
+        await verifyEmailOwnership(tx, t.user_id);
+        if (!ssoOnly && input.password)
+          await db(tx)
+            .updateTable('identity.users')
+            .set({ password_hash: await hashPassword(input.password), failed_logins: 0, locked_until: null })
+            .where('id', '=', t.user_id)
+            .execute();
+      } else if (creds.hasPassword) {
+        // A verified person with a sign-in proves it; their credentials are never changed here.
         if (!input.password)
           return {
             ok: false,
@@ -322,9 +434,16 @@ export async function acceptInvitation(
               'You already have a Portico sign-in: enter your current password (and a code from your authenticator if you use one) to accept.',
             ),
           };
-        const pwOk = await argonVerify(u.password_hash, input.password).catch(() => false);
+        const lock = await reserveSecondFactorAttempt(tx, t.user_id);
+        if (lock) return { ok: false, error: new SecondFactorLockedError(lock) };
+        const u = await db(tx)
+          .selectFrom('identity.users')
+          .select('password_hash')
+          .where('id', '=', t.user_id)
+          .executeTakeFirstOrThrow();
+        const pwOk = await argonVerify(u.password_hash as string, input.password).catch(() => false);
         const factorOk =
-          !(await hasActiveTotp(tx, t.user_id)) ||
+          !creds.hasFactor ||
           ((!!input.code || !!input.recoveryCode) &&
             (await verifySecondFactor(tx, ports, t.user_id, input)) !== null);
         if (!pwOk || !factorOk) {
@@ -338,32 +457,14 @@ export async function acceptInvitation(
         }
         await recordSecondFactorSuccess(tx, t.user_id);
       } else {
-        if ((await membershipsElsewhere(tx, t.user_id)) > 0) {
-          return {
-            ok: false,
-            error: new BusinessRuleError(
-              'sign_in_to_accept',
-              'You already use Portico with another organization. Sign in there and accept this invitation from your account.',
-            ),
-          };
-        }
-        const sso = await db(tx)
-          .selectFrom('identity.sso_connections')
-          .select(['sso_required', 'status'])
-          .executeTakeFirst();
-        const ssoOnly = sso?.status === 'active' && sso.sso_required;
-        if (!ssoOnly && (input.password ?? '').length < 12)
-          throw new ValidationError(
-            'password_required',
-            'Choose a password (at least 12 characters) to finish joining.',
-          );
-        const newHash = input.password && !ssoOnly ? await hashPassword(input.password) : null;
-        if (newHash)
-          await db(tx)
-            .updateTable('identity.users')
-            .set({ password_hash: newHash })
-            .where('id', '=', t.user_id)
-            .execute();
+        // Verified, signs in only through an identity provider: accept from the account (in-app).
+        return {
+          ok: false,
+          error: new BusinessRuleError(
+            'sign_in_to_accept',
+            'You already sign in to Portico through your organization’s single sign-on. Sign in that way and accept this invitation from your account.',
+          ),
+        };
       }
       await db(tx)
         .updateTable('identity.credential_tokens')
@@ -396,18 +497,59 @@ async function activateInvitedMembership(tx: TxContext, membershipId: string, us
   });
 }
 
-/** Organizations that invited the signed-in person (ADR-0017 §2), so they can accept while signed in. */
+async function emailVerified(database: PorticoDatabase, userId: string): Promise<boolean> {
+  const { rows } = await sql<{ email_verified: boolean }>`
+    select email_verified from identity.credential_summary(${userId}::uuid)`.execute(database.kysely);
+  return rows[0]?.email_verified ?? false;
+}
+
+function systemContextFor(organizationId: string, environment: string, process: string): RequestContext {
+  return {
+    tenantId: organizationId,
+    environment: environment as TenantEnvironment,
+    actor: { kind: 'system', process },
+    authz: systemAuthorizer,
+    correlationId: newId(),
+  };
+}
+
+/** An unused, unrevoked, unexpired invitation for the person in this organization (ADR-0017 rule 13). */
+async function hasValidInvitation(tx: TxContext, userId: string): Promise<boolean> {
+  const t = await db(tx)
+    .selectFrom('identity.credential_tokens')
+    .select('id')
+    .where('user_id', '=', userId)
+    .where('kind', '=', 'invitation')
+    .where('used_at', 'is', null)
+    .where('revoked_at', 'is', null)
+    .where('expires_at', '>', tx.now)
+    .executeTakeFirst();
+  return !!t;
+}
+
+/**
+ * Organizations that invited the signed-in person, so they can accept while signed in (ADR-0017 §2). Rule 13: only
+ * an identity whose email is verified sees them, and only invitations that have not expired.
+ */
 export async function listMyInvitations(database: PorticoDatabase, actor: RequestContext['actor']) {
-  if (!isHumanSelf(actor)) return [];
+  if (!isHumanSelf(actor) || !(await emailVerified(database, actor.userId))) return [];
   const { rows } = await sql<{ id: string; name: string; environment: string; status: string }>`
     select id, name, environment, status from platform.tenant_summaries(
       array(select identity.pending_invitations(${actor.userId}::uuid))::uuid[])`.execute(database.kysely);
-  return rows
-    .filter((r) => r.status === 'active')
-    .map((r) => ({ organizationId: r.id, name: r.name, environment: r.environment }));
+  const out: Array<{ organizationId: string; name: string; environment: string }> = [];
+  for (const r of rows.filter((x) => x.status === 'active')) {
+    const ok = await withTenantTx(database, systemContextFor(r.id, r.environment, 'invitations'), (tx) =>
+      hasValidInvitation(tx, actor.userId),
+    );
+    if (ok) out.push({ organizationId: r.id, name: r.name, environment: r.environment });
+  }
+  return out;
 }
 
-/** Accept an invitation while signed in as oneself (any organization's session proves the person). */
+/**
+ * Accept an invitation while signed in as oneself. ADR-0017 rule 13: the identity's email must be verified (a session
+ * alone is not proof that the person owns the address) and the invitation must not have expired.
+ */
 export async function acceptMembershipAsSelf(
   database: PorticoDatabase,
   actor: RequestContext['actor'],
@@ -415,6 +557,11 @@ export async function acceptMembershipAsSelf(
 ): Promise<{ organizationId: string; userId: string }> {
   if (!isHumanSelf(actor) || !actor.sessionId)
     throw new BusinessRuleError('not_a_user', 'Sign in as yourself to accept an invitation.');
+  if (!(await emailVerified(database, actor.userId)))
+    throw new BusinessRuleError(
+      'email_not_verified',
+      'Your email address is not confirmed yet. Open the invitation email and accept from there; that confirms your address.',
+    );
   const { rows } = await sql<{ environment: string; status: string }>`
     select environment, status from platform.tenant_summaries(${[organizationId]}::uuid[])`.execute(
     database.kysely,
@@ -435,6 +582,11 @@ export async function acceptMembershipAsSelf(
       .where('user_id', '=', actor.userId)
       .executeTakeFirst();
     if (m?.status !== 'invited') throw new NotFoundError('invitation', organizationId);
+    if (!(await hasValidInvitation(tx, actor.userId)))
+      throw new BusinessRuleError(
+        'invitation_expired',
+        'This invitation has expired. Ask the organization to send a new one.',
+      );
     await db(tx)
       .updateTable('identity.credential_tokens')
       .set({ used_at: tx.now })
@@ -476,7 +628,8 @@ async function sendReset(
 /**
  * Self-service "forgot password" (public). Always answers the same way whether or not the email exists. The reset
  * is issued in one of the person's active organizations (a live one when there is one) so that its environment
- * decides whether the email is real or simulated; organizations that require SSO are skipped.
+ * decides whether the email is real or simulated; organizations that require SSO are skipped. ADR-0017 rule 14: a
+ * person who only holds invitations is reached too, through an organization that invited them (live first).
  */
 export async function requestPasswordReset(
   database: PorticoDatabase,
@@ -486,9 +639,16 @@ export async function requestPasswordReset(
   const { rows } = await sql<{ user_id: string; status: string; tenant_ids: string[] }>`
     select user_id, status, tenant_ids from identity.login_lookup(${input.email})`.execute(database.kysely);
   const user = rows[0];
-  if (!user || user.status === 'disabled' || user.tenant_ids.length === 0) return;
+  if (!user || user.status === 'disabled') return;
+  let tenantIds = user.tenant_ids;
+  if (tenantIds.length === 0) {
+    const { rows: invited } = await sql<{ id: string }>`
+      select identity.pending_invitations(${user.user_id}::uuid) as id`.execute(database.kysely);
+    tenantIds = invited.map((r) => r.id);
+  }
+  if (tenantIds.length === 0) return;
   const { rows: orgs } = await sql<{ id: string; environment: string; status: string }>`
-    select id, environment, status from platform.tenant_summaries(${user.tenant_ids}::uuid[])`.execute(
+    select id, environment, status from platform.tenant_summaries(${tenantIds}::uuid[])`.execute(
     database.kysely,
   );
   const ordered = orgs
@@ -542,7 +702,11 @@ export async function sendPasswordResetForMember(
   return sendReset(tx, ports, u);
 }
 
-/** Complete a reset (public). Revokes the person's sessions in every organization (credential changed). */
+/**
+ * Complete a reset (public). Revokes the person's sessions in every organization (credential changed). The link
+ * proves control of the email (ADR-0017 rule 12): the first time, every earlier credential is wiped before the new
+ * password is set.
+ */
 export async function completePasswordReset(
   database: PorticoDatabase,
   input: { token: string; newPassword: string },
@@ -553,6 +717,7 @@ export async function completePasswordReset(
   return withTenantTx(database, ctx, async (tx) => {
     const t = await consumeToken(tx, input.token, 'password_reset');
     if (!t) throw new UnauthenticatedError(INVALID_TOKEN);
+    await verifyEmailOwnership(tx, t.user_id);
     await db(tx)
       .updateTable('identity.users')
       .set({ password_hash: hash, failed_logins: 0, locked_until: null })
@@ -657,8 +822,36 @@ export async function transferMember(
     reason: string;
   },
 ): Promise<TransferPlan> {
-  requirePermission(tx, 'identity.role.assign');
+  // Review R2-P2-2: a transfer removes access at one property and grants it at another, so the actor needs role
+  // assignment at BOTH properties and power over the roles being removed — exactly as a direct revocation would.
+  requirePermission(tx, 'identity.role.assign', { propertyId: input.fromPropertyId });
+  requirePermission(tx, 'identity.role.assign', { propertyId: input.toPropertyId });
+  assertNotElevated(tx, 'Transferring staff');
+  if (tx.actor.kind === 'user' && tx.actor.userId === input.userId)
+    throw new BusinessRuleError(
+      'segregation_of_duties',
+      'You cannot transfer yourself. Ask another administrator.',
+    );
   const plan = await planTransfer(tx, input);
+  if (plan.remove.length) {
+    const roles = await db(tx)
+      .selectFrom('identity.roles')
+      .select(['key', 'permissions'])
+      .where(
+        'key',
+        'in',
+        plan.remove.map((r) => r.roleKey),
+      )
+      .execute();
+    for (const r of roles)
+      await assertCanGrantRole(
+        tx,
+        r.permissions,
+        { type: 'property', id: input.fromPropertyId },
+        ports,
+        'You can only transfer people whose access at that property you also hold.',
+      );
+  }
   const effective = new Date(plan.effectiveAt);
   const immediate = effective.getTime() <= tx.now.getTime();
   for (const r of plan.remove) {
@@ -816,6 +1009,8 @@ export async function removeMember(
     .where('created_by', '=', userId)
     .where('status', '=', 'active')
     .executeTakeFirst();
+  // A removed member keeps no SSO link here (no orphan links, R2-P1-3).
+  await db(tx).deleteFrom('identity.sso_identities').where('user_id', '=', userId).execute();
   await db(tx)
     .updateTable('identity.credential_tokens')
     .set({ revoked_at: tx.now })
@@ -895,7 +1090,7 @@ export async function getMember(tx: TxContext, userId: string) {
     externalId: m.external_id,
     activatedAt: m.activated_at?.toISOString() ?? null,
     lastSignInAt: lastSession?.created_at.toISOString() ?? null,
-    mfa: await mfaStatus(tx, userId),
+    mfa: m.status === 'invited' ? null : await mfaStatus(tx, userId),
     assignments: assignments.map((a) => ({
       assignmentId: a.id,
       roleKey: a.key,

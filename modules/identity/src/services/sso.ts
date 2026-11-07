@@ -17,13 +17,24 @@ import {
   ValidationError,
 } from '@portico/kernel';
 import { createLocalJWKSet, type JSONWebKeySet, type JWTPayload, jwtVerify } from 'jose';
-import { emailDomainAllowed, groupsFromClaim } from '../domain/role-mapping';
+import { emailDomain, emailDomainAllowed, groupsFromClaim } from '../domain/role-mapping';
 import { NotConfiguredError } from '../errors';
 import type { IdentityPorts } from '../ports';
 import type { IdentityDB } from '../tables';
-import { assertCanGrantRole, assertNotElevated, membershipsElsewhere } from './guard';
+import {
+  assertCanGrantRole,
+  assertNotElevated,
+  assertRootChange,
+  credentialSummary,
+  hasAnyCredential,
+  isHumanSelf,
+  membershipsElsewhere,
+  notifyAdministrators,
+  verifyEmailOwnership,
+} from './guard';
 import { reconcileMappedRoles } from './mapped-roles';
-import { checkSignInLocation } from './security';
+import { getSecurityPolicy } from './policy';
+import { checkSignInLocation, raiseSecurityAlert } from './security';
 import { createSession } from './sessions';
 
 /**
@@ -205,7 +216,7 @@ export interface SsoConfigInput {
  */
 export async function configureSso(
   tx: TxContext,
-  ports: Pick<IdentityPorts, 'oidcHttp' | 'secrets' | 'hasEntitlement' | 'config'>,
+  ports: Pick<IdentityPorts, 'oidcHttp' | 'secrets' | 'hasEntitlement' | 'config' | 'notifier'>,
   input: SsoConfigInput,
   expectedVersion?: number,
   /** Pre-fetched with `discoverIssuer` outside the transaction (routes do this; tests may omit it). */
@@ -221,6 +232,18 @@ export async function configureSso(
   const d =
     discovery && discovery.issuer === input.issuer ? discovery : await discoverIssuer(ports, input.issuer);
   const existing = await db(tx).selectFrom('identity.sso_connections').selectAll().executeTakeFirst();
+  // ADR-0017 rule 15 (review R2-P1-1): the issuer, the email allow-list and trusting the IdP's MFA decide who can sign
+  // in as whom, so changing them is a root change.
+  const sameDomains = (a: readonly string[], b: readonly string[]) =>
+    a.length === b.length && [...a].sort().join() === [...b].sort().join();
+  const issuerChanged = !!existing && existing.issuer !== input.issuer;
+  const rootChange =
+    !existing ||
+    issuerChanged ||
+    !sameDomains(existing.allowed_email_domains, domains) ||
+    existing.trust_idp_mfa !== (input.trustIdpMfa ?? existing.trust_idp_mfa);
+  if (rootChange)
+    assertRootChange(tx, 'Changing the identity provider, the allowed email domains or trust in its MFA');
   if (existing && expectedVersion === undefined)
     throw new ValidationError('if_match_required', 'Send If-Match with the connection version to change it.');
   if (!existing && !input.clientSecret)
@@ -247,7 +270,7 @@ export async function configureSso(
     allowed_email_domains: domains,
     groups_claim: input.groupsClaim ?? 'groups',
     jit_provisioning: input.jitProvisioning ?? true,
-    trust_idp_mfa: input.trustIdpMfa ?? false,
+    trust_idp_mfa: input.trustIdpMfa ?? existing?.trust_idp_mfa ?? false,
     status: input.status ?? 'active',
     updated_by: by,
   };
@@ -277,6 +300,29 @@ export async function configureSso(
     target: { type: 'sso_connection', id: row.id },
     after: { ...values, client_secret_ref: '(stored in secret store)' },
   });
+  if (issuerChanged) {
+    // ADR-0017 rule 15: a new issuer re-confirms domain ownership (verification is not inherited, R2-P3-5) and the
+    // old issuer's links stop meaning anything.
+    await db(tx).updateTable('identity.sso_domains').set({ verified_at: null }).execute();
+    await db(tx).deleteFrom('identity.sso_identities').where('issuer', '=', existing.issuer).execute();
+  }
+  if (rootChange && existing) {
+    const by = tx.actor.kind === 'user' ? (tx.actor.displayName ?? tx.actor.userId) : tx.actor.kind;
+    const summary = issuerChanged
+      ? `Single sign-on now trusts a different identity provider (${input.issuer}); email domains must be verified again.`
+      : 'Single sign-on root settings changed (allowed email domains or trust in the identity provider’s MFA).';
+    await raiseSecurityAlert(tx, {
+      rule: 'sso_root_change',
+      severity: 'high',
+      summary,
+      details: { issuerChanged, by },
+      dedupeKey: `sso_root_change:${row.id}:${row.version}`,
+    });
+    await notifyAdministrators(tx, ports, {
+      subject: 'Single sign-on settings changed',
+      body: `${summary} Changed by ${by}. If you did not expect this, review the SSO settings now.`,
+    });
+  }
   return toView(tx, row);
 }
 
@@ -349,6 +395,7 @@ export async function setSsoEnforcement(
 ) {
   requirePermission(tx, 'identity.sso.manage');
   assertNotElevated(tx, 'Changing single sign-on enforcement');
+  assertRootChange(tx, 'Requiring single sign-on (or changing who is exempt)');
   const c = await db(tx).selectFrom('identity.sso_connections').selectAll().executeTakeFirst();
   if (c?.status !== 'active')
     throw new BusinessRuleError('sso_not_configured', 'Configure and activate SSO first.');
@@ -440,7 +487,7 @@ function b64url(buf: Buffer): string {
 export async function startSsoLogin(
   database: PorticoDatabase,
   ports: Pick<IdentityPorts, 'cipher' | 'config'>,
-  input: { organizationId: string },
+  input: { organizationId: string; linkUserId?: string | undefined },
 ): Promise<{ authorizationUrl: string; expiresAt: Date; browserBinding: string }> {
   if (!ports.cipher) throw new NotConfiguredError('Single sign-on', 'field encryption');
   const redirectUri = ports.config?.ssoRedirectUri;
@@ -473,6 +520,7 @@ export async function startSsoLogin(
         nonce,
         code_verifier_enc: cipher.encrypt(verifier, `sso:${id}`),
         redirect_uri: redirectUri,
+        link_user_id: input.linkUserId ?? null,
         expires_at: expiresAt,
         consumed_at: null,
       })
@@ -490,6 +538,47 @@ export async function startSsoLogin(
     }).toString();
     return { authorizationUrl: url.toString(), expiresAt, browserBinding };
   });
+}
+
+/**
+ * ADR-0017 rule 15: a member who already has their own credentials proves them before their identity-provider account
+ * is linked. They start SSO from a session signed in with their password (and a fresh second factor when they have
+ * one); the callback then links the IdP account to them, and only to them.
+ */
+export async function startSsoLink(
+  database: PorticoDatabase,
+  ports: Pick<IdentityPorts, 'cipher' | 'config'>,
+  ctx: RequestContext,
+): Promise<{ authorizationUrl: string; expiresAt: Date; browserBinding: string }> {
+  const actor = ctx.actor;
+  if (!isHumanSelf(actor) || !actor.sessionId)
+    throw new BusinessRuleError('not_a_user', 'Sign in as yourself to link your single sign-on account.');
+  const sessionId = actor.sessionId;
+  await withTenantTx(database, ctx, async (tx) => {
+    const s = await db(tx)
+      .selectFrom('identity.sessions')
+      .select(['auth_method', 'mfa_verified_at'])
+      .where('id', '=', sessionId)
+      .executeTakeFirst();
+    if (s?.auth_method !== 'password')
+      throw new BusinessRuleError(
+        'password_session_required',
+        'Sign in with your Portico password (not single sign-on) to prove it is you, then link your account.',
+      );
+    const creds = await credentialSummary(tx, actor.userId);
+    if (creds.hasFactor) {
+      const policy = await getSecurityPolicy(tx);
+      const fresh =
+        s.mfa_verified_at &&
+        tx.now.getTime() - s.mfa_verified_at.getTime() <= policy.mfaStepUpWindowMinutes * 60_000;
+      if (!fresh)
+        throw new BusinessRuleError(
+          'mfa_required',
+          'Confirm a code from your authenticator first, then link your single sign-on account.',
+        );
+    }
+  });
+  return startSsoLogin(database, ports, { organizationId: ctx.tenantId, linkUserId: actor.userId });
 }
 
 const jwksCache = new Map<string, { jwks: JSONWebKeySet; fetchedAt: number }>();
@@ -541,13 +630,23 @@ async function verifyIdToken(
   return payload;
 }
 
+/** A refused SSO sign-in: thrown inside the binding transaction so nothing it wrote is kept. */
+class SsoRefusal extends Error {
+  constructor(
+    readonly reason: string,
+    readonly details: Record<string, unknown> = {},
+  ) {
+    super(reason);
+  }
+}
+
 const SSO_FAILED =
   'Single sign-on did not complete. Start again from the sign-in page; if it keeps failing, ask your administrator.';
 
 /** P3-5: failure audits never store a non-member's email or groups — only the domain and a fingerprint. */
 function emailFingerprint(email: string | undefined) {
   if (!email) return {};
-  return { emailDomain: email.split('@')[1] ?? null, emailHash: sha256Hex(email.toLowerCase()).slice(0, 16) };
+  return { emailDomain: emailDomain(email), emailHash: sha256Hex(email.toLowerCase()).slice(0, 16) };
 }
 
 async function auditFailure(
@@ -606,13 +705,14 @@ export async function completeSsoLogin(
       .executeTakeFirst();
     if (!st || st.consumed_at || st.expires_at <= tx.now)
       return { ok: false as const, reason: 'invalid_or_expired_state' };
+    // R2-P3-8: check the browser binding BEFORE consuming, so a leaked (state, code) cannot burn the real login.
+    if (!input.browserBinding || sha256Hex(input.browserBinding) !== st.binding_hash)
+      return { ok: false as const, reason: 'browser_binding_mismatch' };
     await db(tx)
       .updateTable('identity.sso_login_states')
       .set({ consumed_at: tx.now })
       .where('id', '=', st.id)
       .execute();
-    if (!input.browserBinding || sha256Hex(input.browserBinding) !== st.binding_hash)
-      return { ok: false as const, reason: 'browser_binding_mismatch' };
     const c = await db(tx).selectFrom('identity.sso_connections').selectAll().executeTakeFirst();
     if (c?.status !== 'active') return { ok: false as const, reason: 'sso_not_active' };
     return {
@@ -656,143 +756,197 @@ export async function completeSsoLogin(
     throw new UnauthenticatedError(SSO_FAILED);
   }
 
-  // Phase 3 — bind the identity and open a session.
-  const result = await withTenantTx(database, ctx, async (tx) => {
-    const fail = async (reason: string, details: Record<string, unknown> = {}) => {
-      await tx.audit({
-        action: 'identity.sso.loginFailed',
-        target: { type: 'organization', id: tx.tenantId },
-        reason,
-        metadata: details,
-      });
-      return { ok: false as const, reason };
-    };
-    const email = typeof claims.email === 'string' ? claims.email.toLowerCase() : undefined;
-    const subject = typeof claims.sub === 'string' ? claims.sub : undefined;
-    if (!email || !subject) return fail('email_or_subject_missing');
-    if (claims.email_verified !== true) return fail('email_not_verified', emailFingerprint(email));
-    if (!emailDomainAllowed(email, c.allowed_email_domains))
-      return fail('email_domain_not_allowed', emailFingerprint(email));
-    const groups = groupsFromClaim(claims[c.groups_claim]);
-    const { rows: found } = await sql<{ user_id: string }>`
-      select user_id from identity.login_lookup(${email})`.execute(tx.db);
-    const emailUserId = found[0]?.user_id;
-    const link = await db(tx)
-      .selectFrom('identity.sso_identities')
-      .selectAll()
-      .where('issuer', '=', c.issuer)
-      .where('subject', '=', subject)
-      .executeTakeFirst();
-    let userId: string;
-    if (link) {
-      if (emailUserId && emailUserId !== link.user_id)
-        return fail('email_belongs_to_another_person', emailFingerprint(email));
-      userId = link.user_id;
-    } else {
-      if (emailUserId) {
-        const elsewhere = await membershipsElsewhere(tx, emailUserId);
-        const domain = email.split('@')[1] ?? '';
-        const verified = await db(tx)
-          .selectFrom('identity.sso_domains')
-          .select('id')
-          .where('domain', '=', domain)
-          .where('verified_at', 'is not', null)
-          .executeTakeFirst();
-        if (elsewhere > 0 && !verified)
-          return fail('existing_account_requires_verified_domain', emailFingerprint(email));
+  // Phase 3 — every check first, then the writes (R2-P1-3): a refused sign-in throws, so the transaction rolls back
+  // and persists neither a user nor a link; the refusal is audited in its own transaction.
+  let result: { ok: true; userId: string; token: string; expiresAt: Date };
+  try {
+    result = await withTenantTx(database, ctx, async (tx) => {
+      const refuse = (reason: string, details: Record<string, unknown> = {}): never => {
+        throw new SsoRefusal(reason, details);
+      };
+      const rawEmail = typeof claims.email === 'string' ? claims.email.trim().toLowerCase() : '';
+      const domain = emailDomain(rawEmail);
+      const subject = typeof claims.sub === 'string' ? claims.sub : undefined;
+      if (!domain || !subject) return refuse('email_or_subject_missing');
+      const email = rawEmail;
+      const fp = emailFingerprint(email);
+      if (claims.email_verified !== true) return refuse('email_not_verified', fp);
+      if (!emailDomainAllowed(email, c.allowed_email_domains)) return refuse('email_domain_not_allowed', fp);
+      const groups = groupsFromClaim(claims[c.groups_claim]);
+      const { rows: found } = await sql<{ user_id: string }>`
+        select user_id from identity.login_lookup(${email})`.execute(tx.db);
+      const emailUserId = found[0]?.user_id;
+      const domainVerified = !!(await db(tx)
+        .selectFrom('identity.sso_domains')
+        .select('id')
+        .where('domain', '=', domain)
+        .where('verified_at', 'is not', null)
+        .executeTakeFirst());
+      const link = await db(tx)
+        .selectFrom('identity.sso_identities')
+        .selectAll()
+        .where('issuer', '=', c.issuer)
+        .where('subject', '=', subject)
+        .executeTakeFirst();
+      // Link mode: a signed-in member proved their own credentials and asked to link this IdP account to them.
+      const provedUserId = st.link_user_id;
+      if (provedUserId && emailUserId !== provedUserId) return refuse('link_email_mismatch', fp);
+      let userId: string | undefined;
+      let newLink = false;
+      if (link) {
+        if (emailUserId && emailUserId !== link.user_id) return refuse('email_belongs_to_another_person', fp);
+        userId = link.user_id;
+      } else if (emailUserId) {
         const already = await db(tx)
           .selectFrom('identity.sso_identities')
           .select('id')
           .where('issuer', '=', c.issuer)
           .where('user_id', '=', emailUserId)
           .executeTakeFirst();
-        if (already) return fail('person_linked_to_another_subject', emailFingerprint(email));
+        if (already) return refuse('person_linked_to_another_subject', fp);
+        if (provedUserId !== emailUserId) {
+          const creds = await credentialSummary(tx, emailUserId);
+          // A first sign-in through a verified domain verifies the email and wipes credentials set before (rule 12),
+          // so only an already-verified person's own credentials need their proof (rule 15).
+          const wipedFirst = domainVerified && !creds.emailVerified;
+          if (!wipedFirst && hasAnyCredential(creds)) return refuse('existing_credentials_require_proof', fp);
+        }
         userId = emailUserId;
+        newLink = true;
       } else {
-        const candidate = newId();
+        newLink = true;
+      }
+      const member = userId
+        ? await db(tx)
+            .selectFrom('identity.memberships')
+            .select(['id', 'status'])
+            .where('user_id', '=', userId)
+            .executeTakeFirst()
+        : undefined;
+      if (member && member.status !== 'active' && member.status !== 'invited')
+        return refuse('membership_not_active', { userId });
+      // ADR-0017 rule 15 / §5: whenever SSO would create or activate a membership for a person who works elsewhere,
+      // this organization must have verified the email domain (or the person proved their own credentials).
+      const activating = !member || member.status === 'invited';
+      if (
+        activating &&
+        userId &&
+        provedUserId !== userId &&
+        !domainVerified &&
+        (await membershipsElsewhere(tx, userId)) > 0
+      )
+        return refuse('existing_account_requires_verified_domain', fp);
+      if (!member) {
+        if (!c.jit_provisioning) return refuse('no_membership', fp);
+        const mappings = await db(tx)
+          .selectFrom('identity.group_role_mappings')
+          .select('group_name')
+          .execute();
+        const lower = new Set(groups.map((g) => g.toLowerCase()));
+        if (!mappings.some((m) => lower.has(m.group_name.toLowerCase())))
+          return refuse('no_mapped_group', fp);
+      }
+      if (member?.status === 'invited') {
+        const invitation = await db(tx)
+          .selectFrom('identity.credential_tokens')
+          .select('id')
+          .where('user_id', '=', userId as string)
+          .where('kind', '=', 'invitation')
+          .where('used_at', 'is', null)
+          .where('revoked_at', 'is', null)
+          .where('expires_at', '>', tx.now)
+          .executeTakeFirst();
+        if (!invitation) return refuse('invitation_expired', { userId });
+      }
+
+      // All checks passed — now write.
+      if (!userId) {
         const { rows } = await sql<{ id: string }>`
-          select identity.ensure_user(${candidate}::uuid, ${email}) as id`.execute(tx.db);
+          select identity.ensure_user(${newId()}::uuid, ${email}) as id`.execute(tx.db);
         userId = rows[0]?.id as string;
       }
-      await db(tx)
-        .insertInto('identity.sso_identities')
-        .values({
-          id: newId(),
-          tenant_id: tx.tenantId,
-          issuer: c.issuer,
-          subject,
-          user_id: userId,
-          email_at_link: email,
-          linked_at: tx.now,
-        })
-        .execute();
-      await tx.audit({
-        action: 'identity.sso.link',
-        target: { type: 'user', id: userId },
-        metadata: { issuer: c.issuer },
+      const name = typeof claims.name === 'string' && claims.name.trim() ? claims.name.trim() : email;
+      if (!member) {
+        await db(tx)
+          .insertInto('identity.memberships')
+          .values({
+            id: newId(),
+            tenant_id: tx.tenantId,
+            user_id: userId,
+            display_name: name,
+            job_title: null,
+            status: 'active',
+            activated_at: tx.now,
+            provisioned_by: 'sso',
+            external_id: `oidc:${subject}`,
+            status_reason: null,
+            removed_at: null,
+            default_property_id: null,
+          })
+          .execute();
+        await tx.audit({ action: 'identity.user.jitProvision', target: { type: 'user', id: userId } });
+        await tx.emit({
+          type: 'identity.membership.activated',
+          aggregate: { type: 'user', id: userId },
+          payload: { userId, via: 'sso' },
+        });
+      } else if (member.status === 'invited') {
+        await db(tx)
+          .updateTable('identity.credential_tokens')
+          .set({ used_at: tx.now })
+          .where('user_id', '=', userId)
+          .where('kind', '=', 'invitation')
+          .where('used_at', 'is', null)
+          .execute();
+        await db(tx)
+          .updateTable('identity.memberships')
+          .set({ status: 'active', activated_at: tx.now, version: sql`version + 1` })
+          .where('id', '=', member.id)
+          .execute();
+      }
+      // A sign-in through an identity provider whose domain this organization verified proves control of the email
+      // (rule 12): the first time, everything set before is wiped — including older links, so ours is (re)written.
+      if (domainVerified && (await verifyEmailOwnership(tx, userId))) newLink = true;
+      if (newLink) {
+        await db(tx)
+          .insertInto('identity.sso_identities')
+          .values({
+            id: newId(),
+            tenant_id: tx.tenantId,
+            issuer: c.issuer,
+            subject,
+            user_id: userId,
+            email_at_link: email,
+            linked_at: tx.now,
+          })
+          .onConflict((oc) => oc.columns(['tenant_id', 'issuer', 'subject']).doNothing())
+          .execute();
+        await tx.audit({
+          action: 'identity.sso.link',
+          target: { type: 'user', id: userId },
+          metadata: { issuer: c.issuer, proved: provedUserId === userId },
+        });
+      }
+      await reconcileMappedRoles(tx, userId, 'sso', groups);
+      const amr = Array.isArray(claims.amr) ? claims.amr.map(String) : [];
+      const idpMfa =
+        c.trust_idp_mfa || amr.some((m) => ['mfa', 'otp', 'hwk', 'swk', 'sms', 'fpt', 'face'].includes(m));
+      const session = await createSession(tx, {
+        userId,
+        authMethod: 'sso',
+        mfaVerifiedAt: idpMfa ? tx.now : null,
+        idpMfa,
+        ip: input.ip,
+        userAgent: input.userAgent,
       });
-    }
-    const member = await db(tx)
-      .selectFrom('identity.memberships')
-      .select(['id', 'status'])
-      .where('user_id', '=', userId)
-      .executeTakeFirst();
-    if (member && member.status !== 'active' && member.status !== 'invited')
-      return fail('membership_not_active', { userId });
-    const name = typeof claims.name === 'string' && claims.name.trim() ? claims.name.trim() : email;
-    if (!member) {
-      if (!c.jit_provisioning) return fail('no_membership', emailFingerprint(email));
-      const mappings = await db(tx).selectFrom('identity.group_role_mappings').select('group_name').execute();
-      const lower = new Set(groups.map((g) => g.toLowerCase()));
-      if (!mappings.some((m) => lower.has(m.group_name.toLowerCase())))
-        return fail('no_mapped_group', emailFingerprint(email));
-      await db(tx)
-        .insertInto('identity.memberships')
-        .values({
-          id: newId(),
-          tenant_id: tx.tenantId,
-          user_id: userId,
-          display_name: name,
-          job_title: null,
-          status: 'active',
-          activated_at: tx.now,
-          provisioned_by: 'sso',
-          external_id: `oidc:${subject}`,
-          status_reason: null,
-          removed_at: null,
-          default_property_id: null,
-        })
-        .execute();
-      await tx.audit({ action: 'identity.user.jitProvision', target: { type: 'user', id: userId } });
-      await tx.emit({
-        type: 'identity.membership.activated',
-        aggregate: { type: 'user', id: userId },
-        payload: { userId, via: 'sso' },
-      });
-    } else if (member.status === 'invited') {
-      // The identity link above passed ADR-0017 §5, so the identity provider vouches for this person.
-      await db(tx)
-        .updateTable('identity.memberships')
-        .set({ status: 'active', activated_at: tx.now, version: sql`version + 1` })
-        .where('id', '=', member.id)
-        .execute();
-    }
-    await reconcileMappedRoles(tx, userId, 'sso', groups);
-    const amr = Array.isArray(claims.amr) ? claims.amr.map(String) : [];
-    const idpMfa =
-      c.trust_idp_mfa || amr.some((m) => ['mfa', 'otp', 'hwk', 'swk', 'sms', 'fpt', 'face'].includes(m));
-    const session = await createSession(tx, {
-      userId,
-      authMethod: 'sso',
-      mfaVerifiedAt: idpMfa ? tx.now : null,
-      idpMfa,
-      ip: input.ip,
-      userAgent: input.userAgent,
+      await checkSignInLocation(tx, ports, { userId, ip: input.ip });
+      return { ok: true as const, userId, ...session };
     });
-    await checkSignInLocation(tx, ports, { userId, ip: input.ip });
-    return { ok: true as const, userId, ...session };
-  });
-  if (!result.ok) throw new UnauthenticatedError(SSO_FAILED);
+  } catch (err) {
+    if (!(err instanceof SsoRefusal)) throw err;
+    await auditFailure(database, ctx, err.reason, err.details);
+    throw new UnauthenticatedError(SSO_FAILED);
+  }
   return {
     status: 'signed_in' as const,
     token: result.token,

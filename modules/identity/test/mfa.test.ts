@@ -17,7 +17,9 @@ async function enrol(o: Awaited<ReturnType<typeof org>>, ctx: Parameters<typeof 
   const { secret, otpauthUri } = started.value;
   expect(otpauthUri).toMatch(/^otpauth:\/\/totp\/Portico:/);
   const code = totp(base32Decode(secret), h.clock.now());
-  const { recoveryCodes } = await o.tx((tx) => identity.confirmTotp(tx, h.ports, { code }), ctx);
+  const confirmed = await o.tx((tx) => identity.confirmTotp(tx, h.ports, { code }), ctx);
+  if (!confirmed.ok) throw confirmed.error;
+  const { recoveryCodes } = confirmed.value;
   return { secret: base32Decode(secret), recoveryCodes };
 }
 

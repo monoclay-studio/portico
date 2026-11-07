@@ -73,9 +73,19 @@ export function reconcileMappedAssignments(
 }
 
 /** Email domain allow-list check (case-insensitive, exact domain — subdomains must be listed explicitly). */
+/**
+ * The one email parser for SSO decisions (review R2-P3-4): exactly one `@`, a non-empty local part and a domain such
+ * as `lagoon.mv`. Returns the lower-cased domain, or null when the address is not well formed.
+ */
+export function emailDomain(email: string): string | null {
+  const parts = email.trim().toLowerCase().split('@');
+  if (parts.length !== 2 || !parts[0]) return null;
+  const domain = parts[1] as string;
+  return /^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(domain) ? domain : null;
+}
+
 export function emailDomainAllowed(email: string, allowedDomains: readonly string[]): boolean {
-  const at = email.lastIndexOf('@');
-  if (at < 1) return false;
-  const domain = email.slice(at + 1).toLowerCase();
+  const domain = emailDomain(email);
+  if (!domain) return false;
   return allowedDomains.some((d) => d.toLowerCase() === domain);
 }

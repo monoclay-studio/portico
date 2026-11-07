@@ -62,13 +62,17 @@ describe('P0-1: another organization cannot take over a person through their pas
     const live = await org(h, { name: 'Victim resort' });
     const victimEmail = `scim-${Date.now()}@victim.mv`;
     const created = await live.tx((tx) =>
-      identity.createUser(tx, {
-        email: victimEmail,
-        displayName: 'GM',
-        roles: [{ roleKey: 'org_admin', scopeType: 'organization' }],
-      }),
+      identity.createUser(
+        tx,
+        {
+          email: victimEmail,
+          displayName: 'GM',
+          roles: [{ roleKey: 'org_admin', scopeType: 'organization' }],
+        },
+        h.ports,
+      ),
     );
-    expect(created.status).toBe('active'); // brand-new person, no password yet (SSO/SCIM style)
+    expect(created.status).toBe('invited'); // brand-new person, no credentials until they accept (rule 12)
     const other = await org(h, { name: 'Other live org' });
     const admin = await other.member([{ roleKey: 'org_admin', scopeType: 'organization' }]);
     const a = await signInWithMfa(h, admin.email);
@@ -80,10 +84,10 @@ describe('P0-1: another organization cannot take over a person through their pas
             displayName: 'x',
             initialPassword: 'attacker-chosen-password',
             roles: [],
-          }),
+          } as Parameters<typeof identity.createUser>[1]),
         a.ctx,
       ),
-    ).rejects.toMatchObject({ code: 'person_already_has_sign_in' });
+    ).rejects.toMatchObject({ code: 'password_not_allowed' });
     await expect(
       identity.login(h.t.db, { email: victimEmail, password: 'attacker-chosen-password' }),
     ).rejects.toMatchObject({ code: 'unauthenticated' });
@@ -99,7 +103,8 @@ describe('P0-1: another organization cannot take over a person through their pas
       (tx) => identity.createUser(tx, { email: victim.email, displayName: 'x', roles: [] }),
       a.ctx,
     );
-    expect(r).toEqual({ userId: victim.userId, status: 'invited' });
+    expect(r).toMatchObject({ userId: victim.userId, status: 'invited' });
+    expect(JSON.stringify(r)).not.toMatch(/inv\.|prt\./);
     // The person is not dropped into the other organization: sign-in still goes straight to their own.
     const lr = await identity.login(h.t.db, { email: victim.email, password: PASSWORD });
     expect(lr.status).toBe('signed_in');
@@ -547,10 +552,12 @@ describe('P2-13: concurrent replay of the same TOTP code or recovery code', () =
     const started = await o.tx((tx) => identity.enrolTotp(tx, h.ports, { currentPassword: PASSWORD }), s.ctx);
     if (!started.ok) throw started.error;
     const secret = base32Decode(started.value.secret);
-    const conf = await o.tx(
+    const confirmed = await o.tx(
       (tx) => identity.confirmTotp(tx, h.ports, { code: hotp(secret, timeStep(h.clock.now()) - 1) }),
       s.ctx,
     );
+    if (!confirmed.ok) throw confirmed.error;
+    const conf = confirmed.value;
     const code = hotp(secret, timeStep(h.clock.now()));
     const c1 = await identity.login(h.t.db, { email: m.email, password: PASSWORD });
     const c2 = await identity.login(h.t.db, { email: m.email, password: PASSWORD });

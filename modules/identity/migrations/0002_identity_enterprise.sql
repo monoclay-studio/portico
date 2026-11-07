@@ -17,7 +17,11 @@ create index sessions_user_idx on identity.sessions (tenant_id, user_id) where r
 alter table identity.users
   add column first_activated_at   timestamptz,
   add column mfa_failed_attempts  int not null default 0,
-  add column mfa_locked_until     timestamptz;
+  add column mfa_locked_until     timestamptz,
+  -- ADR-0017 amendment 1 (rules 12-13): set only when the person completes an emailed link (invitation, reset) or
+  -- signs in through an identity provider whose email domain the organization verified. Null = email_unverified.
+  add column email_verified_at    timestamptz;
+update identity.users set email_verified_at = created_at where password_hash is not null;
 
 alter table identity.memberships
   add column activated_at    timestamptz,
@@ -54,6 +58,7 @@ create table identity.mfa_factors (
   created_at      timestamptz not null default now(),
   confirmed_at    timestamptz,
   disabled_at     timestamptz,
+  confirm_failures int not null default 0,  -- wrong codes while confirming a pending factor (capped)
   version         int not null default 1
 );
 create unique index mfa_factors_one_active_idx on identity.mfa_factors (user_id, kind) where status = 'active';
@@ -193,6 +198,7 @@ create table identity.sso_login_states (
   nonce               text not null,
   code_verifier_enc   text not null,
   redirect_uri        text not null,
+  link_user_id        uuid,              -- ADR-0017 rule 15: set when a signed-in member proves they own the IdP account
   created_at          timestamptz not null default now(),
   expires_at          timestamptz not null,
   consumed_at         timestamptz
@@ -527,6 +533,87 @@ begin
 end $$;
 revoke execute on function identity.purge_login_attempts(int, int) from public;
 grant execute on function identity.purge_login_attempts(int, int) to portico_app;
+
+-- ADR-0017 amendment 1, rule 12: the first time a person proves control of their email (an emailed link, or an IdP
+-- whose domain the organization verified), every credential that existed before is wiped: password, MFA factors,
+-- recovery codes, SSO links, sessions and the API keys they issued, in every organization. Returns true only for the
+-- first verification. Factors, links and sessions are tenant-guarded, so each organization is visited in turn.
+create or replace function identity.first_email_verification(p_user_id uuid, p_now timestamptz) returns boolean
+  language plpgsql security definer set search_path = identity, pg_temp as $$
+declare
+  previous text := current_setting('app.tenant_id', true);
+  t uuid;
+  c int;
+begin
+  update identity.users
+     set email_verified_at = p_now, password_hash = null, failed_logins = 0, locked_until = null,
+         mfa_failed_attempts = 0, mfa_locked_until = null
+   where id = p_user_id and email_verified_at is null;
+  get diagnostics c = row_count;
+  if c = 0 then return false; end if;
+  for t in select ut.tenant_id from identity.user_tenants ut where ut.user_id = p_user_id loop
+    perform set_config('app.tenant_id', t::text, true);
+    update identity.mfa_factors set status = 'disabled', disabled_at = p_now
+     where user_id = p_user_id and status in ('active', 'pending');
+    update identity.mfa_recovery_codes set revoked_at = p_now
+     where user_id = p_user_id and used_at is null and revoked_at is null;
+    delete from identity.sso_identities where user_id = p_user_id;
+    update identity.sessions set revoked_at = p_now, revoked_reason = 'email_verified'
+     where user_id = p_user_id and revoked_at is null;
+    update identity.api_clients set status = 'revoked' where created_by = p_user_id::text and status = 'active';
+  end loop;
+  perform set_config('app.tenant_id', coalesce(previous, ''), true);
+  return true;
+end $$;
+
+-- What credentials a person holds anywhere (ADR-0017 rule 14: the first-password decision depends on credentials,
+-- never on memberships). Counts only; never says where.
+create or replace function identity.credential_summary(p_user_id uuid)
+  returns table (email_verified boolean, has_password boolean, has_factor boolean, sso_links int)
+  language plpgsql security definer set search_path = identity, pg_temp as $$
+declare
+  previous text := current_setting('app.tenant_id', true);
+  t uuid;
+  links int := 0;
+  c int;
+  factor boolean := false;
+begin
+  for t in select ut.tenant_id from identity.user_tenants ut where ut.user_id = p_user_id loop
+    perform set_config('app.tenant_id', t::text, true);
+    select count(*) into c from identity.sso_identities where user_id = p_user_id;
+    links := links + c;
+    factor := factor or exists (select 1 from identity.mfa_factors where user_id = p_user_id and status = 'active');
+  end loop;
+  perform set_config('app.tenant_id', coalesce(previous, ''), true);
+  return query select u.email_verified_at is not null, u.password_hash is not null, factor, links
+                 from identity.users u where u.id = p_user_id;
+end $$;
+
+-- ADR-0017 rule 15 / review R2-P1-3: an SSO link whose person has no membership in the linking organization is an
+-- orphan (left by a removal); purge them. Visits each organization that has members.
+create or replace function identity.purge_orphan_sso_links() returns int
+  language plpgsql security definer set search_path = identity, pg_temp as $$
+declare
+  previous text := current_setting('app.tenant_id', true);
+  t uuid;
+  n int := 0;
+  c int;
+begin
+  for t in select distinct ut.tenant_id from identity.user_tenants ut loop
+    perform set_config('app.tenant_id', t::text, true);
+    delete from identity.sso_identities s
+     where not exists (select 1 from identity.memberships m
+                        where m.user_id = s.user_id and m.status in ('active', 'invited', 'suspended'));
+    get diagnostics c = row_count;
+    n := n + c;
+  end loop;
+  perform set_config('app.tenant_id', coalesce(previous, ''), true);
+  return n;
+end $$;
+revoke execute on function identity.first_email_verification(uuid, timestamptz),
+  identity.credential_summary(uuid), identity.purge_orphan_sso_links() from public;
+grant execute on function identity.first_email_verification(uuid, timestamptz),
+  identity.credential_summary(uuid), identity.purge_orphan_sso_links() to portico_app;
 
 -- Pending invitations of a person across organizations (the person lists and accepts them while signed in).
 create or replace function identity.pending_invitations(p_user_id uuid) returns setof uuid

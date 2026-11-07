@@ -147,17 +147,39 @@ export async function secondFactorLock(tx: TxContext, userId: string): Promise<D
   return u?.mfa_locked_until && u.mfa_locked_until > tx.now ? u.mfa_locked_until : null;
 }
 
-/** Count one failure for the person; escalate delays, lock, and alert the person and the organization's admins. */
+/**
+ * Reserve one second-factor attempt for the person BEFORE checking the code (review R2-P2-1). The counter is taken
+ * with a single guarded UPDATE that also holds the person's row until the transaction ends, so concurrent attempts
+ * are serialized and each one sees the lock set by the previous failure. Returns the lock when the person is locked
+ * (nothing reserved), otherwise null. Success resets the counter; failure applies the escalation.
+ */
+export async function reserveSecondFactorAttempt(tx: TxContext, userId: string): Promise<Date | null> {
+  const row = await db(tx)
+    .updateTable('identity.users')
+    .set({ mfa_failed_attempts: sql`mfa_failed_attempts + 1` })
+    .where('id', '=', userId)
+    .where((eb) => eb.or([eb('mfa_locked_until', 'is', null), eb('mfa_locked_until', '<=', tx.now)]))
+    .returning('id')
+    .executeTakeFirst();
+  if (row) return null;
+  const lock = await secondFactorLock(tx, userId);
+  if (!lock) throw new NotFoundError('user', userId);
+  return lock;
+}
+
+/**
+ * A reserved attempt failed: escalate delays, lock, and alert the person and the organization's admins. The counter
+ * was already taken by `reserveSecondFactorAttempt`.
+ */
 export async function recordSecondFactorFailure(
   tx: TxContext,
   ports: Pick<IdentityPorts, 'notifier'>,
   userId: string,
 ): Promise<number> {
   const row = await db(tx)
-    .updateTable('identity.users')
-    .set({ mfa_failed_attempts: sql`mfa_failed_attempts + 1` })
+    .selectFrom('identity.users')
+    .select(['mfa_failed_attempts', 'email'])
     .where('id', '=', userId)
-    .returning(['mfa_failed_attempts', 'email'])
     .executeTakeFirst();
   const n = row?.mfa_failed_attempts ?? 0;
   const L = SECOND_FACTOR_LIMITS;
@@ -216,11 +238,11 @@ export async function proveExistingCredential(
   userId: string,
   proof: CredentialProof,
 ): Promise<{ ok: true } | { ok: false; error: DomainError }> {
-  const lock = await secondFactorLock(tx, userId);
-  if (lock) return { ok: false, error: new SecondFactorLockedError(lock) };
   if (await hasActiveTotp(tx, userId)) {
     if (!proof.code && !proof.recoveryCode)
       return { ok: false, error: new ValidationError('proof_required', PROOF_REQUIRED_TOTP) };
+    const lock = await reserveSecondFactorAttempt(tx, userId);
+    if (lock) return { ok: false, error: new SecondFactorLockedError(lock) };
     const method = await verifySecondFactor(tx, ports, userId, proof);
     if (!method) {
       await recordSecondFactorFailure(tx, ports, userId);
@@ -240,6 +262,8 @@ export async function proveExistingCredential(
   if (user.password_hash) {
     if (!proof.currentPassword)
       return { ok: false, error: new ValidationError('proof_required', PROOF_REQUIRED_PASSWORD) };
+    const lock = await reserveSecondFactorAttempt(tx, userId);
+    if (lock) return { ok: false, error: new SecondFactorLockedError(lock) };
     const ok = await argonVerify(user.password_hash, proof.currentPassword).catch(() => false);
     if (!ok) {
       await recordSecondFactorFailure(tx, ports, userId);
@@ -338,12 +362,19 @@ async function verifyFactorCode(
   return Number(res.numUpdatedRows) === 1;
 }
 
-/** Confirm enrolment with a first code. Activates the factor and returns 10 recovery codes (shown once). */
+/** Wrong codes allowed while confirming one pending factor (review R2-P3-2); then the set-up must restart. */
+export const MFA_CONFIRM_MAX_ATTEMPTS = 5;
+
+/**
+ * Confirm enrolment with a first code. Activates the factor and returns 10 recovery codes (shown once). Failures
+ * count per person (R2-P2-1) and per pending factor (5, then it is discarded); they are returned, not thrown, so the
+ * counters commit.
+ */
 export async function confirmTotp(
   tx: TxContext,
-  ports: Pick<IdentityPorts, 'cipher'>,
+  ports: Pick<IdentityPorts, 'cipher' | 'notifier'>,
   input: { code: string },
-) {
+): Promise<Outcome<{ recoveryCodes: string[] }>> {
   const userId = selfUserId(tx);
   const cipher = cipherOf(ports);
   const pending = await db(tx)
@@ -358,12 +389,30 @@ export async function confirmTotp(
       'no_pending_enrolment',
       'Start the authenticator set-up first (it expires after 15 minutes), then enter a code from the app.',
     );
+  const lock = await reserveSecondFactorAttempt(tx, userId);
+  if (lock) return { ok: false, error: new SecondFactorLockedError(lock) };
   if (!(await verifyFactorCode(tx, cipher, pending, input.code))) {
-    throw new ValidationError(
-      'invalid_code',
-      'That code is not valid. Check that your phone’s time is set automatically and enter the current 6-digit code.',
-    );
+    await recordSecondFactorFailure(tx, ports, userId);
+    const failures = pending.confirm_failures + 1;
+    await db(tx)
+      .updateTable('identity.mfa_factors')
+      .set({
+        confirm_failures: failures,
+        ...(failures >= MFA_CONFIRM_MAX_ATTEMPTS ? { status: 'disabled', disabled_at: tx.now } : {}),
+      })
+      .where('id', '=', pending.id)
+      .execute();
+    return {
+      ok: false,
+      error: new ValidationError(
+        'invalid_code',
+        failures >= MFA_CONFIRM_MAX_ATTEMPTS
+          ? 'Too many wrong codes for this set-up. Start the authenticator set-up again.'
+          : 'That code is not valid. Check that your phone’s time is set automatically and enter the current 6-digit code.',
+      ),
+    };
   }
+  await recordSecondFactorSuccess(tx, userId);
   await db(tx)
     .updateTable('identity.mfa_factors')
     .set({ status: 'disabled', disabled_at: tx.now })
@@ -393,7 +442,7 @@ export async function confirmTotp(
     aggregate: { type: 'user', id: userId },
     payload: { userId, kind: 'totp' },
   });
-  return { recoveryCodes: codes };
+  return { ok: true, value: { recoveryCodes: codes } };
 }
 
 async function revokeRecoveryCodes(tx: TxContext, userId: string) {
@@ -491,7 +540,7 @@ export async function stepUp(
   const userId = selfUserId(tx);
   const session = await currentSession(tx);
   if (!session) throw new UnauthenticatedError();
-  const lock = await secondFactorLock(tx, userId);
+  const lock = await reserveSecondFactorAttempt(tx, userId);
   if (lock) return { ok: false, attemptsRemaining: 0, sessionRevoked: false, lockedUntil: lock };
   const method = await verifySecondFactor(tx, ports, userId, input);
   if (!method) {
@@ -681,7 +730,7 @@ export async function completeMfaChallenge(
       .executeTakeFirst();
     if (!c || c.consumed_at || c.expires_at <= tx.now || c.attempts >= MFA_MAX_ATTEMPTS)
       return { ok: false as const };
-    const lock = await secondFactorLock(tx, c.user_id);
+    const lock = await reserveSecondFactorAttempt(tx, c.user_id);
     if (lock) return { ok: false as const, lock };
     const method = await verifySecondFactor(tx, ports, c.user_id, input);
     if (!method) {

@@ -169,3 +169,102 @@ export async function revokeApiKeysIssuedBy(tx: TxContext, userId: string): Prom
     .executeTakeFirst();
   return Number(res.numUpdatedRows);
 }
+
+export interface CredentialSummary {
+  emailVerified: boolean;
+  hasPassword: boolean;
+  hasFactor: boolean;
+  ssoLinks: number;
+}
+
+/** What credentials a person holds anywhere (ADR-0017 rule 14). Counts only; never says where. */
+export async function credentialSummary(tx: TxContext, userId: string): Promise<CredentialSummary> {
+  const { rows } = await sql<{
+    email_verified: boolean;
+    has_password: boolean;
+    has_factor: boolean;
+    sso_links: number;
+  }>`select * from identity.credential_summary(${userId}::uuid)`.execute(tx.db);
+  const r = rows[0];
+  return {
+    emailVerified: r?.email_verified ?? false,
+    hasPassword: r?.has_password ?? false,
+    hasFactor: r?.has_factor ?? false,
+    ssoLinks: r?.sso_links ?? 0,
+  };
+}
+
+export function hasAnyCredential(c: CredentialSummary): boolean {
+  return c.hasPassword || c.hasFactor || c.ssoLinks > 0;
+}
+
+/**
+ * ADR-0017 rule 12: the person has just proved control of their email (an emailed link, or an IdP whose domain this
+ * organization verified). The first time, every earlier credential is wiped everywhere (password, factors, recovery
+ * codes, SSO links, sessions, API keys they issued) so nothing set before the proof survives. Returns true when this
+ * was the first verification. Call it while the person has a membership in the current organization.
+ */
+export async function verifyEmailOwnership(tx: TxContext, userId: string): Promise<boolean> {
+  const { rows } = await sql<{ first: boolean }>`
+    select identity.first_email_verification(${userId}::uuid, ${tx.now}::timestamptz) as first`.execute(
+    tx.db,
+  );
+  const first = rows[0]?.first ?? false;
+  if (first)
+    await tx.audit({
+      action: 'identity.email.verified',
+      target: { type: 'user', id: userId },
+      metadata: { earlierCredentialsWiped: true },
+    });
+  return first;
+}
+
+/** Everyone holding organization-wide `identity.user.manage` among active members (the organization's admins). */
+export async function administratorEmails(tx: TxContext, exceptUserId?: string): Promise<string[]> {
+  let q = db(tx)
+    .selectFrom('identity.role_assignments as a')
+    .innerJoin('identity.roles as r', 'r.id', 'a.role_id')
+    .innerJoin('identity.users as u', 'u.id', 'a.user_id')
+    .innerJoin('identity.memberships as m', 'm.user_id', 'a.user_id')
+    .select(['u.email', 'r.permissions'])
+    .where('a.scope_type', '=', 'organization')
+    .where('a.revoked_at', 'is', null)
+    .where('m.status', '=', 'active');
+  if (exceptUserId) q = q.where('a.user_id', '<>', exceptUserId);
+  const rows = await q.execute();
+  return [
+    ...new Set(
+      rows
+        .filter((r) => r.permissions.some((p) => entryCovers(p, 'identity.user.manage')))
+        .map((r) => r.email),
+    ),
+  ];
+}
+
+/** Tell every administrator about a security-relevant change (break-glass, SSO root changes). */
+export async function notifyAdministrators(
+  tx: TxContext,
+  ports: Pick<IdentityPorts, 'notifier'>,
+  message: { subject: string; body: string; exceptUserId?: string },
+): Promise<void> {
+  if (!ports.notifier) return;
+  for (const to of await administratorEmails(tx, message.exceptUserId))
+    await ports.notifier.send(tx, {
+      kind: 'staff.securityAlert',
+      to,
+      subject: message.subject,
+      body: message.body,
+    });
+}
+
+/**
+ * ADR-0017 rule 15: some changes are root changes (they decide who can sign in as whom). The editor must hold
+ * organization-wide `*`; a second-administrator approval flow is not built yet, so nothing weaker is accepted.
+ */
+export function assertRootChange(tx: TxContext, what: string): void {
+  if (tx.actor.kind === 'system') return;
+  if (tx.authz.propertyScope('*') !== 'all')
+    throw new ForbiddenError('*', {
+      reason: `${what} is a root change: only an administrator with full organization-wide access can make it.`,
+    });
+}

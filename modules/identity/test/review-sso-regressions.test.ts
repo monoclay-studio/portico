@@ -7,7 +7,16 @@ import { newId } from '@portico/kernel';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { identity } from '../src';
 import { fakeIdp } from './fake-idp';
-import { authenticate, type Harness, harness, nextTotp, org, PASSWORD, signInWithMfa } from './harness';
+import {
+  authenticate,
+  type Harness,
+  harness,
+  invitationToken,
+  nextTotp,
+  org,
+  PASSWORD,
+  signInWithMfa,
+} from './harness';
 
 let h: Harness;
 let idp: Awaited<ReturnType<typeof fakeIdp>>;
@@ -37,8 +46,14 @@ async function ssoOrg(domains: string[]) {
       { group: 'g', roleKey: 'read_only', scopeType: 'organization' },
     ]),
   );
-  const login = async (claims: Record<string, unknown>) => {
-    const start = await identity.startSsoLogin(h.t.db, h.ports, { organizationId: o.tenantId });
+  /** Sign in through the IdP; `linkFrom` = start in link mode from that member's password session (rule 15). */
+  const login = async (
+    claims: Record<string, unknown>,
+    linkFrom?: Parameters<typeof identity.startSsoLink>[2],
+  ) => {
+    const start = linkFrom
+      ? await identity.startSsoLink(h.t.db, h.ports, linkFrom)
+      : await identity.startSsoLogin(h.t.db, h.ports, { organizationId: o.tenantId });
     const { code, state } = idp.authorize(start.authorizationUrl, {
       email_verified: true,
       groups: ['g'],
@@ -69,7 +84,9 @@ describe('P0-2b: an organization’s SSO cannot assert another organization’s 
     await expect(
       attacker.login({ email: victimEmail, sub: `attacker-${newId()}`, amr: ['mfa'] }),
     ).rejects.toMatchObject({ code: 'unauthenticated' });
-    expect(await attacker.failures()).toContain('existing_account_requires_verified_domain');
+    // The victim already has their own credentials: no organization's IdP may link them without their proof (rule
+    // 15), and without a verified domain it could not activate them either (§5).
+    expect(await attacker.failures()).toContain('existing_credentials_require_proof');
 
     // The attacker cannot prove the domain either: the TXT record lives in the victim's DNS.
     const claim = await attacker.o.tx((tx) => identity.addSsoDomain(tx, 'victim.mv'));
@@ -92,16 +109,44 @@ describe('P0-2b: an organization’s SSO cannot assert another organization’s 
     expect(ok.status).toBe('signed_in');
   });
 
-  it('with a verified domain, the SSO session still cannot change the person’s global MFA', async () => {
+  it('even with a verified domain, a credentialed person is linked only after proving it; the SSO session then still cannot change their global MFA', async () => {
     const domain = `hotel-${newId().slice(-6)}.mv`;
     const home = await org(h);
     const person = await home.member([], `chef@${domain}`);
-    await signInWithMfa(h, person.email);
+    const own = await signInWithMfa(h, person.email);
     const group = await ssoOrg([domain]);
     const claimed = await group.o.tx((tx) => identity.addSsoDomain(tx, domain));
     txt.set(claimed.txtRecord.name, [claimed.txtRecord.value]);
     expect((await identity.verifySsoDomain(h.t.db, group.o.ctx, h.ports, domain)).verified).toBe(true);
-    const s = await group.login({ email: person.email, sub: `entra-${newId()}`, amr: ['mfa'] });
+    const sub = `entra-${newId()}`;
+    // ADR-0017 rule 15: the domain owner's IdP cannot take over an identity that already has its own credentials.
+    await expect(group.login({ email: person.email, sub, amr: ['mfa'] })).rejects.toMatchObject({
+      code: 'unauthenticated',
+    });
+    expect(await group.failures()).toContain('existing_credentials_require_proof');
+    // The person joins the group (invitation, accepted with their own password and code) and links their IdP account
+    // from a password session with a fresh second factor.
+    await group.o.tx((tx) =>
+      identity.inviteMember(tx, h.ports, { email: person.email, displayName: 'Chef', roles: [] }),
+    );
+    await identity.acceptInvitation(h.t.db, h.ports, {
+      token: invitationToken(h, person.email),
+      password: PASSWORD,
+      code: nextTotp(h, own.secret),
+    });
+    const pw = await identity.login(h.t.db, {
+      email: person.email,
+      password: PASSWORD,
+      organizationId: group.o.tenantId,
+    });
+    if (pw.status !== 'mfa_required') throw new Error(pw.status);
+    const signed = await identity.completeMfaChallenge(h.t.db, h.ports, {
+      challengeToken: pw.challengeToken,
+      code: nextTotp(h, own.secret),
+    });
+    const pwCtx = await authenticate(h, signed.token);
+    if (!pwCtx) throw new Error('no session');
+    const s = await group.login({ email: person.email, sub, amr: ['mfa'] }, pwCtx);
     expect(s.userId).toBe(person.userId);
     const ctx = await authenticate(h, s.token);
     if (!ctx) throw new Error('no session');

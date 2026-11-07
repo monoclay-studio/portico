@@ -53,7 +53,8 @@ export const createUserRequest = z.object({
   email: z.email(),
   displayName: z.string().min(1).max(200),
   jobTitle: z.string().max(200).optional(),
-  initialPassword: z.string().min(12).max(500).optional(),
+  /** Removed (ADR-0017 rule 12): accepted only so that a sender gets a clear `password_not_allowed` refusal. */
+  initialPassword: z.unknown().optional(),
   roles: z
     .array(
       z.object({
@@ -67,10 +68,10 @@ export const createUserRequest = z.object({
 
 export const createUserResponse = z.object({
   userId: z.uuid(),
-  /** `invited` when the email already belongs to a person: they accept while signed in as themselves (ADR-0017 §2). */
-  status: z.enum(['active', 'invited']),
-  invitationExpiresAt: z.string().optional(),
-  delivery: z.lazy(() => delivery).optional(),
+  /** Always `invited` (ADR-0017 rule 12): the person accepts from the email and chooses their own password. */
+  status: z.literal('invited'),
+  invitationExpiresAt: z.string(),
+  delivery: z.lazy(() => delivery),
 });
 
 export const userSummary = z.object({
@@ -283,7 +284,8 @@ export const memberDetail = z.object({
   externalId: z.string().nullable(),
   activatedAt: z.string().nullable(),
   lastSignInAt: z.string().nullable(),
-  mfa: mfaStatusResponse,
+  /** Null while the person has not accepted (their credentials are theirs, not this organization's — R2-P3-6). */
+  mfa: mfaStatusResponse.nullable(),
   assignments: z.array(
     z.object({
       assignmentId: z.uuid(),

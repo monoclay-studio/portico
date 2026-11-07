@@ -88,24 +88,35 @@ export async function org(
         businessDate: '2026-11-07',
       }),
     );
-  /** Create a member with a password and roles (as the system). */
+  /**
+   * Add a member the way a real person joins (ADR-0017 rule 12): the organization invites them, and they accept from
+   * the emailed link, choosing their own password (PASSWORD). Roles are effective once accepted.
+   */
   const member = async (
     roles: Array<{ roleKey: string; scopeType: 'organization' | 'property'; scopeId?: string }>,
     email = `m-${newId()}@lagoon.mv`,
   ) => {
     const { userId } = await withTenantTx(h.t.db, ctx, (tx) =>
-      identity.createUser(tx, {
-        email,
-        displayName: email.split('@')[0] as string,
-        initialPassword: PASSWORD,
-        roles,
-      }),
+      identity.inviteMember(tx, h.ports, { email, displayName: email.split('@')[0] as string, roles }),
     );
+    await acceptInvitationFor(h, email);
     return { userId, email };
   };
   const tx = <T>(fn: Parameters<typeof withTenantTx<T>>[2], as: RequestContext = ctx) =>
     withTenantTx(h.t.db, as, fn);
   return { ctx, tenantId: ctx.tenantId, name, le, property, member, tx };
+}
+
+/** The token of the latest invitation emailed to `email` (the fake notifier keeps every message). */
+export function invitationToken(h: Harness, email: string): string {
+  const message = [...h.sent].reverse().find((m) => m.kind === 'staff.invitation' && m.to === email);
+  if (!message?.link) throw new Error(`no invitation for ${email}`);
+  return decodeURIComponent(message.link.split('token=')[1] as string);
+}
+
+/** The person follows their invitation link and chooses (or proves) their password. */
+export async function acceptInvitationFor(h: Harness, email: string, password = PASSWORD) {
+  return identity.acceptInvitation(h.t.db, h.ports, { token: invitationToken(h, email), password });
 }
 
 /** Sign in with a password and return the authenticated principal. */
@@ -132,9 +143,11 @@ export async function signInWithMfa(h: Harness, email: string, organizationId?: 
   );
   if (!started.ok) throw started.error;
   const secret = base32Decode(started.value.secret);
-  const { recoveryCodes } = await withTenantTx(h.t.db, s.ctx, (tx) =>
+  const confirmed = await withTenantTx(h.t.db, s.ctx, (tx) =>
     identity.confirmTotp(tx, h.ports, { code: totp(secret, h.clock.now()) }),
   );
+  if (!confirmed.ok) throw confirmed.error;
+  const { recoveryCodes } = confirmed.value;
   const ctx = await authenticate(h, s.token);
   if (!ctx) throw new Error('session lost after enrolment');
   return { token: s.token, ctx, secret, recoveryCodes, principal: s.principal };

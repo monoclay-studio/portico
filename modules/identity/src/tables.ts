@@ -17,6 +17,7 @@ export interface IdentityDB {
     first_activated_at: Date | null;
     mfa_failed_attempts: Generated<number>;
     mfa_locked_until: Date | null;
+    email_verified_at: Date | null;
   };
   'identity.memberships': {
     id: string;
@@ -110,6 +111,7 @@ export interface IdentityDB {
     created_at: Generated<Date>;
     confirmed_at: Date | null;
     disabled_at: Date | null;
+    confirm_failures: Generated<number>;
     version: Generated<number>;
   };
   'identity.mfa_recovery_codes': {
@@ -201,6 +203,7 @@ export interface IdentityDB {
     nonce: string;
     code_verifier_enc: string;
     redirect_uri: string;
+    link_user_id: string | null;
     created_at: Generated<Date>;
     expires_at: Date;
     consumed_at: Date | null;

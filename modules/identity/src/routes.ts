@@ -373,7 +373,8 @@ function registerSelfRoutes(app: PorticoApp, database: PorticoDatabase, ports: I
         response: { 200: recoveryCodesResponse },
       },
     },
-    (req) => withTenantTx(database, req.ctx, (tx) => svc.confirmTotp(tx, ports, req.body)),
+    async (req) =>
+      unwrap(await withTenantTx(database, req.ctx, (tx) => svc.confirmTotp(tx, ports, req.body))),
   );
   app.post(
     '/auth/mfa/verify',
@@ -412,6 +413,19 @@ function registerSelfRoutes(app: PorticoApp, database: PorticoDatabase, ports: I
   app.delete('/me/mfa', disableSchema, disableMfa);
   // Same as DELETE /me/mfa for clients that cannot send a body with DELETE.
   app.post('/me/mfa/disable', disableSchema, disableMfa);
+  // ADR-0017 rule 15: link your own identity-provider account after proving your Portico credentials.
+  app.post(
+    '/me/sso/link',
+    { schema: { tags: ['Single sign-on'], response: { 200: ssoStartResponse } } },
+    async (req) => {
+      const r = await svc.startSsoLink(database, ports, req.ctx);
+      return {
+        authorizationUrl: r.authorizationUrl,
+        expiresAt: r.expiresAt.toISOString(),
+        browserBinding: r.browserBinding,
+      };
+    },
+  );
   app.get(
     '/me/invitations',
     { schema: { tags: ['Authentication'], response: { 200: z.object({ items: z.array(myInvitation) }) } } },
@@ -501,21 +515,12 @@ function registerAdminRoutes(app: PorticoApp, database: PorticoDatabase, ports: 
     },
     async (req, reply) => {
       const key = requireIdempotencyKey(req);
+      // ADR-0017 rule 12: every person is invited and chooses their own password; `initialPassword` is refused.
       const res = await runIdempotent(
         database,
         req.ctx,
         { scope: 'POST /users', key, request: { ...req.body, initialPassword: undefined } },
-        async (tx) => {
-          const created = await svc.createUser(tx, req.body);
-          if (created.status === 'active') return { status: 201, body: created };
-          // An existing person: they are invited and accept themselves (ADR-0017 §2). The link goes only to them.
-          const sent = await svc.sendInvitation(tx, ports, {
-            userId: created.userId,
-            email: req.body.email,
-            displayName: req.body.displayName,
-          });
-          return { status: 201, body: { ...created, ...sent } };
-        },
+        async (tx) => ({ status: 201, body: await svc.createUser(tx, req.body, ports) }),
       );
       return reply.status(201).send(res.body);
     },
