@@ -172,4 +172,13 @@ Each agent's brief and report are in `agents/`.
   10x briefs, each with targets and the next 3 increments. Owner questions Q150–Q155 are added. Merged to main.
   - It also flagged measurement problems: stale parity coverage, parity files under-reporting tested rows, and a
     requirement-prefix collision. The orchestrator fixed the coverage and the collision (`ACS-R` for access).
+- **18:25 — Staff web app (backoffice) merged** after its fix round.
+  - Shared-desk data leak fixed; drawer focus fixed; uncertain outcomes shown as "pending verification"; vocabularies
+    aligned with the real module contracts; arrivals layout redesigned from the reviewer's prototype.
+  - Bulk selection and list keys added; the data layer is swappable per domain; Departures and In house added.
+  - Main bundle cut from 938 kB to 366 kB.
+  - Verified on a merged copy: lint, forced typecheck, every package's tests (ui 87, backoffice 36) and the Playwright
+    suite 11/11, including an axe scan with zero violations (WCAG 2.2 AA, every screen, drawer and palette open,
+    light and dark).
+  - All ten wave-1 code branches except identity-plus and the integration step are now on main.
 

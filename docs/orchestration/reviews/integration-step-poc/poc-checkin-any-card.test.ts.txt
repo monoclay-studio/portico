@@ -1,0 +1,102 @@
+/**
+ * PoC (steward review, integration step) — ADR-0015 delegation widens the check-in guarantee step.
+ *
+ * Payments' port surface now grants payments.payment.collect at the stay's property for every `authorize` call
+ * (PAYMENTS_PORT_DELEGATION). Reservations' check-in passes `input.guarantee.paymentMethodId` and `input.guarantee
+ * .amount` straight from the request. Nobody checks that the saved card belongs to the booking's guest or payer, or
+ * that the amount relates to the stay. So a role holding reservations.stay.checkIn and NO payments key can place a
+ * hold of any amount on any saved card of the legal entity (another guest's card) — something payments' own route
+ * refuses to that same user.
+ */
+import { sql } from '@portico/db';
+import { newId, type RequestContext, staticAuthorizer } from '@portico/kernel';
+import type { Booking } from '@portico/reservations';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import {
+  applied,
+  bookingInput,
+  cardOnFile,
+  kandu,
+  organization,
+  readyUnit,
+  type Scenario,
+  startScenario,
+} from './scenarios/harness';
+
+let s: Scenario;
+beforeAll(async () => {
+  s = await startScenario();
+});
+afterAll(async () => s?.close());
+
+describe('PoC: check-in authorizes any saved card for any amount without payments permissions', () => {
+  it('a custom "night receptionist" (no payments.*) holds USD 25,000 on another guest\'s card', async () => {
+    const org = await organization(s);
+    const k = await kandu(s, org, '2027-03-10');
+    const { reservations, payments } = s.c.services;
+    const agent = org.staff('reservations_agent', 'Aishath', [k.id]);
+    const b = applied<Booking>(
+      await org.run(agent, (tx) =>
+        reservations.createBooking(
+          tx,
+          bookingInput(k, { arrival: '2027-03-10', departure: '2027-03-11', unit: '214' }),
+        ),
+      ),
+    );
+    await s.drain();
+    await readyUnit(s, org, k.id, k.units['214'] as string);
+    // A card saved for SOMEONE ELSE (cardOnFile owner: a different guest profile).
+    const strangersCard = await cardOnFile(s, org, k.id, k.legalEntityId);
+
+    const perms = [
+      'platform.property.read',
+      'reservations.booking.read',
+      'reservations.stay.checkIn',
+      'guests.profile.read',
+      'guests.profile.update',
+      'operations.unit.read',
+      'inventory.unit.read',
+    ];
+    const night: RequestContext = {
+      tenantId: org.tenantId,
+      environment: org.environment,
+      actor: { kind: 'user', userId: newId(), displayName: 'Night receptionist' },
+      authz: staticAuthorizer(perms.map((permission) => ({ permission, propertyIds: [k.id] }))),
+      correlationId: newId(),
+    };
+    // The same user may not authorize through payments' own entry point (the HTTP route's command).
+    await expect(
+      org.run(night, (tx) =>
+        payments.tx.authorize(tx, {
+          propertyId: k.id,
+          methodId: strangersCard.id,
+          amount: { amountMinor: 2_500_000, currency: 'USD' },
+          ref: { type: 'stay', id: b.stays[0]?.id as string },
+          businessKey: `direct:${newId()}`,
+        }),
+      ),
+    ).rejects.toMatchObject({ status: 403 });
+
+    const run = await reservations.performWorkflow(s.t.db, night, {
+      stayId: b.stays[0]?.id as string,
+      kind: 'check_in',
+      checkIn: {
+        registration: { identityVerified: true },
+        guarantee: {
+          paymentMethodId: strangersCard.id,
+          amount: { amountMinor: 2_500_000, currency: 'USD' },
+        },
+        access: { kind: 'card', count: 1 },
+      },
+    });
+    const guarantee = run.run?.steps.find((st) => st.key === 'guarantee');
+    console.log('guarantee step:', JSON.stringify(guarantee).slice(0, 400));
+    const auths = await sql<{ method_id: string; amount_minor: number; status: string }>`
+      select method_id, amount_minor, status from payments.authorizations where ref_id = ${b.stays[0]?.id}`.execute(
+      s.t.admin.kysely,
+    );
+    // BUG: an authorization of USD 25,000 on a stranger's card, created by a user with no payments permission.
+    expect(auths.rows).toHaveLength(1);
+    expect(auths.rows[0]).toMatchObject({ method_id: strangersCard.id, amount_minor: 2_500_000 });
+  });
+});

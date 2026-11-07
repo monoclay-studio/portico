@@ -1,0 +1,85 @@
+/**
+ * PoC (steward review, integration step) — reservations' rates adapter (`ratesPortFrom`).
+ *
+ * `ratesDocumentOf` only checks `kind` and that `seal` is a string. priceChange is safe (rates verifies the seal),
+ * but the pure provider functions reservations uses for money — evaluateCancellationPenalty and
+ * instantiatePaymentSchedule — never verify it, so altered agreed terms are evaluated as if agreed.
+ */
+import type { TermsSnapshot } from '@portico/reservations';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { kandu, organization, type Scenario, startScenario } from './scenarios/harness';
+
+let s: Scenario;
+beforeAll(async () => {
+  s = await startScenario();
+});
+afterAll(async () => s?.close());
+
+describe('PoC: rates adapter', () => {
+  it('an altered sealed document is refused by priceChange but evaluated by the pure functions', async () => {
+    const org = await organization(s);
+    const k = await kandu(s, org);
+    const agent = org.staff('reservations_agent', 'Aishath', [k.id]);
+    const { reservations, rates } = s.c.services;
+    const offers = await org.run(agent, (tx) =>
+      reservations.deps.ports.rates.quote(tx, {
+        propertyId: k.id,
+        nights: { from: '2027-03-15', to: '2027-03-18' },
+        occupancy: { adults: 2, childrenAges: [] },
+        unitTypeIds: [k.types.BV as string],
+        ratePlanIds: [k.plans.BAR as string],
+      }),
+    );
+    const view = offers[0]?.terms as TermsSnapshot;
+    const port = reservations.deps.ports.rates;
+    const at = new Date('2027-03-10T09:00:00+05:00');
+    const honest = port.evaluateCancellationPenalty(view, at, {
+      event: 'cancellation',
+      nights: ['2027-03-15', '2027-03-16', '2027-03-17'],
+    });
+    expect(honest.amount.amountMinor).toBeGreaterThan(0);
+    const honestDeposit = port.instantiatePaymentSchedule(view);
+
+    // Tamper: drop the cancellation policy and the deposit from the provider document; keep the seal string.
+    const doc = structuredClone(view.providerDocument) as {
+      policies: { cancellation: unknown; deposit: unknown };
+    };
+    doc.policies.cancellation = null;
+    doc.policies.deposit = null;
+    const forged: TermsSnapshot = { ...view, providerDocument: doc };
+    expect(rates.verifyTerms(doc)).toBe(false);
+
+    // priceChange: refused (rates checks the seal).
+    await expect(
+      org.run(agent, (tx) =>
+        port.priceChange(tx, {
+          terms: forged,
+          change: {
+            nights: { from: '2027-03-15', to: '2027-03-19' },
+            unitTypeId: k.types.BV as string,
+            ratePlanId: k.plans.BAR as string,
+            occupancy: { adults: 2, childrenAges: [] },
+            asOf: '2027-03-08',
+          },
+        }),
+      ),
+    ).rejects.toMatchObject({ code: 'terms_seal_invalid' });
+
+    // BUG: the money-relevant pure functions accept the forged document silently.
+    const forgedPenalty = port.evaluateCancellationPenalty(forged, at, {
+      event: 'cancellation',
+      nights: ['2027-03-15', '2027-03-16', '2027-03-17'],
+    });
+    expect(forgedPenalty.amount.amountMinor).toBe(0);
+    const forgedDeposit = port.instantiatePaymentSchedule(forged);
+    console.log(
+      'penalty honest/forged:',
+      honest.amount.amountMinor,
+      forgedPenalty.amount.amountMinor,
+      'deposit items honest/forged:',
+      honestDeposit.length,
+      forgedDeposit.length,
+    );
+    expect(forgedDeposit.length).toBeLessThan(Math.max(1, honestDeposit.length));
+  });
+});

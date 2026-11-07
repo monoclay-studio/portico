@@ -34,3 +34,4 @@
 - parity-finance: downgrade PAR-FIN-132/133 and the other rows the finance review named (F-12)
 - platform: `lockBusinessDate` provider for finance (review P2-01)
 - integration (after identity-plus merges): bind platform openTransitionFor / planAuthorityTransition / assertEffectInScope and transitionGuard → integration pendingOperations (modules/integration/FOUNDATION_REQUESTS.md FR-2)
+- backoffice (next round): `e2e/fixtures.ts` hard-codes baseURL `127.0.0.1:5180` (lines 67, 75) — use the config's WEB_PORT so parallel e2e runs on other ports work; add operations' occupancy value `skip` to the UI status vocabulary (currently a neutral fallback chip); foundation requests #8–13 in apps/backoffice/FOUNDATION_REQUESTS.md (history newest-first, shared status-vocabulary package, per-blocker owner on frontDeskRow)
