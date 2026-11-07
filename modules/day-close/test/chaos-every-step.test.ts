@@ -6,6 +6,7 @@
  * departure transfer deferred to the next day's close) and one expected arrival that becomes a no-show.
  * After all days: every ledger effect exists exactly once (0 duplicate postings after any interruption).
  */
+import { sql } from '@portico/db';
 import { addDays } from '@portico/kernel';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { SimulatedCrash, STEP_KEYS, type StepKey } from '../src';
@@ -47,6 +48,12 @@ describe('crash at every step boundary and inside every step, then resume (E07)'
   let day = D;
   it.each(POINTS.map((p, i) => [i, p.at, p.step] as const))('day %i: crash %s %s', async (_i, at, step) => {
     const next = addDays(day, 1);
+    // Morning: yesterday's guests check out at the desk (otherwise they block today's close as overstays).
+    await org.run((tx) =>
+      sql`update dcl_fake.stays set status = 'checked_out' where status = 'in_house' and departure <= ${day}::date`.execute(
+        tx.db,
+      ),
+    );
     const rooms = [
       await addStay(h, org, { arrival: day, departure: next, plan: 'BAR' }),
       await addStay(h, org, { arrival: day, departure: next, plan: 'BAR' }),
@@ -76,6 +83,7 @@ describe('crash at every step boundary and inside every step, then resume (E07)'
     h.clock.advance(3 * 60_000);
     const done = await h.service.resumeRun(h.t.db, org.auditor, run?.id as string, run?.version as number);
     expect(done.runStatus).toBe('completed');
+    expect(done.overrides).toEqual([]);
     expect(await businessDate(org)).toBe(next);
 
     // Exactly once per stay-night and per no-show, whatever the crash point.
