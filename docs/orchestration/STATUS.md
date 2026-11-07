@@ -158,8 +158,9 @@
     - `feat/distribution-channex` @ a8bd950: R3 against the simulator; blocked on rates `termsFromChannelPrices`;
     - `feat/day-close` @ cb0fbf3: 22 mutants red; 17 contract requests.
   - **RESUME ORDER** (each from its latest playbook; every brief requires self-check v6):
-    1. Integration-step: fix round 4 DONE at a1bdd70 (pushed). Focused re-review #5 launched 23:36 and running →
-       `reviews/review-integration-step-5.md`. If stopped, resume the reviewer; merge if clean, else fix round 5.
+    1. Integration-step: re-review #5 said merge after fixes (2 P1, the same consent class). Fix round 5 (ADR-0015
+       Amendment 4) was sent at 23:56 and is running. Then a focused re-review #6 → merge if clean. Quality round 4 input:
+       four rounds of "one step beyond" in consent; the builder grid lacked an input-source column.
     2. Steward reviews of distribution and day-close (in parallel). Then fix rounds, then merge.
     3. Steward review of migration (`feat/migration` @ 45be8b9, built 23:27: 95 module tests, gates green; MIG-CR-1 blocks real runs), in parallel with item 2.
     4. After integration-step merges:
