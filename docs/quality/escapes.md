@@ -51,17 +51,22 @@ entries whose earliest point was an orchestrator step now count under **L-orch**
 
 Before reclassification, round 0 read L1-gate 9 / L1-BSC 7 / L2 11 / L3 0 / L4 5 / L5 6.
 
-| Loop | Round 0 (reclassified) | Round 1 | Round 2 | Cumulative | Round-2 entries |
-|---|---|---|---|---|---|
-| L1-gate | 8 | 2 | **1** | 11 | E-079 |
-| L1-BSC (builder self-check, incl. fix rounds) | 7 | 13 | **15** | 35 | E-063, E-064, E-066, E-068, E-069, E-070, E-071, E-072 (residuals of round-0 fixes); E-075, E-076, E-077, E-078 (integration-step fix round); E-082, E-084, E-085 (guests fix round) |
-| L2 steward review | 10 | 3 | **5** | 18 | E-065, E-067, E-083 (recall misses of round-0 reviews; L8 contributed to E-083); E-073, E-074 (recommendation defects of a v1-era review) |
-| L3 scenario proof | 0 | 1 | **0** | 1 | — |
-| L4 UX loop | 3 | 0 | **0** | 3 | No L4 round ran |
-| L5 market, parity and research | 5 | 1 | **0** | 6 | — |
-| L-orch (orchestrator process) | 5 | 3 | **2** | 10 | E-080, E-081 |
-| L8 meta loop | 0 | 1 | **0** | 1 | — |
-| **Total** | **38** | **24** | **23** | **85** | |
+| Loop | Round 0 (reclassified) | Round 1 | Round 2 | Round 3 | Cumulative | Round-3 entries |
+|---|---|---|---|---|---|---|
+| L1-gate | 8 | 2 | 1 | **2** | 13 | E-094, E-095 |
+| L1-BSC (builder self-check, incl. fix rounds) | 7 | 13 | 15 | **25** | 60 | E-086 … E-093 (integration-step fix round 2, under v4 § 5); E-096 … E-103 (infra build, claims answered "yes" under v3); E-106 … E-110 (backoffice round-1 claims refuted by UX 2a); E-111, E-112, E-113 (found by the parity re-run); E-114 (found by the L8 mutation canary) |
+| L2 steward review | 10 | 3 | 5 | **0** | 18 | — |
+| L3 scenario proof | 0 | 1 | 0 | **0** | 1 | — |
+| L4 UX loop | 3 | 0 | 0 | **0** | 3 | — |
+| L5 market, parity and research | 5 | 1 | 0 | **0** | 6 | — |
+| L-orch (orchestrator process) | 5 | 3 | 2 | **2** | 12 | E-104 (Q158 default ≠ code), E-105 (UX 2a dispositions) |
+| L8 meta loop | 0 | 1 | 0 | **1** | 2 | E-115 (timeline `now` tokens) |
+| **Total** | **38** | **24** | **23** | **30** | **115** | |
+
+Round-2 entries by loop (moved here from the table): L1-gate E-079; L1-BSC E-063, E-064, E-066, E-068 … E-072
+(residuals of round-0 fixes), E-075 … E-078 (integration-step fix round), E-082, E-084, E-085 (guests fix round); L2
+E-065, E-067, E-083 (recall misses of round-0 reviews), E-073, E-074 (recommendation defects of a v1-era review);
+L-orch E-080, E-081.
 
 ### By where they were found
 
@@ -86,6 +91,13 @@ Before reclassification, round 0 read L1-gate 9 / L1-BSC 7 / L2 11 / L3 0 / L4 5
 - the orchestrator's merge verification: 1 (E-079);
 - the orchestrator about its own process: 2 (E-080, E-081);
 - the L2 guests erasure re-review: 4 (E-082 … E-085).
+
+**Round 3 by where found:**
+- the L2 integration-step re-review #3: 9 (E-086 … E-094);
+- the L2 infra security review: 10 (E-095 … E-104);
+- the L4 black-box tester, round 2a: 5 (E-106 … E-110);
+- the L5 parity evidence re-run: 3 (E-111 … E-113);
+- L8 (disposition check, mutation canary, timeline check): 3 (E-105, E-114, E-115).
 
 ### By severity and kind
 
@@ -114,6 +126,18 @@ recommended fix caused. There are **12 of 24**:
 The trend is 7 of 38 → 12 of 24 → 17 of 23. As P0/P1 classes close, the remaining defects come increasingly from
 fixes.
 
+**Round 3 by severity:** P0 0, P1 5, P2 17, P3 8. **By kind:** D 16, G 5, C 6, Pr 3.
+
+**Round 3, fix-related: 15 of 30 (50 %).**
+- The integration-step fix round 2: 10 (E-086 … E-094, E-114).
+- The backoffice round-1 fix round, refuted by UX 2a: 5 (E-106 … E-110). E-106 is the exact reproduction of E-025.
+- The share fell because the infra **first** review added 10 escapes that no fix caused. Of the escapes found by
+  re-checking fixed work (re-review #3, UX 2a, the canary), **15 of 15** are fix-related.
+
+**Claims (kind C, plus D entries whose report or docs said the opposite):** 15 of 30 contradict a written claim: a
+README, runbook, decisions-file "Done", self-check "yes" or parity row (E-087, E-096 … E-102, E-106, E-107, E-109,
+E-110, E-111; E-104 and E-105 are the orchestrator's records). RC-15 below.
+
 ### Root causes shared by several escapes
 
 | Root cause | Escapes | Main fix |
@@ -132,6 +156,10 @@ fixes.
 | **RC-11.** The test environment is not the production environment: superuser migrations, a single e2e port, Playwright outside the gate | E-052, E-053 | Retro edits 3c and 1c; orchestrator v4 queued |
 | **RC-12.** The orchestrator passed things on or recorded them inexactly: paraphrased claims, broad commits, estimated times, generated files not refreshed | E-043 (contributing), E-055, E-057, E-060 | Orchestrator v2 (O2-1…O2-4) |
 | **RC-13 (round 2).** A fix guards the reported *path*, not the *invariant*. The writers of the facts it trusts (premises), the inverse and repeated operations, the other record parameters, the other stores and the fix's own records are never enumerated | E-063, E-066, E-067 (stores), E-070, E-073, E-074, E-075, E-076, E-077 | Builder self-check **v4** (invariant closure); patterns AP-57 and AP-58 |
+| **RC-14 (round 3).** Closure is enumerated from memory, inside Portico's code. Writer and reader lists are recalled, not derived; the record's other states and exits, the external systems holding a copy of it, the enforcement points of a stored control fact, the key fields that select it, and concurrency per writer are outside the frame | E-086, E-087, E-088, E-089, E-090, E-092 | Builder self-check **v5** (BS5-1 … BS5-6); patterns AP-59 and AP-60 |
+| **RC-15 (round 3).** A prose claim about behaviour (a runbook capability, a recorded default, a "Done" refinement, a parity row, a self-check "yes") is written without a test or code check, and no gate reads prose | E-087, E-096 … E-102, E-104, E-106, E-107, E-109, E-110, E-111 | Builder **v5** BS5-7 (claim ledger); orchestrator **v4** O4-1; pattern AP-62 |
+| **RC-16 (round 3).** A loop step is skipped for cost and its function is not reassigned: the refiner's triage, disposition and confirm/refute of "Done" claims | E-105 (E-107 left unrouted as a result) | Orchestrator **v4** O4-2; refiner **v2.1** triage-only variant |
+| **RC-10 recurred (round 3).** A test cannot fail: values unasserted (E-099), a title that claims more than the body (E-113), a "concurrent" test whose race is set up sequentially (E-114) | E-099, E-113, E-114 | Builder **v5** BS5-8 (one mutant per guard) |
 
 ---
 
@@ -907,6 +935,9 @@ v2 existed. So **no v2 playbook was used in round 1**, and the v2 effect is stil
   templates and the readiness register, but not the parity rows or the coverage file. The round-0 inventory builder
   said it "couldn't edit `docs/parity/inventory.md` because it is on another branch".
 - **Checks added.** Orchestrator v2 **O2-4**; retro edit 1b.
+- **Note (round 3, 2026-11-07).** "Their READMEs prove dozens of rows" was taken from the README. The parity re-run found
+  that 13 of the 49 rows the inventory README calls tested are not; 36 are (E-111). Both directions were wrong: the
+  matrix under-claimed and the README over-claimed.
 
 ### L8 — the meta loop itself
 
@@ -1167,4 +1198,350 @@ The guests erasure re-review landed at 18:53, and is folded in below (E-082 to E
 
 ---
 
-<!-- Round 3 entries go below this line: "## Round 3 — <date>" -->
+## Round 3 — 2026-11-07, 21:51–22:30 UTC (integration-step re-review #3, the infra security review, UX round 2a, the parity evidence re-run, the guests fix merge, the orchestrator's process)
+
+Sources:
+- `docs/orchestration/reviews/review-integration-step-3.md` and `integration-step-poc/r3-*`;
+- `review-infra.md` and `infra-poc/*`;
+- `docs/ux/round-2a/README.md` and `blackbox-findings.md`; `docs/ux/round-1/decisions/backoffice.md`;
+- `docs/parity/gaps-front.md` § "v2 evidence re-run" (`f95c55a`), `modules/inventory/README.md` § Competitive parity
+  status;
+- `docs/orchestration/pending-fixes.md` lines 69–70 (`3a4a4ec`); `docs/OPEN_QUESTIONS.md` Q158 (`be58bbe`);
+- the builder reports, read from the subagent transcripts: integration step fix round 2 (19:28), infra (19:22), guests
+  fix (19:06);
+- `docs/chronicle/01-timeline.md` (18:52 onward), checked against the transcripts and git by
+  `canary-scripts/r3_verify_times.py`;
+- scripted canary `r3-l1` (mutation, `canaries.md` § 6).
+
+**Playbook versions in force:**
+- Re-review #3 and the infra review ran on **steward v2.1**.
+- The integration-step fix round 2 ran **builder self-check v4 § 5** (its first use). The guests fix ran v4 § 5 with
+  mutations.
+- The infra builder (brief 18:07) ran **self-check v3** (§ 2 items 5–32, § 3, § 4); v4 was published at 18:57.
+- UX round 2a ran **black-box tester v2** (its first use). No refiner ran.
+- The parity re-run ran **parity v2**.
+- The orchestrator ran **v3** (O3-1 times derived, O3-2 no force-push, O3-3 flakes tracked).
+
+### L1-BSC — the integration-step fix round 2, under self-check v4 § 5
+
+#### E-086 · P1 · D · Invariant (b) leaks at three exits: a payable guest link for money the folio no longer owes (R3-P1-1)
+- **Found.** L2 re-review #3 (PoCs R3-B1, B2, B3).
+  - (i) Settling the folio to receivables never re-syncs the request: the company was invoiced USD 234 and the guest
+    paid the same USD 234 through the link.
+  - (ii) The "defer while a payment is in flight" exemption never resumes when that payment fails.
+  - (iii) A re-issued request cancels the old one in Portico but never deactivates its link at the provider: USD 585
+    collected for a USD 351 debt.
+- **Should have been caught by.** L1-BSC. The builder's v4 § 5 row (b) listed seven writers (late charge, reversal,
+  adjustment, transfer, payment, refund, deposit application). It did not list `transferToReceivables` or
+  `recordPaymentAdjustment`, the exit of its own deferral (exemption 4 was attacked only with "a payment in flight →
+  deferred", not with "… then the payment fails"), or the provider, which holds a copy of the request.
+- **Why it was missed.**
+  - The writer list was written from memory. The reviewer derived it from the code (callers of `syncDepartedFolios`
+    against every path that changes a folio balance).
+  - v4 § 5 asks for writers, repeats and inverses. It does not ask for the states a record can be in, the exits from
+    each state (failed, expired, superseded, settled elsewhere), or the **external systems that hold a copy** of the
+    record and can act on it.
+  - RC-14 (new).
+- **Checks added.**
+  - ADR-0015 Amendment 2 ("payment links have external writers", orchestrator, 21:38) and the fix-round-3 brief
+    ("model the request as a state machine with the provider as an external writer").
+  - Builder **v5** BS5-1 (state machine), BS5-2 (external holders), BS5-3 (writer list derived from the code).
+  - New pattern **AP-59**; AP-58, extended.
+
+#### E-087 · P1 · D · The cardholder's mandate scope is stored but enforced only on the guarantee path; the README says it is enforced (R3-P1-2)
+- **Found.** L2 re-review #3 (PoC R3-F1). A card agreed for "a guarantee of booking A, at most USD 100" was charged
+  USD 5,000 onto another guest's folio, and a USD 9,000 hold was accepted.
+- **Should have been caught by.** L1-BSC. The builder knew the scope fields. Its § 3 row R2-P1-1 says "a standing
+  mandate does not cover a booking staff linked; only one naming the booking does, within its amount". That check is
+  on the guarantee path only. `assertMitAllowed` (charge, authorize) checks legal entity and properties, and
+  `incrementAuthorization` checks only `collect`. `modules/payments/README.md:38` claims all five scope fields are
+  enforced.
+- **Why it was missed.** v4 enumerates the **writers** of the facts a fix trusts. A stored consent is a control fact,
+  and its risk is in its **readers**: every path that moves money must read every field of it. No step lists the
+  enforcement points of a stored control fact (AP-45 applied to readers).
+- **Checks added.** Builder **v5** BS5-4 (enforcement points); new pattern **AP-60**; AP-50, extended (a README claim
+  about a guard needs one test per guarded path).
+
+#### E-088 · P2 · D · The collection guard still depends on the purpose label and the exact reference (R3-P2-1)
+- **Found.** L2 re-review #3 (PoC R3-D1). The same 30,000 labelled `incidentals` is collected twice, and a `custom`
+  charge on a stay folio passes a paid deposit link on its booking.
+- **Should have been caught by.** L1-BSC. The fix sweep's own "attack on the fix" for SW-PAY-2 said "treat a booking
+  and its stays' folios as one ref family". That line was in the recommendation, and the fix did not implement it.
+- **Why it was missed.** The invariant's **key fields** (reference and purpose) are chosen by the client. v4 asks who
+  writes the facts a fix trusts, but the builder applied it to the stored facts, not to the key that selects them
+  (AP-35 again). The recommendation's attack-on-the-fix line did not become a row in the builder's table.
+- **Checks added.** Builder **v5** BS5-5 (writers of the invariant's key fields; every recommendation line is a row);
+  pattern AP-28, extended.
+
+#### E-089 · P2 · D · Third FD-15 sibling: stored issues show folio balances to every booking reader (R3-P2-2)
+- **Found.** L2 re-review #3 (PoC R3-G1). A housekeeping supervisor gets `moneyRedacted: true` and an issue reading
+  "folio 17550 USD"; `listIssues` and handover return the same.
+- **Should have been caught by.** L1-BSC. This is the **third** sibling miss on FD-15 (E-044, E-076). v4 BS4-1 asks
+  for "every reader of the protected quantity"; the builder listed runs and derived issues, not stored issue text,
+  `listIssues` or handover.
+- **Why it was missed.** The reader list was written from memory again (RC-14). A protected quantity can be copied
+  into free text, where no field filter reaches it.
+- **Checks added.** Builder **v5** BS5-3 (reader and writer lists derived by search, the search pasted); pattern
+  AP-18, extended (copies of a protected value inside messages and details).
+
+#### E-090 · P2 · D · Concurrent opening-deposit imports skip the "held elsewhere" check and mix two legal entities (R3-P2-3)
+- **Found.** L2 re-review #3 (PoC R3-C1). Run sequentially, the second import is refused; run concurrently, both are
+  accepted into one account of 20,000.
+- **Should have been caught by.** L1-BSC. The builder's § 3 table marked concurrency "n/a" for R2-P1-3, and v4 § 5 has
+  no concurrency column.
+- **Checks added.** Builder **v5** BS5-6 (a concurrency cell per writer; "n/a" needs the lock or constraint that makes
+  it so); pattern AP-36, extended.
+
+#### E-091 · P3 · D · Any guest actor counts as customer-initiated for any saved card (R3-P3-1, latent)
+- **Found.** L2 re-review #3 (code-read). No guest surface exists yet.
+- **Should have been caught by.** L1-BSC. The fix's own rule ("only a guest acting for themselves") was implemented as
+  "any guest" (`deriveInitiator`). This is the fix's own record (v4 BS4-1(c)) checked by its name, not its meaning.
+- **Checks added.** Pattern AP-57, extended (the actor kind is a premise; ownership is the fact).
+
+#### E-092 · P3 · D · Finance and payments take their locks in opposite orders (R3-P3-3, latent)
+- **Found.** L2 re-review #3 (code-read; not reproduced in 12 concurrent rounds).
+  - Late charge: folio, then collection.
+  - Link webhook: collection, then folio.
+- **Should have been caught by.** L1-BSC. The fix added a cross-module call that locks.
+- **Checks added.** Pattern AP-36, extended (lock order across modules is written in the domain map); builder **v5**
+  BS5-6.
+
+#### E-093 · P3 · G · The scenario harness completes the authority transition with empty platform ports (R3-P3-4)
+- **Found.** L2 re-review #3. `makeExternal` passes `{}` (no `transitionGuard`) and a fabricated approver.
+- **Should have been caught by.** L1-BSC (scenario tests v3). The harness exercises a path the real composition
+  guards differently (RC-11).
+- **Checks added.** Scenario tests: the harness binds the composition's ports, never `{}` (noted for v4 of that
+  playbook; no new version this round).
+
+### L1-gate
+
+#### E-094 · P3 · G · A lint warning passes the gate (R3-P3-2)
+- **Defect.** `pnpm lint` exits 0 with a Biome warning (`useOptionalChain`, `accounts.ts:630`).
+- **Found.** L2 re-review #3.
+- **Should have been caught by.** L1-gate. Warnings never fail the gate, so they accumulate unseen.
+- **Checks added.** Retro edit 6 (`biome check --error-on-warnings` in the `lint` script); canary C-L1-07.
+
+#### E-095 · P3 · G · No gate runs the infrastructure checks (infra P3-6)
+- **Defect.** `.github/workflows/ci.yml` runs no `terraform fmt/validate/test`, `verify-roles.sh` or
+  `deploy-cell.test.sh`.
+- **Found.** L2 infra review.
+- **Should have been caught by.** L1-gate (AP-52). The builder ran them by hand and reported "17 of 17 runs pass".
+- **Checks added.** Pattern AP-52, extended (every test a builder reports must run in a gate).
+
+### L1-BSC — the infra build, under self-check v3 (claims answered "yes")
+
+The infra builder's report (19:22) answered v3 § 2 items 23 ("guard rails tested"), 25 ("LIVE keys and operator
+tokens refused") and 31 ("README claims cite tests") with **yes**, and items "about tenant tables, routes, money,
+events, data authority, SSRF and erasure" with **N/A**. The six entries below contradict those answers. The
+infra review's other findings (P2-2, P2-3, P2-6, P2-7, P2-8, and the P3s except P3-6) are first-review design
+findings whose class was not in the builder's checklist, so they are **not** counted as escapes.
+
+#### E-096 · P1 · D · The CI deploy role is administrator-equivalent for its cell; the runbook says it cannot read secrets; its trust is pinned by a claimable repository name (infra P1-1)
+- **Found.** L2 infra review (`infra-poc/ci-deploy-role-equivalence.txt`, chains A–C).
+  - `RegisterTaskDefinition` + `RunTask` with overrides + `PassRole` on the db-bootstrap execution role prints the
+    RDS master password.
+  - The trust policy pins only `repo:<name>` and an environment; the examples use `monoclay/portico`, while the
+    repository is `monoclay-studio/portico`.
+- **Should have been caught by.** L1-BSC. `docs/runbooks/deploy.md:20-21` makes a capability claim that no test
+  checks (item 31 answered yes). Privilege equivalence (AP-09) and trust keyed on a claimable name (AP-03) were in the
+  pattern library.
+- **Checks added.** Patterns AP-09 and AP-03, extended; builder **v5** BS5-7 (claim ledger).
+
+#### E-097 · P1 · D · The monthly restore drill can never run, and nothing alarms (infra P1-3)
+- **Found.** L2 infra review (`infra-poc/restore-drill-silent.txt`).
+  - No pipeline pushes the `latest-drill` image.
+  - The paging rule matches only a container exit code, which a task that fails to start does not have.
+  - No metric is published, so the failure alarm stays OK.
+- **Should have been caught by.** L1-BSC (item 23 "guard rails tested"; item 31). The README and
+  `backup-restore-verification.md` present the drill as running and paging.
+- **Why it was missed.** A monitor that alarms on a **failure signal** is silent when the job never runs. Only the
+  absence of a **success signal** within its period catches that.
+- **Checks added.** New pattern **AP-61** (dead-man's switch); builder **v5** BS5-7.
+
+#### E-098 · P2 · D · The "LIVE keys only in production" guard checks only the variable name (infra P2-1)
+- **Found.** L2 infra review (`infra-poc/live-key-guard-bypass.txt`). Staging accepts the live Stripe Connect key under
+  the TEST name.
+- **Should have been caught by.** L1-BSC (item 25 answered "LIVE keys refused"). The guard checks one side of a
+  name → value mapping (AP-19).
+- **Checks added.** Pattern AP-19, extended (a guard on a name must also check the value it names).
+
+#### E-099 · P2 · C · Every deployment runs `NODE_ENV=production`, so the README's "operator tokens: non-production only" is false (infra P2-9)
+- **Found.** L2 infra review (third `terraform test` run in `live-key-guard-bypass.txt`).
+- **Should have been caught by.** L1-BSC (item 25; item 31). The `runtime_contract` test asserts names, not values
+  (AP-55).
+- **Checks added.** Builder **v5** BS5-7.
+
+#### E-100 · P2 · C · "Failed backup and copy jobs page on-call" is false: the topic refuses AWS Backup and SES (infra P2-10)
+- **Found.** L2 infra review (code-read of topic and KMS policies).
+- **Should have been caught by.** L1-BSC (item 31).
+- **Checks added.** Builder **v5** BS5-7; pattern AP-61 (a page that cannot be delivered is a silent monitor).
+
+#### E-101 · P2 · C · Governance-mode locks are described as stopping a compromised administrator (infra P2-11)
+- **Found.** L2 infra review. Governance mode can be bypassed by an administrator; no trail or detective control
+  exists, while `incident-response.md:59` relies on CloudTrail.
+- **Should have been caught by.** L1-BSC (item 31).
+- **Checks added.** Builder **v5** BS5-7.
+
+#### E-102 · P2 · C · The drill's isolation checks miss likely defects, and the "earlier negative tests" it cites do not exist (infra P2-4)
+- **Found.** L2 infra review (`infra-poc/drill-mutations.txt`: 8 planted defects caught, 6 missed).
+- **Should have been caught by.** L1-BSC (item 31; AP-55). The reviewer's mutation run is the evidence that the
+  builder's own claim needed.
+- **Checks added.** Builder **v5** BS5-8 (mutation proof for guards and checks).
+
+#### E-103 · P2 · D · Guest PII reaches Postgres logs; the self-check marked PII "N/A" for infra (infra P2-5)
+- **Found.** L2 infra review (`infra-poc/pii-in-postgres-logs.txt`): bind values of slow queries and key values in
+  error DETAIL.
+- **Should have been caught by.** L1-BSC. Infra owns the database's logging parameters, so "erasure and PII are not
+  infra's" was a wrong N/A. CLAUDE.md § 6 ("PII is never logged") is in every brief.
+- **Checks added.** Patterns AP-15 and AP-17, extended (database server logs); builder **v5** (an N/A needs a reason
+  about the item, checked against what the module configures).
+
+### L-orch — the orchestrator's process
+
+#### E-104 · P1 · Pr · The recorded default for lean egress (Q158: NAT, private tasks) contradicts the code (public task IPs) (infra P1-2)
+- **Defect.** At 19:23 (`be58bbe`) the orchestrator wrote Q158 with "Default we are proceeding with: … **NAT gateway**
+  (private tasks)". The code's lean preset was `nat_mode = "none"` (`modules/cell/locals.tf:323`), `infra/README.md`
+  D6 said "public task IPs", and the cost tables excluded NAT. The builder's report listed the choice ("public task
+  IPs, or a NAT gateway for about $45 more") without saying which one the code did.
+- **Found.** L2 infra review, P1-2. Resolved at 21:51 (NAT and private tasks is the default; the code changes).
+- **Should have been caught by.** L-orch, the recording step. A "default we are proceeding with" is a claim about
+  what the system does; nothing checked it against the code. The builder contributed.
+- **Why it matters.** If the owner approves "the defaults", the weaker posture deploys.
+- **Checks added.** Orchestrator **v4** O4-1 (a recorded default cites the code that implements it, or a pending-fix
+  line that will make the code match). New pattern **AP-62**. RC-15 (new).
+
+#### E-105 · P2 · Pr · UX round 2a: 39 of 49 findings have no disposition, and no "Done" refinement was confirmed or refuted
+- **Defect.**
+  - The README's rule is "[LIVE] findings go straight to the backoffice's next round". 19 findings have a LIVE
+    component; 2 were routed (R2a-P7-F01, P7-F02).
+  - Two SIM-tagged findings whose cause is UI logic were routed with the LIVE ones (R2a-P1-F06, P1-F02). Others with
+    the same kind of cause were routed nowhere: tile routing (R2a-X-F01), focus after j/k (R2a-P1-F07), column priority
+    hiding the task's columns on tablets (R2a-P1-F15, P4-F06).
+  - 6 SIM findings became acceptance checks. In all, **10 of 49** findings have a disposition, 13 of 23 majors have
+    none, and nothing maps the rest to an existing refinement (for example R2a-X-F04 → HLP-01, R2a-X-F03 → NAV-09).
+  - `docs/ux/scorecard.md` has no R2a column, and no table says which round-1 "Done" claims 2a confirmed or refuted
+    (E-106, E-107, E-109, E-110 refute four).
+- **Found.** L8 (this round): finding IDs in `blackbox-findings.md` against `pending-fixes.md:69-70`.
+- **Should have been caught by.** L-orch. Skipping the refiner removed its triage, and nothing replaced it. The
+  `[SIM]`/`[LIVE]` badge says where the data comes from, not where the defect is.
+- **Checks added.** Orchestrator **v4** O4-2 (a disposition for every finding, checked by script; triage by cause, not
+  by badge; a confirm/refute table for "Done" claims). Refiner **v2.1** (triage-only variant). Canary C-L4-12.
+
+### L1-BSC — the backoffice round-1 claims, refuted by UX round 2a
+
+#### E-106 · P2 · D · NAV-08 is marked "Done", yet saving a property with an empty Name now crashes the screen (R2a-P7-F01)
+- **Found.** L4 tester v2 (`screens/p7-24-edit-property-invalid.jpg`). "This screen ran into a problem"; Try again
+  repeats it.
+- **This is the exact reproduction of E-025** (round 0: the same save showed raw Zod JSON). The decisions file says
+  "NAV-08 … Done: field validation in staff language". `apps/backoffice/e2e/smoke.spec.ts` covers the property
+  conflict dialog but not the empty-name save, so nothing protected the case that raised the refinement.
+- **Should have been caught by.** L1-BSC (backoffice fix round): the named reproduction had no regression test
+  (RC-4 at its narrowest).
+- **Checks added.** Builder **v5** BS5-8 (every finding's own reproduction is a test that fails without the fix);
+  canary C-L4-13.
+
+#### E-107 · P2 · D · NAV-07 is marked "Done", but three Today tiles open lists that cannot be checked against their number (R2a-X-F01)
+- **Found.** L4 tester v2. "Open exceptions" and "Payments pending verification" open the same unfiltered My work list
+  of 13 rows; "Occupancy" opens the generic timeline.
+- **Should have been caught by.** L1-BSC. The claim covers all tiles; the e2e asserts the Arrivals tile only (AP-45:
+  one instance tested, the claim generalized).
+- **Routing.** Not in `pending-fixes.md` (tagged SIM; the cause is navigation, not data). See E-105.
+- **Checks added.** Pattern UX-02, extended (every tile, not one); builder **v5** BS5-7.
+
+#### E-108 · P2 · D · The `g s` switcher starts on the first property, ignores typing, and Enter silently switches to the wrong hotel (R2a-P7-F02)
+- **Found.** L4 tester v2 (`screens/p7-08-gs-switcher-focus.jpg`, `p7-09-wrong-property-after-enter.jpg`).
+- **Should have been caught by.** L1-BSC. The go-to map, `g s` included, was built in the backoffice fix round (C2,
+  "exactly as proposed"); the only switcher e2e is mouse-driven (`smoke.spec.ts` "switches property from the top
+  bar"). L-orch contributed: a fix round's new UI surface was merged without a UI review.
+- **Checks added.** New UX pattern **UX-18** (a context switch by keyboard); orchestrator **v4** O4-3.
+
+#### E-109 · P2 · C · The simulator's claimed consistency is false: arrivals are "Ready / Inspected" in villas whose departing guests are in house (R2a-P1-F01, P4-F01, P4-F02)
+- **Found.** L4 tester v2. Villas 135, 145 and 160; the housekeeping board calls them Vacant and misses four baby-cot
+  blockers that the front desk says housekeeping owns.
+- **Should have been caught by.** L1-BSC. The decisions file says C3 "in-house never Ready" and C9 "sample data made
+  consistent (SR P2-1)". The simulator is what an owner sees in a demo (R2, "demonstrated with sample data"), so its
+  contradictions are demo defects even before real data replaces it.
+- **Routing.** Correctly made real-data acceptance checks. The C9 claim should still be withdrawn now.
+- **Checks added.** Pattern UX-03, extended (a simulator states one world: every derived view of one fact agrees).
+
+#### E-110 · P2 · D · FD-13 and C4 are partly false: lists are not keyboard-ready (25 Tabs), and focus does not follow j/k (R2a-P1-F06, F07)
+- **Found.** L4 tester v2. Esc returns focus to the row first opened, not the one being read.
+- **Should have been caught by.** L1-BSC. The decisions file says "Enter / e / j / k / x done" and "Esc returns focus
+  to the row".
+- **Checks added.** Pattern UX-06, extended (keyboard claims are tested from page load, not from a focused row).
+
+### L1-BSC — found by the parity evidence re-run (L5, parity v2)
+
+#### E-111 · P2 · C · The inventory README calls 13 of its 49 listed rows tested that are not
+- **Found.** L5 parity re-run (`gaps-front.md` § "Rows downgraded"). For example, the relocation case is proven only
+  against reservations' fake inventory (EC-INV-005), and conflicts open without the owner the row requires
+  (PAR-INV-057, EC-INV-016).
+- **Should have been caught by.** L1-BSC (v1 item 31). The README's list is a claim per row, and 13 rows had no
+  assertion of the claimed outcome.
+- **L8 correction.** E-060 (round 1) read "their READMEs prove dozens of rows" from the README; 36 of 49 do.
+- **Checks added.** Builder **v5** BS5-7 (a parity claim quotes its assertion, like parity v2 PR2-1).
+
+#### E-112 · P3 · D · Reservations' waitlist consumer reads `payload.cells`, which inventory never emits; its test feeds a hand-made payload (EC-INV-049)
+- **Found.** L5 parity re-run. Every availability change re-checks every waitlisted stay: the outcome is correct, the
+  work is wasted.
+- **Should have been caught by.** L1-BSC (reservations). The consumer's test builds the event by hand instead of from
+  inventory's exported schema (RC-2, AP-43).
+- **Checks added.** Pattern AP-43, extended (consumer tests build events with the producer's exported schema).
+
+#### E-113 · P3 · G · A test titled "… channel id …" never searches a channel id (PAR-RES-009)
+- **Found.** L5 parity re-run (`front-desk-handover.test.ts:437`).
+- **Should have been caught by.** L1-BSC (AP-55, RC-10).
+- **Checks added.** None new; AP-55 covers it.
+
+### Found by the L8 mutation canary (r3-l1)
+
+#### E-114 · P2 · G · No test protects the collection lock: removing it leaves every payments and API test green
+- **Found.** Scripted canary `r3-l1` (`canaries.md` § 6). Six guard elements of the integration-step fix round 2
+  (`db6ae8c`) were removed one at a time. Five turned a payments test red. Removing
+  `lockCollectionRefs` from `assertCollectionOwnership` left 137/137 payments tests green. On the fix-round-3 head
+  (`7b0c59c`) the same mutant leaves 142/142 payments and 129/129 API tests green.
+- **Why.** The test "(e) atomic: ten concurrent desk deposit charges against a fresh link race" creates and commits the
+  link **before** the charges, so nothing races the lock. The builder's report says the concurrency test "already
+  passed before the fix", which was the signal.
+- **Should have been caught by.** L1-BSC. A pre-fix-commit run shows that a test fails; it cannot show which guard
+  each test protects.
+- **Checks added.** Builder **v5** BS5-8 (one mutant per guard element for P0/P1 fixes). Pending-fixes line (retro
+  edit 4): race link creation and link payment against a desk charge, and show the test fails without the lock.
+
+### L8 — the meta loop itself
+
+#### E-115 · P3 · Pr · Three timeline entries are dated when they were written, not when the event happened
+- **Defect.** O3-1 held: every entry since 18:58 carries a source token, and all 7 agent and commit tokens match their
+  source exactly. But three entries use `now`, the time of writing, for an earlier event:
+
+  | Entry | Written | Event (source) |
+  |---|---|---|
+  | Owner: make Portico Channex-ready | 19:09 | 19:07:50, owner message queued (main transcript) |
+  | Owner decision D14 | 19:35 | 19:34:33, owner message |
+  | Resumed after the reset | 21:16 | 21:13:25, scheduled task fired; agents launched 21:14:50 |
+
+- **Found.** L8, this round (`canary-scripts/r3_verify_times.py`).
+- **Should have been caught by.** L8. My round-2 helper offered only `agent`, `commit` and `now`, so an owner message
+  or a scheduled resume had no source. `verify-times.py` checks that the minute matches the token, not that the token
+  is the event's. L-orch contributed by choosing `now`.
+- **Checks added.** `when.py owner "<text>"` and `when.py trigger` (prototype in the scratchpad); verify-times refuses
+  `now` on entries that begin "Owner" or "Resumed" (retro edit 2).
+
+### Not counted as escapes this round (recorded for completeness)
+
+- **R3-P2-4** (invariant (e) on payments' own routes): declared open by the builder.
+- **The infra review's first-review design findings** whose class was not in the builder's checklist: P2-2, P2-3,
+  P2-6, P2-7, P2-8 and P3-1 … P3-12 except P3-6.
+- **UX round 2a findings that are not refuted claims**: missing capabilities the decisions file lists as "next round"
+  (help content, user management, check-in and check-out not built, phone navigation). They are product backlog, not
+  escapes.
+- **R2a-P4-F04** (money visible to housekeeping on simulated screens) is the UI side of FD-15. The backoffice made no
+  claim about it, and it is routed as an acceptance check. It becomes an escape if the real-data round ships without
+  it.
+- **The parity sweep's new edge cases** (EC-INV-038, 043, 046, 052; EC-RES-068, 077): new catalogue rows for modules
+  built before the pattern library, with spec change requests. EC-RES-057 (reservations has no erasure path) is
+  already declared in the guests README and logged as E-085.
+
+---
+
+<!-- Round 4 entries go below this line: "## Round 4 — <date>" -->
