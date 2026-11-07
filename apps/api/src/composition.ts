@@ -21,6 +21,15 @@ import {
 } from '@portico/guests';
 import type { Authenticator, HttpModule } from '@portico/http';
 import { type IdentityPorts, identityAuthenticator, identityHttp, identityManifest } from '@portico/identity';
+import {
+  createInventoryDemoSeed,
+  createInventoryJobs,
+  createInventoryService,
+  type InventoryService,
+  inventoryHttp,
+  inventoryManifest,
+  inventorySearch,
+} from '@portico/inventory';
 import { fieldCryptoFromEnv, type ModuleManifest, systemAuthorizer } from '@portico/kernel';
 import { platform, platformHttp, platformManifest, platformSearch } from '@portico/platform';
 import { recordsHttp } from './records-routes';
@@ -29,9 +38,26 @@ import type { DemoSeedStep } from './seed/demo';
 export const MANIFESTS: readonly ModuleManifest[] = [
   platformManifest,
   identityManifest,
+  inventoryManifest,
   guestsManifest,
   // wave-1 modules register here
 ];
+
+// ── inventory ── bound once; inventory's only port is platform (exists on main), so nothing is stubbed.
+// Other modules (reservations, operations, groups, distribution, day-close) bind their inventory ports to this.
+export const inventoryService: InventoryService = createInventoryService({
+  platform: {
+    getBusinessDate: platform.getBusinessDate,
+    getDataAuthority: platform.getDataAuthority,
+    assertWritable: platform.assertWritable,
+    getLimit: platform.getLimit,
+    resolvePolicy: platform.resolvePolicy,
+  },
+});
+/** DemoSeedStep `run` for inventory (registered in `Composition.demoSeedSteps`). */
+export const inventoryDemoSeed = createInventoryDemoSeed(inventoryService, {
+  businessDate: platform.getBusinessDate,
+});
 
 export interface Composition {
   authenticator: Authenticator;
@@ -41,7 +67,7 @@ export interface Composition {
   /** Periodic background jobs run by apps/worker (each module contributes its own). */
   jobs: ScheduledJob[];
   /** Provider services other modules' ports bind to (domain map). */
-  services: { guests: GuestsService };
+  services: { guests: GuestsService; inventory: InventoryService };
   /** Demo data contributed by each module, run in order inside each demo organization (apps/api/src/seed). */
   demoSeedSteps: DemoSeedStep[];
 }
@@ -78,18 +104,25 @@ export function compose(database: PorticoDatabase): Composition {
   });
   const guestsModule = guestsHttp({ database, service: guestsService });
 
+  // ── inventory ──
+  const inventoryModule = inventoryHttp({ database, inventory: inventoryService });
+
   // ── cross-module experience: global search, summaries, record history ──
-  const searchProviders: SearchProvider[] = [platformSearch, guestsSearchProvider(guestsService)];
+  const searchProviders: SearchProvider[] = [
+    platformSearch,
+    inventorySearch,
+    guestsSearchProvider(guestsService),
+  ];
   const recordsModule = recordsHttp({ database, manifests: MANIFESTS, searchProviders });
 
   return {
     authenticator: identityAuthenticator(database, identityPorts),
-    httpModules: [platformModule, identityModule, guestsModule, recordsModule],
+    httpModules: [platformModule, identityModule, inventoryModule, guestsModule, recordsModule],
     subscriptions: [],
     searchProviders,
-    jobs: [...CORE_JOBS, ...guestsJobs(guestsService)],
-    services: { guests: guestsService },
-    demoSeedSteps: [createGuestsDemoSeed(guestsService)],
+    jobs: [...CORE_JOBS, ...createInventoryJobs(inventoryService), ...guestsJobs(guestsService)],
+    services: { guests: guestsService, inventory: inventoryService },
+    demoSeedSteps: [{ name: 'inventory', run: inventoryDemoSeed }, createGuestsDemoSeed(guestsService)],
   };
 }
 
