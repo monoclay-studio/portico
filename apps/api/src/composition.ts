@@ -3,11 +3,12 @@
  * Each module contributes: a manifest (migrations + permissions), an HTTP module, event subscriptions and
  * port bindings. Keep one block per module to make parallel work merge cleanly.
  */
-import type { PorticoDatabase, TxEventSubscription } from '@portico/db';
+import type { PorticoDatabase, SearchProvider, TxEventSubscription } from '@portico/db';
 import type { Authenticator, HttpModule } from '@portico/http';
 import { type IdentityPorts, identityAuthenticator, identityHttp, identityManifest } from '@portico/identity';
 import type { ModuleManifest } from '@portico/kernel';
-import { platform, platformHttp, platformManifest } from '@portico/platform';
+import { platform, platformHttp, platformManifest, platformSearch } from '@portico/platform';
+import { recordsHttp } from './records-routes';
 
 export const MANIFESTS: readonly ModuleManifest[] = [
   platformManifest,
@@ -19,6 +20,7 @@ export interface Composition {
   authenticator: Authenticator;
   httpModules: HttpModule[];
   subscriptions: TxEventSubscription[];
+  searchProviders: SearchProvider[];
 }
 
 export function compose(database: PorticoDatabase): Composition {
@@ -29,10 +31,15 @@ export function compose(database: PorticoDatabase): Composition {
   const identityPorts: IdentityPorts = { propertyIdsInScope: platform.propertyIdsInScope };
   const identityModule = identityHttp({ database });
 
+  // ── cross-module experience: global search, summaries, record history ──
+  const searchProviders: SearchProvider[] = [platformSearch];
+  const recordsModule = recordsHttp({ database, manifests: MANIFESTS, searchProviders });
+
   return {
     authenticator: identityAuthenticator(database, identityPorts),
-    httpModules: [platformModule, identityModule],
+    httpModules: [platformModule, identityModule, recordsModule],
     subscriptions: [],
+    searchProviders,
   };
 }
 

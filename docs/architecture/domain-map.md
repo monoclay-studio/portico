@@ -30,6 +30,16 @@ All functions are async. Dates are `LocalDate` strings (`YYYY-MM-DD`). Night ran
 | `integration` | `integration` | **Connector framework** (catalogue of connectors with workflow-level capabilities, connection lifecycle with the 9-step setup journey, encrypted credentials, mappings with suggestions + review, exchange log, sync runs, health, exceptions), webhook subscriptions & deliveries, partner apps; later: import/migration jobs & reconciliation, data export | 1 (framework) / 2 (migration) |
 | `ai` | `ai` | Assistant sessions, permission-aware retrieval, cited answers, action proposals requiring approval | 3 |
 | `billing` | `billing` | Monoclay's own SaaS subscriptions & invoices to organizations (Stripe Billing on the platform account) — never mixed with hotel money | 3 |
+| `access` | `access` | Door locks, key encoders, RFID wristbands, mobile keys: issue/duplicate/extend/cancel on move & checkout, lock-vendor connectors (often via local connector), manual fallback, key audit | 2 (spec: docs/specs/access.md) |
+| `guest-experience` | `guest_experience` | Guest web portal & kiosk: pre-arrival, online check-in (registration card, ID, e-signature, authorization), upsells, itinerary, requests, chat, digital folio, express checkout, feedback | 3 |
+| `crm` | `crm` | Segments, consented campaigns, abandoned-booking recovery, surveys/NPS, reputation (reviews & replies), loyalty/recognition, gift vouchers | 3 |
+| `contracting` | `contracting` | Tour operator / DMC / wholesale contracts: seasons, net rates, allotments & release, stop-sale, combinable offers, statements (Maldives-critical) | 2 |
+| `accounting` | `accounting` | Back-office accounting on the finance ledger: GL journals, period close, AP, bank reconciliation, fixed assets, budgets, consolidation, owner statements, financial statements, tax-return data, ERP exports | 3 |
+| `fnb-pos` | `fnb_pos` | Outlet point of sale: menus, tables, orders, kitchen tickets/KDS, split checks, room charge with posting privileges, meal-plan consumption, voids/comps, offline tablets | 3 |
+| `procurement` | `procurement` | Suppliers, requisitions, approvals, purchase orders, receiving, three-way match → AP, import/landed cost | 3 |
+| `stock` | `stock` | Goods inventory (not accommodation): items, stores, issues/transfers, par levels, counts, costing, recipes & menu costing, minibar & amenity consumption | 3 |
+| `workforce` | `workforce` | Staff records, rosters from forecast, time & attendance, leave, staff housing, certifications, work permits, service-charge distribution; payroll export (computation is a boundary) | 4 |
+| `concessions` | `concessions` | Third-party operators inside resorts (dive, spa, boutique): room charges on their behalf, revenue share, settlements; utilities & sustainability metering | 4 |
 
 Dependency direction (who calls whom synchronously). Arrows point at the provider. No cycles allowed.
 
@@ -228,6 +238,26 @@ re-validation. Events: `integration.connection.statusChanged`, `integration.exce
 `integration.mapping.changed`.
 
 ---
+
+## Universal record contract (every module — docs/product/experience-architecture.md)
+
+Every primary aggregate's `GET` response includes, in addition to its own fields:
+
+```ts
+status: Record<string, string>      // one entry per status family — never merged into one field
+allowedActions: RecordAction[]      // { action, label, enabled, reason?, previewRequired? } computed server-side
+issues: RecordIssue[]               // { code, severity: blocking|warning|info, message, owner?, since? }
+owner?: RecordOwner                 // responsible user or department
+links: RecordLink[]                 // { rel, type, id, title? } related records across modules
+provenance?: Provenance             // when data is mirrored/simulated/copied/delayed
+```
+Types live in `@portico/kernel` (`records.ts`). Each module also:
+- declares `recordTypes` in its manifest (the `type` equals the `target.type` used in its audit entries), which
+  powers `GET /v1/records/{type}/{id}/history` (one cross-module timeline from the audit log);
+- exports a `SearchProvider` (`@portico/db`) with `search` + `summarize`, permission- and property-scope-aware,
+  registered in the composition root → `GET /v1/search` and hover previews. Reference: `modules/platform/src/search.ts`.
+- never writes secrets or sensitive identity values into audit `before`/`after` (mask them) — history is shown to
+  anyone with read permission on the record.
 
 ## Rules for changing a contract
 
