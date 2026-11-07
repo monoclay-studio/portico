@@ -168,6 +168,55 @@ export type StayPatch = z.infer<typeof stayPatch>;
 
 // ───────────────────────────── records ─────────────────────────────
 
+// ───────────────────────────── universal record contract (domain map) ─────────────────────────────
+
+export const recordAction = z.object({
+  action: z.string(),
+  label: z.string(),
+  enabled: z.boolean(),
+  reason: z.string().optional(),
+  previewRequired: z.boolean().optional(),
+});
+export const recordIssue = z.object({
+  code: z.string(),
+  severity: z.enum(['blocking', 'warning', 'info']),
+  message: z.string(),
+  owner: z
+    .object({ kind: z.enum(['user', 'department']), id: z.string(), name: z.string().optional() })
+    .optional(),
+  since: z.string().optional(),
+});
+export const recordOwner = z.object({
+  kind: z.enum(['user', 'department']),
+  id: z.string(),
+  name: z.string().optional(),
+});
+export const recordLink = z.object({
+  rel: z.string(),
+  type: z.string(),
+  id: z.string(),
+  title: z.string().optional(),
+});
+export const provenance = z.enum(['live', 'simulated', 'copied', 'delayed', 'incomplete', 'external']);
+
+/** Status families of a booking — never merged into one field (glossary, RES-R07). */
+export const bookingStatusFamilies = z.object({ booking: bookingStatus, payment: z.string().optional() });
+/** Status families of a stay: stay status, booking status, payment status, unit condition — each its own entry. */
+export const stayStatusFamilies = z.object({
+  stay: stayStatus,
+  booking: bookingStatus,
+  payment: z.string().optional(),
+  unitCondition: z.string().optional(),
+});
+
+const recordContract = {
+  allowedActions: z.array(recordAction),
+  issues: z.array(recordIssue),
+  owner: recordOwner.optional(),
+  links: z.array(recordLink),
+  provenance: provenance.optional(),
+};
+
 export const segment = z.object({
   id: uuid,
   from: localDate,
@@ -194,7 +243,7 @@ export const stay = z.object({
   id: uuid,
   bookingId: uuid,
   propertyId: uuid,
-  status: stayStatus,
+  status: stayStatusFamilies,
   commercialType,
   arrival: localDate,
   departure: localDate,
@@ -214,6 +263,7 @@ export const stay = z.object({
   checkedInAt: z.string().nullable(),
   checkedOutAt: z.string().nullable(),
   version: z.number().int(),
+  ...recordContract,
 });
 export type Stay = z.infer<typeof stay>;
 
@@ -229,7 +279,7 @@ export const booking = z.object({
   id: uuid,
   propertyId: uuid,
   code: z.string(),
-  status: bookingStatus,
+  status: bookingStatusFamilies,
   booker: z.object({
     kind: z.enum(['profile', 'company', 'agency', 'channel']),
     profileId: uuid.nullable(),
@@ -261,14 +311,17 @@ export const booking = z.object({
   createdAt: z.string(),
   updatedAt: z.string(),
   version: z.number().int(),
+  ...recordContract,
 });
 export type Booking = z.infer<typeof booking>;
 
-export const bookingSummary = booking.omit({ stays: true, pendingForwardedChanges: true }).extend({
-  arrival: localDate,
-  departure: localDate,
-  stayCount: z.number().int(),
-});
+export const bookingSummary = booking
+  .omit({ stays: true, pendingForwardedChanges: true, allowedActions: true, issues: true, links: true })
+  .extend({
+    arrival: localDate,
+    departure: localDate,
+    stayCount: z.number().int(),
+  });
 export type BookingSummary = z.infer<typeof bookingSummary>;
 
 export const bookingListQuery = z.object({

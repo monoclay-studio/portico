@@ -377,6 +377,7 @@ export function toStayView(
   snapshots: Map<string, TermsSnapshot>,
   currency: string,
   businessDate?: LocalDate,
+  bookingStatus = 'confirmed',
 ): Stay {
   const r = stay.row;
   const first = stay.segments.find((s) => s.from <= r.arrival) ?? stay.segments[0];
@@ -384,7 +385,7 @@ export function toStayView(
     id: r.id,
     bookingId: r.booking_id,
     propertyId: r.property_id,
-    status: r.status as Stay['status'],
+    status: { stay: r.status as Stay['status']['stay'], booking: bookingStatus as Stay['status']['booking'] },
     commercialType: r.commercial_type as Stay['commercialType'],
     arrival: r.arrival,
     departure: r.departure,
@@ -420,6 +421,9 @@ export function toStayView(
     checkedInAt: r.checked_in_at?.toISOString() ?? null,
     checkedOutAt: r.checked_out_at?.toISOString() ?? null,
     version: r.version,
+    allowedActions: [],
+    issues: [],
+    links: [],
   };
 }
 
@@ -433,14 +437,14 @@ export async function toBookingView(
     tx,
     rec.stays.flatMap((s) => s.segments.map((g) => g.termsSnapshotId)),
   );
-  const stays = rec.stays.map((s) => toStayView(s, snapshots, b.currency, businessDate));
+  const stays = rec.stays.map((s) => toStayView(s, snapshots, b.currency, businessDate, b.status));
   const forwarded = await db(tx)
     .selectFrom('reservations.forwarded_changes')
     .select(['id', 'kind', 'status', 'system_name', 'created_at'])
     .where('booking_id', '=', b.id)
     .where('status', '=', 'pending')
     .execute();
-  const counted = stays.filter((s) => ACTIVE_FOR_TOTALS.has(s.status));
+  const counted = stays.filter((s) => ACTIVE_FOR_TOTALS.has(s.status.stay));
   const totals = addTotals(
     b.currency,
     counted.map((s) => s.totals),
@@ -450,7 +454,7 @@ export async function toBookingView(
     id: b.id,
     propertyId: b.property_id,
     code: b.code,
-    status: b.status as Booking['status'],
+    status: { booking: b.status as Booking['status']['booking'] },
     booker: {
       kind: b.booker_kind as Booking['booker']['kind'],
       profileId: b.booker_profile_id,
@@ -484,6 +488,9 @@ export async function toBookingView(
     createdAt: b.created_at.toISOString(),
     updatedAt: b.updated_at.toISOString(),
     version: b.version,
+    allowedActions: [],
+    issues: [],
+    links: [],
   };
 }
 

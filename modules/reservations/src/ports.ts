@@ -203,6 +203,7 @@ export interface InventoryPort {
     input: { propertyId: string; unitTypeId: string; date: LocalDate },
   ): Promise<AvailabilityExplanation>;
   getUnit(tx: TxContext, unitId: string): Promise<UnitSummary>;
+  listUnits(tx: TxContext, input: { propertyId: string }): Promise<UnitSummary[]>;
   listUnitTypes(tx: TxContext, input: { propertyId: string }): Promise<UnitTypeSummary[]>;
 }
 

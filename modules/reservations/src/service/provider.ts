@@ -4,7 +4,8 @@ import type { Stay } from '../contracts';
 import { RESERVATIONS_PERMISSIONS as P } from '../manifest';
 import type { TermsSnapshot } from '../ports';
 import { type Deps, db } from './context';
-import { loadSnapshots, loadStay, loadStayRecords, snapshotOf, toStayView } from './repo';
+import { stayRecordView } from './record';
+import { loadBooking, loadSnapshots, loadStay, loadStayRecords, snapshotOf } from './repo';
 
 /** What Day Close needs to post one night of one in-house stay — from the agreed terms only (domain map). */
 export interface StayForPosting {
@@ -25,21 +26,7 @@ export interface StayForPosting {
 export async function getStay(deps: Deps, tx: TxContext, stayId: string): Promise<Stay> {
   const stay = await loadStay(tx, stayId);
   requirePermission(tx, P.bookingRead, { propertyId: stay.row.property_id });
-  const b = await db(tx)
-    .selectFrom('reservations.bookings')
-    .select(['currency'])
-    .where('id', '=', stay.row.booking_id)
-    .executeTakeFirstOrThrow();
-  const snaps = await loadSnapshots(
-    tx,
-    stay.segments.map((s) => s.termsSnapshotId),
-  );
-  return toStayView(
-    stay,
-    snaps,
-    b.currency,
-    await deps.ports.platform.getBusinessDate(tx, stay.row.property_id),
-  );
+  return stayRecordView(deps, tx, await loadBooking(tx, stay.row.booking_id), stayId);
 }
 
 /** listInHouseStaysForNight(propertyId, date) — Day Close room posting. */

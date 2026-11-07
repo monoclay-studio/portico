@@ -2,6 +2,7 @@ import type { PorticoDatabase, TxContext } from '@portico/db';
 import type { RequestContext } from '@portico/kernel';
 import type { ChangeRequest, NewBookingInput } from '../contracts';
 import type { ReservationsPorts } from '../ports';
+import { reservationsSearch } from '../search';
 import * as authority from './authority';
 import * as bookings from './bookings';
 import * as changes from './changes';
@@ -85,6 +86,7 @@ export function reservationsService(ports: ReservationsPorts, config: Partial<Se
     listDueArrivals: bind(deps, provider.listDueArrivals),
     listDueDepartures: bind(deps, provider.listDueDepartures),
     subscriptions: () => reservationsSubscriptions(deps),
+    search: () => reservationsSearch(deps),
   };
 }
 

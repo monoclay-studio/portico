@@ -49,6 +49,7 @@ import {
 } from './context';
 import { raiseIssue } from './issues';
 import { keyOperation } from './keys';
+import { bookingRecord } from './record';
 import {
   type BookingRecord,
   bumpBooking,
@@ -570,7 +571,7 @@ export async function createBooking(
   });
   if (forwarded) return forwarded;
   const { booking } = await createBookingInternal(deps, tx, input, opts);
-  return toBookingView(tx, booking, await businessDateOf(deps, tx, input.propertyId));
+  return bookingRecord(deps, tx, booking);
 }
 
 /**
@@ -761,7 +762,7 @@ export async function transitionBooking(
       payload,
     });
   }
-  return toBookingView(tx, updated, await businessDateOf(deps, tx, row.property_id));
+  return bookingRecord(deps, tx, updated);
 }
 
 /** Expire held bookings whose hold passed, and tentative bookings past their option date when policy says so. */
@@ -833,6 +834,19 @@ export async function expireBookings(
 
 // ───────────────────────────── edits without inventory/price effects ─────────────────────────────
 
+/** Audit history is visible to anyone who can read the booking: never store payment tokens in it. */
+function auditSafePatch(values: Record<string, unknown>, keys: string[]): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const k of keys) {
+    const v = values[k];
+    if (k === 'guarantee' && v && typeof v === 'object') {
+      const g = v as Record<string, unknown>;
+      out[k] = { ...g, ...(g.paymentMethodId ? { paymentMethodId: '[token on file]' } : {}) };
+    } else out[k] = v ?? null;
+  }
+  return out;
+}
+
 /** Booking-level fields with no inventory, price or balance effect (no preview needed). If-Match required. */
 export async function patchBooking(
   deps: Deps,
@@ -868,10 +882,20 @@ export async function patchBooking(
     action: 'reservations.booking.update',
     target: { type: 'booking', id: row.id },
     propertyId: row.property_id,
-    before: Object.fromEntries(
-      Object.keys(p).map((k) => [k, (row as unknown as Record<string, unknown>)[k] ?? null]),
+    before: auditSafePatch(
+      {
+        marketSegment: row.market_segment,
+        notes: row.notes,
+        specialRequests: row.special_requests,
+        tags: row.tags,
+        ownerId: row.owner_id,
+        optionDate: row.option_date,
+        guarantee: row.guarantee,
+        externalRefs: row.external_refs,
+      },
+      Object.keys(p),
     ),
-    after: p,
+    after: auditSafePatch(p as Record<string, unknown>, Object.keys(p)),
   });
   await tx.emit({
     type: E.bookingModified,
@@ -879,7 +903,7 @@ export async function patchBooking(
     aggregate: { type: 'booking', id: row.id },
     payload: { bookingId: row.id, code: row.code, fields: Object.keys(p) },
   });
-  return toBookingView(tx, updated, await businessDateOf(deps, tx, row.property_id));
+  return bookingRecord(deps, tx, updated);
 }
 
 /** Stay operational details (ETA, arrival details, requests). If-Match on the booking version. */
@@ -906,7 +930,7 @@ export async function patchStay(
     propertyId: row.property_id,
     after: p,
   });
-  return toBookingView(tx, updated, await businessDateOf(deps, tx, row.property_id));
+  return bookingRecord(deps, tx, updated);
 }
 
 // ───────────────────────────── unit assignment ─────────────────────────────
@@ -964,7 +988,7 @@ export async function assignUnit(
     before: { unitId: segs[0]?.unitId ?? null },
     after: { unitId: unit.id, from: fromDate },
   });
-  return toBookingView(tx, updated, businessDate);
+  return bookingRecord(deps, tx, updated);
 }
 
 // ───────────────────────────── no-show (Day Close provider) ─────────────────────────────
@@ -1158,14 +1182,14 @@ export async function confirmWaitlistedStay(
     aggregate: { type: 'booking', id: row.id },
     payload: { bookingId: row.id, code: row.code, stayId: stay.row.id, change: 'waitlist_confirmed' },
   });
-  return toBookingView(tx, updated, await businessDateOf(deps, tx, row.property_id));
+  return bookingRecord(deps, tx, updated);
 }
 
 // ───────────────────────────── reads ─────────────────────────────
 
 export async function getBooking(deps: Deps, tx: TxContext, bookingId: string): Promise<Booking> {
   const rec = await readableBooking(tx, bookingId);
-  return toBookingView(tx, rec, await businessDateOf(deps, tx, rec.row.property_id));
+  return bookingRecord(deps, tx, rec);
 }
 
 export async function getBookingByStay(deps: Deps, tx: TxContext, stayId: string): Promise<Booking> {
@@ -1218,7 +1242,14 @@ export async function listBookings(
   for (const r of page) {
     const rec = await loadBooking(tx, r.id);
     const view = await toBookingView(tx, rec);
-    const { stays: _s, pendingForwardedChanges: _f, ...rest } = view;
+    const {
+      stays: _s,
+      pendingForwardedChanges: _f,
+      allowedActions: _a,
+      issues: _i,
+      links: _l,
+      ...rest
+    } = view;
     items.push({ ...rest, arrival: r.first_arrival, departure: r.last_departure, stayCount: r.stay_count });
   }
   return { items, nextCursor: rows.length > q.limit ? (page[page.length - 1]?.id ?? null) : null };

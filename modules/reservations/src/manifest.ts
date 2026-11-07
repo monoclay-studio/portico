@@ -33,6 +33,26 @@ export const reservationsManifest: ModuleManifest = {
   name: 'reservations',
   schema: 'reservations',
   migrationsDir: join(dirname(fileURLToPath(import.meta.url)), '..', 'migrations'),
+  // Universal record contract: `type` equals the audit target.type used by this module.
+  recordTypes: [
+    { type: 'booking', label: 'Booking', readPermission: P.bookingRead, route: '/reservations/bookings/:id' },
+    { type: 'stay', label: 'Stay', readPermission: P.bookingRead, route: '/reservations/stays/:id' },
+    {
+      type: 'relocation_case',
+      label: 'Relocation case',
+      readPermission: P.bookingRead,
+      route: '/reservations/relocations/:id',
+    },
+    {
+      type: 'handover',
+      label: 'Shift handover',
+      readPermission: P.handoverManage,
+      route: '/front-desk/handovers/:id',
+    },
+    { type: 'handover_item', label: 'Handover item', readPermission: P.handoverManage },
+    { type: 'issue', label: 'Reservations issue', readPermission: P.bookingRead },
+    { type: 'forwarded_change', label: 'Forwarded change', readPermission: P.bookingRead },
+  ],
   permissions: [
     { key: P.bookingRead, description: 'View bookings, stays and front-desk lists', scope: 'property' },
     {

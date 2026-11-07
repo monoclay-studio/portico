@@ -81,6 +81,7 @@ import {
 } from './context';
 import { raiseIssue } from './issues';
 import { keyOperation } from './keys';
+import { bookingRecord } from './record';
 import {
   type BookingRecord,
   bumpBooking,
@@ -93,7 +94,6 @@ import {
   replaceSegments,
   type StayRecord,
   snapshotOf,
-  toBookingView,
   updateStay,
 } from './repo';
 
@@ -1496,12 +1496,11 @@ export async function commitChange(
     .where('token', '=', row.token)
     .execute();
   const rec = await loadBooking(tx, bookingId);
-  const businessDate = (await propertyInfo(deps, tx, plan.propertyId)).businessDate;
   return {
     kind: request.kind,
     previewToken: row.token,
     bookingId,
-    booking: await toBookingView(tx, rec, businessDate),
+    booking: await bookingRecord(deps, tx, rec),
     keys,
   };
 }

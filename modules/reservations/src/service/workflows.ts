@@ -88,6 +88,9 @@ function toView(row: RunRow): WorkflowRun {
   };
 }
 
+/** The earlier of two local dates (ISO strings compare lexicographically). */
+const earlier = (a: string, b: string): string => [a, b].sort()[0] as string;
+
 const permissionFor = (kind: WorkflowKind) => (kind === 'check_in' ? P.stayCheckIn : P.stayCheckOut);
 
 async function activeRun(
@@ -259,7 +262,7 @@ async function stepRegistration(
   return {
     status: 'done',
     message: 'Identity verified and required details complete.',
-    result: { profileId: primary?.profile_id ?? null, documentReference: input?.documentReference ?? null },
+    result: { profileId: primary?.profile_id ?? null, documentRecorded: Boolean(input?.documentReference) },
   };
 }
 
@@ -795,7 +798,7 @@ async function confirmCheckOut(
     }
     const trimmed = fresh.segments
       .filter((s) => s.from < releasedFrom)
-      .map((s) => ({ ...s, to: s.to < releasedFrom ? s.to : releasedFrom }));
+      .map((s) => ({ ...s, to: earlier(s.to, releasedFrom) }));
     await replaceSegments(tx, stay.row.id, trimmed);
     await updateStay(tx, stay.row.id, { departure: releasedFrom });
     early = { releasedFrom, penalty: penalty.amountMinor > 0 ? penalty : null };

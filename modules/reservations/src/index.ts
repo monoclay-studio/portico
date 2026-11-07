@@ -4,6 +4,7 @@ export * from './events';
 export * from './manifest';
 export * from './ports';
 export * from './routes';
+export { reservationsSearch } from './search';
 export { reservationsDemoSeed } from './seed';
 export * from './service';
 export type { ReservationsDB } from './tables';
