@@ -195,4 +195,6 @@ Each agent's brief and report are in `agents/`.
   regression tests, spot-checked by the orchestrator, with no fourth full review.
   - Pattern across the three identity reviews: P0 2 → 1 → 0, and each round's fix opened a narrower new class. This
     is the strongest evidence for the quality steward's "re-attack every fix" rule.
+- **17:31 — Owner-requested checkpoint** before logging out and back in (the usage display wasn't updating). Four
+  agents were stopped, all work was committed and pushed, and the resume order was written in STATUS.
 

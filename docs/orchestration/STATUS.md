@@ -84,6 +84,30 @@
   - (2) Resume the quality steward after that batch: integration-step review, backoffice merge, identity review 3.
   - (3) Canaries C-L1-02 and C-L1-03 at the next merge batch (CPU only).
 
+- **2026-11-07 17:31 UTC — OWNER-REQUESTED CHECKPOINT** (the owner is logging out and back in to refresh the
+  usage display). Usage at 17:30: 5-hour 33%, seven-day 62%. Four agents were stopped mid-work, and
+  `tools/checkpoint.sh` committed WIP, refreshed the chronicle and pushed every branch. The pending usage-check
+  trigger was deleted. **The 3-hourly UX + quality heartbeat is still scheduled** (next 18:43 UTC).
+  **Resume exactly these, in this order:**
+  1. **Integration-step fix round** (`feat/integration-step`, wt/integration-step; WIP committed). Brief: the
+     integration-step review P1-1 to P1-3 plus the P2s (`reviews/review-integration-step.md`, PoCs in
+     `reviews/integration-step-poc/`), the self-check playbook, and scenario-tests v2. It had begun reading the
+     check-in guarantee step for P1-2.
+  2. **Identity fix round 4** (`feat/identity-platform-enterprise`, wt/identity-plus; clean tree, it had just
+     started). Brief: `reviews/review-identity-plus-3.md` (R3-P1-1 wipe race with row lock and credential epoch;
+     R3-P1-2 groups claim, jit_provisioning and client_id as root changes; R3-P2-1/2/3; P3s). Merge condition: the
+     orchestrator spot-checks the W-1..W-3 regression tests.
+  3. **Parity-ops** (`docs/parity-ops`; WIP committed; it was on the crm module). Remaining: crm, ai, and whatever
+     is unfinished of comms, resort, access, guest-experience, identity and integration. Run from
+     `docs/quality/playbooks/parity-researcher.md`.
+  4. **Quality steward meta-loop round 1** (`docs/quality`; clean, it had just started). Inputs: the
+     integration-step review, identity review 3, the backoffice merge verification, the orchestrator's process
+     escapes, and a new `playbooks/orchestrator.md`.
+
+  Then the queue: the P0 re-attack sweep, module round 2 from `docs/strategy/` briefs, and canaries C-L1-02/03.
+  Agents can be resumed by message if the session keeps their transcripts; otherwise start new agents on the same
+  branches from these briefs. Restart Postgres first if needed (`pnpm db:up`), and recreate the usage-check chain.
+
 ## 1. Owner, product and how to work with the owner
 
 - Owner: founder of **Monoclay LLC** (Delaware, Stripe Atlas), based in the Maldives. Product: **Portico** (final name).
