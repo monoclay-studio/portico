@@ -560,7 +560,7 @@ async function processOne(
     return retryable ? 'failed' : 'rejected';
   }
   const state = STATE_OF[result.outcome];
-  const wasParked = row.state === 'parked' || opts.forceApply === true;
+  const wasParked = row.parked_since !== null || opts.forceApply === true;
   await db(tx)
     .updateTable('distribution.revision_processing')
     .set({
