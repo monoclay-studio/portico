@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { detectDateOrder, excelSerialToDate, normalizeStatus, parseBool, parseDate, parseMoney } from './normalize';
+import {
+  detectDateOrder,
+  excelSerialToDate,
+  normalizeStatus,
+  parseBool,
+  parseDate,
+  parseMoney,
+} from './normalize';
 
 describe('dates', () => {
   it('reads ISO, named months, date-times and Excel serials (spreadsheets only)', () => {

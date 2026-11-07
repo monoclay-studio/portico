@@ -128,7 +128,7 @@ export interface InventoryPort {
   createUnit(
     tx: TxContext,
     propertyId: string,
-    input: { unitTypeId: string; number: string; name?: string },
+    input: { unitTypeId: string; number: string; name?: string; inInventoryFrom?: LocalDate },
   ): Promise<{ id: string }>;
   /** Units sold per unit type and night (availability ledger) — reconciliation read-back. */
   sold(

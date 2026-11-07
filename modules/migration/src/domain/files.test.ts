@@ -24,7 +24,13 @@ describe('CSV reader', () => {
     expect(() => parseCsv('')).toThrow(/empty/);
   });
   it('writes CSV that a spreadsheet cannot run as a formula, keeping negative amounts numeric', () => {
-    const out = toCsv(['x', 'y'], [['=SUM(A1)', '-120.00'], ['a,b', '@cmd']]);
+    const out = toCsv(
+      ['x', 'y'],
+      [
+        ['=SUM(A1)', '-120.00'],
+        ['a,b', '@cmd'],
+      ],
+    );
     expect(out).toBe(`x,y\n'=SUM(A1),-120.00\n"a,b",'@cmd`);
     expect(parseCsv(out).rows[0]).toEqual(["'=SUM(A1)", '-120.00']);
   });
@@ -33,7 +39,14 @@ describe('CSV reader', () => {
 describe('XLSX reader', () => {
   it('round-trips a workbook with several sheets (inline strings)', () => {
     const buf = writeXlsx([
-      { name: 'units', headers: ['number', 'unit_type_code'], rows: [['101', 'DBL'], ['102', 'DBL']] },
+      {
+        name: 'units',
+        headers: ['number', 'unit_type_code'],
+        rows: [
+          ['101', 'DBL'],
+          ['102', 'DBL'],
+        ],
+      },
       { name: 'Reservations & more', headers: ['confirmation', 'status'], rows: [['A<1>', 'Confirmed']] },
     ]);
     const sheets = readXlsx(buf);
@@ -50,15 +63,21 @@ describe('XLSX reader', () => {
     const buf = zip([
       {
         name: 'xl/workbook.xml',
-        data: Buffer.from(`<workbook xmlns="${ns}" xmlns:r="${rel}"><sheets><sheet name="R" sheetId="1" r:id="rId1"/></sheets></workbook>`),
+        data: Buffer.from(
+          `<workbook xmlns="${ns}" xmlns:r="${rel}"><sheets><sheet name="R" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+        ),
       },
       {
         name: 'xl/_rels/workbook.xml.rels',
-        data: Buffer.from('<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml" Type="x"/></Relationships>'),
+        data: Buffer.from(
+          '<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml" Type="x"/></Relationships>',
+        ),
       },
       {
         name: 'xl/sharedStrings.xml',
-        data: Buffer.from('<sst><si><t>confirmation</t></si><si><r><t>arr</t></r><r><t>ival</t></r></si><si><t>CN&amp;1</t></si></sst>'),
+        data: Buffer.from(
+          '<sst><si><t>confirmation</t></si><si><r><t>arr</t></r><r><t>ival</t></r></si><si><t>CN&amp;1</t></si></sst>',
+        ),
       },
       {
         name: 'xl/worksheets/sheet1.xml',
@@ -89,21 +108,48 @@ describe('card numbers and masked values (MG-02, DD11 F4)', () => {
     expect(looksLikeCardNumber('7000000000000002')).toBe(false);
   });
   it('finds a card number with spaces or dashes in any cell, reporting position only', () => {
-    const f = findCardNumbers(['ref', 'notes'], [['CN1', 'card 4111-1111-1111-1111 exp 12/29'], ['CN2', 'BDC-4471002']]);
+    const f = findCardNumbers(
+      ['ref', 'notes'],
+      [
+        ['CN1', 'card 4111-1111-1111-1111 exp 12/29'],
+        ['CN2', 'BDC-4471002'],
+      ],
+    );
     expect(f).toEqual([{ row: 1, column: 'notes' }]);
     expect(JSON.stringify(f)).not.toContain('4111');
-    expect(findCardNumbers(['phone'], [['+960 777 0101'], ['5555 5555 5555 4444']])).toEqual([{ row: 2, column: 'phone' }]);
+    expect(findCardNumbers(['phone'], [['+960 777 0101'], ['5555 5555 5555 4444']])).toEqual([
+      { row: 2, column: 'phone' },
+    ]);
   });
   it('detects masked and redacted personal data, never plain names', () => {
-    for (const v of ['XXXXXXXX', 'J*****n', 'j*****@example.com', 'john@*****', '+960 *** **12', 'REDACTED', 'Anonymised', '••••'])
+    for (const v of [
+      'XXXXXXXX',
+      'J*****n',
+      'j*****@example.com',
+      'john@*****',
+      '+960 *** **12',
+      'REDACTED',
+      'Anonymised',
+      '••••',
+    ])
       expect(isMasked(v), v).toBe(true);
-    for (const v of ['Rasheed', "O'Connor", 'Max', 'aisha@example.test', '+960 777 0101', '', null]) expect(isMasked(v), String(v)).toBe(false);
+    for (const v of ['Rasheed', "O'Connor", 'Max', 'aisha@example.test', '+960 777 0101', '', null])
+      expect(isMasked(v), String(v)).toBe(false);
   });
 });
 
 describe('column auto-detection', () => {
   it('maps vendor headers to fields and recognizes the table', () => {
-    const d = detectTable(['Reservation ID', 'Booking Status', 'Check-in', 'Check-out', 'Room Type', 'Currency', 'Room Revenue', 'Guest Name']);
+    const d = detectTable([
+      'Reservation ID',
+      'Booking Status',
+      'Check-in',
+      'Check-out',
+      'Room Type',
+      'Currency',
+      'Room Revenue',
+      'Guest Name',
+    ]);
     expect(d.kind).toBe('reservations');
     expect(d.missingRequired).toEqual([]);
     expect(Object.fromEntries(d.columns.map((c) => [c.field, c.header]))).toMatchObject({
@@ -118,7 +164,11 @@ describe('column auto-detection', () => {
   it('reports missing required fields and lets a person override a header', () => {
     const d = mapColumns('deposits', ['Booking', 'Held']);
     expect(d.missingRequired).toEqual(['confirmation', 'amount', 'currency']);
-    const o = mapColumns('deposits', ['Booking', 'Held', 'CCY'], { Booking: 'confirmation', Held: 'amount', CCY: 'currency' });
+    const o = mapColumns('deposits', ['Booking', 'Held', 'CCY'], {
+      Booking: 'confirmation',
+      Held: 'amount',
+      CCY: 'currency',
+    });
     expect(o.missingRequired).toEqual([]);
     expect(o.confidence).toBe(1);
   });

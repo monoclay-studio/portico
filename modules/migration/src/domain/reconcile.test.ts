@@ -1,10 +1,23 @@
 import { describe, expect, it } from 'vitest';
-import { evaluateCutoverGate, freezeMinutes, type GateInput, inRollbackWindow, rollbackWindowEnds } from './cutover';
+import {
+  evaluateCutoverGate,
+  freezeMinutes,
+  type GateInput,
+  inRollbackWindow,
+  rollbackWindowEnds,
+} from './cutover';
 import { diffSnapshots } from './delta';
-import { emptyPlan, pendingReview, planFingerprint, suggestRatePlans, suggestUnitTypes, toUnitTypeCode } from './mapping';
+import {
+  emptyPlan,
+  pendingReview,
+  planFingerprint,
+  suggestRatePlans,
+  suggestUnitTypes,
+  toUnitTypeCode,
+} from './mapping';
 import { initialSteps, resumePoint } from './pipeline';
-import type { ReservationRecord, SourceRecord } from './records';
 import { agingBucket, type LedgerEntry, type PorticoReadBack, reconcile } from './reconcile';
+import type { ReservationRecord, SourceRecord } from './records';
 
 const BD = '2026-12-01';
 const res = (key: string, p: Partial<ReservationRecord> = {}): SourceRecord => ({
@@ -106,11 +119,21 @@ describe('reconciliation (M4): exact, or every difference listed', () => {
     expect(r.differences).toEqual([]);
     expect(r.exact).toBe(true);
     expect(r.controlTotals).toEqual([
-      { dataClass: 'deposit', currency: 'USD', reported: 5000, sourceDetail: 5000, portico: 5000, excluded: 0, unexplainedMinor: 0 },
+      {
+        dataClass: 'deposit',
+        currency: 'USD',
+        reported: 5000,
+        sourceDetail: 5000,
+        portico: 5000,
+        excluded: 0,
+        unexplainedMinor: 0,
+      },
     ]);
   });
   it('S18: a deposit 1 minor unit off the source’s closing balance is not exact and is never plugged', () => {
-    const r = reconcile(input({ controlTotals: [{ dataClass: 'deposit', currency: 'USD', count: 1, amountMinor: 5001 }] }));
+    const r = reconcile(
+      input({ controlTotals: [{ dataClass: 'deposit', currency: 'USD', count: 1, amountMinor: 5001 }] }),
+    );
     expect(r.exact).toBe(false);
     expect(r.differences).toEqual([
       expect.objectContaining({ dataClass: 'deposit', measure: 'closing_balance', explained: false }),
@@ -133,14 +156,21 @@ describe('reconciliation (M4): exact, or every difference listed', () => {
     expect(r.controlTotals[0]).toMatchObject({ excluded: 700, unexplainedMinor: 0 });
     expect(r.differences.filter((d) => !d.explained)).toEqual([]);
     expect(r.exact).toBe(true);
-    expect(r.accounting.find((a) => a.dataClass === 'reservation')?.states).toMatchObject({ imported: 1, exception: 1 });
+    expect(r.accounting.find((a) => a.dataClass === 'reservation')?.states).toMatchObject({
+      imported: 1,
+      exception: 1,
+    });
   });
   it('reservation amounts, statuses, revenue per stay date and room nights are compared per booking', () => {
     const r = reconcile(
       input({
         portico: portico({
           reservations: [
-            { ...portico().reservations[0], taxTotalMinor: 3401, totalMinor: 23401 } as PorticoReadBack['reservations'][number],
+            {
+              ...portico().reservations[0],
+              taxTotalMinor: 3401,
+              totalMinor: 23401,
+            } as PorticoReadBack['reservations'][number],
           ],
           sold: [{ unitTypeId: 'ut-dbl', date: '2026-12-03', sold: 2 }],
         }),
@@ -148,12 +178,19 @@ describe('reconciliation (M4): exact, or every difference listed', () => {
     );
     expect(r.exact).toBe(false);
     const m = r.differences.map((d) => d.measure);
-    expect(m).toEqual(expect.arrayContaining(['tax_total', 'total', 'room_nights 2026-12-03', 'room_nights 2026-12-04']));
+    expect(m).toEqual(
+      expect.arrayContaining(['tax_total', 'total', 'room_nights 2026-12-03', 'room_nights 2026-12-04']),
+    );
   });
   it('a record with no outcome, a pending record or a provider that cannot read back is never "reconciled"', () => {
     expect(reconcile(input({ ledger: [imported('deposit', 'R1', 'b1')] })).exact).toBe(false);
     const pending = reconcile(
-      input({ ledger: [{ ...imported('reservation', 'R1', 'b1'), state: 'pending' }, imported('deposit', 'R1', 'b1')] }),
+      input({
+        ledger: [
+          { ...imported('reservation', 'R1', 'b1'), state: 'pending' },
+          imported('deposit', 'R1', 'b1'),
+        ],
+      }),
     );
     expect(pending.differences.some((d) => d.measure === 'pending')).toBe(true);
     const unavailable = reconcile(input({ portico: portico({ unavailable: ['reservation'] }) }));
@@ -163,7 +200,9 @@ describe('reconciliation (M4): exact, or every difference listed', () => {
   it('the fingerprint is stable for identical results and changes with any difference', () => {
     expect(reconcile(input()).fingerprint).toBe(reconcile(input()).fingerprint);
     expect(reconcile(input()).fingerprint).not.toBe(
-      reconcile(input({ controlTotals: [{ dataClass: 'deposit', currency: 'USD', count: 1, amountMinor: 5001 }] })).fingerprint,
+      reconcile(
+        input({ controlTotals: [{ dataClass: 'deposit', currency: 'USD', count: 1, amountMinor: 5001 }] }),
+      ).fingerprint,
     );
   });
   it('aging buckets by due date against the business date', () => {
@@ -203,7 +242,10 @@ describe('mapping suggestions', () => {
   it('pending review: low confidence, unknown statuses, ambiguous dates and every tax mapping (finance)', () => {
     const plan = {
       ...emptyPlan('USD', ['reservation']),
-      unitTypes: suggestUnitTypes([{ code: 'FAM', name: 'Family suite room' }], [{ id: 'b', code: 'FS', name: 'Family suite' }]),
+      unitTypes: suggestUnitTypes(
+        [{ code: 'FAM', name: 'Family suite room' }],
+        [{ id: 'b', code: 'FS', name: 'Family suite' }],
+      ),
       statuses: [{ sourceWord: 'waitlisted', status: null, reviewedBy: null }],
       taxAccounts: [{ sourceCode: 'TGST', accountKey: 'tgst', confidence: 0.9, reviewedBy: null }],
       ambiguousDateColumns: ['r.csv:arrival'],
@@ -217,8 +259,20 @@ describe('mapping suggestions', () => {
   });
   it('the plan fingerprint ignores Portico ids (a trial rehearsal and the live cutover run the same plan)', () => {
     const base = { ...emptyPlan('USD', ['reservation']) };
-    const a = { ...base, unitTypes: suggestUnitTypes([{ code: 'DBL', name: 'Double' }], [{ id: 'trial-id', code: 'DBL', name: 'Double' }]) };
-    const b = { ...base, unitTypes: suggestUnitTypes([{ code: 'DBL', name: 'Double' }], [{ id: 'live-id', code: 'DBL', name: 'Double' }]) };
+    const a = {
+      ...base,
+      unitTypes: suggestUnitTypes(
+        [{ code: 'DBL', name: 'Double' }],
+        [{ id: 'trial-id', code: 'DBL', name: 'Double' }],
+      ),
+    };
+    const b = {
+      ...base,
+      unitTypes: suggestUnitTypes(
+        [{ code: 'DBL', name: 'Double' }],
+        [{ id: 'live-id', code: 'DBL', name: 'Double' }],
+      ),
+    };
     expect(planFingerprint(a)).toBe(planFingerprint(b));
     expect(planFingerprint(a)).not.toBe(planFingerprint({ ...a, dateOrder: 'dmy' }));
   });
@@ -229,7 +283,15 @@ describe('cutover gate, freeze and window', () => {
     purpose: 'production',
     environment: 'live',
     checklist: (
-      ['data_authorization', 'source_access', 'card_transfer', 'opening_balances', 'channel_switch', 'cutover_window', 'staff_acceptance'] as const
+      [
+        'data_authorization',
+        'source_access',
+        'card_transfer',
+        'opening_balances',
+        'channel_switch',
+        'cutover_window',
+        'staff_acceptance',
+      ] as const
     ).map((key) => ({ key, status: 'done' as const })),
     certificate: { planFingerprint: 'P', exact: true },
     planFingerprint: 'P',
@@ -247,24 +309,39 @@ describe('cutover gate, freeze and window', () => {
   it('lists each blocker in plain language', () => {
     expect(codes({ environment: 'trial' })).toEqual(['not_live']);
     expect(codes({ certificate: null })).toEqual(['no_rehearsal']);
-    expect(codes({ planFingerprint: 'Q', authorization: { ...ok.authorization!, planFingerprint: 'Q' } })).toEqual([
-      'plan_changed_since_rehearsal',
-    ]);
+    expect(
+      codes({ planFingerprint: 'Q', authorization: { ...ok.authorization!, planFingerprint: 'Q' } }),
+    ).toEqual(['plan_changed_since_rehearsal']);
     expect(codes({ authorization: null })).toEqual(['production_authorization_missing']);
-    expect(codes({ authorization: { ...ok.authorization!, grantedBy: 'user:a' } })).toEqual(['authorization_same_person']);
+    expect(codes({ authorization: { ...ok.authorization!, grantedBy: 'user:a' } })).toEqual([
+      'authorization_same_person',
+    ]);
     expect(codes({ now: new Date('2026-12-03T00:00:00Z') })).toEqual(['authorization_expired']);
-    expect(codes({ transition: { status: 'planned', approved: false } })).toEqual(['transition_not_approved']);
-    expect(codes({ openBlockingExceptions: 2, finalExtractBlocking: 1 })).toEqual(['open_blocking_exceptions', 'final_capture_blocking']);
-    expect(codes({ checklist: ok.checklist.filter((c) => c.key !== 'staff_acceptance') })).toEqual(['checklist_staff_acceptance']);
+    expect(codes({ transition: { status: 'planned', approved: false } })).toEqual([
+      'transition_not_approved',
+    ]);
+    expect(codes({ openBlockingExceptions: 2, finalExtractBlocking: 1 })).toEqual([
+      'open_blocking_exceptions',
+      'final_capture_blocking',
+    ]);
+    expect(codes({ checklist: ok.checklist.filter((c) => c.key !== 'staff_acceptance') })).toEqual([
+      'checklist_staff_acceptance',
+    ]);
     // a drill needs no checklist or authorization, but never runs in live
-    expect(codes({ purpose: 'rehearsal', environment: 'sandbox', authorization: null, checklist: [] })).toEqual([]);
-    expect(codes({ purpose: 'rehearsal', environment: 'live', authorization: null, checklist: [] })).toEqual(['drill_in_live']);
+    expect(
+      codes({ purpose: 'rehearsal', environment: 'sandbox', authorization: null, checklist: [] }),
+    ).toEqual([]);
+    expect(codes({ purpose: 'rehearsal', environment: 'live', authorization: null, checklist: [] })).toEqual([
+      'drill_in_live',
+    ]);
   });
   it('freeze minutes and the rollback window', () => {
     expect(freezeMinutes(new Date('2026-12-01T10:00:00Z'), new Date('2026-12-01T10:12:30Z'))).toBe(12.5);
     const end = rollbackWindowEnds(new Date('2026-12-01T10:00:00Z'));
     expect(end.toISOString()).toBe('2026-12-03T10:00:00.000Z');
-    expect(inRollbackWindow(new Date('2026-12-01T10:00:00Z'), end, new Date('2026-12-03T09:59:59Z'))).toBe(true);
+    expect(inRollbackWindow(new Date('2026-12-01T10:00:00Z'), end, new Date('2026-12-03T09:59:59Z'))).toBe(
+      true,
+    );
     expect(inRollbackWindow(new Date('2026-12-01T10:00:00Z'), end, end)).toBe(false);
   });
   it('resume point and delta detection', () => {
@@ -281,11 +358,11 @@ describe('cutover gate, freeze and window', () => {
         { dataClass: 'reservation', key: 'C', hash: '1' },
       ],
     );
-    expect([d.added.map((x) => x.key), d.changed.map((x) => x.key), d.removed.map((x) => x.key), d.unchanged]).toEqual([
-      ['C'],
-      ['A'],
-      ['B'],
-      0,
-    ]);
+    expect([
+      d.added.map((x) => x.key),
+      d.changed.map((x) => x.key),
+      d.removed.map((x) => x.key),
+      d.unchanged,
+    ]).toEqual([['C'], ['A'], ['B'], 0]);
   });
 });

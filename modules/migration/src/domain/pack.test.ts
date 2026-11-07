@@ -13,11 +13,18 @@ function tables(pack: Record<string, string[][]>, overrides: Record<string, stri
     const headers = overrides[name] ?? (TEMPLATE_HEADERS[name] as string[]);
     const t = parseCsv(toCsv(headers, rows));
     const kind = kindFromName(name) as TableKind;
-    return { name: `${name}.csv`, kind, table: t, columns: mapColumns(kind, t.headers).columns, spreadsheet: false };
+    return {
+      name: `${name}.csv`,
+      kind,
+      table: t,
+      columns: mapColumns(kind, t.headers).columns,
+      spreadsheet: false,
+    };
   });
 }
 
-const byKey = (recs: SourceRecord[], c: string, k: string) => recs.find((r) => r.dataClass === c && r.key === k);
+const byKey = (recs: SourceRecord[], c: string, k: string) =>
+  recs.find((r) => r.dataClass === c && r.key === k);
 
 describe('building canonical records from the guesthouse template pack', () => {
   const out = buildPack(tables(sampleGuesthousePack(BD)), { defaultCurrency: 'USD' });
@@ -61,14 +68,23 @@ describe('building canonical records from the guesthouse template pack', () => {
     ]);
     const incl = byKey(out.records, 'reservation', 'CN1008')?.payload as ReservationRecord;
     expect(incl).toMatchObject({ taxInclusive: true, roomTotalMinor: 40000, totalMinor: 40000 });
-    expect((byKey(out.records, 'reservation', 'CN1004')?.payload as ReservationRecord).status).toBe('in_house');
-    expect((byKey(out.records, 'reservation', 'CN1007')?.payload as ReservationRecord).status).toBe('no_show');
+    expect((byKey(out.records, 'reservation', 'CN1004')?.payload as ReservationRecord).status).toBe(
+      'in_house',
+    );
+    expect((byKey(out.records, 'reservation', 'CN1007')?.payload as ReservationRecord).status).toBe(
+      'no_show',
+    );
   });
   it('carries the tax already declared on deposits and the source’s control totals', () => {
     expect((byKey(out.records, 'deposit', 'CN1001')?.payload as DepositRecord).taxDeclared).toEqual([
       { code: 'TGST', name: 'T-GST', amountMinor: 1453 },
     ]);
-    expect(out.controlTotals).toContainEqual({ dataClass: 'deposit', currency: 'USD', count: 2, amountMinor: 30000 });
+    expect(out.controlTotals).toContainEqual({
+      dataClass: 'deposit',
+      currency: 'USD',
+      count: 2,
+      amountMinor: 30000,
+    });
   });
 });
 
@@ -78,11 +94,121 @@ describe('problems are reported per record, never guessed', () => {
     const pack = {
       ...base,
       reservations: [
-        ['X1', 'Confirmed', '2026-12-10', '2026-12-12', 'DBL', '', '', 'A B', '1', '0', '', 'USD', '100.00', '17.00', '', '', 'no', '118.00', '', '', ''],
-        ['X2', 'Confirmed', '2026-12-10', '2026-12-09', 'DBL', '', '', 'A B', '1', '0', '', 'USD', '100.00', '', '', '', 'no', '', '', '', ''],
-        ['X3', 'Waitlisted', '2026-12-10', '2026-12-12', 'DBL', '', '', 'A B', '1', '0', '', 'USD', '100.00', '', '', '', 'no', '', '', '', ''],
-        ['X4', 'Confirmed', '2026-12-10', '2026-12-13', 'DBL', '', '', 'A B', '1', '0', '', 'USD', '300.00', '', '', '', 'no', '', '', '', ''],
-        ['X5', 'Confirmed', '2026-12-10', '2026-12-11', 'DBL', '', '', 'A B', '1', '0', '', 'USD', '1.250', '', '', '', 'no', '', '', '', ''],
+        [
+          'X1',
+          'Confirmed',
+          '2026-12-10',
+          '2026-12-12',
+          'DBL',
+          '',
+          '',
+          'A B',
+          '1',
+          '0',
+          '',
+          'USD',
+          '100.00',
+          '17.00',
+          '',
+          '',
+          'no',
+          '118.00',
+          '',
+          '',
+          '',
+        ],
+        [
+          'X2',
+          'Confirmed',
+          '2026-12-10',
+          '2026-12-09',
+          'DBL',
+          '',
+          '',
+          'A B',
+          '1',
+          '0',
+          '',
+          'USD',
+          '100.00',
+          '',
+          '',
+          '',
+          'no',
+          '',
+          '',
+          '',
+          '',
+        ],
+        [
+          'X3',
+          'Waitlisted',
+          '2026-12-10',
+          '2026-12-12',
+          'DBL',
+          '',
+          '',
+          'A B',
+          '1',
+          '0',
+          '',
+          'USD',
+          '100.00',
+          '',
+          '',
+          '',
+          'no',
+          '',
+          '',
+          '',
+          '',
+        ],
+        [
+          'X4',
+          'Confirmed',
+          '2026-12-10',
+          '2026-12-13',
+          'DBL',
+          '',
+          '',
+          'A B',
+          '1',
+          '0',
+          '',
+          'USD',
+          '300.00',
+          '',
+          '',
+          '',
+          'no',
+          '',
+          '',
+          '',
+          '',
+        ],
+        [
+          'X5',
+          'Confirmed',
+          '2026-12-10',
+          '2026-12-11',
+          'DBL',
+          '',
+          '',
+          'A B',
+          '1',
+          '0',
+          '',
+          'USD',
+          '1.250',
+          '',
+          '',
+          '',
+          'no',
+          '',
+          '',
+          '',
+          '',
+        ],
       ],
       reservation_nights: [
         ['X4', '2026-12-10', '100.00'],
@@ -98,7 +224,10 @@ describe('problems are reported per record, never guessed', () => {
     expect(codes('X5')).toContain('amount_ambiguous_separator');
     expect(out.unknownStatuses).toEqual(['waitlisted']);
     // a reviewed vocabulary decision imports it
-    const decided = buildPack(tables(pack), { defaultCurrency: 'USD', statusMap: { waitlisted: 'tentative' } });
+    const decided = buildPack(tables(pack), {
+      defaultCurrency: 'USD',
+      statusMap: { waitlisted: 'tentative' },
+    });
     expect(byKey(decided.records, 'reservation', 'X3')?.problems).toEqual([]);
   });
   it('masked names block the record; masked contacts are dropped with a warning', () => {
@@ -119,10 +248,15 @@ describe('problems are reported per record, never guessed', () => {
     expect((m2?.payload as GuestRecord).email).toBeNull();
   });
   it('a folio whose charges minus payments differ from its balance is a finance problem', () => {
-    const out = buildPack(tables({ ...base, in_house_balances: [['CN1004', '1', '640.00', '300.00', '345.00', 'USD']] }), {
-      defaultCurrency: 'USD',
-    });
-    expect(byKey(out.records, 'in_house_balance', 'CN1004#1')?.problems.map((p) => p.code)).toEqual(['folio_not_balancing']);
+    const out = buildPack(
+      tables({ ...base, in_house_balances: [['CN1004', '1', '640.00', '300.00', '345.00', 'USD']] }),
+      {
+        defaultCurrency: 'USD',
+      },
+    );
+    expect(byKey(out.records, 'in_house_balance', 'CN1004#1')?.problems.map((p) => p.code)).toEqual([
+      'folio_not_balancing',
+    ]);
   });
 });
 
@@ -141,14 +275,20 @@ describe('SMB export (assumed Little Hotelier layout): guests derived from reser
       'Channel Booking ID': 'channel_booking_id',
     };
     const columns = mapColumns('reservations', t.headers, hints).columns;
-    const out = buildPack([{ name: file.name, kind: 'reservations', table: t, columns, spreadsheet: false }], {
-      defaultCurrency: 'USD',
-      dateOrder: 'dmy',
-    });
+    const out = buildPack(
+      [{ name: file.name, kind: 'reservations', table: t, columns, spreadsheet: false }],
+      {
+        defaultCurrency: 'USD',
+        dateOrder: 'dmy',
+      },
+    );
     const res = out.records.filter((r) => r.dataClass === 'reservation');
     expect(res).toHaveLength(6);
     expect(res.flatMap((r) => r.problems)).toEqual([]);
-    const guests = out.records.filter((r) => r.dataClass === 'guest').map((g) => g.key).sort();
+    const guests = out.records
+      .filter((r) => r.dataClass === 'guest')
+      .map((g) => g.key)
+      .sort();
     expect(guests).toEqual([
       'email:hana.i@example.test',
       'email:lena.v@example.test',
@@ -156,7 +296,11 @@ describe('SMB export (assumed Little Hotelier layout): guests derived from reser
       'email:paolo.r@example.test',
     ]);
     const p = byKey(out.records, 'reservation', 'LH-2002')?.payload as ReservationRecord;
-    expect(p).toMatchObject({ status: 'in_house', arrival: '2026-11-30', guestKey: 'email:paolo.r@example.test' });
+    expect(p).toMatchObject({
+      status: 'in_house',
+      arrival: '2026-11-30',
+      guestKey: 'email:paolo.r@example.test',
+    });
     expect(p.taxes).toEqual([{ code: 'TAX', name: 'Taxes (as stated by the source)', amountMinor: 8840 }]);
   });
 });
@@ -175,7 +319,10 @@ describe('quality checks (M2)', () => {
   it('the sample pack has only the expected duplicate-profile warnings', () => {
     const f = checkQuality(records, ctx);
     expect([...f.keys()].sort()).toEqual(['guest:G002', 'guest:G006']);
-    expect(f.get('guest:G002')?.[0]).toMatchObject({ code: 'possible_duplicate_profile', severity: 'warning' });
+    expect(f.get('guest:G002')?.[0]).toMatchObject({
+      code: 'possible_duplicate_profile',
+      severity: 'warning',
+    });
   });
   it('finds duplicate channel bookings, double-assigned units, overbooking, orphan and mismatched money', () => {
     const extra: SourceRecord[] = [
@@ -200,7 +347,13 @@ describe('quality checks (M2)', () => {
       {
         dataClass: 'deposit',
         key: 'CN1002',
-        payload: { bookingKey: 'CN1002', amountMinor: 100, currency: 'EUR', taxDeclared: [], receivedOn: null },
+        payload: {
+          bookingKey: 'CN1002',
+          amountMinor: 100,
+          currency: 'EUR',
+          taxDeclared: [],
+          receivedOn: null,
+        },
         origin: { file: 'x', row: 3 },
         problems: [],
       },
@@ -232,7 +385,10 @@ describe('quality checks (M2)', () => {
       ctx,
     );
     expect(f.get('reservation:PAST')?.map((p) => p.code)).toEqual(['future_stay_in_past']);
-    expect(f.get('reservation:INH')?.map((p) => p.code)).toEqual(['in_house_dates', 'in_house_without_balance']);
+    expect(f.get('reservation:INH')?.map((p) => p.code)).toEqual([
+      'in_house_dates',
+      'in_house_without_balance',
+    ]);
     expect(f.get('reservation:UT')?.map((p) => p.code)).toEqual(['unit_type_unmapped']);
     expect(f.get('reservation:PRE')?.map((p) => p.code)).toEqual(['prepaid_without_deposit']);
   });

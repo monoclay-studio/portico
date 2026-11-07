@@ -212,7 +212,7 @@ export async function importAll(
         // The job row lock serializes every importer of this job (concurrent `run`, delta sync, sweep).
         const j = await loadJob(tx, jobId, { lock: true });
         const decisions = await exceptionDecisions(tx, jobId);
-        const ctxIds = await importContext(tx, deps, j);
+        const ctxIds = await importContext(tx, deps, j, records);
         for (const r of chunk) {
           if (opts.failAfter !== undefined && processed >= opts.failAfter)
             throw new Error(`Injected failure after ${processed} records (test)`);
@@ -241,14 +241,29 @@ interface ImportIds {
   units: Map<string, string>;
   guests: Map<string, string>;
   businessDate: string;
+  /** Units count in inventory from the earliest night an imported in-house stay occupies. */
+  inventoryFrom: string;
 }
 
-async function importContext(tx: TxContext, deps: MigrationDeps, job: Job): Promise<ImportIds> {
+async function importContext(
+  tx: TxContext,
+  deps: MigrationDeps,
+  job: Job,
+  records: readonly SourceRecord[],
+): Promise<ImportIds> {
+  const businessDate = (await deps.ports.platform.getProperty(tx, job.propertyId)).businessDate;
+  let inventoryFrom = businessDate;
+  for (const r of records)
+    if (r.dataClass === 'reservation' && r.payload) {
+      const p = r.payload as ReservationRecord;
+      if (p.status === 'in_house' && p.arrival < inventoryFrom) inventoryFrom = p.arrival;
+    }
   return {
     unitTypes: await unitTypeIds(tx, job),
     units: await ledgerTargets(tx, job, 'unit'),
     guests: await ledgerTargets(tx, job, 'guest'),
-    businessDate: (await deps.ports.platform.getProperty(tx, job.propertyId)).businessDate,
+    businessDate,
+    inventoryFrom,
   };
 }
 
@@ -425,6 +440,7 @@ async function applyRecord(
         unitTypeId: typeId,
         number: p.number,
         ...(p.name ? { name: p.name } : {}),
+        inInventoryFrom: ids.inventoryFrom,
       });
       ids.units.set(r.key, created.id);
       return { state: 'imported', targetType: 'unit', targetId: created.id };
