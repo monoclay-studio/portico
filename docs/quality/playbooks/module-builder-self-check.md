@@ -2,9 +2,9 @@
 
 | | |
 |---|---|
-| **Current version** | **v3** (2026-11-07, round 1) |
-| **Theme of v3** | Contract integrity: import shared vocabularies, never copy them; use the value's own family; scope parameters are required. The v2 theme (re-verify every change in a fix round or merge) stays in force, unchanged |
-| **Previous** | `archive/module-builder-self-check-v2.md` (v2); `archive/module-builder-self-check-v1.md`. That is the 32-item "done" checklist: the gates from the briefs actually used, plus the defect classes the first ten reviews found in branches that had passed their own tests |
+| **Current version** | **v4** (2026-11-07, round 2) |
+| **Theme of v4** | Invariant closure: state each fix as an invariant over stored state, then test every writer of its inputs, every repeat and inverse operation, and the fix's own records. It revises the v2 theme, which was measured once and found insufficient. v3 (contract integrity) stays in force:  import shared vocabularies, never copy them; use the value's own family; scope parameters are required. The v2 theme (re-verify every change in a fix round or merge) stays in force, unchanged |
+| **Previous** | `archive/module-builder-self-check-v3.md` (v3); `archive/module-builder-self-check-v2.md` (v2); `archive/module-builder-self-check-v1.md`. That is the 32-item "done" checklist: the gates from the briefs actually used, plus the defect classes the first ten reviews found in branches that had passed their own tests |
 | **Launch** | Builders run it before saying "done" and in every fix round. The final reply includes the § 3 table. The orchestrator links this file from `module-agent-playbook.md` (retro, edit 2) |
 | **Measured by** | `scorecard.md`: escapes attributed to L1-BSC (round 0: 7); P0/P1 findings per first review (round 0: 17 P0 and 94 P1 across 10 reviews); defects that a fix round introduced or left behind, found by re-reviews (round 0, identity-plus: 6, of which 1 P0, 2 P1 and 3 P2) |
 
@@ -19,6 +19,21 @@
 | v3 | 2026-11-07 | **BS3-1** | **Import, never copy, a shared vocabulary.** No module-local `z.enum` or union may copy a kernel or provider vocabulary: provenance, environment, data-authority domains, payer types, statuses, error codes. Grep before "done" (§ 4). If the owner does not export it, request it in `FOUNDATION_REQUESTS.md` and import the type meanwhile | RC-2 recurred. Five modules hold six literal provenance copies, four of them different from the kernel's, and reservations lacks `sandbox`. A planted kernel value was caught only through payments' copy (canary C-L1-02b) | E-008, E-009, E-011, **E-058** | Module-local copies of kernel or provider vocabularies (R1 baseline: 6 provenance literals in 5 modules; see `scorecard.md` § 7); merge-time drift breakages |
 | v3 | 2026-11-07 | **BS3-2** | **Use the value's own family.** Every status chip, badge or stored label uses the vocabulary of the field the value comes from | The backoffice rendered a discrepancy value (`skip`) with the occupancy vocabulary | **E-054** | Wrong-family call sites (UX-03b) found later |
 | v3 | 2026-11-07 | **BS3-3** | **Scope parameters are required.** No port function takes an optional `propertyId` or `legalEntityId`. An omitted scope throws; it never widens to every property | Finance's reservations port widened delegation to every property when `propertyId` was omitted. That is the shape of round-0 finance P0-1 | **E-045** | Optional scope parameters on port surfaces (R1 baseline: 22 matches of the § 4 grep; 6 functions in `financeForReservations` per the review) |
+| v4 | 2026-11-07 | **BS4-1** | **Invariant closure** (new § 5). For each fix, write the invariant it establishes over stored state. Then fill one row per writer: (a) **premise writers**, every path that writes a fact the fix reads (AP-57); (b) **repeat and inverse** operations of the guarded operation (AP-58); (c) the fix's **own records** (exceptions, statuses, requests, audits), recomputed on every change; (d) the other **record parameters** and **stores** the invariant covers (AP-01, AP-17) | v2's § 3 was measured for the first time this round. All 3 fix rounds filled it in. Even so, the integration-step fix round left 3 P1s "one step beyond" its fixes, and the sweep found 8 residuals of round-0 fixes. § 3(b) "siblings" was read as *other callers of the guarded action*, never as *writers of the facts the guard trusts*, inverse operations or repeated application | E-063, E-066, E-067, E-070, E-073, E-074, E-075, E-076 (RC-13) | Defects that fix rounds introduce or leave behind (round 2: 12 from L1-BSC plus 2 from recommendations); canaries C-L2-18 and C-L2-19 |
+| v4 | 2026-11-07 | **BS4-2** | **Exemption list.** The fix-round reply lists every early `return`, default, label or flag that lets something pass, with the attack run against each | R2-P2-3: the fix added two fail-open `return`s. SW-PAY-2: the `custom` label skipped the guard. SW-RAT-1: an unsafe default | E-064, E-069, E-077 | Exemptions found by the re-review that were absent from the builder's list |
+| v4 | 2026-11-07 | **BS4-3** | **The test must fail without the fix.** For each regression test, revert or disable the fix locally and confirm the test fails. Note "fails without fix: yes" in the table | SW-BO-1: the P0-1 e2e test cannot fail. R2-P2-4: the test asserts `done`, not the attestation | E-068, E-078 (AP-55) | Regression tests that pass without their fix (round 2: 2 found by review) |
+
+### Round-2 measurement of v2 and v3
+
+- **v2 § 3 (re-attack table):** filled in **3 of 3** fix rounds (integration step, identity round 4, guests). The
+  identity round added genuine reverse-order and sibling regression tests for the W-1 race. The integration-step round
+  still produced **3 P1s one step beyond** its fixes. § 3 works as a record but is not sufficient as a technique, so
+  v4 adds invariant closure.
+- **v3 § 4 (contract integrity):** run in **1 of 2** fix rounds. Identity round 4 self-detected platform vocabulary
+  copies (environment, effect modes, provenance, data authority). The integration-step round did not run § 4.
+  Vocabulary copies on `main` are unchanged, because the lint rule is still unbuilt.
+- **§ 1 gate block:** identity round 4 ran only the coordinator's command set, not both test commands. Report every
+  gate command in the reply, including those not run.
 
 ### Why v3 is published before v2 has been measured
 
@@ -42,7 +57,8 @@ recurring twice in one round (E-054, E-058), with a canary confirming that the g
 1. **Before you say "done"**, go through § 2, the v1 checklist. For every item answer `yes, test <name>`,
    `N/A: reason` or `no: listed in README Known gaps`. Put the summary in your final reply: counts of yes, N/A and no,
    and every "no" with its gap entry.
-2. **In every fix round**, also do § 3, the v2 re-attack, for each finding you fix. Include the table in your reply.
+2. **In every fix round**, also do § 3 (the re-attack table) and § 5 (invariant closure, v4) for each finding you
+   fix. Include both tables and the exemption list in your reply.
 3. **After every merge of `main`**, run § 1, the gate block, again on the merged tree.
 
 ## 1. Gate block (v2, BS2-3; supersedes v1 items 1–4)
@@ -116,3 +132,28 @@ grep -rnE "propertyId\?: *string|legalEntityId\?: *string" modules/*/src/ports.t
 | BS3-1 | Every vocabulary your module shares with the kernel or another module is imported from the owner's contracts, or a foundation request is filed |
 | BS3-2 | Every `StatusBadge`/label call site passes the vocabulary of the value's own field. No family receives another family's values |
 | BS3-3 | No port function your module exposes or consumes accepts an omitted scope. `delegated(…, undefined)` throws |
+
+## 5. Invariant closure (v4: BS4-1, BS4-2, BS4-3)
+
+For **each** finding you fix, after the § 3 table:
+
+1. **Write the invariant** the fix establishes over **stored state**, not as a check on a path. Examples:
+   - "After departure, a folio has at most one open balance request, and it equals the folio's debt."
+   - "A card held at check-in was supplied by its cardholder for this booking, or is covered by a mandate."
+   - "Every deposit account's booking belongs to the account's property and legal entity."
+   - "No personal data of an erased subject is returned by any API, including idempotent replays."
+2. **List its inputs:** every field, row, link and flag the invariant depends on.
+3. **List every writer of each input.** Grep the inserts and updates, the commands, imports, channel ingestion,
+   merges and unmerges, jobs, seeds and migrations. Include writers in **other modules** reached through ports.
+4. **Fill the table.** One row per writer, plus the repeat, inverse and own-record rows. Each row needs a test that
+   **fails without the fix** (BS4-3).
+
+| Invariant | Input | Writer, repeat or inverse | Held to the rule? | Test (fails without fix?) |
+|---|---|---|---|---|
+| a departed folio's open request = its debt | folio balance | late charge ×3, with a request already open | yes: amend under the folio lock | `late-charges ×3` (yes) |
+| | | reversal, adjustment, transfer out | yes: amend down, or cancel at 0 | `reversal cancels request` (yes) |
+| | exception severity (the fix's own record) | every recompute | recomputed, never frozen | `severity follows debt` (yes) |
+| a held card was supplied by its cardholder | booking guarantee link | create, patch, channel create, channel modify, check-in input | yes: owner = `booking:<id>` supply, or a mandate | `stranger linked as booker → refused` (yes) |
+
+5. **Exemptions (BS4-2).** List every early `return`, default value, client-chosen label or optional dependency that
+   lets something pass, and the attack you ran against each. An exemption you cannot defend becomes a refusal.

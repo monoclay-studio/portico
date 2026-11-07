@@ -22,6 +22,22 @@
 | v2.1 | 2026-11-07 | **SR2-2a** | Inside "attack the fix": write every recommended fix as a **principle with its known instances**, and attack the principle's boundary. Exact text added to Pattern sweep step 3: "State the fix as a rule with examples (for example 'root change = anything that decides who signs in or which roles a sign-in grants: issuer, allow-list, groups claim, client id, …'), never as a closed list, and say which boundary case you attacked." | Review 2's fix for R2-P1-1 listed four root-change fields. ADR-0017 rule 15 copied the list, the builder implemented exactly that list, and review 3 then found the groups claim (R3-P1-2) | E-048 | No list-shaped recommendation leaves a sibling that the next review finds; canary C-L2-13 |
 | v2.1 | 2026-11-07 | **SR2-6** | **Load-bearing check (AP-54)**, new step 6 of the pattern sweep. Exact text: "List the mechanisms your recommended fix newly relies on. If any has an open lower-severity finding or known gap (in this review or earlier ones), re-rate it at the fix's severity and include it in the fix." | Review 2 rated stale domain verification as P3 (R2-P3-5), while its own P0 fix made that verification the global proof of email ownership (R3-P2-2) | E-050 | Load-bearing weaknesses that a later review finds (round 1: 1) |
 
+### Round-2 measurement: v2.1 works for reviewers (no version change)
+
+- **Runs on v2.1:** 2 (fix sweep; integration-step re-review). Both were launched from the playbook.
+- **Coverage declaration: 2 of 2.**
+  - Sweep: 49 applicable patterns, 38 probed or code-read, 11 not probed (each with a reason).
+  - Re-review: 37 applicable, 24 probed and 13 code-read.
+- **What the v2.1 steps found:**
+  - Re-review: all 3 P1s came from v2.1 steps — reverse order (R2-P1-1), sibling paths (R2-P1-2), and the
+    load-bearing re-rating (R2-P1-3).
+  - Sweep: 3 of its 4 P1s came from sibling paths and the load-bearing check (SW-PAY-1, SW-PAY-4, SW-GUE-1). The
+    fourth (SW-PAY-3) came from AP-01 applied to a second record parameter.
+- **Recommendations were stated as principles with instances**, for example "a departed folio has at most one open
+  balance request and it equals the debt". Whether that reduces recommendation defects (RC-9) is measured next round.
+- **What is still open:** the sweep's 11 "not probed (budget)" patterns. If a later escape falls in one of them,
+  promote a v3 "risk-ranked pattern order" for long sweeps.
+
 ### Round-1 note: v2 is not yet measured
 
 Both round-1 reviews launched before v2 was published: the integration step at 17:04 and identity review 3 at 17:09,
