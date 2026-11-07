@@ -15,6 +15,10 @@ Each P0 and P1 class found by any review, generalized so that **any module can b
 - Parity researchers turn applicable classes into edge-case rows (`playbooks/parity-researcher.md`, PR2-2).
 - The **UX-** traps are probes for UI reviews (SR2-5) and lab traps for L4 canaries.
 - **The black-box tester never reads this file.** Its traps are hidden in the lab build instead.
+- **Examples are illustrations, not boundaries (added in round 2).** The "Seen in" and "Applies to" lists show where a
+  class has appeared; they do not limit it. Mark a pattern "not applicable" only with a reason about the **class**,
+  never because the module is missing from the examples. The fix sweep marked AP-56 not applicable because erasure
+  was not among its examples, and an erasure race then survived (E-083).
 
 **Maintenance.** This file is append-only by ID. A new class gets the next free number in its group. A pattern that
 proves useless is marked *retired* with a date, never deleted.

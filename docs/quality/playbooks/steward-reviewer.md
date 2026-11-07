@@ -24,8 +24,9 @@
 
 ### Round-2 measurement: v2.1 works for reviewers (no version change)
 
-- **Runs on v2.1:** 2 (fix sweep; integration-step re-review). Both were launched from the playbook.
-- **Coverage declaration: 2 of 2.**
+- **Runs on v2.1:** 3 (fix sweep; integration-step re-review; guests erasure re-review). All were launched from
+  the playbook.
+- **Coverage declaration: 3 of 3.**
   - Sweep: 49 applicable patterns, 38 probed or code-read, 11 not probed (each with a reason).
   - Re-review: 37 applicable, 24 probed and 13 code-read.
 - **What the v2.1 steps found:**
@@ -35,6 +36,10 @@
     fourth (SW-PAY-3) came from AP-01 applied to a second record parameter.
 - **Recommendations were stated as principles with instances**, for example "a departed folio has at most one open
   balance request and it equals the debt". Whether that reduces recommendation defects (RC-9) is measured next round.
+- **One miss traced to the pattern library, not the playbook.** The sweep marked AP-56 "not applicable" for the
+  erasure fix, because AP-56's examples did not name erasure. A concurrent write surviving an erasure was then found
+  by the guests re-review (E-083). The fix was to the pattern wording (`patterns.md` header and AP-56), not to the
+  playbook.
 - **What is still open:** the sweep's 11 "not probed (budget)" patterns. If a later escape falls in one of them,
   promote a v3 "risk-ranked pattern order" for long sweeps.
 
