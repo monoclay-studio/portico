@@ -268,4 +268,7 @@ Each agent's brief and report are in `agents/`.
   - A focused UX round 2a is due on the merged UI changes.
   - Merged 18:57 <!-- t: commit:e46c024 @ 2026-11-07T18:57:28Z -->.
 - Correction (18:57): the first integration-step review reported at 17:26:51, not 17:27 <!-- t: agent-aef8923307daf19e5 @ 2026-11-07T17:26:51.854Z (Steward review: integration step) -->.
+- **19:09 — Owner: make Portico Channex-ready** <!-- t: now @ 2026-11-07T19:09:42Z --> — ARI engine, outbox and queue within 20 ARI/min, a booking-revision
+  webhook, and an acknowledgement flow. The distribution spec already covers all four. The build (distribution module +
+  Channex adapter) is queued first for the next usage window.
 

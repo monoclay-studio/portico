@@ -115,6 +115,18 @@
   - (3) Every fix-round brief names its invariants and requires the builder self-check v4 § 5 (invariant closure)
     table.
 
+- **2026-11-07 19:09 UTC — owner: make Portico Channex-ready.** TOP of the next window, after the reset at 21:10:
+  build the `distribution` module (spec `docs/specs/distribution.md` §3.2–3.3) with a **Channex adapter**:
+  - an event-driven ARI engine with coalescing (no polling);
+  - an outbox queue with a per-connection token bucket (20 ARI/min, configurable);
+  - a webhook endpoint for booking revisions with a durable revision log, ordered per property, plus a recovery pull;
+  - ack only after `reservations.ingestChannelBooking` commits;
+  - mappings, last-acknowledged state, discrepancies and health.
+
+  Build and test against an exact simulator of Channex's API (R3). Then run Channex **staging** tests (R4); this needs a
+  free staging account and API key from the owner, requested via `request_credential` for the Channex staging host.
+  Channex certification (R5–R6) is an external step. Production activation needs owner authorization (platform fee).
+
 ## 1. Owner, product and how to work with the owner
 
 - Owner: founder of **Monoclay LLC** (Delaware, Stripe Atlas), based in the Maldives. Product: **Portico** (final name).
