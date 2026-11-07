@@ -1,4 +1,5 @@
 import { CommandPalette, type PaletteCommand, ProvenanceBadge } from '@portico/ui';
+import { scopeKey } from '../../api/queries';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import {
@@ -76,7 +77,7 @@ export function GlobalPalette({
   }, [open]);
 
   const server = useQuery({
-    queryKey: ['search', app.session.organization.id, q],
+    queryKey: scopeKey(app.session, 'search', q),
     queryFn: ({ signal }) => api.search(q, { limit: 12, signal }),
     enabled: open && q.length >= 2,
     staleTime: 10_000,

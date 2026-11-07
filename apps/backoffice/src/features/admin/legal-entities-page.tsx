@@ -18,7 +18,7 @@ import { useTranslation } from 'react-i18next';
 import { api, type LegalEntity, type LegalEntityInput } from '../../api';
 import { problemFromUnknown } from '../../api/errors';
 import { IntentKeys } from '../../api/intent';
-import { queries } from '../../api/queries';
+import { queries, scopeKey } from '../../api/queries';
 import { useApp } from '../../app/app-context';
 import { useScreenAction } from '../../app/screen-actions';
 import { learning } from '../../learning/progress';
@@ -44,7 +44,7 @@ export function LegalEntitiesPage() {
   const toast = useToast();
   const nav = useRecordNav();
   const queryClient = useQueryClient();
-  const query = useQuery(queries.legalEntities(session.organization.id));
+  const query = useQuery(queries.legalEntities(session));
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(EMPTY);
   const intent = useRef(new IntentKeys()).current;
@@ -70,7 +70,7 @@ export function LegalEntitiesPage() {
       setOpen(false);
       setForm(EMPTY);
       toast({ tone: 'success', title: t('admin.createdLegalEntity'), description: r.data.name });
-      void queryClient.invalidateQueries({ queryKey: ['org', session.organization.id, 'legal-entities'] });
+      void queryClient.invalidateQueries({ queryKey: scopeKey(session, 'legal-entities') });
     },
     onError: (e) => setProblem(problemFromUnknown(e, 'legal-entity')),
   });

@@ -66,8 +66,8 @@ const property: RecordDefinition = {
   simulated: false,
   async load(ctx, id) {
     const org = ctx.app.session.organization.id;
-    const { property: p, version } = await ctx.queryClient.fetchQuery(queries.property(org, id));
-    const entities = await ctx.queryClient.fetchQuery(queries.legalEntities(org)).catch(() => []);
+    const { property: p, version } = await ctx.queryClient.fetchQuery(queries.property(ctx.app.session, id));
+    const entities = await ctx.queryClient.fetchQuery(queries.legalEntities(ctx.app.session)).catch(() => []);
     const le = entities.find((e) => e.id === p.legalEntityId);
     const t = ctx.t;
     const current = ctx.app.property?.id === p.id;
@@ -168,7 +168,7 @@ const legalEntity: RecordDefinition = {
   simulated: false,
   async load(ctx, id) {
     const org = ctx.app.session.organization.id;
-    const list = await ctx.queryClient.fetchQuery(queries.legalEntities(org));
+    const list = await ctx.queryClient.fetchQuery(queries.legalEntities(ctx.app.session));
     const le = list.find((e) => e.id === id);
     if (!le) return null;
     const t = ctx.t;
@@ -220,7 +220,7 @@ const legalEntity: RecordDefinition = {
     };
   },
   async summary(ctx, id) {
-    const list = await ctx.queryClient.fetchQuery(queries.legalEntities(ctx.app.session.organization.id));
+    const list = await ctx.queryClient.fetchQuery(queries.legalEntities(ctx.app.session));
     const le = list.find((e) => e.id === id);
     return le
       ? {
@@ -240,7 +240,7 @@ const user: RecordDefinition = {
   simulated: false,
   async load(ctx, id) {
     const org = ctx.app.session.organization.id;
-    const list = await ctx.queryClient.fetchQuery(queries.users(org));
+    const list = await ctx.queryClient.fetchQuery(queries.users(ctx.app.session));
     const u = list.find((x) => x.userId === id);
     if (!u) return null;
     const t = ctx.t;
@@ -298,7 +298,7 @@ const user: RecordDefinition = {
     };
   },
   async summary(ctx, id) {
-    const list = await ctx.queryClient.fetchQuery(queries.users(ctx.app.session.organization.id));
+    const list = await ctx.queryClient.fetchQuery(queries.users(ctx.app.session));
     const u = list.find((x) => x.userId === id);
     return u
       ? {

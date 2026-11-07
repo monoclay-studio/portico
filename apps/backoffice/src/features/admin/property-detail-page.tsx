@@ -22,7 +22,7 @@ import { type FormEvent, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api, type Property, type PropertyUpdate } from '../../api';
 import { isApiError, problemFromUnknown } from '../../api/errors';
-import { queries } from '../../api/queries';
+import { queries, scopeKey } from '../../api/queries';
 import { useApp } from '../../app/app-context';
 import { PageHeader } from '../common/page-header';
 
@@ -72,7 +72,7 @@ export function PropertyDetailPage() {
   const { session } = useApp();
   const toast = useToast();
   const queryClient = useQueryClient();
-  const query = useQuery(queries.property(session.organization.id, propertyId));
+  const query = useQuery(queries.property(session, propertyId));
   const [base, setBase] = useState<{ value: Editable; version: number } | null>(null);
   const [form, setForm] = useState<Editable | null>(null);
   const [conflict, setConflict] = useState<ConflictState | null>(null);
@@ -89,11 +89,11 @@ export function PropertyDetailPage() {
   const accept = (p: Property, version: number) => {
     setBase({ value: pick(p), version });
     setForm(pick(p));
-    queryClient.setQueryData(queries.property(session.organization.id, propertyId).queryKey, {
+    queryClient.setQueryData(queries.property(session, propertyId).queryKey, {
       property: p,
       version,
     });
-    void queryClient.invalidateQueries({ queryKey: ['org', session.organization.id, 'properties'] });
+    void queryClient.invalidateQueries({ queryKey: scopeKey(session, 'properties') });
   };
 
   const save = useMutation({

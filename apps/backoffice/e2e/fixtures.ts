@@ -1,6 +1,7 @@
 import { type APIRequestContext, test as base, expect, type Page } from '@playwright/test';
 
 export const DIRECTOR = 'group.director@demo-azure-atoll.demo.portico.invalid';
+export const FRONT_DESK = 'front.desk.agent@demo-azure-atoll.demo.portico.invalid';
 export const PASSWORD = 'portico-demo-2026'; // demo environment only (printed by seed:demo)
 export const DEMO_ORG = 'Azure Atoll Collection (demo)';
 export const TRAINING_ORG = 'Azure Atoll Collection (training)';

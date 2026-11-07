@@ -1,6 +1,16 @@
 import { useSyncExternalStore } from 'react';
 
-/** Recent and pinned records per staff member — a per-viewer convenience kept in this browser. */
+/**
+ * Recent and pinned records per staff member — a per-viewer convenience kept in this browser. Titles stored here
+ * must not identify guests or staff (shared desk computers): use `safeRecordTitle`.
+ */
+const PERSONAL_TYPES = new Set(['stay', 'guest', 'booking', 'user', 'company']);
+
+/** A title safe to keep in browser storage: the reference code for personal records, never a person's name. */
+export function safeRecordTitle(r: { type: string; title: string; code?: string | undefined; typeLabel: string }): string {
+  if (!PERSONAL_TYPES.has(r.type)) return r.title;
+  return r.code ? `${r.typeLabel} ${r.code}` : r.typeLabel;
+}
 export interface RecordRef {
   type: string;
   id: string;
@@ -47,6 +57,14 @@ function makeStore(prefix: string, max: number) {
         userId,
         read(userId).filter((r) => !(r.type === ref.type && r.id === ref.id)),
       );
+    },
+    clear(userId: string) {
+      write(userId, []);
+      try {
+        localStorage.removeItem(key(userId));
+      } catch {
+        // storage blocked
+      }
     },
     has(userId: string, ref: Pick<RecordRef, 'type' | 'id'>) {
       return read(userId).some((r) => r.type === ref.type && r.id === ref.id);

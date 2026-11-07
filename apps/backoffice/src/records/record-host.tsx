@@ -1,4 +1,5 @@
 import { type HistoryState, ProblemAlert, RecordDrawer, RecordView, useHotkey, useToast } from '@portico/ui';
+import { scopeKey } from '../api/queries';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from '@tanstack/react-router';
 import { useEffect, useRef, useState } from 'react';
@@ -8,7 +9,7 @@ import { useApp } from '../app/app-context';
 import { ExtendStayDialog } from '../features/reservations/extend-stay-dialog';
 import { RecordLink } from './entity-link';
 import { definitionFor, type RecordCtx, serverHistory } from './registry';
-import { pinnedRecords, recentRecords, useRecordRefs } from './stores';
+import { pinnedRecords, recentRecords, safeRecordTitle, useRecordRefs } from './stores';
 import { useRecordNav } from './use-record-nav';
 
 const titles = new Map<string, string>();
@@ -29,14 +30,14 @@ export function RecordHost() {
   const pinned = useRecordRefs(pinnedRecords, userId);
 
   const record = useQuery({
-    queryKey: ['record', app.session.organization.id, app.property?.id, top?.type, top?.id],
+    queryKey: scopeKey(app.session, 'record', app.property?.id, top?.type, top?.id),
     queryFn: async () => (top && def ? def.load(ctx, top.id) : null),
     enabled: Boolean(top && def),
   });
   const model = record.data?.model;
   const needsServerHistory = record.data?.history === 'server';
   const history = useQuery({
-    queryKey: ['history', app.session.organization.id, top?.type, top?.id],
+    queryKey: scopeKey(app.session, 'history', top?.type, top?.id),
     queryFn: () => serverHistory(top?.type ?? '', top?.id ?? ''),
     enabled: Boolean(top) && needsServerHistory,
   });
@@ -44,11 +45,11 @@ export function RecordHost() {
   const lastRecent = useRef<string | null>(null);
   useEffect(() => {
     if (!model) return;
-    titles.set(`${model.type}:${model.id}`, model.title);
+    titles.set(`${userId}:${model.type}:${model.id}`, model.title);
     const key = `${model.type}:${model.id}`;
     if (lastRecent.current !== key) {
       lastRecent.current = key;
-      recentRecords.add(userId, { type: model.type, id: model.id, title: model.title });
+      recentRecords.add(userId, { type: model.type, id: model.id, title: safeRecordTitle(model) });
     }
   }, [model, userId]);
 
@@ -87,7 +88,7 @@ export function RecordHost() {
           title:
             (model && model.type === e.type && model.id === e.id
               ? model.title
-              : titles.get(`${e.type}:${e.id}`)) ?? t(`records.types.${e.type}`, { defaultValue: e.type }),
+              : titles.get(`${userId}:${e.type}:${e.id}`)) ?? t(`records.types.${e.type}`, { defaultValue: e.type }),
         }))}
         onNavigateTrail={nav.jump}
         onBack={nav.back}
@@ -110,7 +111,7 @@ export function RecordHost() {
             onTogglePin={() =>
               isPinned
                 ? pinnedRecords.remove(userId, model)
-                : pinnedRecords.add(userId, { type: model.type, id: model.id, title: model.title })
+                : pinnedRecords.add(userId, { type: model.type, id: model.id, title: safeRecordTitle(model) })
             }
             onAction={(a) => def?.onAction?.(ctx, model, a, handlers)}
             renderLink={(l) => (

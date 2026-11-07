@@ -15,7 +15,7 @@ export function PropertiesPage() {
   const { t } = useTranslation();
   const { session } = useApp();
   const nav = useRecordNav();
-  const query = useQuery(queries.properties(session.organization.id));
+  const query = useQuery(queries.properties(session));
   const columns = useMemo<ColumnDef<Property>[]>(
     () => [
       {

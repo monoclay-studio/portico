@@ -21,7 +21,7 @@ import { useTranslation } from 'react-i18next';
 import { api, type CreateUserRequest, type UserSummary } from '../../api';
 import { problemFromUnknown } from '../../api/errors';
 import { IntentKeys } from '../../api/intent';
-import { queries } from '../../api/queries';
+import { queries, scopeKey } from '../../api/queries';
 import { useApp } from '../../app/app-context';
 import { useScreenAction } from '../../app/screen-actions';
 import { learning } from '../../learning/progress';
@@ -44,9 +44,8 @@ export function UsersPage() {
   const toast = useToast();
   const nav = useRecordNav();
   const queryClient = useQueryClient();
-  const orgId = session.organization.id;
-  const users = useQuery(queries.users(orgId));
-  const roles = useQuery(queries.roles(orgId));
+  const users = useQuery(queries.users(session));
+  const roles = useQuery(queries.roles(session));
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(EMPTY);
   const [problem, setProblem] = useState<ProblemDetails | null>(null);
@@ -75,7 +74,7 @@ export function UsersPage() {
       setForm(EMPTY);
       setProblem(null);
       toast({ tone: 'success', title: t('admin.createdUser') });
-      void queryClient.invalidateQueries({ queryKey: ['org', orgId, 'users'] });
+      void queryClient.invalidateQueries({ queryKey: scopeKey(session, 'users') });
     },
     onError: (e) => setProblem(problemFromUnknown(e, 'create-user')),
   });

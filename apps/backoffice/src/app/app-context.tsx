@@ -24,19 +24,20 @@ export function useApp(): AppContextValue {
   return ctx;
 }
 
-const PROPERTY_KEY = (orgId: string) => `portico.property.${orgId}`;
+const PROPERTY_KEY = (s: { userId: string; organization: { id: string } }) =>
+  `portico.property.${s.organization.id}.${s.userId}`;
 
-export function rememberedPropertyId(orgId: string): string | null {
+export function rememberedPropertyId(s: { userId: string; organization: { id: string } }): string | null {
   try {
-    return localStorage.getItem(PROPERTY_KEY(orgId));
+    return localStorage.getItem(PROPERTY_KEY(s));
   } catch {
     return null;
   }
 }
 
-export function rememberPropertyId(orgId: string, id: string) {
+export function rememberPropertyId(s: { userId: string; organization: { id: string } }, id: string) {
   try {
-    localStorage.setItem(PROPERTY_KEY(orgId), id);
+    localStorage.setItem(PROPERTY_KEY(s), id);
   } catch {
     // per-viewer convenience only
   }

@@ -8,7 +8,11 @@ import { sessionStore } from './session';
 export const apiClient = createApiClient({
   baseUrl: API_BASE,
   getToken: () => sessionStore.get()?.token ?? null,
-  onSessionEnded: () => sessionStore.clear('expired'),
+  // Only end the session the failing request belonged to (an in-flight call from a previous session must not
+  // sign out the person who is signed in now).
+  onSessionEnded: (_problem, tokenUsed) => {
+    if (tokenUsed && sessionStore.get()?.token === tokenUsed) sessionStore.clear('expired');
+  },
   onReachability: (ok) => connectivity.report(ok),
 });
 

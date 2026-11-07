@@ -68,11 +68,11 @@ export function AppShell() {
   const toast = useToast();
   const queryClient = useQueryClient();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
-  const orgId = session?.organization.id ?? 'none';
-  const me = useQuery({ ...queries.me(orgId), enabled: Boolean(session) });
-  const organization = useQuery({ ...queries.organization(orgId), enabled: Boolean(session) });
-  const properties = useQuery({ ...queries.properties(orgId), enabled: Boolean(session) });
-  const [selectedId, setSelectedId] = useState<string | null>(() => rememberedPropertyId(orgId));
+  const scope = session ?? { userId: 'none', organization: { id: 'none' } };
+  const me = useQuery({ ...queries.me(scope), enabled: Boolean(session) });
+  const organization = useQuery({ ...queries.organization(scope), enabled: Boolean(session) });
+  const properties = useQuery({ ...queries.properties(scope), enabled: Boolean(session) });
+  const [selectedId, setSelectedId] = useState<string | null>(() => rememberedPropertyId(scope));
   const [palette, setPalette] = useState<{ open: boolean; mode: 'search' | 'command' }>({
     open: false,
     mode: 'command',
@@ -86,8 +86,12 @@ export function AppShell() {
   const screenActions = useRef<ScreenActionsRegistry>({ handlers: new Map() }).current;
 
   useEffect(() => {
-    if (!session)
-      void navigate({ to: '/sign-in', search: { reason: sessionStore.endedReason ?? undefined } });
+    if (!session) {
+      const reason = sessionStore.endedReason ?? undefined;
+      // After an expired session, come back to the same screen once signed in again.
+      const redirect = reason === 'expired' ? window.location.pathname + window.location.search : undefined;
+      void navigate({ to: '/sign-in', search: { reason, ...(redirect ? { redirect } : {}) } });
+    }
   }, [session, navigate]);
   useEffect(() => {
     if (me.data) {
@@ -111,9 +115,9 @@ export function AppShell() {
   const setPropertyId = useCallback(
     (id: string) => {
       setSelectedId(id);
-      rememberPropertyId(orgId, id);
+      rememberPropertyId(scope, id);
     },
-    [orgId],
+    [scope],
   );
   const openShortcuts = useCallback(() => {
     setShortcutsOpen(true);

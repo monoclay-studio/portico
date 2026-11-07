@@ -28,8 +28,8 @@ export interface RequestOptions<S extends z.ZodType> {
 export interface ApiClientOptions {
   baseUrl: string;
   getToken: () => string | null;
-  /** Called when an authenticated call returns 401 (session expired or revoked). */
-  onSessionEnded?: (problem: ProblemDetails) => void;
+  /** Called when an authenticated call returns 401 (session expired or revoked), with the token that was used. */
+  onSessionEnded?: (problem: ProblemDetails, tokenUsed: string | null) => void;
   /** Reachability signal for the offline indicator: false on network failure, true on any HTTP answer. */
   onReachability?: (reachable: boolean) => void;
   fetch?: typeof fetch;
@@ -100,7 +100,7 @@ export function createApiClient(opts: ApiClientOptions) {
             retryable: res.status >= 500 || res.status === 429,
             correlationId,
           };
-      if (res.status === 401 && !o.expectUnauthenticated) opts.onSessionEnded?.(problem);
+      if (res.status === 401 && !o.expectUnauthenticated) opts.onSessionEnded?.(problem, token);
       throw new ApiError(problem);
     }
 

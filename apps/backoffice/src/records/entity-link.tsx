@@ -1,4 +1,5 @@
 import { EntityLink, ProvenanceBadge } from '@portico/ui';
+import { scopeKey } from '../api/queries';
 import { useQueryClient } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -31,7 +32,7 @@ export function RecordLink({
       id={id}
       loadSummary={(ty, i) =>
         queryClient.fetchQuery({
-          queryKey: ['summary', app.session.organization.id, app.property?.id, ty, i],
+          queryKey: scopeKey(app.session, 'summary', app.property?.id, ty, i),
           queryFn: () => def.summary(ctx, i),
         })
       }
