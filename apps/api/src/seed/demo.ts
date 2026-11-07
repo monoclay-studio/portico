@@ -98,13 +98,21 @@ const ORGS: Array<{
         code: 'AZH',
         name: 'Azure Lagoon Hotel, Hulhumalé',
         profile: 'hotel',
-        classification: { 'mv.establishmentType': 'hotel', 'mv.inhabitedIsland': true, 'mv.registeredRooms': 64 },
+        classification: {
+          'mv.establishmentType': 'hotel',
+          'mv.inhabitedIsland': true,
+          'mv.registeredRooms': 64,
+        },
       },
       {
         code: 'AZA',
         name: 'Azure Reef Residences, Malé',
         profile: 'serviced_apartments',
-        classification: { 'mv.establishmentType': 'hotel', 'mv.inhabitedIsland': true, 'mv.registeredRooms': 24 },
+        classification: {
+          'mv.establishmentType': 'hotel',
+          'mv.inhabitedIsland': true,
+          'mv.registeredRooms': 24,
+        },
       },
     ],
     staff: [
