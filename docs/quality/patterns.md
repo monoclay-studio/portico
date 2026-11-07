@@ -547,7 +547,8 @@ proves useless is marked *retired* with a date, never deleted.
 - **Applies to:** every module, `packages/ui`, and the backoffice.
 - **Canary:** C-L1-02.
 - **Round 1 (E-054, E-058; canary C-L1-02b):**
-  - Five module-local provenance enums exist, with four different value sets. Reservations lacks `sandbox`.
+  - Five modules hold six literal provenance copies; four of the value sets differ from the kernel's. Reservations lacks
+    `sandbox`.
   - A planted kernel value was caught by typecheck only through payments' copy.
   - The backoffice rendered a discrepancy value with the occupancy vocabulary.
   - **Probe addition:**

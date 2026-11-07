@@ -767,7 +767,7 @@ v2 existed. So **no v2 playbook was used in round 1**, and the v2 effect is stil
 
 #### E-058 · P2 · D · *Latent:* module-local provenance enums have drifted from the kernel
 - **Defect.** The kernel `Provenance` has 7 values, including `sandbox` (`packages/kernel/src/context.ts:21`). Five
-  module-local copies exist, with **four different value sets**:
+  modules hold six literal copies, with five distinct value sets, **four of which differ from the kernel's**:
   - reservations `contracts.ts:200` lacks `sandbox`, and `:525` allows only `live|simulated`;
   - guests `:13` allows `live|copied|external`;
   - operations `:48` allows `live|external|copied|simulated`;
