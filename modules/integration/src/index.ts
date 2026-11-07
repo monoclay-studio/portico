@@ -23,7 +23,7 @@ export * from './routes';
 export { integrationSearch } from './search';
 export { localSecretStore, type SecretStore, secretStoreFromEnv } from './secrets';
 export type { IntegrationDeps } from './service/common';
-export { type IntegrationJob, integrationJobs, runTenantWork } from './service/jobs';
+export { integrationJobs, runTenantWork } from './service/jobs';
 export { createIntegrationProvider, type IntegrationProvider } from './service/provider';
 export { fetchWebhookTransport, type WebhookTransport } from './service/transport';
 export * as integration from './services';

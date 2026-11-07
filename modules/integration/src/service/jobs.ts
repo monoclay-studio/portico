@@ -4,7 +4,7 @@
  * (`integration.claim_due_tenants`, routing metadata only); all work then runs inside the tenant's own
  * RLS-scoped transactions with the tenant's environment (so environment safety applies to background jobs too).
  */
-import { type PorticoDatabase, sql, withTenantTx } from '@portico/db';
+import { type PorticoDatabase, type ScheduledJob, sql, withTenantTx } from '@portico/db';
 import { newId, type RequestContext, systemContext, type TenantEnvironment } from '@portico/kernel';
 import type { ConnectionState } from '../contracts';
 import { isOperational } from '../domain/setup-journey';
@@ -103,43 +103,36 @@ export async function runTenantWork(
   return res;
 }
 
-export interface IntegrationJob {
-  name: string;
-  /** Process organizations with due work; returns how many were processed. */
-  runOnce(): Promise<number>;
-}
-
-/** Jobs for apps/worker (see FOUNDATION_REQUESTS.md: the worker loop must call them). */
+/**
+ * Scheduled job for apps/worker (`ScheduledJob` from @portico/db, run once per interval across replicas):
+ * claims organizations with due integration work through the scheduler index and runs it in each organization's
+ * own context and environment.
+ */
 export function integrationJobs(
-  database: PorticoDatabase,
   deps: IntegrationDeps,
-  opts: {
-    environmentOf: (tenantId: string) => Promise<TenantEnvironment>;
-    batch?: number;
-    onError?: (err: unknown) => void;
-  },
-): IntegrationJob[] {
+  opts: { batch?: number; onError?: (tenantId: string, err: unknown) => void } = {},
+): ScheduledJob[] {
   return [
     {
-      name: 'integration.due-work',
-      async runOnce() {
-        const { rows } = await sql<{ tenant_id: string }>`
-          select tenant_id from integration.claim_due_tenants(${opts.batch ?? 20}, 300)`.execute(
-          database.kysely,
-        );
+      name: 'integration.dueWork',
+      intervalSeconds: 10,
+      leaseSeconds: 300,
+      async run(database) {
+        const { rows } = await sql<{ tenant_id: string; environment: TenantEnvironment | null }>`
+          select d.tenant_id, platform.tenant_environment(d.tenant_id) as environment
+            from integration.claim_due_tenants(${opts.batch ?? 20}, 300) d`.execute(database.kysely);
         for (const r of rows) {
+          if (!r.environment) continue; // closed organization
           try {
-            const env = await opts.environmentOf(r.tenant_id);
             await runTenantWork(
               database,
               deps,
-              systemContext(r.tenant_id, 'integration-scheduler', env, newId()),
+              systemContext(r.tenant_id, 'integration-scheduler', r.environment, newId()),
             );
           } catch (err) {
-            opts.onError?.(err);
+            opts.onError?.(r.tenant_id, err);
           }
         }
-        return rows.length;
       },
     },
   ];

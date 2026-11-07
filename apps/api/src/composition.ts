@@ -3,14 +3,19 @@
  * Each module contributes: a manifest (migrations + permissions), an HTTP module, event subscriptions and
  * port bindings. Keep one block per module to make parallel work merge cleanly.
  */
-import type { PorticoDatabase, SearchProvider, TxEventSubscription } from '@portico/db';
+import {
+  CORE_JOBS,
+  type PorticoDatabase,
+  type ScheduledJob,
+  type SearchProvider,
+  type TxEventSubscription,
+} from '@portico/db';
 import type { Authenticator, HttpModule } from '@portico/http';
 import { type IdentityPorts, identityAuthenticator, identityHttp, identityManifest } from '@portico/identity';
 import {
   createConnectorRegistry,
   fetchWebhookTransport,
   type IntegrationDeps,
-  type IntegrationJob,
   integrationHttp,
   integrationJobs,
   integrationManifest,
@@ -22,7 +27,7 @@ import {
   unavailableActivationScope,
   unavailableCatalog,
 } from '@portico/integration';
-import type { ModuleManifest, TenantEnvironment } from '@portico/kernel';
+import type { ModuleManifest } from '@portico/kernel';
 import { platform, platformHttp, platformManifest, platformSearch } from '@portico/platform';
 import { recordsHttp } from './records-routes';
 
@@ -38,8 +43,8 @@ export interface Composition {
   httpModules: HttpModule[];
   subscriptions: TxEventSubscription[];
   searchProviders: SearchProvider[];
-  /** Periodic background work (integration syncs, outbound dispatch, webhook delivery). The worker runs these. */
-  backgroundJobs(opts: { environmentOf: (tenantId: string) => Promise<TenantEnvironment> }): IntegrationJob[];
+  /** Periodic background jobs run by apps/worker (each module contributes its own). */
+  jobs: ScheduledJob[];
 }
 
 export function compose(database: PorticoDatabase): Composition {
@@ -99,7 +104,7 @@ export function compose(database: PorticoDatabase): Composition {
     httpModules: [platformModule, identityModule, integrationModule, recordsModule],
     subscriptions: [...integrationSubscriptions()],
     searchProviders,
-    backgroundJobs: (opts) => [...integrationJobs(database, integrationDeps, opts)],
+    jobs: [...CORE_JOBS, ...integrationJobs(integrationDeps)],
   };
 }
 
