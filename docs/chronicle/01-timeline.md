@@ -147,4 +147,11 @@ Each agent's brief and report are in `agents/`.
   - The agent's summary file was refused by a harness policy on report files. The orchestrator committed it verbatim.
     Merged to main at 17:02.
 - **17:00 — Build-cache root cause fixed:** `turbo.json` now hashes every workspace package's sources.
+- **17:05 — Owner: "a very very intelligent self improving system with many feedback loops"**, with an agent in
+  charge of the testing agents.
+  - The quality system is designed (`docs/quality/README.md`): eight loops L1–L8, a meta loop with escape analysis,
+    canary defects to measure recall, versioned playbooks and a pattern library.
+  - The quality steward launches (round 0: playbooks v1/v2 from today's real briefs, escapes, patterns, canaries,
+    scorecard, retro).
+  - The 3-hourly heartbeat now also resumes the quality steward after every checking round.
 
