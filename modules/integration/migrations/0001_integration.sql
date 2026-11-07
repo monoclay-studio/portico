@@ -57,6 +57,8 @@ create trigger touch before update on integration.connections for each row execu
 
 -- Every step and lifecycle transition, with actor and time (append-only). Progress is preserved here.
 create table integration.connection_steps (
+  -- Monotonic order (several rows can share a timestamp within one transaction).
+  seq                 bigint generated always as identity,
   id            uuid primary key,
   tenant_id     uuid not null,
   connection_id uuid not null references integration.connections(id),
@@ -171,6 +173,8 @@ select core.enable_tenant_isolation('integration.mapping_versions');
 -- Validation runs and previews (step 6 and 7)
 ---------------------------------------------------------------------------------------------------------
 create table integration.validation_runs (
+  -- Monotonic order (several rows can share a timestamp within one transaction).
+  seq                 bigint generated always as identity,
   id                  uuid primary key,
   tenant_id           uuid not null,
   connection_id       uuid not null references integration.connections(id),
@@ -185,6 +189,8 @@ create table integration.validation_runs (
 select core.enable_tenant_isolation('integration.validation_runs');
 
 create table integration.previews (
+  -- Monotonic order (several rows can share a timestamp within one transaction).
+  seq                 bigint generated always as identity,
   id                  uuid primary key,
   tenant_id           uuid not null,
   connection_id       uuid not null references integration.connections(id),
@@ -225,6 +231,7 @@ create table integration.workflow_state (
 select core.enable_tenant_isolation('integration.workflow_state');
 
 create table integration.files (
+  seq            bigint generated always as identity,
   id             uuid primary key,
   tenant_id      uuid not null,
   connection_id  uuid not null references integration.connections(id),
@@ -260,6 +267,7 @@ create index sync_runs_conn_idx on integration.sync_runs (connection_id, started
 select core.enable_tenant_isolation('integration.sync_runs');
 
 create table integration.exchange_log (
+  seq              bigint generated always as identity,
   id               uuid primary key,
   tenant_id        uuid not null,
   connection_id    uuid not null references integration.connections(id),

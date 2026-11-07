@@ -34,6 +34,7 @@ export interface ConnectionsTable {
 }
 
 export interface ConnectionStepsTable {
+  seq: Generated<number>;
   id: string;
   tenant_id: string;
   connection_id: string;
@@ -121,6 +122,7 @@ export interface MappingVersionsTable {
 }
 
 export interface ValidationRunsTable {
+  seq: Generated<number>;
   id: string;
   tenant_id: string;
   connection_id: string;
@@ -134,6 +136,7 @@ export interface ValidationRunsTable {
 }
 
 export interface PreviewsTable {
+  seq: Generated<number>;
   id: string;
   tenant_id: string;
   connection_id: string;
@@ -165,6 +168,7 @@ export interface WorkflowStateTable {
 }
 
 export interface FilesTable {
+  seq: Generated<number>;
   id: string;
   tenant_id: string;
   connection_id: string;
@@ -197,6 +201,7 @@ export interface SyncRunsTable {
 }
 
 export interface ExchangeLogTable {
+  seq: Generated<number>;
   id: string;
   tenant_id: string;
   connection_id: string;

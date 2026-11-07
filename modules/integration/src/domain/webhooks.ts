@@ -22,6 +22,14 @@ export function signPayload(secret: string, timestampSeconds: number, body: stri
   return `t=${timestampSeconds},v1=${mac}`;
 }
 
+/** Header with one v1 signature per active secret (two during a signing-secret rotation). */
+export function signatureHeader(secrets: readonly string[], timestampSeconds: number, body: string): string {
+  const macs = secrets.map((s) =>
+    createHmac('sha256', s).update(`${timestampSeconds}.${body}`).digest('hex'),
+  );
+  return [`t=${timestampSeconds}`, ...macs.map((m) => `v1=${m}`)].join(',');
+}
+
 export type VerifyResult = { valid: true } | { valid: false; reason: string };
 
 /** Reference verification for partners (documented in the README). Constant-time comparison. */
@@ -33,22 +41,25 @@ export function verifySignature(
   toleranceSeconds = SIGNATURE_TOLERANCE_SECONDS,
 ): VerifyResult {
   if (!header) return { valid: false, reason: 'missing signature header' };
-  const parts = Object.fromEntries(
-    header.split(',').map((p) => {
-      const i = p.indexOf('=');
-      return [p.slice(0, i).trim(), p.slice(i + 1).trim()];
-    }),
-  );
-  const t = Number(parts.t);
-  const v1 = parts.v1;
-  if (!Number.isInteger(t) || !v1) return { valid: false, reason: 'malformed signature header' };
+  let t = Number.NaN;
+  const candidates: string[] = [];
+  for (const part of header.split(',')) {
+    const i = part.indexOf('=');
+    const k = part.slice(0, i).trim();
+    const v = part.slice(i + 1).trim();
+    if (k === 't') t = Number(v);
+    else if (k === 'v1' && v) candidates.push(v);
+  }
+  if (!Number.isInteger(t) || candidates.length === 0)
+    return { valid: false, reason: 'malformed signature header' };
   if (Math.abs(nowSeconds - t) > toleranceSeconds)
     return { valid: false, reason: 'timestamp outside tolerance' };
-  const expected = createHmac('sha256', secret).update(`${t}.${body}`).digest('hex');
-  const a = Buffer.from(expected, 'utf8');
-  const b = Buffer.from(v1, 'utf8');
-  if (a.length !== b.length || !timingSafeEqual(a, b)) return { valid: false, reason: 'signature mismatch' };
-  return { valid: true };
+  const expected = Buffer.from(createHmac('sha256', secret).update(`${t}.${body}`).digest('hex'), 'utf8');
+  const ok = candidates.some((c) => {
+    const b = Buffer.from(c, 'utf8');
+    return b.length === expected.length && timingSafeEqual(expected, b);
+  });
+  return ok ? { valid: true } : { valid: false, reason: 'signature mismatch' };
 }
 
 /** Seconds until the next attempt after `attempts` failed attempts, or null when the delivery is dead. */

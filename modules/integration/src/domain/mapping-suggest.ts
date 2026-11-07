@@ -69,20 +69,40 @@ export const MIN_SUGGESTION = 0.5;
 export const AMBIGUITY_MARGIN = 0.05;
 
 const STOP_WORDS = new Set(['the', 'a', 'an', 'with', 'and', 'of', 'w']);
+/** Abbreviations that are also ordinary words: expanded only when written as an all-caps code ("BAR", not "Bar"). */
+const AMBIGUOUS_ABBREVIATIONS = new Set([
+  'bar',
+  'rest',
+  'sc',
+  'gt',
+  'sp',
+  'pl',
+  'sup',
+  'ro',
+  'ai',
+  'tw',
+  'bb',
+  'hb',
+  'fb',
+  'rack',
+  'corp',
+  'mb',
+]);
 
 /** Lowercase, strip accents and punctuation, expand abbreviations, drop stop words. */
 export function normalizeTokens(input: string): string[] {
   const base = input
     .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '')
-    .toLowerCase()
+    .replace(/[\u0300-\u036f]/g, '')
     .replace(/&/g, ' and ')
-    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/[^A-Za-z0-9]+/g, ' ')
     .trim();
   if (!base) return [];
   const out: string[] = [];
-  for (const token of base.split(' ')) {
-    const expanded = ABBREVIATIONS[token];
+  for (const raw of base.split(' ')) {
+    const token = raw.toLowerCase();
+    const isCode = raw === raw.toUpperCase() && /[A-Z]/.test(raw);
+    const expanded = AMBIGUOUS_ABBREVIATIONS.has(token) && !isCode ? undefined : ABBREVIATIONS[token];
     for (const t of (expanded ?? token).split(' ')) if (t && !STOP_WORDS.has(t)) out.push(t);
   }
   return out;
@@ -91,7 +111,7 @@ export function normalizeTokens(input: string): string[] {
 export function normalizeCode(code: string): string {
   return code
     .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '')
+    .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
     .replace(/[^a-z0-9]/g, '');
 }

@@ -53,6 +53,7 @@ export const integrationManifest: ModuleManifest = {
       route: '/integrations/webhooks/:id',
     },
     { type: 'integration_webhook_delivery', label: 'Webhook delivery', readPermission: P.webhookManage },
+    { type: 'integration_simulator', label: 'Simulated external system', readPermission: P.simulatorControl },
   ],
   permissions: [
     {

@@ -208,7 +208,7 @@ async function authorityConflicts(
           .select(['name', 'state'])
           .where('id', '=', current.connectionId)
           .executeTakeFirst();
-        if (!other || other.state !== 'disconnected') {
+        if (other?.state !== 'disconnected') {
           out.push(
             `${domainLabel(a.domain)[0]?.toUpperCase()}${domainLabel(a.domain).slice(1)} are already controlled by ${current.systemName ?? other?.name ?? 'another connection'}. Two systems must not change the same information: replace that connection instead.`,
           );
@@ -301,7 +301,7 @@ export async function compatibilityReport(
   }
   for (const a of scope.authority) {
     const g = def.governableDomains.find((x) => x.domain === a.domain);
-    if (!g || !g.writeModes.includes(a.writeMode)) {
+    if (!g?.writeModes.includes(a.writeMode)) {
       checks.push({
         code: 'authority_unsupported',
         outcome: 'blocking',
@@ -801,8 +801,7 @@ async function latestValidation(tx: TxContext, connectionId: string) {
     .selectFrom('integration.validation_runs')
     .selectAll()
     .where('connection_id', '=', connectionId)
-    .orderBy('finished_at', 'desc')
-    .orderBy('id', 'desc')
+    .orderBy('seq', 'desc')
     .limit(1)
     .executeTakeFirst();
 }
@@ -857,7 +856,7 @@ export async function previewActivation(
     }
     const rows = await mappingRows(tx, id);
     const last = await latestValidation(tx, id);
-    if (!last || last.status !== 'passed' || last.mapping_fingerprint !== fingerprintOf(rows)) {
+    if (last?.status !== 'passed' || last.mapping_fingerprint !== fingerprintOf(rows)) {
       throw new BusinessRuleError(
         'validation_outdated',
         'The last validation did not pass or was made before the latest mapping change. Run validation again.',
@@ -1025,8 +1024,7 @@ export async function activate(
     .selectAll()
     .where('connection_id', '=', id)
     .where('kind', '=', 'activation')
-    .orderBy('created_at', 'desc')
-    .orderBy('id', 'desc')
+    .orderBy('seq', 'desc')
     .limit(1)
     .executeTakeFirst();
   if (!preview || preview.id !== input.previewId || preview.content_hash !== input.previewHash) {
@@ -1438,8 +1436,7 @@ export async function replace(
     .select(['id', 'content_hash'])
     .where('connection_id', '=', repl.id)
     .where('kind', '=', 'activation')
-    .orderBy('created_at', 'desc')
-    .orderBy('id', 'desc')
+    .orderBy('seq', 'desc')
     .limit(1)
     .executeTakeFirst();
   if (!replPreview) throw new NotFoundError('activation_preview', repl.id);

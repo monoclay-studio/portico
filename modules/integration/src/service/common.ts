@@ -2,7 +2,6 @@
 import { type Selectable, sql, type TxContext, typed } from '@portico/db';
 import {
   actorId,
-  actorLabel,
   assertExternalEffectAllowed,
   BusinessRuleError,
   canonicalJson,
@@ -21,19 +20,12 @@ import type {
   RegisteredConnector,
   WorkflowDefinition,
 } from '../connectors/sdk';
-import type {
-  Connection,
-  ConnectionScope,
-  ConnectionState,
-  ExchangeProvenance,
-  IntegrationStatus,
-} from '../contracts';
+import type { ConnectionScope, ConnectionState, ExchangeProvenance, IntegrationStatus } from '../contracts';
 import {
   completedStep,
   type JourneyAction,
   JourneyTransitionError,
   nextState,
-  progress,
   stepOfAction,
 } from '../domain/setup-journey';
 

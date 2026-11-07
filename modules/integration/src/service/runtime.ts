@@ -62,7 +62,7 @@ export async function prepareCall(
       .select(['workflow', 'name', 'content', 'created_at'])
       .where('connection_id', '=', conn.id)
       .where('direction', '=', 'import')
-      .orderBy('created_at', 'desc')
+      .orderBy('seq', 'desc')
       .limit(50)
       .execute();
     const latest = new Map<string, { workflow: string; name: string; content: string }>();

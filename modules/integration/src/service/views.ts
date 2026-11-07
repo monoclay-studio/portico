@@ -193,8 +193,7 @@ export async function connectionView(
     .selectFrom('integration.connection_steps')
     .select(['step', 'outcome', 'occurred_at', 'actor'])
     .where('connection_id', '=', row.id)
-    .orderBy('occurred_at')
-    .orderBy('id')
+    .orderBy('seq')
     .execute();
   const cred = await db(tx)
     .selectFrom('integration.credentials')

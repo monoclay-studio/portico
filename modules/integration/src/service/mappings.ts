@@ -45,7 +45,6 @@ import {
   type ConnectionRow,
   db,
   type IntegrationDeps,
-  iso,
   loadConnection,
   parseScope,
   readsWorkflow,
@@ -638,7 +637,7 @@ export async function getMapping(
     .where('kind', '=', input.kind)
     .where('external_id', '=', input.externalId)
     .executeTakeFirst();
-  if (!row || row.status !== 'confirmed' || !row.internal_id) return null;
+  if (row?.status !== 'confirmed' || !row.internal_id) return null;
   return { internalId: row.internal_id, reviewed: row.reviewed };
 }
 

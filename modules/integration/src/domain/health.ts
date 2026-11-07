@@ -257,7 +257,8 @@ export function computeHealth(input: HealthInput): HealthResult {
       activatedAt: input.activatedAt,
     });
     const T = w.sync === 'periodic' || w.sync === 'realtime' ? w.freshnessTargetSeconds : null;
-    const stale = T !== null && ageSeconds !== null && ageSeconds > T;
+    const late = T !== null && w.lastMessageLatencySeconds !== null && w.lastMessageLatencySeconds > T;
+    const stale = (T !== null && ageSeconds !== null && ageSeconds > T) || late;
     const provenance = w.incompleteSince
       ? 'incomplete'
       : stale || (monitored && status === 'failing')

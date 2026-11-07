@@ -192,8 +192,7 @@ export async function listExchanges(
     .selectFrom('integration.exchange_log')
     .selectAll()
     .where('connection_id', '=', connectionId)
-    .orderBy('occurred_at', 'desc')
-    .orderBy('id', 'desc')
+    .orderBy('seq', 'desc')
     .limit(q.limit);
   if (q.workflow) query = query.where('workflow', '=', q.workflow);
   const rows = await query.execute();
