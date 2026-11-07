@@ -1,7 +1,7 @@
 # access — 10x brief (keys and credentials bound to the stay)
 
 Status: v1 · 2026-11-07 · Gap strategist · **Planned** (wave 2; manual key log is pilot-critical) · Spec
-`docs/specs/access.md` (ACC-R01–R24) · Parity: **none** (planned on `docs/parity-ops`) · Source key:
+`docs/specs/access.md` (ACC-R01–R24 — **prefix collision:** `accounting` also uses `ACC-Rnn`; cite as `access ACC-Rnn` until the orchestrator renames one, e.g. access → `KEY`) · Parity: **none** (planned on `docs/parity-ops`) · Source key:
 `docs/strategy/gap-plan.md` §0. **All targets are TARGETS until validated with hotel staff and a lock vendor.**
 
 ## 1. Current state (evidence)

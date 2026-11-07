@@ -35,7 +35,7 @@ party, [I] inference.
 Portico has **ten wave-1 engines on `main` at R3** (implemented and tested internally): platform, identity (wave 0),
 inventory, rates (with the tax engine), guests, reservations, finance, payments, operations and integration — roughly
 **1,000 automated tests** against real Postgres, with tenant isolation, idempotency, audit and optimistic concurrency
-proven in tests and by eight independent steward reviews. The **engines are deep and honest; the product a hotel
+proven in tests and checked by eleven independent steward reviews (`docs/orchestration/reviews/`). The **engines are deep and honest; the product a hotel
 would touch is not there yet.** Cross-module ports are still being bound (`feat/integration-step`), the staff web app
 shows the operational workspaces on **simulated** data (README-backoffice §Status), the enterprise identity branch is
 blocked by a new P0 (REV-identity-plus-2 R2-P0-1), and **nothing is R4 or above**: no sandbox-tested integration, no
@@ -375,7 +375,10 @@ customer, not a free pilot — Q3); additional country packs.
 5. **Mirror and forward handlers** (M7): each authority domain's owner binds an inbound handler and an outbound
    forward contract in integration (README-integration § Known gaps: "No owning module binds an inbound handler yet").
 6. **Fiscal document kinds** (M5): `receipt`, `deposit_receipt`, plus a `FiscalAdapter` port for e-invoicing.
-7. **Status vocabulary convergence** in the glossary: payer types, commission vocabulary (README-guests § Known gaps),
+7. **Requirement-ID prefix collision:** `docs/specs/access.md` and `docs/specs/accounting.md` both use `ACC-Rnn`
+   (`docs/specs/README.md` lists neither). Rename one before parity files cite both (suggest access → `KEY`; the
+   accounting parity file already uses `PAR-ACC-*`).
+8. **Status vocabulary convergence** in the glossary: payer types, commission vocabulary (README-guests § Known gaps),
    work-order states (README-operations § Known gaps).
 
 ---
