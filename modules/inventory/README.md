@@ -146,7 +146,7 @@ Nothing here is external, so nothing claims beyond R3.
 | `test/availability.test.ts` | Catalog, consume/release/change/transfer, holds, overbooking vs conflicts, explanations |
 | `test/hold-expiry-job.test.ts` | INV-R16: scheduled sweeper expires due holds across organizations, once, inside RLS |
 | `test/regression-review.test.ts` | Steward review CE1–CE8 as regression tests with proven interleaving (release × release, release × change, release × sweeper, convert × convert, residence sale × villa assignment, residence sale × villa sale); composite hold protection; lapsed allowances; consistency check; house totals; 2-year horizon; unit-change preview; hold policy |
-| `apps/api/test/inventory.test.ts` | HTTP: idempotent creates, ETag/If-Match, record contract, grid, explanation, block preview/place/release + history, overbooking, search/summary, isolation over HTTP, demo seed through `DEMO_SEED_STEPS` |
+| `apps/api/test/inventory.test.ts` | HTTP: idempotent creates, ETag/If-Match, record contract, grid, explanation, block preview/place/release + history, overbooking, search/summary, isolation over HTTP, demo seed through `Composition.demoSeedSteps` |
 
 Counts: 31 domain unit tests, 65 module integration tests, 6 API tests (`pnpm --filter @portico/inventory test`,
 `pnpm --filter @portico/api test`, with `PORTICO_TEST_DB_PREFIX`).
@@ -215,8 +215,8 @@ previousUnitIds, nights }` · `inventory.hold.expired` · `inventory.conflict.de
 `PlatformPort` (`getBusinessDate`, `getDataAuthority`, `assertWritable`, `getLimit`, `resolvePolicy`) — bound to the real platform
 provider in `apps/api/src/composition.ts`. The hold-expiry job resolves an organization's environment through the
 whitelisted `platform.tenant_environment()` routing function. Inventory needs nothing from other wave-1 modules, so nothing is stubbed.
-Composition also exports `inventoryService` (bind other modules' inventory ports to it) and `inventoryDemoSeed`
-(register as `{ name: 'inventory', run: inventoryDemoSeed }` in `DEMO_SEED_STEPS`).
+Composition exposes `inventoryService` (also as `services.inventory`; bind other modules' inventory ports to it),
+registers the jobs in `jobs` and the demo inventory in `demoSeedSteps` (it runs before the other modules' demo data).
 
 ## Universal record contract coverage
 

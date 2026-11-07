@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@portico/db": "workspace:*",
+    "@portico/guests": "workspace:*",
     "@portico/http": "workspace:*",
     "@portico/identity": "workspace:*",
     "@portico/inventory": "workspace:*",

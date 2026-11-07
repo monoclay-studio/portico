@@ -1,7 +1,6 @@
 import { newId } from '@portico/kernel';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { inventoryDemoSeed } from '../src';
-import { DEMO_SEED_STEPS, seedDemo } from '../src/seed/demo';
+import { seedDemo } from '../src/seed/demo';
 import { type ApiHarness, signedInOrg, startApi } from './helpers';
 
 let h: ApiHarness;
@@ -297,9 +296,8 @@ describe('inventory HTTP API', () => {
     expect(grid.json().cells).toEqual([]);
   });
 
-  it('seeds realistic Maldives demo inventory through the demo seeder step', async () => {
-    DEMO_SEED_STEPS.push({ name: 'inventory', run: inventoryDemoSeed });
-    try {
+  it('seeds realistic Maldives demo inventory through the registered demo seed step', async () => {
+    {
       const orgs = await seedDemo(h.t.db, { businessDate: '2026-11-07' });
       const guesthouse = orgs[0];
       const group = orgs[1];
@@ -333,8 +331,7 @@ describe('inventory HTTP API', () => {
       const cells = grid.json().cells as Array<{ capacity: number; outOfOrder: number; composite: unknown }>;
       expect(cells.reduce((s, c) => s + (c.composite ? 0 : c.capacity), 0)).toBe(120);
       expect(cells.reduce((s, c) => s + c.outOfOrder, 0)).toBe(1);
-    } finally {
-      DEMO_SEED_STEPS.pop();
+      expect(grid.json().houseTotals[0]).toMatchObject({ capacity: 120, outOfOrder: 1 });
     }
   });
 });
