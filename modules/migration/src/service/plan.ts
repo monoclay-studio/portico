@@ -21,6 +21,7 @@ import type {
   UnitRecord,
   UnitTypeRecord,
 } from '../domain/records';
+import { MASKED_FILE_THRESHOLD } from '../domain/sensitive';
 import { P } from '../manifest';
 import { actorKey, assertOpen, db, type Job, loadJobFor, type MigrationDeps, saveJob } from './context';
 import { loadExtracts, materialize, rematerialize } from './extract';
@@ -241,6 +242,24 @@ export async function runValidateStep(
       else warnings++;
     }
   }
+  // A largely masked export (OPERA over insecure delivery, Little Hotelier after 180 days) is refused as a whole.
+  const people = records.filter((r) => r.dataClass === 'guest' || r.dataClass === 'reservation');
+  const masked = people.filter((r) => r.problems.some((p) => p.code === 'masked_identity')).length;
+  if (people.length > 0 && masked / people.length > MASKED_FILE_THRESHOLD) {
+    present.add('guest::masked_export');
+    await raiseException(tx, job, {
+      dataClass: 'guest',
+      key: null,
+      code: 'masked_export',
+      severity: 'blocking',
+      problem: `${masked} of ${people.length} guest and reservation records have masked names. This export is masked; masked data is never imported as truth.`,
+      impact: 'The masked records are not imported, and the cutover waits.',
+      proposedResolution:
+        'Re-export with unmasked personal data over a secure delivery (SFTP or HTTPS; for OPERA, the secure export delivery) and upload it again.',
+      ownerRole: 'Hotel IT or general manager',
+    });
+    blocking++;
+  }
   // Close record problems that disappeared (never reconciliation, provider or decision exceptions).
   await closeCorrected(tx, job, present, { only: problemCodesOf(records, findings) });
   return { blocking, warnings };
@@ -290,4 +309,5 @@ const KNOWN_RECORD_CODES = [
   'in_house_without_balance',
   'possible_duplicate_profile',
   'unit_type_derived',
+  'masked_export',
 ];
