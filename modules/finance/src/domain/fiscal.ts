@@ -1,4 +1,4 @@
-import { canonicalJson, sha256Hex } from '@portico/kernel';
+import { canonicalJson, Decimal, sha256Hex } from '@portico/kernel';
 
 /** Hash at the start of every legal entity's fiscal chain. */
 export const GENESIS_HASH = '0'.repeat(64);
@@ -65,4 +65,26 @@ export function findNumberingGaps(numbers: readonly number[]): number[] {
   const gaps: number[] = [];
   for (let i = 1; i <= max; i++) if (!set.has(i)) gaps.push(i);
   return gaps;
+}
+
+/**
+ * Statutory retention end for a financial record: the end of the tax year (calendar year) of its business date
+ * plus `years` (Maldives Tax Administration Act: at least 5 years). Legal holds extend it.
+ */
+export function retainUntil(businessDate: string, years = 5): string {
+  const year = Number(businessDate.slice(0, 4));
+  return `${year + years}-12-31`;
+}
+
+/** |rate − reference| / reference ≤ tolerancePercent / 100 (e.g. MIRA: within ±2% of the MMA rate). */
+export function withinTolerance(rate: string, reference: string, tolerancePercent: string): boolean {
+  const r = new Decimal(rate);
+  const ref = new Decimal(reference);
+  if (ref.lte(0)) return false;
+  return r.minus(ref).abs().div(ref).mul(100).lte(tolerancePercent);
+}
+
+export function deviationPercent(rate: string, reference: string): string {
+  const ref = new Decimal(reference);
+  return new Decimal(rate).minus(ref).div(ref).mul(100).toDecimalPlaces(4).toString();
 }

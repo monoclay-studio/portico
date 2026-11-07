@@ -38,7 +38,7 @@ create table finance.charge_codes (
   name               text not null,
   -- The group is immutable after creation: billing-rule overlap analysis depends on it.
   charge_group       text not null check (charge_group in ('room', 'package', 'food', 'beverage', 'spa', 'activity',
-                       'transfer', 'retail', 'minibar', 'fee', 'penalty', 'misc', 'allowance')),
+                       'transfer', 'retail', 'minibar', 'fee', 'penalty', 'misc', 'allowance', 'gratuity')),
   revenue_account_id uuid,
   tax_group          text,            -- consumed by the tax engine (rates); null = never taxed
   department         text,
@@ -201,6 +201,12 @@ create table finance.postings (
   tax_rule_id         text,
   tax_rule_version_id text,
   tax_name            text,
+  tax_kind            text check (tax_kind in ('tax', 'fee', 'service_charge')),
+  -- Units the tax was computed on (e.g. guest-days for Green Tax), exempt units and rate category (reporting).
+  tax_units           numeric(18, 4),
+  tax_exempt_units    numeric(18, 4),
+  tax_rate_category   text,
+  tax_rate            text,
   quantity            numeric(18, 4),
   unit_price_minor    bigint,
   description         text not null,
@@ -377,6 +383,8 @@ create table finance.deposit_accounts (
   booking_id       uuid not null,
   currency         char(3) not null,
   balance_minor    bigint not null default 0 check (balance_minor >= 0),
+  -- Tax already declared on the remaining balance (time of supply = receipt of the deposit), per tax account key.
+  declared_tax     jsonb not null default '{}',
   version          int not null default 1,
   unique (tenant_id, booking_id)
 );
@@ -394,6 +402,8 @@ create table finance.deposit_movements (
   folio_id         uuid references finance.folios(id),
   payment_ref_type text,
   payment_ref_id   text,
+  -- Tax declared (+) or released (−) by this movement: [{ accountKey, ruleId, ruleVersionId, name, rate, amountMinor }]
+  taxes            jsonb not null default '[]',
   business_date    date not null,
   created_at       timestamptz not null default clock_timestamp()
 );
@@ -539,6 +549,8 @@ create table finance.fiscal_documents (
   previous_hash        text not null,
   hash                 text not null,
   issued_by            text not null,
+  -- Retention: at least 5 years after the end of the tax year (Maldives Tax Administration Act); legal holds extend.
+  retain_until         date not null,
   created_at           timestamptz not null default clock_timestamp(),
   unique (series_id, number),
   unique (tenant_id, idempotency_key),
@@ -556,6 +568,22 @@ create table finance.posting_document_locks (
 );
 create index posting_locks_document_idx on finance.posting_document_locks (document_id);
 select core.enable_tenant_isolation('finance.posting_document_locks');
+
+-- Legal holds extend retention of a legal entity's financial records beyond the statutory minimum.
+create table finance.legal_holds (
+  id               uuid primary key,
+  tenant_id        uuid not null,
+  legal_entity_id  uuid not null,
+  reason           text not null,
+  placed_by        text not null,
+  placed_at        timestamptz not null,
+  released_by      text,
+  released_at      timestamptz,
+  release_reason   text,
+  version          int not null default 1
+);
+create index legal_holds_le_idx on finance.legal_holds (tenant_id, legal_entity_id) where released_at is null;
+select core.enable_tenant_isolation('finance.legal_holds');
 
 ---------------------------------------------------------------------------------------------------------
 -- Cash movements per cashier session (append-only)
@@ -643,7 +671,7 @@ select core.make_append_only('finance.fx_rates');
 -- Mutable aggregates must never be deleted (only state transitions).
 revoke delete on finance.folios, finance.accounts, finance.charge_codes, finance.deposit_accounts,
   finance.allowance_instances, finance.receivables_accounts, finance.fiscal_series, finance.fiscal_chains,
-  finance.cashier_sessions, finance.billing_rules, finance.exceptions from portico_app;
+  finance.cashier_sessions, finance.billing_rules, finance.exceptions, finance.legal_holds from portico_app;
 -- Series numbering may only move forward.
 create or replace function finance.series_forward_only() returns trigger
   language plpgsql as $$

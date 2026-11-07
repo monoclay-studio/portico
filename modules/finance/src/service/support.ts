@@ -192,6 +192,11 @@ export interface PostingDraft {
   taxRuleId?: string | null;
   taxRuleVersionId?: string | null;
   taxName?: string | null;
+  taxKind?: 'tax' | 'fee' | 'service_charge' | null;
+  taxUnits?: number | null;
+  taxExemptUnits?: number | null;
+  taxRateCategory?: string | null;
+  taxRate?: string | null;
   quantity?: number | null;
   unitPriceMinor?: number | null;
   serviceDate?: LocalDate | null;
@@ -319,6 +324,12 @@ export async function writeEntryBody(
         tax_rule_id: p.taxRuleId ?? null,
         tax_rule_version_id: p.taxRuleVersionId ?? null,
         tax_name: p.taxName ?? null,
+        tax_kind: p.taxKind ?? null,
+        tax_units: p.taxUnits === undefined || p.taxUnits === null ? null : String(p.taxUnits),
+        tax_exempt_units:
+          p.taxExemptUnits === undefined || p.taxExemptUnits === null ? null : String(p.taxExemptUnits),
+        tax_rate_category: p.taxRateCategory ?? null,
+        tax_rate: p.taxRate ?? null,
         quantity: p.quantity === undefined || p.quantity === null ? null : String(p.quantity),
         unit_price_minor: p.unitPriceMinor ?? null,
         description: p.description,

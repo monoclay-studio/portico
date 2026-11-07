@@ -143,6 +143,11 @@ export interface PostingsTable {
   tax_rule_id: string | null;
   tax_rule_version_id: string | null;
   tax_name: string | null;
+  tax_kind: string | null;
+  tax_units: string | null;
+  tax_exempt_units: string | null;
+  tax_rate_category: string | null;
+  tax_rate: string | null;
   quantity: string | null;
   unit_price_minor: number | null;
   description: string;
@@ -211,6 +216,7 @@ export interface DepositAccountsTable {
   booking_id: string;
   currency: string;
   balance_minor: Generated<number>;
+  declared_tax: Generated<unknown>;
   version: Generated<number>;
 }
 
@@ -226,6 +232,7 @@ export interface DepositMovementsTable {
   folio_id: string | null;
   payment_ref_type: string | null;
   payment_ref_id: string | null;
+  taxes: Generated<unknown>;
   business_date: string;
   created_at: Ts;
 }
@@ -345,7 +352,21 @@ export interface FiscalDocumentsTable {
   previous_hash: string;
   hash: string;
   issued_by: string;
+  retain_until: string;
   created_at: Ts;
+}
+
+export interface LegalHoldsTable {
+  id: string;
+  tenant_id: string;
+  legal_entity_id: string;
+  reason: string;
+  placed_by: string;
+  placed_at: Date;
+  released_by: string | null;
+  released_at: Date | null;
+  release_reason: string | null;
+  version: Generated<number>;
 }
 
 export interface PostingDocumentLocksTable {
@@ -427,4 +448,5 @@ export interface FinanceDB {
   'finance.cash_movements': CashMovementsTable;
   'finance.opening_balance_imports': OpeningBalanceImportsTable;
   'finance.exceptions': ExceptionsTable;
+  'finance.legal_holds': LegalHoldsTable;
 }

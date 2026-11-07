@@ -62,6 +62,12 @@ export interface TaxLine {
   rate?: string;
   base: Money;
   amount: Money;
+  /** Units the amount was computed on (e.g. guest-days for a per-person-per-day levy). */
+  units?: number;
+  /** Units exempted (e.g. children under 2 for Green Tax). */
+  exemptUnits?: number;
+  /** Reporting category of the rate (e.g. 'mv.green_tax.12usd'). */
+  rateCategory?: string;
 }
 
 export interface TaxComputation {

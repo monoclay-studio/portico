@@ -24,6 +24,7 @@ export const chargeGroup = z.enum([
   'penalty',
   'misc',
   'allowance',
+  'gratuity',
 ]);
 export const folioOwnerType = z.enum(['stay', 'booking', 'group', 'company', 'house']);
 export const ruleOwnerType = z.enum(['stay', 'booking', 'group']);
@@ -486,11 +487,11 @@ export const receivablesPaymentInput = z.object({
 });
 export const agingReport = z.object({
   asOf: z.string(),
-  currency: z.string(),
   accounts: z.array(
     z.object({
       accountId: uuid,
       name: z.string(),
+      currency: z.string(),
       buckets: z.object({
         current: z.number().int(),
         d1_30: z.number().int(),

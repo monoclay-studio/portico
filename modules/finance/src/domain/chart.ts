@@ -24,6 +24,9 @@ export const DEFAULT_CHART: readonly AccountTemplate[] = [
   { code: '1350', name: 'Payout clearing (in transit to bank)', type: 'asset', systemKey: 'payout_clearing' },
   { code: '1360', name: 'Other payment clearing', type: 'asset', systemKey: 'payment_clearing' },
   { code: '1900', name: 'Currency position (FX trading)', type: 'asset', systemKey: 'fx_position' },
+  // Tax already declared on deposits at receipt (time of supply); released when the deposit is applied,
+  // refunded or forfeited so that no supply is taxed twice.
+  { code: '1950', name: 'Tax declared on deposits', type: 'asset', systemKey: 'deposit_tax_declared' },
   // Liabilities
   { code: '2100', name: 'Deposits held (advance deposits)', type: 'liability', systemKey: 'deposits_held' },
   { code: '2200', name: 'TGST payable', type: 'liability', systemKey: 'tax:tgst' },
@@ -32,6 +35,7 @@ export const DEFAULT_CHART: readonly AccountTemplate[] = [
   { code: '2290', name: 'Taxes payable (unmapped — review)', type: 'liability', systemKey: 'tax:unmapped' },
   { code: '2300', name: 'Allowance clearing', type: 'liability', systemKey: 'allowance_clearing' },
   { code: '2400', name: 'Commissions payable', type: 'liability', systemKey: 'commissions_payable' },
+  { code: '2450', name: 'Gratuities payable to staff (outside the tax base)', type: 'liability', systemKey: 'gratuities_payable' },
   { code: '2900', name: 'Migration suspense', type: 'liability', systemKey: 'migration_suspense' },
   { code: '2950', name: 'Suspense', type: 'liability', systemKey: 'suspense' },
   // Equity
@@ -60,7 +64,9 @@ export const DEFAULT_CHART: readonly AccountTemplate[] = [
 
 /** Default revenue account for a charge group (allowance-group codes credit allowance clearing, not revenue). */
 export function revenueKeyForGroup(group: ChargeGroup): string {
-  return group === 'allowance' ? 'allowance_clearing' : `revenue:${group}`;
+  if (group === 'allowance') return 'allowance_clearing';
+  if (group === 'gratuity') return 'gratuities_payable';
+  return `revenue:${group}`;
 }
 
 /** Ledger account (system key) that receives money for a payment method. Card clearing is per provider. */

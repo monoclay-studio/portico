@@ -14,6 +14,7 @@ export const CHARGE_GROUPS = [
   'penalty',
   'misc',
   'allowance',
+  'gratuity',
 ] as const;
 export type ChargeGroup = (typeof CHARGE_GROUPS)[number];
 
