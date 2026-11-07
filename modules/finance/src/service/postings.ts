@@ -1,6 +1,7 @@
 import { type Selectable, sql, type TxContext } from '@portico/db';
 import {
   BusinessRuleError,
+  ConflictError,
   convert,
   type EntityRef,
   type LocalDate,
@@ -13,7 +14,7 @@ import {
 import type { EntryResult, PostChargeResult, TransferInput } from '../contracts';
 import { isEligible, usageFor } from '../domain/allowance';
 import { revenueKeyForGroup, taxAccountKey } from '../domain/chart';
-import type { LineDraft } from '../domain/ledger';
+import type { LineDraft, SubLedgerType } from '../domain/ledger';
 import { capPeriodKey, type RoutingRule, routeCharge } from '../domain/routing';
 import { proportional, splitComponents } from '../domain/split';
 import type { ChargeGroup, PaymentMethodKind, RuleCap, RuleSelector } from '../domain/types';
@@ -29,6 +30,7 @@ import {
   type FolioRow,
   findEntryByKey,
   folioBalance,
+  isUniqueViolation,
   loadFolio,
   lockFolios,
   ownerDeparture,
@@ -667,20 +669,27 @@ export async function postCharge(
   }
 
   const allowanceTotal = consumption.reduce((s, c) => s + c.amount, 0);
-  await tx.audit({
-    action: 'finance.posting.charge',
-    target: { type: 'journal_entry', id: claim.entryId },
-    propertyId: input.propertyId,
-    ...(input.reason ? { reason: input.reason } : {}),
-    after: {
-      chargeCode: code.code,
-      amount: input.amount,
-      gross: money(gross, currency),
-      folioIds,
-      allocations,
-      postDeparture: !!departure,
-    },
-  });
+  // One audit row per folio so each folio's history shows its charges.
+  for (const folioId of folioIds) {
+    await tx.audit({
+      action: 'finance.posting.charge',
+      target: { type: 'folio', id: folioId },
+      propertyId: input.propertyId,
+      ...(input.reason ? { reason: input.reason } : {}),
+      after: {
+        entryId: claim.entryId,
+        chargeCode: code.code,
+        description: input.description,
+        amount: input.amount,
+        onThisFolio: money(
+          postings.filter((p) => p.folioId === folioId).reduce((s, p) => s + p.amountMinor, 0),
+          currency,
+        ),
+        allocations,
+        postDeparture: !!departure,
+      },
+    });
+  }
   await tx.emit({
     type: 'finance.posting.created',
     propertyId: input.propertyId,
@@ -1233,16 +1242,23 @@ export async function transferPostings(
     postings,
     lines,
   );
-  await tx.audit({
-    action: 'finance.posting.transfer',
-    target: { type: 'folio', id: from.id },
-    propertyId: from.property_id,
-    reason: input.reason,
-    after: {
-      toFolioId: to.id,
-      pairs: pairs.map((p) => ({ amount: p.amount, postingId: p.original?.id ?? null })),
-    },
-  });
+  for (const [folio, other, direction] of [
+    [from, to, 'out'],
+    [to, from, 'in'],
+  ] as const) {
+    await tx.audit({
+      action: 'finance.posting.transfer',
+      target: { type: 'folio', id: folio.id },
+      propertyId: from.property_id,
+      reason: input.reason,
+      after: {
+        entryId: claim.entryId,
+        direction,
+        otherFolioId: other.id,
+        pairs: pairs.map((p) => ({ amount: p.amount, postingId: p.original?.id ?? null })),
+      },
+    });
+  }
   await tx.emit({
     type: 'finance.postings.transferred',
     propertyId: from.property_id,
@@ -1468,11 +1484,12 @@ export async function adjustPosting(
   );
   await tx.audit({
     action: 'finance.posting.correct',
-    target: { type: 'posting', id: p.id },
+    target: { type: 'folio', id: p.folio_id },
     propertyId: p.property_id,
     reason: `${input.reasonCode}: ${input.note}`,
     before: { amount: total },
     after: {
+      postingId: p.id,
       adjustedBy: -want,
       entryId: claim.entryId,
       restatementOf: p.business_date !== businessDate ? p.business_date : null,
@@ -1524,4 +1541,185 @@ export async function collectPayment(
     );
   }
   return { entries, balance: money(await folioBalance(tx, input.folioId), f.currency) };
+}
+
+/**
+ * Reverse a whole charge entry (e.g. posted to the wrong stay): an exact mirror of every journal line and
+ * posting, linked with `reverses_entry_id` (at most once per entry, enforced by a unique index). Refused when
+ * any of its postings was invoiced, moved or already partly corrected — correct the remainder instead.
+ */
+export async function reverseEntry(
+  tx: TxContext,
+  deps: Deps,
+  input: { entryId: string; reasonCode: string; note: string; idempotencyKey: string },
+): Promise<EntryResult> {
+  const entry = await db(tx)
+    .selectFrom('finance.journal_entries')
+    .selectAll()
+    .where('id', '=', input.entryId)
+    .executeTakeFirst();
+  if (!entry || !entry.property_id) throw new ValidationError('entry_not_found', 'The journal entry was not found.');
+  requirePermission(tx, 'finance.posting.correct', { propertyId: entry.property_id });
+  if (entry.entry_type !== 'charge') {
+    throw new BusinessRuleError(
+      'entry_not_reversible',
+      'Only charge entries can be reversed here. Payments are corrected by refunds; transfers by a transfer back.',
+    );
+  }
+  const { idempotencyKey, ...rest } = input;
+  const hash = requestHash({ op: 'reverse', ...rest });
+  const prior = await findEntryByKey(tx, idempotencyKey, hash);
+  if (prior) return entryResult(tx, prior, true);
+  await deps.ports.platform.assertWritable(tx, entry.property_id, 'charges');
+  const already = await db(tx)
+    .selectFrom('finance.journal_entries')
+    .select('id')
+    .where('reverses_entry_id', '=', entry.id)
+    .executeTakeFirst();
+  if (already) throw new ConflictError('entry_already_reversed', 'This entry was already reversed.', { reversalEntryId: already.id });
+  const postings = await db(tx)
+    .selectFrom('finance.postings as p')
+    .leftJoin('finance.posting_document_locks as l', 'l.posting_id', 'p.id')
+    .selectAll('p')
+    .select('l.document_id')
+    .where('p.entry_id', '=', entry.id)
+    .orderBy('p.created_at')
+    .orderBy('p.id')
+    .execute();
+  if (postings.some((p) => p.document_id)) {
+    throw new BusinessRuleError('posting_invoiced', 'Part of this entry is on an issued invoice. Issue a credit note instead.');
+  }
+  const touched = await db(tx)
+    .selectFrom('finance.postings')
+    .select('id')
+    .where(
+      'corrects_posting_id',
+      'in',
+      postings.map((p) => p.id),
+    )
+    .executeTakeFirst();
+  if (touched) {
+    throw new BusinessRuleError(
+      'entry_partly_corrected',
+      'Part of this entry was already corrected or moved to another folio. Correct the remaining amount with an adjustment instead.',
+    );
+  }
+  const businessDate = await deps.ports.platform.getBusinessDate(tx, entry.property_id);
+  let claim: Awaited<ReturnType<typeof claimEntry>>;
+  try {
+    claim = await claimEntry(tx, {
+      legalEntityId: entry.legal_entity_id,
+      propertyId: entry.property_id,
+      entryType: 'adjustment',
+      businessDate,
+      idempotencyKey,
+      requestHash: hash,
+      reversesEntryId: entry.id,
+      correctsEntryId: entry.id,
+      relatesToBusinessDate: entry.business_date !== businessDate ? entry.business_date : null,
+      sameDayCorrection: entry.business_date === businessDate,
+      reasonCode: input.reasonCode,
+      description: `Reversal of "${entry.description}": ${input.note}`,
+    });
+  } catch (err) {
+    if (isUniqueViolation(err)) throw new ConflictError('entry_already_reversed', 'This entry was already reversed.');
+    throw err;
+  }
+  if (!claim.claimed) return entryResult(tx, claim.entryId, true);
+  const locked = await lockFolios(
+    tx,
+    postings.map((p) => p.folio_id),
+  );
+  for (const f of locked.values()) {
+    if (f.status === 'closed') {
+      throw new BusinessRuleError('folio_not_open', 'A folio of this entry is closed. Corrections go through a credit note.');
+    }
+    await reopenInPlace(tx, f, 'correction');
+  }
+  for (const p of postings.filter((x) => x.kind === 'allowance_usage' && x.allowance_instance_id)) {
+    const inst = await db(tx)
+      .selectFrom('finance.allowance_instances')
+      .selectAll()
+      .where('id', '=', p.allowance_instance_id as string)
+      .forUpdate()
+      .executeTakeFirstOrThrow();
+    if (inst.status === 'closed' || inst.status === 'cancelled') {
+      throw new BusinessRuleError('allowance_period_closed', `The allowance "${inst.label}" used by this charge is already closed.`);
+    }
+    await db(tx)
+      .updateTable('finance.allowance_instances')
+      .set({ used_minor: Number(inst.used_minor) + Number(p.amount_minor), status: 'active', version: sql`version + 1` })
+      .where('id', '=', inst.id)
+      .execute();
+  }
+  const index = new Map(postings.map((p, i) => [p.id, i]));
+  const drafts: PostingDraft[] = postings.map((p) => ({
+    folioId: p.folio_id,
+    kind: 'adjustment',
+    amountMinor: -Number(p.amount_minor),
+    currency: p.currency,
+    description: `Reversal: ${p.description} (${input.reasonCode})`,
+    chargeCodeId: p.charge_code_id,
+    chargeCode: p.charge_code,
+    taxRuleId: p.tax_rule_id,
+    taxRuleVersionId: p.tax_rule_version_id,
+    taxName: p.tax_name,
+    taxKind: (p.tax_kind as PostingDraft['taxKind']) ?? null,
+    taxUnits: p.tax_units === null ? null : -Number(p.tax_units),
+    taxExemptUnits: p.tax_exempt_units === null ? null : -Number(p.tax_exempt_units),
+    taxRateCategory: p.tax_rate_category,
+    taxRate: p.tax_rate,
+    serviceDate: p.service_date,
+    revenueDate: p.revenue_date,
+    correctsPostingId: p.id,
+    billingRuleId: p.billing_rule_id,
+    allowanceInstanceId: p.allowance_instance_id,
+    counterAccountId: p.counter_account_id,
+    fxRateId: p.fx_rate_id,
+    postDeparture: p.post_departure,
+  }));
+  const original = await db(tx)
+    .selectFrom('finance.journal_lines')
+    .selectAll()
+    .where('entry_id', '=', entry.id)
+    .orderBy('line_no')
+    .execute();
+  const lines: Array<LineDraft & { accountId?: string }> = original.map((l) => ({
+    accountKey: '',
+    accountId: l.account_id,
+    amountMinor: -Number(l.amount_minor),
+    currency: l.currency,
+    functionalAmountMinor: -Number(l.functional_amount_minor),
+    fxRateId: l.fx_rate_id,
+    subLedger: l.sub_ledger_type ? { type: l.sub_ledger_type as SubLedgerType, id: l.sub_ledger_id as string } : null,
+    ...(l.posting_id && index.has(l.posting_id) ? { postingIndex: index.get(l.posting_id) as number } : {}),
+    chargeCode: l.charge_code,
+    serviceDate: l.service_date,
+    revenueDate: l.revenue_date,
+    memo: `reversal${l.memo ? `: ${l.memo}` : ''}`,
+  }));
+  const postingIds = await writeEntryBody(
+    tx,
+    deps,
+    claim.entryId,
+    { legalEntityId: entry.legal_entity_id, propertyId: entry.property_id, businessDate, description: 'Reversal' },
+    drafts,
+    lines,
+  );
+  for (const folioId of [...new Set(postings.map((p) => p.folio_id))]) {
+    await tx.audit({
+      action: 'finance.posting.reverse',
+      target: { type: 'folio', id: folioId },
+      propertyId: entry.property_id,
+      reason: `${input.reasonCode}: ${input.note}`,
+      after: { reversedEntryId: entry.id, entryId: claim.entryId },
+    });
+  }
+  await tx.emit({
+    type: 'finance.posting.adjusted',
+    propertyId: entry.property_id,
+    aggregate: { type: 'journal_entry', id: claim.entryId },
+    payload: { entryId: claim.entryId, reversesEntryId: entry.id, reasonCode: input.reasonCode, relatesToBusinessDate: entry.business_date },
+  });
+  return { entryId: claim.entryId, postingIds, replayed: false };
 }
