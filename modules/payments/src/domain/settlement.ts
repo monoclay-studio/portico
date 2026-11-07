@@ -140,7 +140,13 @@ export function matchSettlement(input: {
     );
     if (refCandidates.length > 0) {
       if (refCandidates.every((c) => c.alreadyVerified)) {
-        results.push({ lineNo: line.lineNo, status: 'duplicate', basis: 'reference', itemId: null, itemKind: null });
+        results.push({
+          lineNo: line.lineNo,
+          status: 'duplicate',
+          basis: 'reference',
+          itemId: null,
+          itemKind: null,
+        });
         issues.push({
           kind: 'duplicate_in_statement',
           lineNo: line.lineNo,

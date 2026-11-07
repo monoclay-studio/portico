@@ -54,7 +54,13 @@ export interface SimulatorTestToken {
  * `sim_*` are Portico simulator tokens for scenarios Stripe test cards cannot express (timeouts, funding delay).
  */
 export const SIMULATOR_TEST_TOKENS: readonly SimulatorTestToken[] = [
-  { token: 'pm_card_visa', brand: 'visa', last4: '4242', scenario: { kind: 'approve' }, description: 'Approves.' },
+  {
+    token: 'pm_card_visa',
+    brand: 'visa',
+    last4: '4242',
+    scenario: { kind: 'approve' },
+    description: 'Approves.',
+  },
   {
     token: 'pm_card_mastercard',
     brand: 'mastercard',
@@ -62,7 +68,13 @@ export const SIMULATOR_TEST_TOKENS: readonly SimulatorTestToken[] = [
     scenario: { kind: 'approve' },
     description: 'Approves.',
   },
-  { token: 'pm_card_amex', brand: 'amex', last4: '8431', scenario: { kind: 'approve' }, description: 'Approves.' },
+  {
+    token: 'pm_card_amex',
+    brand: 'amex',
+    last4: '8431',
+    scenario: { kind: 'approve' },
+    description: 'Approves.',
+  },
   {
     token: 'pm_card_visa_chargeDeclined',
     brand: 'visa',
@@ -146,7 +158,9 @@ export function scenarioForToken(token: string): SimScenario | undefined {
 }
 
 /** Account-level overrides (tests / demo presenter). Parsed from SimulatorControls.scenarioOverrides. */
-type Overrides = Partial<Record<'authorize' | 'charge' | 'capture' | 'refund' | 'increment' | 'void', string>>;
+type Overrides = Partial<
+  Record<'authorize' | 'charge' | 'capture' | 'refund' | 'increment' | 'void', string>
+>;
 
 function parseScenario(s: string | undefined): SimScenario | undefined {
   if (!s) return undefined;
@@ -207,7 +221,11 @@ export class SimulatorProvider implements PaymentProvider {
     return typed<PaymentsDB>(tx.db);
   }
 
-  private async find(tx: TxContext, account: ProviderAccount, key: string): Promise<StoredObject | undefined> {
+  private async find(
+    tx: TxContext,
+    account: ProviderAccount,
+    key: string,
+  ): Promise<StoredObject | undefined> {
     return this.db(tx)
       .selectFrom('payments.simulator_objects')
       .select(['object_id', 'kind', 'status', 'currency', 'amount_minor', 'data'])
@@ -286,14 +304,17 @@ export class SimulatorProvider implements PaymentProvider {
   /** Outage control: returns an outcome when the simulated provider is down, else null. */
   private outage(account: ProviderAccount): ProviderOutcome | null {
     const o = account.simulatorControls.outage;
-    if (o === 'refuse') return { kind: 'unavailable', reason: 'simulated provider outage: connection refused' };
+    if (o === 'refuse')
+      return { kind: 'unavailable', reason: 'simulated provider outage: connection refused' };
     if (o === 'timeout') return { kind: 'unknown', reason: 'simulated provider outage: request timed out' };
     return null;
   }
 
   private scenarioFor(account: ProviderAccount, kind: keyof Overrides, token?: string): SimScenario {
     const overrides = (account.simulatorControls as { scenarioOverrides?: Overrides }).scenarioOverrides;
-    return parseScenario(overrides?.[kind]) ?? (token ? scenarioForToken(token) : undefined) ?? { kind: 'approve' };
+    return (
+      parseScenario(overrides?.[kind]) ?? (token ? scenarioForToken(token) : undefined) ?? { kind: 'approve' }
+    );
   }
 
   private replay(existing: StoredObject): ProviderOutcome {
@@ -338,12 +359,24 @@ export class SimulatorProvider implements PaymentProvider {
       if (scenario.kind === 'vcc_funding_delay') {
         const { rows } = await sql<{ n: number }>`
           select count(*)::int as n from payments.simulator_objects
-           where account_id = ${account.id} and kind = 'pi' and data->>'token' = ${call.methodToken}`.execute(tx.db);
-        scenario = (rows[0]?.n ?? 0) < scenario.failures ? { kind: 'decline', code: 'vcc_not_funded' } : { kind: 'approve' };
+           where account_id = ${account.id} and kind = 'pi' and data->>'token' = ${call.methodToken}`.execute(
+          tx.db,
+        );
+        scenario =
+          (rows[0]?.n ?? 0) < scenario.failures
+            ? { kind: 'decline', code: 'vcc_not_funded' }
+            : { kind: 'approve' };
       }
-      const approve = scenario.kind === 'approve' || scenario.kind === 'dispute' || scenario.kind === 'timeout_then_succeeded';
+      const approve =
+        scenario.kind === 'approve' ||
+        scenario.kind === 'dispute' ||
+        scenario.kind === 'timeout_then_succeeded';
       const declineCode =
-        scenario.kind === 'decline' ? scenario.code : scenario.kind === 'timeout_then_failed' ? scenario.code : null;
+        scenario.kind === 'decline'
+          ? scenario.code
+          : scenario.kind === 'timeout_then_failed'
+            ? scenario.code
+            : null;
       const amount = call.amount.amountMinor;
       const pi: Record<string, unknown> = {
         token: call.methodToken,
@@ -381,7 +414,12 @@ export class SimulatorProvider implements PaymentProvider {
           ? 'payment_intent.amount_capturable_updated'
           : 'payment_intent.succeeded'
         : 'payment_intent.payment_failed';
-      await this.queueEvent(tx, account, type, this.paymentObject(piId, pi, call.amount.currency, call.operationId));
+      await this.queueEvent(
+        tx,
+        account,
+        type,
+        this.paymentObject(piId, pi, call.amount.currency, call.operationId),
+      );
       if (scenario.kind === 'dispute' && approve) {
         await this.queueEvent(tx, account, 'charge.dispute.created', {
           kind: 'dispute',
@@ -420,7 +458,12 @@ export class SimulatorProvider implements PaymentProvider {
     act: (
       pi: Record<string, unknown>,
       objectId: string,
-    ) => { outcome: ProviderOutcome; pi?: Record<string, unknown>; eventType?: string; extra?: WebhookObject },
+    ) => {
+      outcome: ProviderOutcome;
+      pi?: Record<string, unknown>;
+      eventType?: string;
+      extra?: WebhookObject;
+    },
   ): Promise<ProviderOutcome> {
     const down = this.outage(account);
     if (down) return down;
@@ -476,10 +519,16 @@ export class SimulatorProvider implements PaymentProvider {
   ): Promise<ProviderOutcome> {
     return this.onIntent(account, call, 'increment', call.providerRef, (pi) => {
       if (pi.state !== 'authorized') {
-        return { outcome: { kind: 'failed', code: 'invalid_state', message: 'The authorization is no longer open.' } };
+        return {
+          outcome: { kind: 'failed', code: 'invalid_state', message: 'The authorization is no longer open.' },
+        };
       }
       const captured = Number(pi.received ?? 0);
-      const next = { ...pi, amount: call.newTotal.amountMinor, capturable: call.newTotal.amountMinor - captured };
+      const next = {
+        ...pi,
+        amount: call.newTotal.amountMinor,
+        capturable: call.newTotal.amountMinor - captured,
+      };
       return {
         outcome: {
           kind: 'succeeded',
@@ -531,11 +580,18 @@ export class SimulatorProvider implements PaymentProvider {
   void(account: ProviderAccount, call: CallBase & { providerRef: string }): Promise<ProviderOutcome> {
     return this.onIntent(account, call, 'void', call.providerRef, (pi) => {
       if (pi.state !== 'authorized') {
-        return { outcome: { kind: 'failed', code: 'invalid_state', message: 'The authorization is no longer open.' } };
+        return {
+          outcome: { kind: 'failed', code: 'invalid_state', message: 'The authorization is no longer open.' },
+        };
       }
       const next = { ...pi, capturable: 0, state: Number(pi.received ?? 0) > 0 ? 'succeeded' : 'canceled' };
       return {
-        outcome: { kind: 'succeeded', providerRef: call.providerRef, amountMinor: 0, remainingAuthorizedMinor: 0 },
+        outcome: {
+          kind: 'succeeded',
+          providerRef: call.providerRef,
+          amountMinor: 0,
+          remainingAuthorizedMinor: 0,
+        },
         pi: next,
         eventType: 'payment_intent.canceled',
       };
@@ -627,7 +683,11 @@ export class SimulatorProvider implements PaymentProvider {
     } catch {
       throw new WebhookSignatureError('Body is not JSON.');
     }
-    if (typeof parsed.id !== 'string' || typeof parsed.type !== 'string' || typeof parsed.account !== 'string') {
+    if (
+      typeof parsed.id !== 'string' ||
+      typeof parsed.type !== 'string' ||
+      typeof parsed.account !== 'string'
+    ) {
       throw new WebhookSignatureError('Malformed simulator event.');
     }
     const object = reviveObject(parsed.data?.object);
@@ -684,10 +744,14 @@ export class SimulatorProvider implements PaymentProvider {
   }
 
   /** The guest pays a simulated payment link (demo / tests). Queues a signed completion event. */
-  async simulateLinkPayment(account: ProviderAccount, linkRef: string, amountMinor?: number): Promise<string> {
+  async simulateLinkPayment(
+    account: ProviderAccount,
+    linkRef: string,
+    amountMinor?: number,
+  ): Promise<string> {
     return this.tx(account, async (tx) => {
       const link = await this.findById(tx, linkRef);
-      if (!link || link.kind !== 'link') throw new Error(`No simulated payment link ${linkRef}`);
+      if (link?.kind !== 'link') throw new Error(`No simulated payment link ${linkRef}`);
       const amount = amountMinor ?? link.amount_minor;
       const piId = `sim_pi_${randomToken(12).replace(/[^A-Za-z0-9]/g, 'x')}`;
       await this.insert(tx, account, `link-payment:${linkRef}:${newId()}`, {
@@ -722,8 +786,18 @@ export class SimulatorProvider implements PaymentProvider {
   /** Queue a payout event (demo / tests). Delayed settlement is expressed through `arrivalDate`. */
   async simulatePayout(
     account: ProviderAccount,
-    input: { payoutRef: string; amountMinor: number; currency: string; state: 'paid' | 'failed'; arrivalDate: string },
+    input: {
+      payoutRef: string;
+      amountMinor: number;
+      currency: string;
+      state: 'in_transit' | 'paid' | 'failed';
+      /** Defaults to today + the account's `settlementDelayDays` control (delayed settlement scenario). */
+      arrivalDate?: string;
+    },
   ): Promise<void> {
+    const delayDays = account.simulatorControls.settlementDelayDays ?? 2;
+    const arrivalDate =
+      input.arrivalDate ?? new Date(this.now().getTime() + delayDays * 86_400_000).toISOString().slice(0, 10);
     await this.tx(account, (tx) =>
       this.queueEvent(tx, account, `payout.${input.state}`, {
         kind: 'payout',
@@ -731,7 +805,7 @@ export class SimulatorProvider implements PaymentProvider {
         state: input.state,
         amountMinor: input.amountMinor,
         currency: input.currency,
-        arrivalDate: input.arrivalDate,
+        arrivalDate,
         failureCode: input.state === 'failed' ? 'account_closed' : null,
       }),
     );
@@ -742,7 +816,10 @@ function reviveObject(raw: unknown): WebhookObject {
   if (!raw || typeof raw !== 'object') return { kind: 'unknown', rawType: 'missing' };
   const o = raw as Record<string, unknown>;
   if (o.kind === 'dispute') {
-    return { ...(o as WebhookObject & { kind: 'dispute' }), evidenceDueBy: o.evidenceDueBy ? new Date(String(o.evidenceDueBy)) : null };
+    return {
+      ...(o as WebhookObject & { kind: 'dispute' }),
+      evidenceDueBy: o.evidenceDueBy ? new Date(String(o.evidenceDueBy)) : null,
+    };
   }
   if (
     o.kind === 'payment' ||

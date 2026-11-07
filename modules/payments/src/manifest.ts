@@ -49,7 +49,11 @@ export const paymentsManifest: ModuleManifest = {
       scope: 'property',
       sensitive: true,
     },
-    { key: 'payments.account.read', description: 'View payment accounts and provider health', scope: 'organization' },
+    {
+      key: 'payments.account.read',
+      description: 'View payment accounts and provider health',
+      scope: 'organization',
+    },
     {
       key: 'payments.account.manage',
       description: 'Create and change payment accounts of legal entities (merchant of record)',
@@ -65,16 +69,55 @@ export const paymentsManifest: ModuleManifest = {
   ],
   // Universal record contract: `type` equals the audit `target.type` used by this module.
   recordTypes: [
-    { type: 'payment', label: 'Payment', readPermission: 'payments.payment.read', route: '/payments/transactions/:id' },
-    { type: 'authorization', label: 'Card authorization (hold)', readPermission: 'payments.payment.read', route: '/payments/authorizations/:id' },
-    { type: 'refund', label: 'Refund', readPermission: 'payments.payment.read', route: '/payments/refunds/:id' },
-    { type: 'payment_request', label: 'Payment request', readPermission: 'payments.payment.read', route: '/payments/requests/:id' },
+    {
+      type: 'payment',
+      label: 'Payment',
+      readPermission: 'payments.payment.read',
+      route: '/payments/transactions/:id',
+    },
+    {
+      type: 'authorization',
+      label: 'Card authorization (hold)',
+      readPermission: 'payments.payment.read',
+      route: '/payments/authorizations/:id',
+    },
+    {
+      type: 'refund',
+      label: 'Refund',
+      readPermission: 'payments.payment.read',
+      route: '/payments/refunds/:id',
+    },
+    {
+      type: 'payment_request',
+      label: 'Payment request',
+      readPermission: 'payments.payment.read',
+      route: '/payments/requests/:id',
+    },
     { type: 'payment_method', label: 'Saved payment method', readPermission: 'payments.payment.read' },
-    { type: 'virtual_card', label: 'Virtual card (OTA)', readPermission: 'payments.payment.read', route: '/payments/virtual-cards/:id' },
-    { type: 'dispute', label: 'Dispute (chargeback)', readPermission: 'payments.payment.read', route: '/payments/disputes/:id' },
+    {
+      type: 'virtual_card',
+      label: 'Virtual card (OTA)',
+      readPermission: 'payments.payment.read',
+      route: '/payments/virtual-cards/:id',
+    },
+    {
+      type: 'dispute',
+      label: 'Dispute (chargeback)',
+      readPermission: 'payments.payment.read',
+      route: '/payments/disputes/:id',
+    },
     { type: 'payment_exception', label: 'Payment exception', readPermission: 'payments.payment.read' },
-    { type: 'payment_account', label: 'Payment account', readPermission: 'payments.account.read', route: '/payments/accounts/:id' },
+    {
+      type: 'payment_account',
+      label: 'Payment account',
+      readPermission: 'payments.account.read',
+      route: '/payments/accounts/:id',
+    },
     { type: 'payout', label: 'Payout', readPermission: 'payments.account.read' },
-    { type: 'statement', label: 'Settlement statement import', readPermission: 'payments.reconciliation.manage' },
+    {
+      type: 'statement',
+      label: 'Settlement statement import',
+      readPermission: 'payments.reconciliation.manage',
+    },
   ],
 };

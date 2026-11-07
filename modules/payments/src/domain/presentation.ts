@@ -77,9 +77,14 @@ export function presentPayment(status: PaymentStatus, mode: RecordMode, method: 
 
 export function presentRefund(status: PaymentStatus, mode: RecordMode): Presentation {
   const p = presentPayment(status, mode, 'card');
-  if (status === 'succeeded') return { ...p, label: `Refunded${modeSuffix(mode)}`, explanation: 'The provider confirmed the refund.' };
+  if (status === 'succeeded')
+    return { ...p, label: `Refunded${modeSuffix(mode)}`, explanation: 'The provider confirmed the refund.' };
   if (status === 'failed') {
-    return { ...p, label: `Refund failed${modeSuffix(mode)}`, explanation: 'The refund did not go through. No money left the hotel.' };
+    return {
+      ...p,
+      label: `Refund failed${modeSuffix(mode)}`,
+      explanation: 'The refund did not go through. No money left the hotel.',
+    };
   }
   if (status === 'pending_verification') {
     return {
@@ -112,20 +117,41 @@ export function presentAuthorization(status: AuthorizationStatus, mode: RecordMo
         confirmed: mode !== 'recorded',
       };
     case 'partially_captured':
-      return { label: `Partly collected; remaining hold active${s}`, tone: 'neutral', explanation: hold, confirmed: true };
+      return {
+        label: `Partly collected; remaining hold active${s}`,
+        tone: 'neutral',
+        explanation: hold,
+        confirmed: true,
+      };
     case 'captured':
-      return { label: `Collected${s}`, tone: 'success', explanation: 'The held funds were collected.', confirmed: true };
+      return {
+        label: `Collected${s}`,
+        tone: 'success',
+        explanation: 'The held funds were collected.',
+        confirmed: true,
+      };
     case 'voided':
-      return { label: `Hold released${s}`, tone: 'neutral', explanation: 'The hold was released.', confirmed: true };
+      return {
+        label: `Hold released${s}`,
+        tone: 'neutral',
+        explanation: 'The hold was released.',
+        confirmed: true,
+      };
     case 'expired':
       return {
         label: 'Hold expired',
         tone: 'failure',
-        explanation: 'The hold has expired and no longer guarantees payment. Take a new authorization or payment.',
+        explanation:
+          'The hold has expired and no longer guarantees payment. Take a new authorization or payment.',
         confirmed: true,
       };
     case 'failed':
-      return { label: `Hold declined${s}`, tone: 'failure', explanation: 'No funds are held.', confirmed: true };
+      return {
+        label: `Hold declined${s}`,
+        tone: 'failure',
+        explanation: 'No funds are held.',
+        confirmed: true,
+      };
   }
 }
 
@@ -146,9 +172,19 @@ export function presentRequest(status: PaymentRequestStatus, paidMinor: number):
         confirmed: true,
       };
     case 'paid':
-      return { label: 'Paid', tone: 'success', explanation: 'The provider confirmed the payment.', confirmed: true };
+      return {
+        label: 'Paid',
+        tone: 'success',
+        explanation: 'The provider confirmed the payment.',
+        confirmed: true,
+      };
     case 'expired':
-      return { label: 'Expired', tone: 'failure', explanation: 'The link expired before it was paid.', confirmed: true };
+      return {
+        label: 'Expired',
+        tone: 'failure',
+        explanation: 'The link expired before it was paid.',
+        confirmed: true,
+      };
     case 'cancelled':
       return { label: 'Cancelled', tone: 'neutral', explanation: 'Cancelled by staff.', confirmed: true };
   }

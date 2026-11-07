@@ -32,7 +32,14 @@ describe('tenant isolation', () => {
     });
     await expect(svc.view.payment(attacker.ctx, p.id)).rejects.toMatchObject({ status: 404 });
     await expect(
-      attacker.tx((tx) => svc.tx.refund(tx, { paymentId: p.id, amount: { amountMinor: 10_000, currency: 'USD' }, reason: 'x', businessKey: newId() })),
+      attacker.tx((tx) =>
+        svc.tx.refund(tx, {
+          paymentId: p.id,
+          amount: { amountMinor: 10_000, currency: 'USD' },
+          reason: 'x',
+          businessKey: newId(),
+        }),
+      ),
     ).rejects.toMatchObject({ status: 404 });
     await expect(attacker.tx((tx) => svc.tx.getMethod(tx, methodId))).rejects.toMatchObject({ status: 404 });
     // Using the victim's method id in the attacker's org is impossible (RLS hides it).
@@ -50,7 +57,11 @@ describe('tenant isolation', () => {
     expect(hits).toEqual([]);
     const own = await victim.tx((tx) => paymentsSearch.search(tx, '4242 100.00', { limit: 10 }));
     expect(own.map((x) => x.id)).toEqual([p.id]);
-    expect(own[0]).toMatchObject({ type: 'payment', status: { payment: 'succeeded' }, matched: 'card last 4 + amount' });
+    expect(own[0]).toMatchObject({
+      type: 'payment',
+      status: { payment: 'succeeded' },
+      matched: 'card last 4 + amount',
+    });
   });
 });
 
@@ -67,7 +78,11 @@ describe('permissions and property scope', () => {
       initiator: 'customer' as const,
     };
     // Front desk: collect, but not refund.
-    const desk = org.as(['payments.payment.collect', 'payments.paymentRequest.create', 'platform.property.read']);
+    const desk = org.as([
+      'payments.payment.collect',
+      'payments.paymentRequest.create',
+      'platform.property.read',
+    ]);
     const paid = await svc.chargeNow(desk, { ...base, businessKey: newId() });
     expect(paid.status.payment).toBe('succeeded');
     expect(paid.allowedActions.find((a) => a.action === 'refund')).toMatchObject({
@@ -76,21 +91,35 @@ describe('permissions and property scope', () => {
     });
     await expect(
       withTenantTx(h.db, desk, (tx) =>
-        svc.tx.refund(tx, { paymentId: paid.id, amount: { amountMinor: 100, currency: 'USD' }, reason: 'x', businessKey: newId() }),
+        svc.tx.refund(tx, {
+          paymentId: paid.id,
+          amount: { amountMinor: 100, currency: 'USD' },
+          reason: 'x',
+          businessKey: newId(),
+        }),
       ),
     ).rejects.toMatchObject({ status: 403, code: 'forbidden' });
     // Scoped to the OTHER property: cannot collect here or read this payment.
     const elsewhere = org.as(['payments.payment.collect', 'payments.payment.read'], [org.otherPropertyId]);
-    await expect(svc.chargeNow(elsewhere, { ...base, businessKey: newId() })).rejects.toMatchObject({ status: 403 });
+    await expect(svc.chargeNow(elsewhere, { ...base, businessKey: newId() })).rejects.toMatchObject({
+      status: 403,
+    });
     await expect(svc.view.payment(elsewhere, paid.id)).rejects.toMatchObject({ status: 403 });
     // Read-only staff see it but cannot collect.
     const reader = org.as(['payments.payment.read']);
     expect((await svc.view.payment(reader, paid.id)).id).toBe(paid.id);
-    await expect(svc.chargeNow(reader, { ...base, businessKey: newId() })).rejects.toMatchObject({ status: 403 });
+    await expect(svc.chargeNow(reader, { ...base, businessKey: newId() })).rejects.toMatchObject({
+      status: 403,
+    });
     // Account management is organization-level and sensitive.
     await expect(
       withTenantTx(h.db, desk, (tx) =>
-        svc.tx.createAccount(tx, { legalEntityId: org.legalEntityId, provider: 'external_terminal', displayName: 'x', currencies: ['USD'] }),
+        svc.tx.createAccount(tx, {
+          legalEntityId: org.legalEntityId,
+          provider: 'external_terminal',
+          displayName: 'x',
+          currencies: ['USD'],
+        }),
       ),
     ).rejects.toMatchObject({ status: 403 });
     // Data authority: when another system owns payments here, Portico refuses to collect and explains.
@@ -115,10 +144,23 @@ describe('card data never enters Portico (PAY-I05)', () => {
       owner: { type: 'guest_profile', id: newId() },
       mitAgreement: false,
     };
-    expect(paymentMethodInput.safeParse({ ...base, providerToken: '4242 4242 4242 4242' }).success).toBe(false);
-    expect(paymentMethodInput.safeParse({ ...base, providerToken: 'pm_card_visa', cardNumber: '4242424242424242' }).success).toBe(false);
-    expect(paymentMethodInput.safeParse({ ...base, providerToken: 'pm_card_visa', cvc: '123' }).success).toBe(false);
-    expect(paymentMethodInput.safeParse({ ...base, providerToken: 'pm_card_visa', holderName: 'A 4000056655665556' }).success).toBe(false);
+    expect(paymentMethodInput.safeParse({ ...base, providerToken: '4242 4242 4242 4242' }).success).toBe(
+      false,
+    );
+    expect(
+      paymentMethodInput.safeParse({ ...base, providerToken: 'pm_card_visa', cardNumber: '4242424242424242' })
+        .success,
+    ).toBe(false);
+    expect(paymentMethodInput.safeParse({ ...base, providerToken: 'pm_card_visa', cvc: '123' }).success).toBe(
+      false,
+    );
+    expect(
+      paymentMethodInput.safeParse({
+        ...base,
+        providerToken: 'pm_card_visa',
+        holderName: 'A 4000056655665556',
+      }).success,
+    ).toBe(false);
     expect(paymentMethodInput.safeParse({ ...base, providerToken: 'pm_card_visa' }).success).toBe(true);
     expect(
       recordPaymentInput.safeParse({
@@ -141,8 +183,12 @@ describe('card data never enters Portico (PAY-I05)', () => {
       ),
     ).rejects.toThrow(/check constraint/);
     const { rows } = await sql<{ table_name: string; column_name: string }>`
-      select table_name, column_name from information_schema.columns where table_schema = 'payments'`.execute(h.t.admin.kysely);
-    const forbidden = rows.filter((r) => /(^pan$|card_?number|^number$|cvc|cvv|security_code|track)/i.test(r.column_name));
+      select table_name, column_name from information_schema.columns where table_schema = 'payments'`.execute(
+      h.t.admin.kysely,
+    );
+    const forbidden = rows.filter((r) =>
+      /(^pan$|card_?number|^number$|cvc|cvv|security_code|track)/i.test(r.column_name),
+    );
     expect(forbidden).toEqual([]);
   });
 
@@ -150,7 +196,9 @@ describe('card data never enters Portico (PAY-I05)', () => {
     const org = await setupOrg(h);
     await addMethod(h, org, 'pm_card_mastercard');
     const { rows } = await sql<{ after: unknown }>`
-      select after from core.audit_log where tenant_id = ${org.tenantId} and action = 'payments.method.create'`.execute(h.t.admin.kysely);
+      select after from core.audit_log where tenant_id = ${org.tenantId} and action = 'payments.method.create'`.execute(
+      h.t.admin.kysely,
+    );
     expect(rows).toHaveLength(1);
     expect(JSON.stringify(rows[0]?.after)).not.toContain('pm_card_mastercard');
   });

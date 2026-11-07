@@ -3,6 +3,7 @@
  * The UI must show PENDING VERIFICATION (never paid, never failed), a second charge is blocked, and
  * reconciliation later records exactly ONE successful payment and exactly ONE ledger posting.
  */
+import { runDueJobs } from '@portico/db';
 import { newId } from '@portico/kernel';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { addMethod, deliverWebhooks, drain, type Harness, postings, setupOrg, startHarness } from './harness';
@@ -56,7 +57,10 @@ describe('scenario s05: payment succeeds at the provider but the response times 
     expect(run.resolved).toBe(1);
     const resolved = await svc.view.payment(org.ctx, first.id);
     expect(resolved.status).toMatchObject({ payment: 'succeeded', ledger: 'posted' });
-    expect(resolved.presentation).toMatchObject({ label: 'Paid (simulated — no real money)', confirmed: true });
+    expect(resolved.presentation).toMatchObject({
+      label: 'Paid (simulated — no real money)',
+      confirmed: true,
+    });
 
     // 5. Retrying the original request (same key), re-running reconciliation and the provider's webhook all
     //    change nothing: still one payment, one posting.
@@ -138,6 +142,26 @@ describe('scenario s05: payment succeeds at the provider but the response times 
     await drain(h);
     const final = await svc.view.payment(org.ctx, payment.id);
     expect(final.status.payment).toBe('succeeded');
+    expect(await postings(h, org, 'payment')).toHaveLength(1);
+  });
+
+  it('the scheduled reconciliation job resolves it for every organization, without staff action', async () => {
+    const org = await setupOrg(h);
+    const svc = h.module.service;
+    const methodId = await addMethod(h, org, 'sim_timeout_then_succeeded');
+    const p = await svc.chargeNow(org.ctx, {
+      propertyId: org.propertyId,
+      methodId,
+      amount: { amountMinor: 9_900, currency: 'USD' },
+      ref: { type: 'folio', id: newId() },
+      initiator: 'customer',
+      businessKey: newId(),
+    });
+    expect(p.status.payment).toBe('pending_verification');
+    h.clock.advance(20_000);
+    const ran = await runDueJobs(h.db, h.module.jobs);
+    expect(ran).toContain('payments.reconcile');
+    expect((await svc.view.payment(org.ctx, p.id)).status.payment).toBe('succeeded');
     expect(await postings(h, org, 'payment')).toHaveLength(1);
   });
 });

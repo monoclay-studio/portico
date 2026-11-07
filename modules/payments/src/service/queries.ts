@@ -26,16 +26,28 @@ export async function getPayment(tx: TxContext, id: string): Promise<Payment> {
 
 async function capabilitiesByAccount(tx: TxContext, accountIds: string[]): Promise<Map<string, string[]>> {
   if (!accountIds.length) return new Map();
-  const rows = await db(tx).selectFrom('payments.accounts').select(['id', 'capabilities']).where('id', 'in', accountIds).execute();
+  const rows = await db(tx)
+    .selectFrom('payments.accounts')
+    .select(['id', 'capabilities'])
+    .where('id', 'in', accountIds)
+    .execute();
   return new Map(rows.map((r) => [r.id, (r.capabilities as string[]) ?? []]));
 }
 
 export async function getAuthorization(tx: TxContext, id: string): Promise<Authorization> {
-  const a = await db(tx).selectFrom('payments.authorizations').selectAll().where('id', '=', id).executeTakeFirst();
+  const a = await db(tx)
+    .selectFrom('payments.authorizations')
+    .selectAll()
+    .where('id', '=', id)
+    .executeTakeFirst();
   if (!a) throw new NotFoundError('authorization', id);
   requireRead(tx, a.property_id);
   const caps = await capabilitiesByAccount(tx, [a.account_id]);
-  return toAuthorizationView(a, await recordContext(tx, [{ type: 'authorization', id }]), caps.get(a.account_id) ?? []);
+  return toAuthorizationView(
+    a,
+    await recordContext(tx, [{ type: 'authorization', id }]),
+    caps.get(a.account_id) ?? [],
+  );
 }
 
 export async function getRefund(tx: TxContext, id: string): Promise<Refund> {
@@ -46,11 +58,24 @@ export async function getRefund(tx: TxContext, id: string): Promise<Refund> {
 }
 
 /** History of provider interactions for a record (journal): what was sent, when, and what came back. */
-export async function operationHistory(tx: TxContext, target: { type: string; id: string; propertyId: string }) {
+export async function operationHistory(
+  tx: TxContext,
+  target: { type: string; id: string; propertyId: string },
+) {
   requireRead(tx, target.propertyId);
   const ops = await db(tx)
     .selectFrom('payments.provider_operations')
-    .select(['id', 'kind', 'status', 'attempts', 'mode', 'failure_code', 'created_at', 'sent_at', 'completed_at'])
+    .select([
+      'id',
+      'kind',
+      'status',
+      'attempts',
+      'mode',
+      'failure_code',
+      'created_at',
+      'sent_at',
+      'completed_at',
+    ])
     .where((eb) =>
       eb.or([
         eb.and([eb('target_type', '=', target.type as 'payment'), eb('target_id', '=', target.id)]),
@@ -83,7 +108,12 @@ export async function operationHistory(tx: TxContext, target: { type: string; id
     completedAt: o.completed_at ? new Date(o.completed_at).toISOString() : null,
     journal: journal
       .filter((j) => j.operation_id === o.id)
-      .map((j) => ({ attempt: j.attempt, phase: j.phase, status: j.status, at: new Date(j.recorded_at).toISOString() })),
+      .map((j) => ({
+        attempt: j.attempt,
+        phase: j.phase,
+        status: j.status,
+        at: new Date(j.recorded_at).toISOString(),
+      })),
   }));
 }
 
@@ -105,7 +135,10 @@ export interface PaymentStatusSummary {
 }
 
 /** Domain-map provider: authoritative payment status for a business reference, incl. pending verification. */
-export async function getPaymentStatus(tx: TxContext, ref: { type: string; id: string }): Promise<PaymentStatusSummary> {
+export async function getPaymentStatus(
+  tx: TxContext,
+  ref: { type: string; id: string },
+): Promise<PaymentStatusSummary> {
   const paymentRows = await db(tx)
     .selectFrom('payments.payments')
     .selectAll()
@@ -138,15 +171,24 @@ export async function getPaymentStatus(tx: TxContext, ref: { type: string; id: s
   const t = (c: string) => {
     let x = totals.get(c);
     if (!x) {
-      x = { currency: c, confirmedMinor: 0, recordedUnverifiedMinor: 0, pendingVerificationMinor: 0, refundedMinor: 0, heldMinor: 0 };
+      x = {
+        currency: c,
+        confirmedMinor: 0,
+        recordedUnverifiedMinor: 0,
+        pendingVerificationMinor: 0,
+        refundedMinor: 0,
+        heldMinor: 0,
+      };
       totals.set(c, x);
     }
     return x;
   };
   for (const p of paymentRows) {
-    if (p.status === 'succeeded' || p.status === 'recorded_verified') t(p.currency).confirmedMinor += p.amount_minor;
+    if (p.status === 'succeeded' || p.status === 'recorded_verified')
+      t(p.currency).confirmedMinor += p.amount_minor;
     if (p.status === 'recorded_unverified') t(p.currency).recordedUnverifiedMinor += p.amount_minor;
-    if (p.status === 'pending_verification' || p.status === 'processing') t(p.currency).pendingVerificationMinor += p.amount_minor;
+    if (p.status === 'pending_verification' || p.status === 'processing')
+      t(p.currency).pendingVerificationMinor += p.amount_minor;
   }
   for (const r of refundRows) {
     if (r.status === 'succeeded' || r.status === 'recorded_verified' || r.status === 'recorded_unverified') {
@@ -154,7 +196,8 @@ export async function getPaymentStatus(tx: TxContext, ref: { type: string; id: s
     }
   }
   for (const a of authRows) {
-    if (a.status === 'authorized' || a.status === 'partially_captured') t(a.currency).heldMinor += a.amount_minor - a.captured_minor;
+    if (a.status === 'authorized' || a.status === 'partially_captured')
+      t(a.currency).heldMinor += a.amount_minor - a.captured_minor;
   }
   const rc = await recordContext(tx, [
     ...paymentRows.map((p) => ({ type: 'payment', id: p.id })),
@@ -177,7 +220,13 @@ export async function getPaymentStatus(tx: TxContext, ref: { type: string; id: s
 
 export interface UnresolvedItems {
   propertyId: string;
-  pendingVerification: Array<{ type: 'payment' | 'authorization' | 'refund'; id: string; amountMinor: number; currency: string; since: string }>;
+  pendingVerification: Array<{
+    type: 'payment' | 'authorization' | 'refund';
+    id: string;
+    amountMinor: number;
+    currency: string;
+    since: string;
+  }>;
   recordedUnverified: number;
   ledgerPending: number;
   openExceptions: number;
@@ -189,23 +238,59 @@ export async function listUnresolved(tx: TxContext, input: { propertyId: string 
   const pid = input.propertyId;
   const pv = ['processing', 'pending_verification'] as const;
   const [pays, auths, refunds, recorded, ledger, exceptions] = await Promise.all([
-    db(tx).selectFrom('payments.payments').select(['id', 'amount_minor', 'currency', 'created_at']).where('property_id', '=', pid).where('status', 'in', [...pv]).execute(),
-    db(tx).selectFrom('payments.authorizations').select(['id', 'amount_minor', 'currency', 'created_at']).where('property_id', '=', pid).where('status', 'in', [...pv]).execute(),
-    db(tx).selectFrom('payments.refunds').select(['id', 'amount_minor', 'currency', 'created_at']).where('property_id', '=', pid).where('status', 'in', [...pv]).execute(),
-    db(tx).selectFrom('payments.payments').select((eb) => eb.fn.countAll<number>().as('n')).where('property_id', '=', pid).where('status', '=', 'recorded_unverified').executeTakeFirstOrThrow(),
-    db(tx).selectFrom('payments.payments').select((eb) => eb.fn.countAll<number>().as('n')).where('property_id', '=', pid).where('ledger_status', 'in', ['pending', 'failed']).executeTakeFirstOrThrow(),
-    db(tx).selectFrom('payments.exceptions').select((eb) => eb.fn.countAll<number>().as('n')).where('status', '=', 'open').where((eb) => eb.or([eb('property_id', '=', pid), eb('property_id', 'is', null)])).executeTakeFirstOrThrow(),
+    db(tx)
+      .selectFrom('payments.payments')
+      .select(['id', 'amount_minor', 'currency', 'created_at'])
+      .where('property_id', '=', pid)
+      .where('status', 'in', [...pv])
+      .execute(),
+    db(tx)
+      .selectFrom('payments.authorizations')
+      .select(['id', 'amount_minor', 'currency', 'created_at'])
+      .where('property_id', '=', pid)
+      .where('status', 'in', [...pv])
+      .execute(),
+    db(tx)
+      .selectFrom('payments.refunds')
+      .select(['id', 'amount_minor', 'currency', 'created_at'])
+      .where('property_id', '=', pid)
+      .where('status', 'in', [...pv])
+      .execute(),
+    db(tx)
+      .selectFrom('payments.payments')
+      .select((eb) => eb.fn.countAll<number>().as('n'))
+      .where('property_id', '=', pid)
+      .where('status', '=', 'recorded_unverified')
+      .executeTakeFirstOrThrow(),
+    db(tx)
+      .selectFrom('payments.payments')
+      .select((eb) => eb.fn.countAll<number>().as('n'))
+      .where('property_id', '=', pid)
+      .where('ledger_status', 'in', ['pending', 'failed'])
+      .executeTakeFirstOrThrow(),
+    db(tx)
+      .selectFrom('payments.exceptions')
+      .select((eb) => eb.fn.countAll<number>().as('n'))
+      .where('status', '=', 'open')
+      .where((eb) => eb.or([eb('property_id', '=', pid), eb('property_id', 'is', null)]))
+      .executeTakeFirstOrThrow(),
   ]);
-  const item = (type: 'payment' | 'authorization' | 'refund') => (r: { id: string; amount_minor: number; currency: string; created_at: Date }) => ({
-    type,
-    id: r.id,
-    amountMinor: r.amount_minor,
-    currency: r.currency,
-    since: new Date(r.created_at).toISOString(),
-  });
+  const item =
+    (type: 'payment' | 'authorization' | 'refund') =>
+    (r: { id: string; amount_minor: number; currency: string; created_at: Date }) => ({
+      type,
+      id: r.id,
+      amountMinor: r.amount_minor,
+      currency: r.currency,
+      since: new Date(r.created_at).toISOString(),
+    });
   return {
     propertyId: pid,
-    pendingVerification: [...pays.map(item('payment')), ...auths.map(item('authorization')), ...refunds.map(item('refund'))],
+    pendingVerification: [
+      ...pays.map(item('payment')),
+      ...auths.map(item('authorization')),
+      ...refunds.map(item('refund')),
+    ],
     recordedUnverified: Number(recorded.n),
     ledgerPending: Number(ledger.n),
     openExceptions: Number(exceptions.n),
@@ -213,7 +298,11 @@ export async function listUnresolved(tx: TxContext, input: { propertyId: string 
 }
 
 /** Payments status for a property: provider health per account (s20), unresolved items, a clear banner. */
-export async function paymentsStatus(d: PaymentsDeps, tx: TxContext, propertyId: string): Promise<PaymentsStatus> {
+export async function paymentsStatus(
+  d: PaymentsDeps,
+  tx: TxContext,
+  propertyId: string,
+): Promise<PaymentsStatus> {
   requireRead(tx, propertyId);
   const property = await d.platform.getProperty(tx, propertyId);
   const accounts = await db(tx)
@@ -259,7 +348,9 @@ export async function listExceptions(
   if (filter.status) q = q.where('status', '=', filter.status);
   if (filter.propertyId) {
     requireRead(tx, filter.propertyId);
-    q = q.where((eb) => eb.or([eb('property_id', '=', filter.propertyId as string), eb('property_id', 'is', null)]));
+    q = q.where((eb) =>
+      eb.or([eb('property_id', '=', filter.propertyId as string), eb('property_id', 'is', null)]),
+    );
   }
   const rows = await q.execute();
   return rows
@@ -273,13 +364,23 @@ export async function resolveException(
   expectedVersion: number,
   resolution: string,
 ): Promise<PaymentException> {
-  const e = await db(tx).selectFrom('payments.exceptions').selectAll().where('id', '=', id).executeTakeFirst();
+  const e = await db(tx)
+    .selectFrom('payments.exceptions')
+    .selectAll()
+    .where('id', '=', id)
+    .executeTakeFirst();
   if (!e) throw new NotFoundError('payment_exception', id);
   if (e.property_id) requirePermission(tx, 'payments.reconciliation.manage', { propertyId: e.property_id });
   else requirePermission(tx, 'payments.account.manage');
   const row = await db(tx)
     .updateTable('payments.exceptions')
-    .set({ status: 'resolved', resolution, resolved_by: actorKey(tx), resolved_at: tx.now, version: e.version + 1 })
+    .set({
+      status: 'resolved',
+      resolution,
+      resolved_by: actorKey(tx),
+      resolved_at: tx.now,
+      version: e.version + 1,
+    })
     .where('id', '=', id)
     .where('version', '=', expectedVersion)
     .where('status', '=', 'open')

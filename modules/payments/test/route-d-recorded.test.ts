@@ -14,7 +14,13 @@ beforeAll(async () => {
 });
 afterAll(async () => h?.close());
 
-async function recordTerminal(org: Org, amountMinor: number, reference: string, folioId = newId(), last4 = '4242') {
+async function recordTerminal(
+  org: Org,
+  amountMinor: number,
+  reference: string,
+  folioId = newId(),
+  last4 = '4242',
+) {
   const s = await org.tx((tx) =>
     h.module.service.tx.recordPayment(tx, {
       propertyId: org.propertyId,
@@ -33,7 +39,11 @@ async function recordTerminal(org: Org, amountMinor: number, reference: string, 
   return h.module.service.view.payment(org.ctx, s.id);
 }
 
-function importCsv(org: Org, csv: string, source: 'acquirer_settlement' | 'bank_statement' | 'cash_deposit' = 'acquirer_settlement') {
+function importCsv(
+  org: Org,
+  csv: string,
+  source: 'acquirer_settlement' | 'bank_statement' | 'cash_deposit' = 'acquirer_settlement',
+) {
   return org.tx((tx) =>
     h.module.service.tx.importStatement(tx, {
       propertyId: org.propertyId,
@@ -61,10 +71,17 @@ describe('Route D: payments taken on the hotel’s own terminal, recorded in Por
       externalReference: 'AP-100200',
       cardLast4: '4242',
     });
-    expect(p.presentation).toMatchObject({ label: 'Recorded — not yet verified', confirmed: false, tone: 'recorded' });
+    expect(p.presentation).toMatchObject({
+      label: 'Recorded — not yet verified',
+      confirmed: false,
+      tone: 'recorded',
+    });
     const ledger = await postings(h, org, 'payment');
     expect(ledger).toHaveLength(1);
-    expect(ledger[0]?.extra).toMatchObject({ method: 'external_terminal', verification: 'recorded_unverified' });
+    expect(ledger[0]?.extra).toMatchObject({
+      method: 'external_terminal',
+      verification: 'recorded_unverified',
+    });
     // Recording the same approval code twice is refused (it would double the guest's payment).
     await expect(recordTerminal(org, 84_000, 'AP-100200')).rejects.toThrow(/already recorded/);
   });
@@ -86,11 +103,19 @@ describe('Route D: payments taken on the hotel’s own terminal, recorded in Por
 
     expect((await h.module.service.view.payment(org.ctx, ok.id)).status.payment).toBe('recorded_verified');
     expect((await h.module.service.view.payment(org.ctx, ok.id)).presentation.confirmed).toBe(true);
-    expect((await h.module.service.view.payment(org.ctx, wrong.id)).status.payment).toBe('recorded_unverified');
+    expect((await h.module.service.view.payment(org.ctx, wrong.id)).status.payment).toBe(
+      'recorded_unverified',
+    );
 
-    const exceptions = await org.tx((tx) => h.module.service.tx.listExceptions(tx, { propertyId: org.propertyId, status: 'open' }));
+    const exceptions = await org.tx((tx) =>
+      h.module.service.tx.listExceptions(tx, { propertyId: org.propertyId, status: 'open' }),
+    );
     const kinds = exceptions.map((e) => e.kind).sort();
-    expect(kinds).toEqual(['settlement_amount_mismatch', 'settlement_missing_in_statement', 'settlement_unrecorded_in_portico']);
+    expect(kinds).toEqual([
+      'settlement_amount_mismatch',
+      'settlement_missing_in_statement',
+      'settlement_unrecorded_in_portico',
+    ]);
     for (const e of exceptions) {
       expect(e.owner).toMatchObject({ kind: 'department', id: 'finance' });
       expect(e.nextStep.length).toBeGreaterThan(10);
@@ -119,13 +144,17 @@ describe('Route D: payments taken on the hotel’s own terminal, recorded in Por
     expect(original.status.payment).toBe('recorded_verified');
     const adjustments = await postings(h, org, 'adjustment');
     expect(adjustments).toEqual([expect.objectContaining({ amount_minor: -5_000 })]);
-    const stillOpen = await org.tx((tx) => h.module.service.tx.listExceptions(tx, { propertyId: org.propertyId, status: 'open' }));
+    const stillOpen = await org.tx((tx) =>
+      h.module.service.tx.listExceptions(tx, { propertyId: org.propertyId, status: 'open' }),
+    );
     expect(stillOpen.map((e) => e.kind)).not.toContain('settlement_amount_mismatch');
 
     // A later statement that contains the missing payment verifies it and auto-resolves its exception.
     const later = await importCsv(org, 'date,amount,currency,approval_code\n2026-11-07,125.00,USD,AP-3\n');
     expect(later.matchedCount).toBe(1);
-    const open2 = await org.tx((tx) => h.module.service.tx.listExceptions(tx, { propertyId: org.propertyId, status: 'open' }));
+    const open2 = await org.tx((tx) =>
+      h.module.service.tx.listExceptions(tx, { propertyId: org.propertyId, status: 'open' }),
+    );
     expect(open2.filter((e) => e.ref?.id === missing.id)).toEqual([]);
   });
 
@@ -135,7 +164,14 @@ describe('Route D: payments taken on the hotel’s own terminal, recorded in Por
     const p = await recordTerminal(org, 20_000, 'AP-55');
     // A provider refund is refused for a recorded payment: it must be refunded on the terminal.
     await expect(
-      org.tx((tx) => svc.tx.refund(tx, { paymentId: p.id, amount: { amountMinor: 1_000, currency: 'USD' }, reason: 'x', businessKey: newId() })),
+      org.tx((tx) =>
+        svc.tx.refund(tx, {
+          paymentId: p.id,
+          amount: { amountMinor: 1_000, currency: 'USD' },
+          reason: 'x',
+          businessKey: newId(),
+        }),
+      ),
     ).rejects.toThrow(/Refund it the same way/);
     const r = await org.tx((tx) =>
       svc.tx.recordRefund(tx, {
@@ -147,7 +183,10 @@ describe('Route D: payments taken on the hotel’s own terminal, recorded in Por
       }),
     );
     const rv = await svc.view.refund(org.ctx, r.id);
-    expect(rv).toMatchObject({ status: { refund: 'recorded_unverified', ledger: 'posted' }, providerVerified: false });
+    expect(rv).toMatchObject({
+      status: { refund: 'recorded_unverified', ledger: 'posted' },
+      providerVerified: false,
+    });
     expect(await postings(h, org, 'refund')).toEqual([expect.objectContaining({ amount_minor: -5_000 })]);
 
     const folioId = newId();
@@ -193,8 +232,14 @@ describe('Route D: payments taken on the hotel’s own terminal, recorded in Por
         businessKey: newId(),
       }),
     );
-    expect(await postings(h, org, 'deposit')).toEqual([expect.objectContaining({ amount_minor: 250_000, ref_id: bookingId })]);
-    const res = await importCsv(org, 'date,amount,currency,reference\n2026-11-07,2500.00,USD,TT-REF-883\n', 'bank_statement');
+    expect(await postings(h, org, 'deposit')).toEqual([
+      expect.objectContaining({ amount_minor: 250_000, ref_id: bookingId }),
+    ]);
+    const res = await importCsv(
+      org,
+      'date,amount,currency,reference\n2026-11-07,2500.00,USD,TT-REF-883\n',
+      'bank_statement',
+    );
     expect(res.matchedCount).toBe(1);
     expect((await svc.view.payment(org.ctx, bt.id)).status.payment).toBe('recorded_verified');
     // A terminal account is required for card payments taken on a terminal.

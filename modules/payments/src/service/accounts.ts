@@ -3,8 +3,8 @@ import { explainVersionMiss, type TxContext } from '@portico/db';
 import {
   BusinessRuleError,
   ConflictError,
-  newId,
   NotFoundError,
+  newId,
   requirePermission,
   ValidationError,
 } from '@portico/kernel';
@@ -105,20 +105,29 @@ export async function createAccount(
         display_name: input.displayName,
         capabilities: JSON.stringify(PROVIDER_CAPABILITIES[input.provider]),
         onboarding_status:
-          input.provider === 'stripe_connect' ? 'in_progress' : input.provider === 'external_terminal' ? 'not_applicable' : 'complete',
+          input.provider === 'stripe_connect'
+            ? 'in_progress'
+            : input.provider === 'external_terminal'
+              ? 'not_applicable'
+              : 'complete',
         country_code: input.countryCode ?? le.countryCode,
         currencies: input.currencies,
         statement_descriptor: input.statementDescriptor ?? null,
         // Stripe accounts start pending until onboarding is confirmed by the provider (account.updated webhook or
         // an administrator who verified it); simulator and own-terminal accounts are usable immediately.
         status: input.provider === 'stripe_connect' ? 'pending' : 'active',
-        status_reason: input.provider === 'stripe_connect' ? 'Waiting for provider onboarding to complete.' : null,
+        status_reason:
+          input.provider === 'stripe_connect' ? 'Waiting for provider onboarding to complete.' : null,
         application_fee_bps: input.provider === 'stripe_connect' ? (input.applicationFeeBps ?? null) : null,
         simulator_controls: JSON.stringify({}),
       })
       .returningAll()
       .executeTakeFirstOrThrow();
-    await tx.audit({ action: 'payments.account.create', target: { type: 'payment_account', id }, after: input });
+    await tx.audit({
+      action: 'payments.account.create',
+      target: { type: 'payment_account', id },
+      after: input,
+    });
     await tx.emit({
       type: PaymentsEvents.accountCreated,
       aggregate: { type: 'payment_account', id },
@@ -127,13 +136,20 @@ export async function createAccount(
     return toAccountView(d, tx, row);
   } catch (err) {
     if (uniqueViolation(err)) {
-      throw new ConflictError('payment_account_exists', 'This provider account is already connected in this organization.');
+      throw new ConflictError(
+        'payment_account_exists',
+        'This provider account is already connected in this organization.',
+      );
     }
     throw err;
   }
 }
 
-export async function listAccounts(d: PaymentsDeps, tx: TxContext, legalEntityId?: string): Promise<PaymentAccount[]> {
+export async function listAccounts(
+  d: PaymentsDeps,
+  tx: TxContext,
+  legalEntityId?: string,
+): Promise<PaymentAccount[]> {
   requirePermission(tx, 'payments.account.read');
   let q = db(tx).selectFrom('payments.accounts').selectAll().orderBy('display_name');
   if (legalEntityId) q = q.where('legal_entity_id', '=', legalEntityId);
@@ -216,7 +232,11 @@ export async function setSimulatorControls(
   return toAccountView(d, tx, row);
 }
 
-function effectiveMode(d: PaymentsDeps, tx: TxContext, provider: 'simulator' | 'stripe_connect' | 'external_terminal') {
+function effectiveMode(
+  d: PaymentsDeps,
+  tx: TxContext,
+  provider: 'simulator' | 'stripe_connect' | 'external_terminal',
+) {
   if (provider === 'external_terminal') return 'recorded';
   try {
     return d.registry.modeFor(tx, { provider });
@@ -225,7 +245,7 @@ function effectiveMode(d: PaymentsDeps, tx: TxContext, provider: 'simulator' | '
   }
 }
 
-export async function accountHealth(d: PaymentsDeps, tx: TxContext, id: string): Promise<AccountHealth> {
+export async function accountHealth(_d: PaymentsDeps, tx: TxContext, id: string): Promise<AccountHealth> {
   const a = await loadAccount(tx, id);
   const s = await loadBreaker(tx, a.id);
   const state = effectiveState(s, tx.now);
@@ -241,7 +261,8 @@ export async function accountHealth(d: PaymentsDeps, tx: TxContext, id: string):
   } else if (state === 'open') {
     message = `Card payments unavailable — the payment provider is not responding (since ${s.openedAt?.toISOString() ?? 'recently'}). Nothing is being charged. Accept cash, send a payment link to be paid later, or record a manual authorization taken on your own terminal.`;
   } else if (state === 'half_open') {
-    message = 'Checking whether the payment provider is back. The next card payment is a test of the connection.';
+    message =
+      'Checking whether the payment provider is back. The next card payment is a test of the connection.';
   } else {
     message = 'Card payments available.';
   }
@@ -325,7 +346,8 @@ export async function createMethod(
         owner_id: input.owner.id,
         mit_agreement: input.mitAgreement,
         mandate: JSON.stringify(input.mandate ?? {}),
-        token_portability: input.tokenPortability ?? (input.kind === 'virtual_card' ? 'vault_portable' : 'provider_bound'),
+        token_portability:
+          input.tokenPortability ?? (input.kind === 'virtual_card' ? 'vault_portable' : 'provider_bound'),
         portability_note: input.portabilityNote ?? null,
         status: 'active',
       })
@@ -354,9 +376,16 @@ export async function createMethod(
 }
 
 export async function getMethod(tx: TxContext, id: string): Promise<PaymentMethod> {
-  const m = await db(tx).selectFrom('payments.payment_methods').selectAll().where('id', '=', id).executeTakeFirst();
+  const m = await db(tx)
+    .selectFrom('payments.payment_methods')
+    .selectAll()
+    .where('id', '=', id)
+    .executeTakeFirst();
   if (!m) throw new NotFoundError('payment_method', id);
-  if (!tx.authz.can('payments.payment.read', { propertyId: m.property_id }) && !tx.authz.can('payments.method.manage', { propertyId: m.property_id })) {
+  if (
+    !tx.authz.can('payments.payment.read', { propertyId: m.property_id }) &&
+    !tx.authz.can('payments.method.manage', { propertyId: m.property_id })
+  ) {
     throw new NotFoundError('payment_method', id);
   }
   return toMethodView(m);
@@ -382,8 +411,17 @@ export async function listMethods(
     .map(toMethodView);
 }
 
-export async function detachMethod(d: PaymentsDeps, tx: TxContext, id: string, expectedVersion: number): Promise<PaymentMethod> {
-  const m = await db(tx).selectFrom('payments.payment_methods').selectAll().where('id', '=', id).executeTakeFirst();
+export async function detachMethod(
+  d: PaymentsDeps,
+  tx: TxContext,
+  id: string,
+  expectedVersion: number,
+): Promise<PaymentMethod> {
+  const m = await db(tx)
+    .selectFrom('payments.payment_methods')
+    .selectAll()
+    .where('id', '=', id)
+    .executeTakeFirst();
   if (!m) throw new NotFoundError('payment_method', id);
   requirePermission(tx, 'payments.method.manage', { propertyId: m.property_id });
   await assertPaymentsWritable(d, tx, m.property_id);

@@ -10,6 +10,7 @@ import { DomainError, ForbiddenError, requirePermission } from '@portico/kernel'
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import {
+  type Authorization as AuthorizationView,
   account,
   accountHealth,
   accountInput,
@@ -33,18 +34,17 @@ import {
   paymentsStatus,
   payout,
   payoutInput,
+  type Refund,
   reconciliationResult,
   recordAuthorizationInput,
   recordPaymentInput,
   recordRefundInput,
-  type Refund,
   refund,
   refundInput,
   resolveExceptionInput,
   simulatorControls,
   statementImportInput,
   statementResult,
-  type Authorization as AuthorizationView,
   virtualCard,
   virtualCardInput,
   voidInput,
@@ -65,7 +65,9 @@ function replyPayment(reply: FastifyReply, p: Payment): FastifyReply {
     );
   }
   setVersion(reply, p.version);
-  return reply.status(p.status.payment === 'processing' || p.status.payment === 'pending_verification' ? 202 : 201).send(p);
+  return reply
+    .status(p.status.payment === 'processing' || p.status.payment === 'pending_verification' ? 202 : 201)
+    .send(p);
 }
 
 function replyAuthorization(reply: FastifyReply, a: AuthorizationView, created = true): FastifyReply {
@@ -78,7 +80,13 @@ function replyAuthorization(reply: FastifyReply, a: AuthorizationView, created =
   }
   setVersion(reply, a.version);
   return reply
-    .status(a.status.authorization === 'processing' || a.status.authorization === 'pending_verification' ? 202 : created ? 201 : 200)
+    .status(
+      a.status.authorization === 'processing' || a.status.authorization === 'pending_verification'
+        ? 202
+        : created
+          ? 201
+          : 200,
+    )
     .send(a);
 }
 
@@ -91,7 +99,9 @@ function replyRefund(reply: FastifyReply, r: Refund): FastifyReply {
     );
   }
   setVersion(reply, r.version);
-  return reply.status(r.status.refund === 'processing' || r.status.refund === 'pending_verification' ? 202 : 201).send(r);
+  return reply
+    .status(r.status.refund === 'processing' || r.status.refund === 'pending_verification' ? 202 : 201)
+    .send(r);
 }
 
 export function paymentsHttp(deps: { database: PorticoDatabase; service: PaymentsService }): HttpModule {
@@ -111,7 +121,8 @@ export function paymentsHttp(deps: { database: PorticoDatabase; service: Payment
     );
     return { body: res.body, replayed: res.replayed };
   }
-  const tx = <T>(req: FastifyRequest, fn: (tx: TxContext) => Promise<T>) => withTenantTx(database, req.ctx, fn);
+  const tx = <T>(req: FastifyRequest, fn: (tx: TxContext) => Promise<T>) =>
+    withTenantTx(database, req.ctx, fn);
 
   return {
     name: 'payments',
@@ -167,7 +178,14 @@ export function paymentsHttp(deps: { database: PorticoDatabase; service: Payment
       );
       app.put(
         '/payments/accounts/:id/simulator-controls',
-        { schema: { tags: ['Payments simulator'], params: idParams, body: simulatorControls, response: { 200: account } } },
+        {
+          schema: {
+            tags: ['Payments simulator'],
+            params: idParams,
+            body: simulatorControls,
+            response: { 200: account },
+          },
+        },
         async (req) => tx(req, (t) => svc.tx.setSimulatorControls(t, req.params.id, req.body)),
       );
       app.post(
@@ -180,7 +198,12 @@ export function paymentsHttp(deps: { database: PorticoDatabase; service: Payment
       );
       app.get('/payments/simulator/test-tokens', { schema: { tags: ['Payments simulator'] } }, async () => ({
         note: 'Approved TEST instruments only. They work only where payments are simulated (demo, trial, training, tests).',
-        items: SIMULATOR_TEST_TOKENS.map((t) => ({ token: t.token, brand: t.brand, last4: t.last4, description: t.description })),
+        items: SIMULATOR_TEST_TOKENS.map((t) => ({
+          token: t.token,
+          brand: t.brand,
+          last4: t.last4,
+          description: t.description,
+        })),
       }));
 
       // ───────────── payment methods (tokens only) ─────────────
@@ -198,12 +221,17 @@ export function paymentsHttp(deps: { database: PorticoDatabase; service: Payment
         {
           schema: {
             tags,
-            querystring: z.object({ ownerType: z.enum(['guest_profile', 'company', 'agency', 'booking']), ownerId: z.uuid() }),
+            querystring: z.object({
+              ownerType: z.enum(['guest_profile', 'company', 'agency', 'booking']),
+              ownerId: z.uuid(),
+            }),
             response: { 200: z.object({ items: z.array(paymentMethod) }) },
           },
         },
         async (req) => ({
-          items: await tx(req, (t) => svc.tx.listMethods(t, { type: req.query.ownerType, id: req.query.ownerId })),
+          items: await tx(req, (t) =>
+            svc.tx.listMethods(t, { type: req.query.ownerType, id: req.query.ownerId }),
+          ),
         }),
       );
       app.get(
@@ -259,10 +287,20 @@ export function paymentsHttp(deps: { database: PorticoDatabase; service: Payment
       );
       app.post(
         '/payments/authorizations/:id/increment',
-        { schema: { tags, params: idParams, body: incrementInput, response: { 200: authorization, 202: authorization } } },
+        {
+          schema: {
+            tags,
+            params: idParams,
+            body: incrementInput,
+            response: { 200: authorization, 202: authorization },
+          },
+        },
         async (req, reply) => {
           await idem(req, 'POST /payments/authorizations/:id/increment', (t) =>
-            svc.tx.increment(t, { authorizationId: req.params.id, additionalAmount: req.body.additionalAmount }),
+            svc.tx.increment(t, {
+              authorizationId: req.params.id,
+              additionalAmount: req.body.additionalAmount,
+            }),
           );
           await svc.settle(req.ctx, { type: 'authorization', id: req.params.id });
           return replyAuthorization(reply, await svc.view.authorization(req.ctx, req.params.id), false);
@@ -286,7 +324,14 @@ export function paymentsHttp(deps: { database: PorticoDatabase; service: Payment
       );
       app.post(
         '/payments/authorizations/:id/void',
-        { schema: { tags, params: idParams, body: voidInput, response: { 200: authorization, 202: authorization } } },
+        {
+          schema: {
+            tags,
+            params: idParams,
+            body: voidInput,
+            response: { 200: authorization, 202: authorization },
+          },
+        },
         async (req, reply) => {
           await idem(req, 'POST /payments/authorizations/:id/void', (t) =>
             svc.tx.void(t, { authorizationId: req.params.id, reason: req.body.reason }),
@@ -309,7 +354,9 @@ export function paymentsHttp(deps: { database: PorticoDatabase; service: Payment
         '/payments/charges',
         { schema: { tags, body: chargeInput, response: { 201: payment, 202: payment } } },
         async (req, reply) => {
-          const r = await idem(req, 'POST /payments/charges', (t, key) => svc.tx.charge(t, { ...req.body, businessKey: key }));
+          const r = await idem(req, 'POST /payments/charges', (t, key) =>
+            svc.tx.charge(t, { ...req.body, businessKey: key }),
+          );
           await svc.settle(req.ctx, { type: 'payment', id: r.body.id }, { verifyPending: r.replayed });
           return replyPayment(reply, await svc.view.payment(req.ctx, r.body.id));
         },
@@ -336,7 +383,9 @@ export function paymentsHttp(deps: { database: PorticoDatabase; service: Payment
       app.get('/payments/transactions/:id/history', { schema: { tags, params: idParams } }, async (req) =>
         tx(req, async (t) => {
           const p = await svc.tx.getPayment(t, req.params.id);
-          return { items: await svc.tx.operationHistory(t, { type: 'payment', id: p.id, propertyId: p.propertyId }) };
+          return {
+            items: await svc.tx.operationHistory(t, { type: 'payment', id: p.id, propertyId: p.propertyId }),
+          };
         }),
       );
       app.post(
@@ -346,7 +395,11 @@ export function paymentsHttp(deps: { database: PorticoDatabase; service: Payment
           await svc.checkNow(req.ctx, { type: 'payment', id: req.params.id });
           const p = await svc.view.payment(req.ctx, req.params.id);
           setVersion(reply, p.version);
-          return reply.status(p.status.payment === 'pending_verification' || p.status.payment === 'processing' ? 202 : 200).send(p);
+          return reply
+            .status(
+              p.status.payment === 'pending_verification' || p.status.payment === 'processing' ? 202 : 200,
+            )
+            .send(p);
         },
       );
       app.get('/payments/status-by-ref', { schema: { tags, querystring: refQuery } }, async (req) =>
@@ -371,7 +424,9 @@ export function paymentsHttp(deps: { database: PorticoDatabase; service: Payment
         '/payments/refunds',
         { schema: { tags, body: refundInput, response: { 201: refund, 202: refund } } },
         async (req, reply) => {
-          const r = await idem(req, 'POST /payments/refunds', (t, key) => svc.tx.refund(t, { ...req.body, businessKey: key }));
+          const r = await idem(req, 'POST /payments/refunds', (t, key) =>
+            svc.tx.refund(t, { ...req.body, businessKey: key }),
+          );
           await svc.settle(req.ctx, { type: 'refund', id: r.body.id }, { verifyPending: r.replayed });
           return replyRefund(reply, await svc.view.refund(req.ctx, r.body.id));
         },
@@ -402,7 +457,11 @@ export function paymentsHttp(deps: { database: PorticoDatabase; service: Payment
           await svc.checkNow(req.ctx, { type: 'refund', id: req.params.id });
           const r = await svc.view.refund(req.ctx, req.params.id);
           setVersion(reply, r.version);
-          return reply.status(r.status.refund === 'pending_verification' || r.status.refund === 'processing' ? 202 : 200).send(r);
+          return reply
+            .status(
+              r.status.refund === 'pending_verification' || r.status.refund === 'processing' ? 202 : 200,
+            )
+            .send(r);
         },
       );
 
@@ -422,9 +481,17 @@ export function paymentsHttp(deps: { database: PorticoDatabase; service: Payment
       );
       app.get(
         '/payments/requests',
-        { schema: { tags, querystring: refQuery, response: { 200: z.object({ items: z.array(paymentRequest) }) } } },
+        {
+          schema: {
+            tags,
+            querystring: refQuery,
+            response: { 200: z.object({ items: z.array(paymentRequest) }) },
+          },
+        },
         async (req) => ({
-          items: await tx(req, (t) => svc.tx.listPaymentRequests(t, { type: req.query.refType, id: req.query.refId })),
+          items: await tx(req, (t) =>
+            svc.tx.listPaymentRequests(t, { type: req.query.refType, id: req.query.refId }),
+          ),
         }),
       );
       app.get(
@@ -441,7 +508,9 @@ export function paymentsHttp(deps: { database: PorticoDatabase; service: Payment
         { schema: { tags, params: idParams, body: cancelRequestInput, response: { 200: paymentRequest } } },
         async (req, reply) => {
           const expected = requireIfMatch(req);
-          const r = await tx(req, (t) => svc.tx.cancelPaymentRequest(t, req.params.id, expected, req.body.reason));
+          const r = await tx(req, (t) =>
+            svc.tx.cancelPaymentRequest(t, req.params.id, expected, req.body.reason),
+          );
           setVersion(reply, r.version);
           return r;
         },
@@ -469,7 +538,9 @@ export function paymentsHttp(deps: { database: PorticoDatabase; service: Payment
         '/payments/virtual-cards',
         { schema: { tags, body: virtualCardInput, response: { 201: virtualCard } } },
         async (req, reply) => {
-          const r = await idem(req, 'POST /payments/virtual-cards', (t) => svc.tx.registerVirtualCard(t, req.body));
+          const r = await idem(req, 'POST /payments/virtual-cards', (t) =>
+            svc.tx.registerVirtualCard(t, req.body),
+          );
           setVersion(reply, r.body.version);
           return reply.status(201).send(r.body);
         },
@@ -486,7 +557,13 @@ export function paymentsHttp(deps: { database: PorticoDatabase; service: Payment
       // ───────────── disputes ─────────────
       app.get(
         '/payments/disputes',
-        { schema: { tags, querystring: propertyQuery, response: { 200: z.object({ items: z.array(dispute) }) } } },
+        {
+          schema: {
+            tags,
+            querystring: propertyQuery,
+            response: { 200: z.object({ items: z.array(dispute) }) },
+          },
+        },
         async (req) => ({ items: await tx(req, (t) => svc.tx.listDisputes(t, req.query.propertyId)) }),
       );
       app.get(
@@ -503,17 +580,23 @@ export function paymentsHttp(deps: { database: PorticoDatabase; service: Payment
         { schema: { tags, params: idParams, body: evidenceUpdate, response: { 200: dispute } } },
         async (req, reply) => {
           const expected = requireIfMatch(req);
-          const r = await tx(req, (t) => svc.tx.updateDisputeEvidence(t, req.params.id, expected, req.body.items));
+          const r = await tx(req, (t) =>
+            svc.tx.updateDisputeEvidence(t, req.params.id, expected, req.body.items),
+          );
           setVersion(reply, r.version);
           return r;
         },
       );
 
       // ───────────── payouts and statements ─────────────
-      app.post('/payments/payouts', { schema: { tags, body: payoutInput, response: { 201: payout } } }, async (req, reply) => {
-        const r = await idem(req, 'POST /payments/payouts', (t) => svc.tx.recordPayout(t, req.body));
-        return reply.status(201).send(r.body);
-      });
+      app.post(
+        '/payments/payouts',
+        { schema: { tags, body: payoutInput, response: { 201: payout } } },
+        async (req, reply) => {
+          const r = await idem(req, 'POST /payments/payouts', (t) => svc.tx.recordPayout(t, req.body));
+          return reply.status(201).send(r.body);
+        },
+      );
       app.get(
         '/payments/payouts',
         {
@@ -540,7 +623,10 @@ export function paymentsHttp(deps: { database: PorticoDatabase; service: Payment
         {
           schema: {
             tags,
-            querystring: z.object({ propertyId: z.uuid().optional(), status: z.enum(['open', 'resolved']).optional() }),
+            querystring: z.object({
+              propertyId: z.uuid().optional(),
+              status: z.enum(['open', 'resolved']).optional(),
+            }),
             response: { 200: z.object({ items: z.array(paymentException) }) },
           },
         },
@@ -555,10 +641,19 @@ export function paymentsHttp(deps: { database: PorticoDatabase; service: Payment
       );
       app.post(
         '/payments/exceptions/:id/resolve',
-        { schema: { tags, params: idParams, body: resolveExceptionInput, response: { 200: paymentException } } },
+        {
+          schema: {
+            tags,
+            params: idParams,
+            body: resolveExceptionInput,
+            response: { 200: paymentException },
+          },
+        },
         async (req, reply) => {
           const expected = requireIfMatch(req);
-          const r = await tx(req, (t) => svc.tx.resolveException(t, req.params.id, expected, req.body.resolution));
+          const r = await tx(req, (t) =>
+            svc.tx.resolveException(t, req.params.id, expected, req.body.resolution),
+          );
           setVersion(reply, r.version);
           return r;
         },
@@ -590,14 +685,17 @@ export function paymentsHttp(deps: { database: PorticoDatabase; service: Payment
       // ───────────── provider webhooks (public; signature-verified; raw body) ─────────────
       await app.register(async (scope) => {
         scope.removeContentTypeParser(['application/json']);
-        scope.addContentTypeParser('application/json', { parseAs: 'string' }, (_req, body, done) => done(null, body));
+        scope.addContentTypeParser('application/json', { parseAs: 'string' }, (_req, body, done) =>
+          done(null, body),
+        );
         scope.post(
           '/payments/webhooks/stripe',
           { config: { public: true }, schema: { tags: ['Payments webhooks'] } },
           async (req, reply) => {
             const raw = typeof req.body === 'string' ? req.body : '';
             const headers: Record<string, string | undefined> = {};
-            for (const [k, v] of Object.entries(req.headers)) headers[k.toLowerCase()] = Array.isArray(v) ? v[0] : v;
+            for (const [k, v] of Object.entries(req.headers))
+              headers[k.toLowerCase()] = Array.isArray(v) ? v[0] : v;
             const r = await svc.receiveStripeWebhook(raw, headers);
             return reply.status(200).send({ received: true, ...r });
           },

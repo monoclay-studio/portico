@@ -80,7 +80,11 @@ describe('scenario s06: a refund request is retried after an interruption', () =
     // The original payment posting is untouched; the payment shows what was refunded.
     expect(await postings(h, org, 'payment')).toHaveLength(1);
     const p = await h.module.service.view.payment(org.ctx, payment.id);
-    expect(p).toMatchObject({ refundedMinor: 30_000, refundableMinor: 70_000, amount: { amountMinor: 100_000 } });
+    expect(p).toMatchObject({
+      refundedMinor: 30_000,
+      refundableMinor: 70_000,
+      amount: { amountMinor: 100_000 },
+    });
     // Only ONE refund object exists at the provider (the simulator's side).
     const status = await org.tx((tx) => h.module.service.tx.getPaymentStatus(tx, p.ref));
     expect(status.refunds).toHaveLength(1);
@@ -91,13 +95,23 @@ describe('scenario s06: a refund request is retried after an interruption', () =
     const payment = await paidCharge(org, 50_000);
     const svc = h.module.service;
     const s = await org.tx((tx) =>
-      svc.tx.refund(tx, { paymentId: payment.id, amount: { amountMinor: 50_000, currency: 'USD' }, reason: 'x', businessKey: newId() }),
+      svc.tx.refund(tx, {
+        paymentId: payment.id,
+        amount: { amountMinor: 50_000, currency: 'USD' },
+        reason: 'x',
+        businessKey: newId(),
+      }),
     );
     // Crash after commit, then two recoveries at once (API retry + worker consumer).
-    await Promise.all([svc.execute(org.ctx, s.operationId as string), svc.execute(org.ctx, s.operationId as string)]);
+    await Promise.all([
+      svc.execute(org.ctx, s.operationId as string),
+      svc.execute(org.ctx, s.operationId as string),
+    ]);
     const r = await svc.view.refund(org.ctx, s.id);
     expect(r.status.refund).toBe('succeeded');
-    const history = await org.tx((tx) => svc.tx.operationHistory(tx, { type: 'refund', id: s.id, propertyId: org.propertyId }));
+    const history = await org.tx((tx) =>
+      svc.tx.operationHistory(tx, { type: 'refund', id: s.id, propertyId: org.propertyId }),
+    );
     expect(history[0]?.attempts).toBe(1);
     expect(await postings(h, org, 'refund')).toHaveLength(1);
   });
@@ -122,7 +136,9 @@ describe('scenario s06: a refund request is retried after an interruption', () =
     const org = await setupOrg(h);
     const payment = await paidCharge(org, 10_000);
     await setControls(h, org, { scenarioOverrides: { refund: 'decline:charge_already_refunded' } });
-    await expect(refundNow(org, payment.id, 10_000, newId())).resolves.toMatchObject({ status: { refund: 'failed' } });
+    await expect(refundNow(org, payment.id, 10_000, newId())).resolves.toMatchObject({
+      status: { refund: 'failed' },
+    });
     const p = await h.module.service.view.payment(org.ctx, payment.id);
     expect(p.refundableMinor).toBe(10_000);
     expect(await postings(h, org, 'refund')).toHaveLength(0);

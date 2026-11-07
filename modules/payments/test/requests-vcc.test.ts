@@ -53,7 +53,9 @@ describe('payment requests', () => {
     const deposits = await postings(h, org, 'deposit');
     expect(deposits.map((d) => d.amount_minor).sort((a, b) => a - b)).toEqual([26_000, 100_000]);
     const status = await org.tx((tx) => svc.tx.getPaymentStatus(tx, req.ref));
-    expect(status.payments.every((p) => p.method === 'payment_link' && p.status.payment === 'succeeded')).toBe(true);
+    expect(
+      status.payments.every((p) => p.method === 'payment_link' && p.status.payment === 'succeeded'),
+    ).toBe(true);
   });
 
   it('expires unpaid requests and can be cancelled with If-Match semantics', async () => {
@@ -61,7 +63,9 @@ describe('payment requests', () => {
     const svc = h.module.service;
     const a = await createRequest(org, 5_000);
     const b = await createRequest(org, 6_000);
-    const cancelled = await org.tx((tx) => svc.tx.cancelPaymentRequest(tx, b.id, b.version, 'Guest paid cash'));
+    const cancelled = await org.tx((tx) =>
+      svc.tx.cancelPaymentRequest(tx, b.id, b.version, 'Guest paid cash'),
+    );
     expect(cancelled.status.paymentRequest).toBe('cancelled');
     expect(cancelled.allowedActions.find((x) => x.action === 'cancel')).toMatchObject({ enabled: false });
     h.clock.advance(4 * 86_400_000);
@@ -105,7 +109,11 @@ describe('OTA virtual cards', () => {
     run = await svc.runDueVirtualCards(org.ctx, { propertyId: org.propertyId });
     expect(run.started).toBe(1);
     let v = await org.tx((tx) => svc.tx.getVirtualCard(tx, vcc.id));
-    expect(v).toMatchObject({ status: 'funding_retry', attempts: 1, lastFailure: { code: 'vcc_not_funded' } });
+    expect(v).toMatchObject({
+      status: 'funding_retry',
+      attempts: 1,
+      lastFailure: { code: 'vcc_not_funded' },
+    });
     // Not due yet → nothing happens.
     expect((await svc.runDueVirtualCards(org.ctx, { propertyId: org.propertyId })).started).toBe(0);
     h.clock.advance(6 * 3_600_000);
@@ -143,7 +151,9 @@ describe('OTA virtual cards', () => {
     await svc.runDueVirtualCards(org.ctx, { propertyId: org.propertyId });
     const v = await org.tx((tx) => svc.tx.getVirtualCard(tx, vcc.id));
     expect(v.status).toBe('failed');
-    const ex = await org.tx((tx) => svc.tx.listExceptions(tx, { propertyId: org.propertyId, status: 'open' }));
+    const ex = await org.tx((tx) =>
+      svc.tx.listExceptions(tx, { propertyId: org.propertyId, status: 'open' }),
+    );
     expect(ex.find((e) => e.kind === 'vcc_charge_failed')).toMatchObject({ owner: { id: 'reservations' } });
   });
 });

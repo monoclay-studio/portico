@@ -27,14 +27,6 @@ import { PaymentsEvents } from '../events';
 import type { LedgerPort, PlatformPort, PropertyInfo } from '../ports';
 import type { ProviderAccount, SimulatorControls } from '../providers/provider';
 import type { ProviderRegistry } from '../providers/registry';
-import {
-  authorizationRecord,
-  exceptionRecord,
-  paymentRecord,
-  type RecordContext,
-  refundRecord,
-  requestRecord,
-} from './records';
 import type {
   AccountsTable,
   AuthorizationsTable,
@@ -45,6 +37,14 @@ import type {
   PaymentsTable,
   RefundsTable,
 } from '../tables';
+import {
+  authorizationRecord,
+  exceptionRecord,
+  paymentRecord,
+  type RecordContext,
+  refundRecord,
+  requestRecord,
+} from './records';
 
 export interface PaymentsDeps {
   database: PorticoDatabase;
@@ -106,18 +106,26 @@ export function readableProperties(ctx: RequestContext): readonly string[] | 'al
 }
 
 /** ADR-0014: payments must be writable here. Forwarding payments to another system is not available. */
-export async function assertPaymentsWritable(d: PaymentsDeps, tx: TxContext, propertyId: string): Promise<void> {
+export async function assertPaymentsWritable(
+  d: PaymentsDeps,
+  tx: TxContext,
+  propertyId: string,
+): Promise<void> {
   const mode = await d.platform.assertWritable(tx, propertyId, 'payments');
   if (mode === 'forward') {
     throw new BusinessRuleError(
       'payments_forwarding_unavailable',
-      "Payments at this property are handled by another system of record. Take the payment in that system; Portico cannot forward payments to it yet.",
+      'Payments at this property are handled by another system of record. Take the payment in that system; Portico cannot forward payments to it yet.',
       { propertyId },
     );
   }
 }
 
-export async function loadProperty(d: PaymentsDeps, tx: TxContext, propertyId: string): Promise<PropertyInfo> {
+export async function loadProperty(
+  d: PaymentsDeps,
+  tx: TxContext,
+  propertyId: string,
+): Promise<PropertyInfo> {
   return d.platform.getProperty(tx, propertyId);
 }
 
@@ -190,14 +198,24 @@ export class ProviderUnavailableError extends DomainError {
       {
         status: 503,
         retryable: true,
-        details: { accountId, retryAfter: retryAfter.toISOString(), actions: OUTAGE_ACTIONS.map((a) => ({ ...a })) },
+        details: {
+          accountId,
+          retryAfter: retryAfter.toISOString(),
+          actions: OUTAGE_ACTIONS.map((a) => ({ ...a })),
+        },
       },
     );
   }
 }
 
 export class PendingVerificationBlockError extends ConflictError {
-  constructor(input: { kind: 'payment' | 'authorization' | 'refund'; id: string; amountMinor: number; currency: string; since: Date }) {
+  constructor(input: {
+    kind: 'payment' | 'authorization' | 'refund';
+    id: string;
+    amountMinor: number;
+    currency: string;
+    since: Date;
+  }) {
     super(
       `${input.kind}_pending_verification`,
       `A ${input.kind} of ${input.currency} ${(input.amountMinor / 100).toFixed(2)} started at ${input.since.toISOString()} is still being verified with the provider. Check its status or wait — starting another one now could charge the guest twice.`,
@@ -273,7 +291,11 @@ export async function raiseException(tx: TxContext, e: ExceptionInput): Promise<
 }
 
 /** Resolve open exceptions by dedupe key (system-detected recovery). */
-export async function resolveExceptionsByKey(tx: TxContext, dedupeKey: string, resolution: string): Promise<void> {
+export async function resolveExceptionsByKey(
+  tx: TxContext,
+  dedupeKey: string,
+  resolution: string,
+): Promise<void> {
   const rows = await db(tx)
     .updateTable('payments.exceptions')
     .set({
@@ -373,7 +395,11 @@ export function toMethodView(m: MethodRow): PaymentMethod {
   };
 }
 
-export function toAuthorizationView(a: AuthorizationRow, rc: RecordContext, capabilities: readonly string[]): Authorization {
+export function toAuthorizationView(
+  a: AuthorizationRow,
+  rc: RecordContext,
+  capabilities: readonly string[],
+): Authorization {
   return {
     id: a.id,
     propertyId: a.property_id,

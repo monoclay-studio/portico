@@ -20,7 +20,14 @@ import {
   ValidationError,
 } from '@portico/kernel';
 import type { z } from 'zod';
-import type { Dispute, Payout, payoutInput, ReconciliationResult, StatementResult, statementImportInput } from '../contracts';
+import type {
+  Dispute,
+  Payout,
+  payoutInput,
+  ReconciliationResult,
+  StatementResult,
+  statementImportInput,
+} from '../contracts';
 import { parseStatementCsv } from '../domain/csv';
 import { matchSettlement, type RecordedItem, type SettlementIssue } from '../domain/settlement';
 import { PaymentsEvents } from '../events';
@@ -64,9 +71,17 @@ export async function runReconciliation(
       .limit(limit);
     if (opts.propertyId) due = due.where('property_id', '=', opts.propertyId);
     const ops = await due.execute();
-    let lp = db(tx).selectFrom('payments.payments').select('id').where('ledger_status', 'in', ['pending', 'failed']).limit(limit);
+    let lp = db(tx)
+      .selectFrom('payments.payments')
+      .select('id')
+      .where('ledger_status', 'in', ['pending', 'failed'])
+      .limit(limit);
     if (opts.propertyId) lp = lp.where('property_id', '=', opts.propertyId);
-    let lr = db(tx).selectFrom('payments.refunds').select('id').where('ledger_status', 'in', ['pending', 'failed']).limit(limit);
+    let lr = db(tx)
+      .selectFrom('payments.refunds')
+      .select('id')
+      .where('ledger_status', 'in', ['pending', 'failed'])
+      .limit(limit);
     if (opts.propertyId) lr = lr.where('property_id', '=', opts.propertyId);
     let links = db(tx)
       .selectFrom('payments.payment_requests')
@@ -75,7 +90,12 @@ export async function runReconciliation(
       .where('link_status', 'in', ['pending', 'unknown'])
       .limit(limit);
     if (opts.propertyId) links = links.where('property_id', '=', opts.propertyId);
-    return { ops, ledgerPayments: await lp.execute(), ledgerRefunds: await lr.execute(), links: await links.execute() };
+    return {
+      ops,
+      ledgerPayments: await lp.execute(),
+      ledgerRefunds: await lr.execute(),
+      links: await links.execute(),
+    };
   });
 
   for (const op of work.ops) {
@@ -109,7 +129,11 @@ export async function runReconciliation(
       .where('capture_reserved_minor', '=', 0);
     if (opts.propertyId) expiring = expiring.where('property_id', '=', opts.propertyId);
     for (const a of await expiring.execute()) {
-      await db(tx).updateTable('payments.authorizations').set({ status: 'expired', version: a.version + 1 }).where('id', '=', a.id).execute();
+      await db(tx)
+        .updateTable('payments.authorizations')
+        .set({ status: 'expired', version: a.version + 1 })
+        .where('id', '=', a.id)
+        .execute();
       await tx.audit({
         action: 'payments.authorization.expire',
         target: { type: 'authorization', id: a.id },
@@ -122,9 +146,54 @@ export async function runReconciliation(
         type: PaymentsEvents.authorizationExpired,
         propertyId: a.property_id,
         aggregate: { type: 'authorization', id: a.id },
-        payload: { authorizationId: a.id, ref: { type: a.ref_type, id: a.ref_id }, uncapturedMinor: a.amount_minor - a.captured_minor },
+        payload: {
+          authorizationId: a.id,
+          ref: { type: a.ref_type, id: a.ref_id },
+          uncapturedMinor: a.amount_minor - a.captured_minor,
+        },
       });
+      await resolveExceptionsByKey(tx, `auth-expiring:${a.id}`, 'The hold expired.');
       result.authorizationsExpired++;
+    }
+    // PAY-R10: holds about to expire get a renewal task (policy payments.authorization.renewBeforeDays, default 2).
+    let soon = db(tx)
+      .selectFrom('payments.authorizations')
+      .select([
+        'id',
+        'property_id',
+        'expires_at',
+        'amount_minor',
+        'captured_minor',
+        'currency',
+        'ref_type',
+        'ref_id',
+      ])
+      .where('status', 'in', ['authorized', 'partially_captured'])
+      .where('expires_at', '>=', tx.now)
+      .where('expires_at', '<', new Date(tx.now.getTime() + 30 * 86_400_000));
+    if (opts.propertyId) soon = soon.where('property_id', '=', opts.propertyId);
+    for (const a of await soon.execute()) {
+      const days = await d.platform.resolvePolicy(
+        tx,
+        a.property_id,
+        'payments.authorization.renewBeforeDays',
+        2,
+      );
+      const expires = new Date(a.expires_at as Date);
+      if (expires.getTime() - tx.now.getTime() > Number(days.value) * 86_400_000) continue;
+      await raiseException(tx, {
+        propertyId: a.property_id,
+        kind: 'authorization_expiring',
+        severity: 'routine',
+        problem: `A card hold of ${a.currency} ${a.amount_minor - a.captured_minor} (minor units) expires at ${expires.toISOString()}.`,
+        businessImpact: 'After expiry the hold no longer guarantees payment for this stay.',
+        nextStep:
+          'Collect what is due now, or take a new authorization (with the guest’s agreement) before it expires.',
+        ownerRole: 'front_office_manager',
+        responsibleParty: 'hotel',
+        ref: { type: 'authorization', id: a.id },
+        dedupeKey: `auth-expiring:${a.id}`,
+      });
     }
     let requests = db(tx)
       .selectFrom('payments.payment_requests')
@@ -133,7 +202,11 @@ export async function runReconciliation(
       .where('expires_at', '<', tx.now);
     if (opts.propertyId) requests = requests.where('property_id', '=', opts.propertyId);
     for (const r of await requests.execute()) {
-      await db(tx).updateTable('payments.payment_requests').set({ status: 'expired', version: r.version + 1 }).where('id', '=', r.id).execute();
+      await db(tx)
+        .updateTable('payments.payment_requests')
+        .set({ status: 'expired', version: r.version + 1 })
+        .where('id', '=', r.id)
+        .execute();
       await tx.emit({
         type: PaymentsEvents.requestExpired,
         propertyId: r.property_id,
@@ -157,7 +230,8 @@ export async function runReconciliation(
         severity: 'routine',
         problem: `A ${p.method.replace('_', ' ')} payment of ${p.currency} ${p.amount_minor} (minor units, ref ${p.external_reference ?? '—'}) has not been matched to any statement for 7 days.`,
         businessImpact: 'Portico cannot confirm the hotel actually received this money.',
-        nextStep: 'Import the settlement or bank statement covering that date, or investigate with the acquirer/bank.',
+        nextStep:
+          'Import the settlement or bank statement covering that date, or investigate with the acquirer/bank.',
         ownerRole: 'finance',
         responsibleParty: 'hotel',
         ref: { type: 'payment', id: p.id },
@@ -181,12 +255,17 @@ const SOURCE_METHODS: Record<string, ReadonlyArray<'external_terminal' | 'cash' 
 function issueException(statementId: string, propertyId: string, i: SettlementIssue, fileName: string) {
   const base = {
     propertyId,
-    severity: (i.kind === 'missing_in_statement' || i.kind === 'ambiguous_match' ? 'routine' : 'urgent') as 'urgent' | 'routine',
+    severity: (i.kind === 'missing_in_statement' || i.kind === 'ambiguous_match' ? 'routine' : 'urgent') as
+      | 'urgent'
+      | 'routine',
     ownerRole: 'finance',
     responsibleParty: 'hotel' as const,
     ...(i.itemId ? { ref: { type: i.itemKind ?? 'payment', id: i.itemId } } : {}),
   };
-  const texts: Record<SettlementIssue['kind'], { problem: string; impact: string; next: string; key: string }> = {
+  const texts: Record<
+    SettlementIssue['kind'],
+    { problem: string; impact: string; next: string; key: string }
+  > = {
     amount_mismatch: {
       problem: `Statement ${fileName}: ${i.detail}`,
       impact: 'The bill and the bank disagree about how much was paid.',
@@ -225,7 +304,14 @@ function issueException(statementId: string, propertyId: string, i: SettlementIs
     },
   };
   const t = texts[i.kind];
-  return { ...base, kind: `settlement_${i.kind}`, problem: t.problem, businessImpact: t.impact, nextStep: t.next, dedupeKey: t.key };
+  return {
+    ...base,
+    kind: `settlement_${i.kind}`,
+    problem: t.problem,
+    businessImpact: t.impact,
+    nextStep: t.next,
+    dedupeKey: t.key,
+  };
 }
 
 export async function importStatement(
@@ -241,12 +327,19 @@ export async function importStatement(
   if (input.accountId) {
     const account = await loadAccount(tx, input.accountId);
     if (account.legal_entity_id !== property.legalEntityId) {
-      throw new BusinessRuleError('wrong_merchant_of_record', 'This account belongs to another legal entity.');
+      throw new BusinessRuleError(
+        'wrong_merchant_of_record',
+        'This account belongs to another legal entity.',
+      );
     }
   }
   const lines = parseStatementCsv(input.csv);
   const fileHash = sha256Hex(input.csv);
-  const dup = await db(tx).selectFrom('payments.statements').select(['id', 'imported_at']).where('file_sha256', '=', fileHash).executeTakeFirst();
+  const dup = await db(tx)
+    .selectFrom('payments.statements')
+    .select(['id', 'imported_at'])
+    .where('file_sha256', '=', fileHash)
+    .executeTakeFirst();
   if (dup) {
     throw new ConflictError(
       'statement_already_imported',
@@ -309,7 +402,9 @@ export async function importStatement(
   const match = matchSettlement({ items, lines, period: { from: input.periodFrom, to: input.periodTo } });
   const statementId = newId(tx.now.getTime());
   const exceptionIds: string[] = [];
-  const issueInputs = match.issues.map((i) => issueException(statementId, input.propertyId, i, input.fileName));
+  const issueInputs = match.issues.map((i) =>
+    issueException(statementId, input.propertyId, i, input.fileName),
+  );
   await db(tx)
     .insertInto('payments.statements')
     .values({
@@ -420,23 +515,26 @@ export async function importStatement(
 
 // ───────────────────────── payouts ─────────────────────────
 
-function toPayoutView(p: {
-  id: string;
-  account_id: string;
-  legal_entity_id: string;
-  provider_payout_id: string;
-  currency: string;
-  gross_minor: number | null;
-  fees_minor: number | null;
-  net_minor: number;
-  arrival_date: string | null;
-  status: string;
-  failure_reason: string | null;
-  source: string;
-  ledger_status: string;
-  ledger_ref: string | null;
-  version: number;
-}, itemCount: number): Payout {
+function toPayoutView(
+  p: {
+    id: string;
+    account_id: string;
+    legal_entity_id: string;
+    provider_payout_id: string;
+    currency: string;
+    gross_minor: number | null;
+    fees_minor: number | null;
+    net_minor: number;
+    arrival_date: string | null;
+    status: string;
+    failure_reason: string | null;
+    source: string;
+    ledger_status: string;
+    ledger_ref: string | null;
+    version: number;
+  },
+  itemCount: number,
+): Payout {
   return {
     id: p.id,
     accountId: p.account_id,
@@ -457,7 +555,11 @@ function toPayoutView(p: {
 }
 
 /** Record (or complete) a payout with gross / fees / net and the payments it includes. Payout ≠ revenue. */
-export async function recordPayout(d: PaymentsDeps, tx: TxContext, input: z.infer<typeof payoutInput>): Promise<Payout> {
+export async function recordPayout(
+  d: PaymentsDeps,
+  tx: TxContext,
+  input: z.infer<typeof payoutInput>,
+): Promise<Payout> {
   requirePermission(tx, 'payments.payout.manage');
   const account = await loadAccount(tx, input.accountId);
   const existing = await db(tx)
@@ -468,7 +570,11 @@ export async function recordPayout(d: PaymentsDeps, tx: TxContext, input: z.infe
     .forUpdate()
     .executeTakeFirst();
   if (existing && existing.ledger_status === 'posted') {
-    const n = await db(tx).selectFrom('payments.payout_items').select((eb) => eb.fn.countAll<number>().as('n')).where('payout_id', '=', existing.id).executeTakeFirstOrThrow();
+    const n = await db(tx)
+      .selectFrom('payments.payout_items')
+      .select((eb) => eb.fn.countAll<number>().as('n'))
+      .where('payout_id', '=', existing.id)
+      .executeTakeFirstOrThrow();
     return toPayoutView(existing, Number(n.n));
   }
   if (existing && existing.net_minor !== input.netMinor) {
@@ -514,31 +620,62 @@ export async function recordPayout(d: PaymentsDeps, tx: TxContext, input: z.infe
       .execute();
   }
   for (const pid of input.paymentIds) {
-    const p = await db(tx).selectFrom('payments.payments').select(['id', 'account_id', 'status', 'amount_minor', 'payout_id']).where('id', '=', pid).executeTakeFirst();
+    const p = await db(tx)
+      .selectFrom('payments.payments')
+      .select(['id', 'account_id', 'status', 'amount_minor', 'payout_id'])
+      .where('id', '=', pid)
+      .executeTakeFirst();
     if (!p || p.account_id !== account.id) throw new NotFoundError('payment', pid);
     if (p.status !== 'succeeded' && p.status !== 'recorded_verified' && p.status !== 'recorded_unverified') {
-      throw new BusinessRuleError('payment_not_settled', `Payment ${pid} was not collected, so it cannot be part of a payout.`);
+      throw new BusinessRuleError(
+        'payment_not_settled',
+        `Payment ${pid} was not collected, so it cannot be part of a payout.`,
+      );
     }
     if (p.payout_id && p.payout_id !== id) {
       throw new ConflictError('payment_in_other_payout', `Payment ${pid} is already part of another payout.`);
     }
     await db(tx)
       .insertInto('payments.payout_items')
-      .values({ id: newId(tx.now.getTime()), tenant_id: tx.tenantId, payout_id: id, kind: 'payment', payment_id: pid, refund_id: null, amount_minor: p.amount_minor })
+      .values({
+        id: newId(tx.now.getTime()),
+        tenant_id: tx.tenantId,
+        payout_id: id,
+        kind: 'payment',
+        payment_id: pid,
+        refund_id: null,
+        amount_minor: p.amount_minor,
+      })
       .onConflict((oc) => oc.columns(['payout_id', 'payment_id']).doNothing())
       .execute();
     await db(tx).updateTable('payments.payments').set({ payout_id: id }).where('id', '=', pid).execute();
   }
   for (const rid of input.refundIds) {
-    const r = await db(tx).selectFrom('payments.refunds').select(['id', 'amount_minor', 'account_id']).where('id', '=', rid).executeTakeFirst();
+    const r = await db(tx)
+      .selectFrom('payments.refunds')
+      .select(['id', 'amount_minor', 'account_id'])
+      .where('id', '=', rid)
+      .executeTakeFirst();
     if (!r || r.account_id !== account.id) throw new NotFoundError('refund', rid);
     await db(tx)
       .insertInto('payments.payout_items')
-      .values({ id: newId(tx.now.getTime()), tenant_id: tx.tenantId, payout_id: id, kind: 'refund', payment_id: null, refund_id: rid, amount_minor: -r.amount_minor })
+      .values({
+        id: newId(tx.now.getTime()),
+        tenant_id: tx.tenantId,
+        payout_id: id,
+        kind: 'refund',
+        payment_id: null,
+        refund_id: rid,
+        amount_minor: -r.amount_minor,
+      })
       .onConflict((oc) => oc.columns(['payout_id', 'refund_id']).doNothing())
       .execute();
   }
-  const row = await db(tx).selectFrom('payments.payouts').selectAll().where('id', '=', id).executeTakeFirstOrThrow();
+  const row = await db(tx)
+    .selectFrom('payments.payouts')
+    .selectAll()
+    .where('id', '=', id)
+    .executeTakeFirstOrThrow();
   if (row.status === 'paid') {
     const posted = await tryLedger(tx, () =>
       d.ledger.recordPayout(tx, {
@@ -553,10 +690,15 @@ export async function recordPayout(d: PaymentsDeps, tx: TxContext, input: z.infe
     );
     await db(tx)
       .updateTable('payments.payouts')
-      .set(posted.ok ? { ledger_status: 'posted', ledger_ref: posted.value.journalEntryId, ledger_error: null } : { ledger_status: 'failed', ledger_error: posted.error })
+      .set(
+        posted.ok
+          ? { ledger_status: 'posted', ledger_ref: posted.value.journalEntryId, ledger_error: null }
+          : { ledger_status: 'failed', ledger_error: posted.error },
+      )
       .where('id', '=', id)
       .execute();
-    if (posted.ok) await resolveExceptionsByKey(tx, `payout-breakdown:${id}`, 'Payout breakdown recorded and posted.');
+    if (posted.ok)
+      await resolveExceptionsByKey(tx, `payout-breakdown:${id}`, 'Payout breakdown recorded and posted.');
     else {
       await raiseException(tx, {
         propertyId: null,
@@ -580,8 +722,16 @@ export async function recordPayout(d: PaymentsDeps, tx: TxContext, input: z.infe
     target: { type: 'payout', id },
     after: { ...input },
   });
-  const final = await db(tx).selectFrom('payments.payouts').selectAll().where('id', '=', id).executeTakeFirstOrThrow();
-  const n = await db(tx).selectFrom('payments.payout_items').select((eb) => eb.fn.countAll<number>().as('n')).where('payout_id', '=', id).executeTakeFirstOrThrow();
+  const final = await db(tx)
+    .selectFrom('payments.payouts')
+    .selectAll()
+    .where('id', '=', id)
+    .executeTakeFirstOrThrow();
+  const n = await db(tx)
+    .selectFrom('payments.payout_items')
+    .select((eb) => eb.fn.countAll<number>().as('n'))
+    .where('payout_id', '=', id)
+    .executeTakeFirstOrThrow();
   return toPayoutView(final, Number(n.n));
 }
 
@@ -637,7 +787,12 @@ export async function getDispute(tx: TxContext, id: string): Promise<Dispute> {
 
 export async function listDisputes(tx: TxContext, propertyId: string): Promise<Dispute[]> {
   requireRead(tx, propertyId);
-  const rows = await db(tx).selectFrom('payments.disputes').selectAll().where('property_id', '=', propertyId).orderBy('opened_at', 'desc').execute();
+  const rows = await db(tx)
+    .selectFrom('payments.disputes')
+    .selectAll()
+    .where('property_id', '=', propertyId)
+    .orderBy('opened_at', 'desc')
+    .execute();
   return rows.map(toDisputeView);
 }
 
@@ -653,7 +808,10 @@ export async function updateDisputeEvidence(
   const current = (r.evidence as Dispute['evidence']) ?? [];
   for (const i of items) {
     if (!current.some((c) => c.key === i.key)) {
-      throw new ValidationError('unknown_evidence_item', `"${i.key}" is not on this dispute's evidence checklist.`);
+      throw new ValidationError(
+        'unknown_evidence_item',
+        `"${i.key}" is not on this dispute's evidence checklist.`,
+      );
     }
   }
   const next = current.map((c) => {

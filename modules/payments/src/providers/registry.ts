@@ -27,7 +27,10 @@ export type ResolvedProvider =
 export interface ProviderRegistry {
   readonly simulator: SimulatorProvider;
   /** The effect mode this context would use (for recording intent BEFORE the call). */
-  modeFor(ctx: Pick<RequestContext, 'environment'>, account: Pick<ProviderAccount, 'provider'>): 'live' | 'sandbox' | 'simulate';
+  modeFor(
+    ctx: Pick<RequestContext, 'environment'>,
+    account: Pick<ProviderAccount, 'provider'>,
+  ): 'live' | 'sandbox' | 'simulate';
   forAccount(ctx: Pick<RequestContext, 'environment'>, account: ProviderAccount): ResolvedProvider;
   /** Adapter used to verify a provider's webhooks for a mode (null when not configured). */
   stripeForWebhooks(mode: 'live' | 'sandbox'): StripeConnectProvider | null;
@@ -92,3 +95,27 @@ export const noProviderSecrets: ProviderSecretsPort = {
   stripeSecretKey: () => null,
   stripeWebhookSecrets: () => [],
 };
+
+/**
+ * Secrets from environment variables (development/sandbox). Production binds Secrets Manager. None of these exist
+ * yet (owner questions Q2/Q3): with no keys every Stripe call is refused before sending ("not configured").
+ *   PAYMENTS_STRIPE_SECRET_KEY_TEST / _LIVE           Monoclay Connect PLATFORM keys (never the SaaS-billing key)
+ *   PAYMENTS_STRIPE_WEBHOOK_SECRETS_TEST / _LIVE      comma-separated Connect endpoint signing secrets
+ */
+export function envProviderSecrets(env: Record<string, string | undefined>): ProviderSecretsPort {
+  const list = (v: string | undefined) =>
+    v
+      ? v
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : [];
+  return {
+    stripeSecretKey: (mode) =>
+      (mode === 'live' ? env.PAYMENTS_STRIPE_SECRET_KEY_LIVE : env.PAYMENTS_STRIPE_SECRET_KEY_TEST) || null,
+    stripeWebhookSecrets: (mode) =>
+      list(
+        mode === 'live' ? env.PAYMENTS_STRIPE_WEBHOOK_SECRETS_LIVE : env.PAYMENTS_STRIPE_WEBHOOK_SECRETS_TEST,
+      ),
+  };
+}

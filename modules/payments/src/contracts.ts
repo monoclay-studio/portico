@@ -12,11 +12,9 @@ export const ledgerRef = z.object({ type: z.enum(['folio', 'booking']), id: z.uu
 export const anyRef = z.object({ type: z.string().min(1).max(40), id: z.uuid() }).strict();
 
 const noLongDigits = (field: string) =>
-  z
-    .string()
-    .refine((v) => !/\d(?:[ -]?\d){11,}/.test(v), {
-      message: `${field} must never contain a card number. Use the provider's token instead.`,
-    });
+  z.string().refine((v) => !/\d(?:[ -]?\d){11,}/.test(v), {
+    message: `${field} must never contain a card number. Use the provider's token instead.`,
+  });
 
 export const providerKind = z.enum(['simulator', 'stripe_connect', 'external_terminal']);
 export const accountStatus = z.enum(['pending', 'active', 'restricted', 'disabled']);
@@ -46,7 +44,10 @@ export const accountInput = z
     externalAccountId: z.string().min(1).max(100).optional(),
     displayName: z.string().min(1).max(200),
     currencies: z.array(currency).min(1).max(20),
-    countryCode: z.string().regex(/^[A-Z]{2}$/).optional(),
+    countryCode: z
+      .string()
+      .regex(/^[A-Z]{2}$/)
+      .optional(),
     statementDescriptor: z.string().max(22).optional(),
     applicationFeeBps: z.number().int().min(0).max(1000).optional(),
   })
@@ -121,7 +122,9 @@ export const mandateInput = z
     acceptedAt: z.iso.datetime(),
     channel: z.string().max(60),
     networkTransactionId: z.string().max(100).optional(),
-    threeDsResult: z.enum(['authenticated', 'attempted', 'not_authenticated', 'exempt', 'unknown']).optional(),
+    threeDsResult: z
+      .enum(['authenticated', 'attempted', 'not_authenticated', 'exempt', 'unknown'])
+      .optional(),
   })
   .strict();
 
@@ -133,11 +136,16 @@ export const paymentMethodInput = z
     providerToken: noLongDigits('providerToken').pipe(z.string().min(3).max(200)),
     providerCustomerRef: noLongDigits('providerCustomerRef').pipe(z.string().max(200)).optional(),
     brand: z.string().max(30).optional(),
-    last4: z.string().regex(/^\d{4}$/, 'last4 is exactly the last four digits').optional(),
+    last4: z
+      .string()
+      .regex(/^\d{4}$/, 'last4 is exactly the last four digits')
+      .optional(),
     expMonth: z.number().int().min(1).max(12).optional(),
     expYear: z.number().int().min(2000).max(2100).optional(),
     holderName: noLongDigits('holderName').pipe(z.string().max(200)).optional(),
-    owner: z.object({ type: z.enum(['guest_profile', 'company', 'agency', 'booking']), id: z.uuid() }).strict(),
+    owner: z
+      .object({ type: z.enum(['guest_profile', 'company', 'agency', 'booking']), id: z.uuid() })
+      .strict(),
     mitAgreement: z.boolean().default(false),
     mandate: mandateInput.optional(),
     tokenPortability: z.enum(['provider_bound', 'network_token', 'vault_portable', 'unknown']).optional(),
@@ -195,7 +203,9 @@ export const recordIssue = z.object({
   code: z.string(),
   severity: z.enum(['blocking', 'warning', 'info']),
   message: z.string(),
-  owner: z.object({ kind: z.enum(['user', 'department']), id: z.string(), name: z.string().optional() }).optional(),
+  owner: z
+    .object({ kind: z.enum(['user', 'department']), id: z.string(), name: z.string().optional() })
+    .optional(),
   since: z.string().optional(),
 });
 export const recordParts = {
@@ -203,8 +213,12 @@ export const recordParts = {
   status: z.record(z.string(), z.string()),
   allowedActions: z.array(recordAction),
   issues: z.array(recordIssue),
-  owner: z.object({ kind: z.enum(['user', 'department']), id: z.string(), name: z.string().optional() }).optional(),
-  links: z.array(z.object({ rel: z.string(), type: z.string(), id: z.string(), title: z.string().optional() })),
+  owner: z
+    .object({ kind: z.enum(['user', 'department']), id: z.string(), name: z.string().optional() })
+    .optional(),
+  links: z.array(
+    z.object({ rel: z.string(), type: z.string(), id: z.string(), title: z.string().optional() }),
+  ),
   provenance: z.enum(['live', 'simulated', 'copied', 'delayed', 'incomplete', 'external']).optional(),
 };
 
@@ -229,7 +243,10 @@ export const recordAuthorizationInput = z
     ref: anyRef,
     approvalCode: noLongDigits('approvalCode').pipe(z.string().min(1).max(60)),
     cardBrand: z.string().max(30).optional(),
-    cardLast4: z.string().regex(/^\d{4}$/).optional(),
+    cardLast4: z
+      .string()
+      .regex(/^\d{4}$/)
+      .optional(),
     expiresAt: z.iso.datetime().optional(),
   })
   .strict();
@@ -277,7 +294,10 @@ export const recordPaymentInput = z
     reference: noLongDigits('reference').pipe(z.string().min(1).max(100)),
     terminalId: z.string().max(60).optional(),
     cardBrand: z.string().max(30).optional(),
-    cardLast4: z.string().regex(/^\d{4}$/).optional(),
+    cardLast4: z
+      .string()
+      .regex(/^\d{4}$/)
+      .optional(),
     receivedAt: z.iso.datetime(),
     authorizationId: z.uuid().optional(),
     note: noLongDigits('note').pipe(z.string().max(500)).optional(),
@@ -407,7 +427,10 @@ export const virtualCardInput = z
     /** Token/alias issued by the PCI vault or proxy that received the OTA card (never the card number). */
     vaultToken: noLongDigits('vaultToken').pipe(z.string().min(3).max(200)),
     brand: z.string().max(30).optional(),
-    last4: z.string().regex(/^\d{4}$/).optional(),
+    last4: z
+      .string()
+      .regex(/^\d{4}$/)
+      .optional(),
     expMonth: z.number().int().min(1).max(12).optional(),
     expYear: z.number().int().min(2000).max(2100).optional(),
     bookingId: z.uuid(),
@@ -461,7 +484,9 @@ export const dispute = z.object({
 export type Dispute = z.infer<typeof dispute>;
 export const evidenceUpdate = z
   .object({
-    items: z.array(z.object({ key: z.string(), done: z.boolean(), note: z.string().max(1000).optional() }).strict()),
+    items: z.array(
+      z.object({ key: z.string(), done: z.boolean(), note: z.string().max(1000).optional() }).strict(),
+    ),
   })
   .strict();
 
@@ -566,7 +591,15 @@ export const paymentsStatus = z.object({
   banner: z.string().nullable(),
   accounts: z.array(accountHealth),
   unresolved: z.object({
-    pendingVerification: z.array(z.object({ type: z.string(), id: z.uuid(), amountMinor: z.number(), currency: z.string(), since: z.string() })),
+    pendingVerification: z.array(
+      z.object({
+        type: z.string(),
+        id: z.uuid(),
+        amountMinor: z.number(),
+        currency: z.string(),
+        since: z.string(),
+      }),
+    ),
     recordedUnverified: z.number().int(),
     ledgerPending: z.number().int(),
     openExceptions: z.number().int(),

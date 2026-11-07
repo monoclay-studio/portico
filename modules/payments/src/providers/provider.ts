@@ -206,7 +206,10 @@ export interface PaymentProvider {
     call: CallBase & { providerRef: string; amount: Money; applicationFeeMinor: number | null },
   ): Promise<ProviderOutcome>;
   void(account: ProviderAccount, call: CallBase & { providerRef: string }): Promise<ProviderOutcome>;
-  charge(account: ProviderAccount, call: PaymentCall & { applicationFeeMinor: number | null }): Promise<ProviderOutcome>;
+  charge(
+    account: ProviderAccount,
+    call: PaymentCall & { applicationFeeMinor: number | null },
+  ): Promise<ProviderOutcome>;
   refund(
     account: ProviderAccount,
     call: CallBase & { paymentProviderRef: string; amount: Money; reason: string },

@@ -14,7 +14,15 @@
  * never by guessing. A lookup that finds nothing is conclusive only after a grace period.
  */
 import { type Selectable, type TxContext, withTenantTx } from '@portico/db';
-import { DomainError, localDateIn, type Money, money, NotFoundError, newId, type RequestContext } from '@portico/kernel';
+import {
+  DomainError,
+  localDateIn,
+  type Money,
+  money,
+  NotFoundError,
+  newId,
+  type RequestContext,
+} from '@portico/kernel';
 import {
   type BreakerState,
   decideAttempt,
@@ -106,14 +114,21 @@ async function saveBreaker(tx: TxContext, account: AccountRow, s: BreakerState):
 }
 
 /** Refuse new provider work while the account's breaker is open (nothing is created, alternatives listed). */
-export async function assertBreakerAllows(d: PaymentsDeps, tx: TxContext, account: AccountRow): Promise<void> {
+export async function assertBreakerAllows(
+  d: PaymentsDeps,
+  tx: TxContext,
+  account: AccountRow,
+): Promise<void> {
   const s = await loadBreaker(tx, account.id);
   const decision = decideAttempt(s, tx.now, d.breaker);
   if (!decision.allowed) throw new ProviderUnavailableError(account.id, decision.retryAfter);
 }
 
 async function updateBreaker(tx: TxContext, account: AccountRow, outcome: ProviderOutcome): Promise<void> {
-  if (outcome.kind === 'failed' && (outcome.code === 'provider_not_configured' || outcome.code === 'expired_before_sending')) {
+  if (
+    outcome.kind === 'failed' &&
+    (outcome.code === 'provider_not_configured' || outcome.code === 'expired_before_sending')
+  ) {
     return;
   }
   const before = await loadBreaker(tx, account.id);
@@ -124,14 +139,19 @@ async function updateBreaker(tx: TxContext, account: AccountRow, outcome: Provid
     await tx.emit({
       type: PaymentsEvents.providerDegraded,
       aggregate: { type: 'payment_account', id: account.id },
-      payload: { accountId: account.id, error: after.lastError, probeAfter: after.probeAfter?.toISOString() ?? null },
+      payload: {
+        accountId: account.id,
+        error: after.lastError,
+        probeAfter: after.probeAfter?.toISOString() ?? null,
+      },
     });
     await raiseException(tx, {
       propertyId: null,
       kind: 'provider_unavailable',
       severity: 'urgent',
       problem: `The payment provider for "${account.display_name}" is not responding (${after.lastError ?? 'unknown error'}).`,
-      businessImpact: 'Card payments, refunds and payment links through this account are paused. Nothing is being charged.',
+      businessImpact:
+        'Card payments, refunds and payment links through this account are paused. Nothing is being charged.',
       nextStep:
         'Accept cash, send payment links to be paid later, or use the hotel’s own terminal and record payments. Portico probes the provider and resumes automatically.',
       ownerRole: 'front_office_manager',
@@ -245,7 +265,11 @@ async function loadCallDetails(tx: TxContext, op: OpRow): Promise<CallDetails> {
   const details: CallDetails = {};
   const methodFor = async (methodId: string | null) => {
     if (!methodId) return;
-    const m = await db(tx).selectFrom('payments.payment_methods').selectAll().where('id', '=', methodId).executeTakeFirst();
+    const m = await db(tx)
+      .selectFrom('payments.payment_methods')
+      .selectAll()
+      .where('id', '=', methodId)
+      .executeTakeFirst();
     if (!m) return;
     details.methodToken = m.provider_token;
     details.customerRef = m.provider_customer_ref;
@@ -253,20 +277,40 @@ async function loadCallDetails(tx: TxContext, op: OpRow): Promise<CallDetails> {
     details.networkTransactionId = mandate.networkTransactionId ?? null;
   };
   if (op.kind === 'authorize') {
-    const a = await db(tx).selectFrom('payments.authorizations').selectAll().where('id', '=', op.target_id).executeTakeFirstOrThrow();
+    const a = await db(tx)
+      .selectFrom('payments.authorizations')
+      .selectAll()
+      .where('id', '=', op.target_id)
+      .executeTakeFirstOrThrow();
     details.initiator = a.initiator;
     await methodFor(a.method_id);
   } else if (op.kind === 'charge') {
-    const p = await db(tx).selectFrom('payments.payments').selectAll().where('id', '=', op.target_id).executeTakeFirstOrThrow();
+    const p = await db(tx)
+      .selectFrom('payments.payments')
+      .selectAll()
+      .where('id', '=', op.target_id)
+      .executeTakeFirstOrThrow();
     details.initiator = p.initiator ?? 'customer';
     await methodFor(p.method_id);
   } else if (op.kind === 'refund') {
-    const r = await db(tx).selectFrom('payments.refunds').selectAll().where('id', '=', op.target_id).executeTakeFirstOrThrow();
-    const p = await db(tx).selectFrom('payments.payments').select(['provider_ref']).where('id', '=', r.payment_id).executeTakeFirstOrThrow();
+    const r = await db(tx)
+      .selectFrom('payments.refunds')
+      .selectAll()
+      .where('id', '=', op.target_id)
+      .executeTakeFirstOrThrow();
+    const p = await db(tx)
+      .selectFrom('payments.payments')
+      .select(['provider_ref'])
+      .where('id', '=', r.payment_id)
+      .executeTakeFirstOrThrow();
     details.parentProviderRef = p.provider_ref;
     details.reason = r.reason;
   } else if (op.authorization_id) {
-    const a = await db(tx).selectFrom('payments.authorizations').selectAll().where('id', '=', op.authorization_id).executeTakeFirstOrThrow();
+    const a = await db(tx)
+      .selectFrom('payments.authorizations')
+      .selectAll()
+      .where('id', '=', op.authorization_id)
+      .executeTakeFirstOrThrow();
     details.parentProviderRef = a.provider_ref;
     details.newTotalMinor = a.amount_minor + op.amount_minor;
   }
@@ -286,29 +330,40 @@ async function claim(d: PaymentsDeps, tx: TxContext, operationId: string): Promi
     .where('id', '=', operationId)
     .forUpdate()
     .executeTakeFirst()) as OpRow | undefined;
-  if (!op || op.status !== 'pending') return null;
-  const account = await db(tx).selectFrom('payments.accounts').selectAll().where('id', '=', op.account_id).executeTakeFirstOrThrow();
+  if (op?.status !== 'pending') return null;
+  const account = await db(tx)
+    .selectFrom('payments.accounts')
+    .selectAll()
+    .where('id', '=', op.account_id)
+    .executeTakeFirstOrThrow();
   const fail = async (code: string, message: string) => {
     await journal(tx, op, 'short_circuit', 'failed', { code, message });
     await applyOutcome(d, tx, op.id, { kind: 'failed', code, message }, 'call');
     return null;
   };
   if (tx.now.getTime() - new Date(op.created_at).getTime() > MAX_PENDING_AGE_MS) {
-    return fail('expired_before_sending', 'The request was not sent in time and was cancelled; nothing was charged.');
+    return fail(
+      'expired_before_sending',
+      'The request was not sent in time and was cancelled; nothing was charged.',
+    );
   }
   if (account.status === 'restricted' || account.status === 'disabled') {
     return fail('account_restricted', `The payment account is ${account.status}; nothing was sent.`);
   }
   const breaker = await loadBreaker(tx, account.id);
   const decision = decideAttempt(breaker, tx.now, d.breaker);
-  if (!decision.allowed) return fail('provider_unavailable', 'The provider is unavailable (circuit open); nothing was sent.');
+  if (!decision.allowed)
+    return fail('provider_unavailable', 'The provider is unavailable (circuit open); nothing was sent.');
   if (decision.probe) await saveBreaker(tx, account, decision.next);
   const details = await loadCallDetails(tx, op);
   if ((op.kind === 'authorize' || op.kind === 'charge') && !details.methodToken) {
     return fail('invalid_request', 'The payment method is missing; nothing was sent.');
   }
   if (op.kind !== 'authorize' && op.kind !== 'charge' && !details.parentProviderRef) {
-    return fail('invalid_request', 'The provider reference of the original transaction is unknown; nothing was sent.');
+    return fail(
+      'invalid_request',
+      'The provider reference of the original transaction is unknown; nothing was sent.',
+    );
   }
   await db(tx)
     .updateTable('payments.provider_operations')
@@ -332,7 +387,11 @@ async function claim(d: PaymentsDeps, tx: TxContext, operationId: string): Promi
   return { op: claimed, account, details };
 }
 
-async function send(provider: PaymentProvider, account: ProviderAccount, c: Claimed): Promise<ProviderOutcome> {
+async function send(
+  provider: PaymentProvider,
+  account: ProviderAccount,
+  c: Claimed,
+): Promise<ProviderOutcome> {
   const { op, details } = c;
   const amount = money(op.amount_minor, op.currency);
   const base = { operationId: op.id, idempotencyKey: op.idempotency_key };
@@ -390,7 +449,11 @@ const NEVER_SENT_CODES = new Set([
  * Execute an operation whose intent is committed. Safe to call concurrently and repeatedly: only the caller
  * that claims `pending → sent` talks to the provider.
  */
-export async function executeOperation(d: PaymentsDeps, ctx: RequestContext, operationId: string): Promise<void> {
+export async function executeOperation(
+  d: PaymentsDeps,
+  ctx: RequestContext,
+  operationId: string,
+): Promise<void> {
   const claimed = await withTenantTx(d.database, ctx, (tx) => claim(d, tx, operationId));
   if (!claimed) return;
   const account = toProviderAccount(claimed.account);
@@ -408,7 +471,10 @@ export async function executeOperation(d: PaymentsDeps, ctx: RequestContext, ope
     outcome =
       err instanceof DomainError && NEVER_SENT_CODES.has(err.code)
         ? { kind: 'failed', code: err.code, message: err.message }
-        : { kind: 'unknown', reason: `Unexpected adapter error: ${err instanceof Error ? err.message : String(err)}` };
+        : {
+            kind: 'unknown',
+            reason: `Unexpected adapter error: ${err instanceof Error ? err.message : String(err)}`,
+          };
   }
   await withTenantTx(d.database, ctx, async (tx) => {
     await applyOutcome(d, tx, operationId, outcome, 'call');
@@ -421,7 +487,8 @@ export async function executeOperation(d: PaymentsDeps, ctx: RequestContext, ope
 type Source = 'call' | 'lookup' | 'webhook';
 
 function failureOf(outcome: ProviderOutcome): { code: string; message: string } | null {
-  if (outcome.kind === 'declined') return { code: outcome.decline.code, message: explainDecline(outcome.decline.code).message };
+  if (outcome.kind === 'declined')
+    return { code: outcome.decline.code, message: explainDecline(outcome.decline.code).message };
   if (outcome.kind === 'failed') return { code: outcome.code, message: outcome.message };
   if (outcome.kind === 'unavailable') return { code: 'provider_unavailable', message: outcome.reason };
   return null;
@@ -446,12 +513,19 @@ export async function applyOutcome(
     .forUpdate()
     .executeTakeFirst()) as OpRow | undefined;
   if (!op) throw new NotFoundError('provider_operation', operationId);
-  const next = outcome.kind === 'succeeded' ? 'succeeded' : outcome.kind === 'unknown' ? 'pending_verification' : 'failed';
+  const next =
+    outcome.kind === 'succeeded'
+      ? 'succeeded'
+      : outcome.kind === 'unknown'
+        ? 'pending_verification'
+        : 'failed';
   const isFinal = op.status === 'succeeded' || op.status === 'failed';
 
   if (next === 'pending_verification') {
     if (isFinal) {
-      await journal(tx, op, source === 'call' ? 'outcome' : source, 'ignored_unknown_after_final', { outcome });
+      await journal(tx, op, source === 'call' ? 'outcome' : source, 'ignored_unknown_after_final', {
+        outcome,
+      });
       return false;
     }
     const checkCount = source === 'lookup' ? op.check_count + 1 : op.check_count;
@@ -489,7 +563,9 @@ export async function applyOutcome(
     .updateTable('payments.provider_operations')
     .set({
       status: next,
-      provider_ref: (outcome.kind === 'succeeded' || outcome.kind === 'declined' ? outcome.providerRef : undefined) ?? op.provider_ref,
+      provider_ref:
+        (outcome.kind === 'succeeded' || outcome.kind === 'declined' ? outcome.providerRef : undefined) ??
+        op.provider_ref,
       outcome: JSON.stringify(outcome),
       failure_code: failure?.code ?? null,
       failure_message: failure?.message ?? null,
@@ -499,7 +575,13 @@ export async function applyOutcome(
     })
     .where('id', '=', op.id)
     .execute();
-  await journal(tx, op, source === 'call' ? 'outcome' : source, contradiction ? `contradiction:${next}` : next, { outcome });
+  await journal(
+    tx,
+    op,
+    source === 'call' ? 'outcome' : source,
+    contradiction ? `contradiction:${next}` : next,
+    { outcome },
+  );
   await resolveExceptionsByKey(tx, `pending:${op.id}`, `Resolved by ${source}: ${next}.`);
 
   switch (op.kind) {
@@ -573,7 +655,8 @@ async function contradictionException(tx: TxContext, op: OpRow, outcome: Provide
     severity: 'urgent',
     problem: `The provider now reports a different final outcome for a ${op.kind} than Portico recorded: ${detail}`,
     businessImpact: 'The guest may have been charged twice or not at all; balances may be wrong.',
-    nextStep: 'Check the transaction in the provider dashboard, then refund a duplicate or collect what is missing.',
+    nextStep:
+      'Check the transaction in the provider dashboard, then refund a duplicate or collect what is missing.',
     ownerRole: 'finance',
     responsibleParty: 'hotel',
     ref: { type: op.target_type, id: op.target_id },
@@ -581,16 +664,33 @@ async function contradictionException(tx: TxContext, op: OpRow, outcome: Provide
   });
 }
 
-async function applyAuthorize(d: PaymentsDeps, tx: TxContext, op: OpRow, outcome: ProviderOutcome, contradiction: boolean) {
-  const a = await db(tx).selectFrom('payments.authorizations').selectAll().where('id', '=', op.target_id).forUpdate().executeTakeFirstOrThrow();
+async function applyAuthorize(
+  d: PaymentsDeps,
+  tx: TxContext,
+  op: OpRow,
+  outcome: ProviderOutcome,
+  contradiction: boolean,
+) {
+  const a = await db(tx)
+    .selectFrom('payments.authorizations')
+    .selectAll()
+    .where('id', '=', op.target_id)
+    .forUpdate()
+    .executeTakeFirstOrThrow();
   if (outcome.kind === 'succeeded') {
     const verdict = authorizationTransition(a.status, 'authorized');
     if (verdict.kind !== 'apply' && !contradiction) return;
     if (contradiction) {
       await contradictionException(tx, op, outcome, 'a hold recorded as declined exists at the provider.');
     }
-    const validity = await d.platform.resolvePolicy(tx, a.property_id, 'payments.authorization.validityDays', 7);
-    const amount = outcome.amountMinor > 0 && outcome.amountMinor < a.amount_minor ? outcome.amountMinor : a.amount_minor;
+    const validity = await d.platform.resolvePolicy(
+      tx,
+      a.property_id,
+      'payments.authorization.validityDays',
+      7,
+    );
+    const amount =
+      outcome.amountMinor > 0 && outcome.amountMinor < a.amount_minor ? outcome.amountMinor : a.amount_minor;
     await db(tx)
       .updateTable('payments.authorizations')
       .set({
@@ -605,12 +705,18 @@ async function applyAuthorize(d: PaymentsDeps, tx: TxContext, op: OpRow, outcome
       .execute();
     if (outcome.networkTransactionId && a.method_id) {
       // Keep the scheme reference of this customer-initiated transaction for later merchant-initiated charges.
-      const m = await db(tx).selectFrom('payments.payment_methods').select(['mandate']).where('id', '=', a.method_id).executeTakeFirst();
+      const m = await db(tx)
+        .selectFrom('payments.payment_methods')
+        .select(['mandate'])
+        .where('id', '=', a.method_id)
+        .executeTakeFirst();
       const mandate = (m?.mandate ?? {}) as Record<string, unknown>;
       if (m && !mandate.networkTransactionId) {
         await db(tx)
           .updateTable('payments.payment_methods')
-          .set({ mandate: JSON.stringify({ ...mandate, networkTransactionId: outcome.networkTransactionId }) })
+          .set({
+            mandate: JSON.stringify({ ...mandate, networkTransactionId: outcome.networkTransactionId }),
+          })
           .where('id', '=', a.method_id)
           .execute();
       }
@@ -619,12 +725,22 @@ async function applyAuthorize(d: PaymentsDeps, tx: TxContext, op: OpRow, outcome
       type: PaymentsEvents.authorizationAuthorized,
       propertyId: a.property_id,
       aggregate: { type: 'authorization', id: a.id },
-      payload: { authorizationId: a.id, ref: { type: a.ref_type, id: a.ref_id }, amountMinor: amount, currency: a.currency },
+      payload: {
+        authorizationId: a.id,
+        ref: { type: a.ref_type, id: a.ref_id },
+        amountMinor: amount,
+        currency: a.currency,
+      },
     });
     return;
   }
   if (contradiction) {
-    await contradictionException(tx, op, outcome, 'an authorization recorded as active is reported as declined.');
+    await contradictionException(
+      tx,
+      op,
+      outcome,
+      'an authorization recorded as active is reported as declined.',
+    );
     return;
   }
   const verdict = authorizationTransition(a.status, 'failed');
@@ -648,7 +764,12 @@ async function applyIncrement(tx: TxContext, op: OpRow, outcome: ProviderOutcome
     return;
   }
   if (outcome.kind !== 'succeeded' || !op.authorization_id) return;
-  const a = await db(tx).selectFrom('payments.authorizations').selectAll().where('id', '=', op.authorization_id).forUpdate().executeTakeFirstOrThrow();
+  const a = await db(tx)
+    .selectFrom('payments.authorizations')
+    .selectAll()
+    .where('id', '=', op.authorization_id)
+    .forUpdate()
+    .executeTakeFirstOrThrow();
   const newTotal = Math.max(a.amount_minor, outcome.amountMinor);
   await db(tx)
     .updateTable('payments.authorizations')
@@ -670,10 +791,19 @@ async function applyVoid(tx: TxContext, op: OpRow, outcome: ProviderOutcome, con
     return;
   }
   if (outcome.kind !== 'succeeded' || !op.authorization_id) return;
-  const a = await db(tx).selectFrom('payments.authorizations').selectAll().where('id', '=', op.authorization_id).forUpdate().executeTakeFirstOrThrow();
+  const a = await db(tx)
+    .selectFrom('payments.authorizations')
+    .selectAll()
+    .where('id', '=', op.authorization_id)
+    .forUpdate()
+    .executeTakeFirstOrThrow();
   const to: AuthorizationStatus = a.captured_minor > 0 ? 'captured' : 'voided';
   if (authorizationTransition(a.status, to).kind !== 'apply') return;
-  await db(tx).updateTable('payments.authorizations').set({ status: to, version: a.version + 1 }).where('id', '=', a.id).execute();
+  await db(tx)
+    .updateTable('payments.authorizations')
+    .set({ status: to, version: a.version + 1 })
+    .where('id', '=', a.id)
+    .execute();
   await tx.emit({
     type: PaymentsEvents.authorizationVoided,
     propertyId: a.property_id,
@@ -682,8 +812,19 @@ async function applyVoid(tx: TxContext, op: OpRow, outcome: ProviderOutcome, con
   });
 }
 
-async function applyPayment(d: PaymentsDeps, tx: TxContext, op: OpRow, outcome: ProviderOutcome, contradiction: boolean) {
-  const p = await db(tx).selectFrom('payments.payments').selectAll().where('id', '=', op.target_id).forUpdate().executeTakeFirstOrThrow();
+async function applyPayment(
+  d: PaymentsDeps,
+  tx: TxContext,
+  op: OpRow,
+  outcome: ProviderOutcome,
+  contradiction: boolean,
+) {
+  const p = await db(tx)
+    .selectFrom('payments.payments')
+    .selectAll()
+    .where('id', '=', op.target_id)
+    .forUpdate()
+    .executeTakeFirstOrThrow();
   const to: PaymentStatus = outcome.kind === 'succeeded' ? 'succeeded' : 'failed';
   const verdict = paymentTransition(p.status, to);
   if (verdict.kind === 'noop' || verdict.kind === 'stale') return;
@@ -692,14 +833,22 @@ async function applyPayment(d: PaymentsDeps, tx: TxContext, op: OpRow, outcome: 
     return;
   }
   if (verdict.kind === 'apply_with_mismatch' || contradiction) {
-    await contradictionException(tx, op, outcome, 'a payment recorded as failed was collected by the provider.');
+    await contradictionException(
+      tx,
+      op,
+      outcome,
+      'a payment recorded as failed was collected by the provider.',
+    );
   }
   const failure = failureOf(outcome);
   await db(tx)
     .updateTable('payments.payments')
     .set({
       status: to,
-      provider_ref: outcome.kind === 'succeeded' ? outcome.providerRef : (p.provider_ref ?? (outcome.kind === 'declined' ? outcome.providerRef ?? null : null)),
+      provider_ref:
+        outcome.kind === 'succeeded'
+          ? outcome.providerRef
+          : (p.provider_ref ?? (outcome.kind === 'declined' ? (outcome.providerRef ?? null) : null)),
       decline: to === 'failed' ? JSON.stringify(failure) : null,
       ledger_status: to === 'succeeded' ? 'pending' : p.ledger_status,
       version: p.version + 1,
@@ -708,7 +857,12 @@ async function applyPayment(d: PaymentsDeps, tx: TxContext, op: OpRow, outcome: 
     .execute();
 
   if (op.kind === 'capture' && p.authorization_id) {
-    const a = await db(tx).selectFrom('payments.authorizations').selectAll().where('id', '=', p.authorization_id).forUpdate().executeTakeFirstOrThrow();
+    const a = await db(tx)
+      .selectFrom('payments.authorizations')
+      .selectAll()
+      .where('id', '=', p.authorization_id)
+      .forUpdate()
+      .executeTakeFirstOrThrow();
     const reserved = Math.max(0, a.capture_reserved_minor - (p.status === 'failed' ? 0 : p.amount_minor));
     if (to === 'succeeded') {
       const captured = a.captured_minor + p.amount_minor;
@@ -733,7 +887,11 @@ async function applyPayment(d: PaymentsDeps, tx: TxContext, op: OpRow, outcome: 
           type: PaymentsEvents.authorizationCaptured,
           propertyId: a.property_id,
           aggregate: { type: 'authorization', id: a.id },
-          payload: { authorizationId: a.id, capturedMinor: captured, releasedMinor: Math.max(0, a.amount_minor - captured) },
+          payload: {
+            authorizationId: a.id,
+            capturedMinor: captured,
+            releasedMinor: Math.max(0, a.amount_minor - captured),
+          },
         });
       }
     } else {
@@ -751,7 +909,12 @@ async function applyPayment(d: PaymentsDeps, tx: TxContext, op: OpRow, outcome: 
     if (p.virtual_card_id) {
       await db(tx)
         .updateTable('payments.virtual_cards')
-        .set({ status: 'charged', charged_payment_id: p.id, next_attempt_at: null, version: (eb) => eb('version', '+', 1) })
+        .set({
+          status: 'charged',
+          charged_payment_id: p.id,
+          next_attempt_at: null,
+          version: (eb) => eb('version', '+', 1),
+        })
         .where('id', '=', p.virtual_card_id)
         .execute();
       await tx.emit({
@@ -786,7 +949,12 @@ async function applyPayment(d: PaymentsDeps, tx: TxContext, op: OpRow, outcome: 
 }
 
 export async function creditPaymentRequest(tx: TxContext, requestId: string, amountMinor: number) {
-  const r = await db(tx).selectFrom('payments.payment_requests').selectAll().where('id', '=', requestId).forUpdate().executeTakeFirstOrThrow();
+  const r = await db(tx)
+    .selectFrom('payments.payment_requests')
+    .selectAll()
+    .where('id', '=', requestId)
+    .forUpdate()
+    .executeTakeFirstOrThrow();
   const paid = r.paid_minor + amountMinor;
   const status = paymentRequestStatusFor(r.status, r.amount_minor, paid);
   await db(tx)
@@ -799,7 +967,12 @@ export async function creditPaymentRequest(tx: TxContext, requestId: string, amo
       type: PaymentsEvents.requestPaid,
       propertyId: r.property_id,
       aggregate: { type: 'payment_request', id: r.id },
-      payload: { paymentRequestId: r.id, ref: { type: r.ref_type, id: r.ref_id }, paidMinor: paid, currency: r.currency },
+      payload: {
+        paymentRequestId: r.id,
+        ref: { type: r.ref_type, id: r.ref_id },
+        paidMinor: paid,
+        currency: r.currency,
+      },
     });
   }
   if (r.status === 'cancelled' || r.status === 'expired' || paid > r.amount_minor) {
@@ -818,8 +991,19 @@ export async function creditPaymentRequest(tx: TxContext, requestId: string, amo
   }
 }
 
-async function vccAfterFailure(d: PaymentsDeps, tx: TxContext, vccId: string, propertyId: string, outcome: ProviderOutcome) {
-  const v = await db(tx).selectFrom('payments.virtual_cards').selectAll().where('id', '=', vccId).forUpdate().executeTakeFirstOrThrow();
+async function vccAfterFailure(
+  d: PaymentsDeps,
+  tx: TxContext,
+  vccId: string,
+  propertyId: string,
+  outcome: ProviderOutcome,
+) {
+  const v = await db(tx)
+    .selectFrom('payments.virtual_cards')
+    .selectAll()
+    .where('id', '=', vccId)
+    .forUpdate()
+    .executeTakeFirstOrThrow();
   const code = failureOf(outcome)?.code ?? 'generic_decline';
   const explanation = explainDecline(code);
   const property = await d.platform.getProperty(tx, propertyId);
@@ -833,14 +1017,24 @@ async function vccAfterFailure(d: PaymentsDeps, tx: TxContext, vccId: string, pr
   if (decision.kind === 'retry') {
     await db(tx)
       .updateTable('payments.virtual_cards')
-      .set({ status: 'funding_retry', next_attempt_at: decision.at, last_failure: JSON.stringify({ code }), version: v.version + 1 })
+      .set({
+        status: 'funding_retry',
+        next_attempt_at: decision.at,
+        last_failure: JSON.stringify({ code }),
+        version: v.version + 1,
+      })
       .where('id', '=', v.id)
       .execute();
     return;
   }
   await db(tx)
     .updateTable('payments.virtual_cards')
-    .set({ status: 'failed', next_attempt_at: null, last_failure: JSON.stringify({ code }), version: v.version + 1 })
+    .set({
+      status: 'failed',
+      next_attempt_at: null,
+      last_failure: JSON.stringify({ code }),
+      version: v.version + 1,
+    })
     .where('id', '=', v.id)
     .execute();
   await tx.emit({
@@ -855,7 +1049,8 @@ async function vccAfterFailure(d: PaymentsDeps, tx: TxContext, vccId: string, pr
     severity: 'urgent',
     problem: `The ${v.channel} virtual card for booking reference ${v.channel_reference} could not be charged: ${explanation.message} (${decision.reason})`,
     businessImpact: 'The stay is not paid by the channel yet.',
-    nextStep: 'Check the virtual card in the channel extranet; ask the channel for a new card or collect from the guest.',
+    nextStep:
+      'Check the virtual card in the channel extranet; ask the channel for a new card or collect from the guest.',
     ownerRole: 'reservations',
     responsibleParty: 'hotel',
     ref: { type: 'virtual_card', id: v.id },
@@ -863,9 +1058,25 @@ async function vccAfterFailure(d: PaymentsDeps, tx: TxContext, vccId: string, pr
   });
 }
 
-async function applyRefund(d: PaymentsDeps, tx: TxContext, op: OpRow, outcome: ProviderOutcome, contradiction: boolean) {
-  const r = await db(tx).selectFrom('payments.refunds').selectAll().where('id', '=', op.target_id).forUpdate().executeTakeFirstOrThrow();
-  const p = await db(tx).selectFrom('payments.payments').selectAll().where('id', '=', r.payment_id).forUpdate().executeTakeFirstOrThrow();
+async function applyRefund(
+  d: PaymentsDeps,
+  tx: TxContext,
+  op: OpRow,
+  outcome: ProviderOutcome,
+  contradiction: boolean,
+) {
+  const r = await db(tx)
+    .selectFrom('payments.refunds')
+    .selectAll()
+    .where('id', '=', op.target_id)
+    .forUpdate()
+    .executeTakeFirstOrThrow();
+  const p = await db(tx)
+    .selectFrom('payments.payments')
+    .selectAll()
+    .where('id', '=', r.payment_id)
+    .forUpdate()
+    .executeTakeFirstOrThrow();
   const to: PaymentStatus = outcome.kind === 'succeeded' ? 'succeeded' : 'failed';
   const verdict = refundTransition(r.status, to);
   if (verdict.kind === 'noop' || verdict.kind === 'stale') return;
@@ -898,10 +1109,18 @@ async function applyRefund(d: PaymentsDeps, tx: TxContext, op: OpRow, outcome: P
     .execute();
   const reserved = wasInFlight ? p.refund_reserved_minor - r.amount_minor : p.refund_reserved_minor;
   const refunded =
-    to === 'succeeded' ? p.refunded_minor + r.amount_minor : r.status === 'succeeded' ? p.refunded_minor - r.amount_minor : p.refunded_minor;
+    to === 'succeeded'
+      ? p.refunded_minor + r.amount_minor
+      : r.status === 'succeeded'
+        ? p.refunded_minor - r.amount_minor
+        : p.refunded_minor;
   await db(tx)
     .updateTable('payments.payments')
-    .set({ refund_reserved_minor: Math.max(0, reserved), refunded_minor: Math.max(0, refunded), version: p.version + 1 })
+    .set({
+      refund_reserved_minor: Math.max(0, reserved),
+      refunded_minor: Math.max(0, refunded),
+      version: p.version + 1,
+    })
     .where('id', '=', p.id)
     .execute();
   if (to === 'succeeded') await postRefundLedger(d, tx, r.id);
@@ -932,15 +1151,22 @@ export async function verifyOperation(
   opts: { force?: boolean } = {},
 ): Promise<VerifyResult> {
   const loaded = await withTenantTx(d.database, ctx, async (tx) => {
-    const op = (await db(tx).selectFrom('payments.provider_operations').selectAll().where('id', '=', operationId).executeTakeFirst()) as
-      | OpRow
-      | undefined;
+    const op = (await db(tx)
+      .selectFrom('payments.provider_operations')
+      .selectAll()
+      .where('id', '=', operationId)
+      .executeTakeFirst()) as OpRow | undefined;
     if (!op) throw new NotFoundError('provider_operation', operationId);
-    if (op.status !== 'sent' && op.status !== 'pending_verification') return { op, account: null, parent: null };
+    if (op.status !== 'sent' && op.status !== 'pending_verification')
+      return { op, account: null, parent: null };
     if (!opts.force && op.next_check_at && new Date(op.next_check_at).getTime() > tx.now.getTime()) {
       return { op, account: null, parent: null };
     }
-    const account = await db(tx).selectFrom('payments.accounts').selectAll().where('id', '=', op.account_id).executeTakeFirstOrThrow();
+    const account = await db(tx)
+      .selectFrom('payments.accounts')
+      .selectAll()
+      .where('id', '=', op.account_id)
+      .executeTakeFirstOrThrow();
     const details = op.kind === 'authorize' || op.kind === 'charge' ? {} : await loadCallDetails(tx, op);
     return { op, account, parent: details.parentProviderRef ?? null };
   });
@@ -965,7 +1191,11 @@ export async function verifyOperation(
   }
 
   return withTenantTx(d.database, ctx, async (tx) => {
-    const current = await db(tx).selectFrom('payments.provider_operations').select(['status', 'attempts', 'sent_at', 'created_at']).where('id', '=', op.id).executeTakeFirstOrThrow();
+    const current = await db(tx)
+      .selectFrom('payments.provider_operations')
+      .select(['status', 'attempts', 'sent_at', 'created_at'])
+      .where('id', '=', op.id)
+      .executeTakeFirstOrThrow();
     await journal(tx, { id: op.id, attempts: current.attempts }, 'lookup', String(result.found), { result });
     let changed = false;
     const sentAt = new Date(current.sent_at ?? current.created_at).getTime();
@@ -976,13 +1206,27 @@ export async function verifyOperation(
         d,
         tx,
         op.id,
-        { kind: 'failed', code: 'not_received_by_provider', message: 'The provider has no record of this request.' },
+        {
+          kind: 'failed',
+          code: 'not_received_by_provider',
+          message: 'The provider has no record of this request.',
+        },
         'lookup',
       );
     } else {
-      changed = await applyOutcome(d, tx, op.id, { kind: 'unknown', reason: result.found === false ? 'not found yet' : result.reason }, 'lookup');
+      changed = await applyOutcome(
+        d,
+        tx,
+        op.id,
+        { kind: 'unknown', reason: result.found === false ? 'not found yet' : result.reason },
+        'lookup',
+      );
     }
-    const after = await db(tx).selectFrom('payments.provider_operations').select(['status']).where('id', '=', op.id).executeTakeFirstOrThrow();
+    const after = await db(tx)
+      .selectFrom('payments.provider_operations')
+      .select(['status'])
+      .where('id', '=', op.id)
+      .executeTakeFirstOrThrow();
     if (
       (after.status === 'pending_verification' || after.status === 'sent') &&
       tx.now.getTime() - new Date(current.created_at).getTime() >= ESCALATE_PENDING_AFTER_MS
@@ -993,7 +1237,8 @@ export async function verifyOperation(
         severity: 'urgent',
         problem: `A ${op.kind} of ${op.currency} ${op.amount_minor} (minor units) has been pending verification for more than a day.`,
         businessImpact: 'Portico cannot tell whether money moved; the bill shows it as pending.',
-        nextStep: 'Look the transaction up in the provider dashboard and confirm with the guest; contact provider support if needed.',
+        nextStep:
+          'Look the transaction up in the provider dashboard and confirm with the guest; contact provider support if needed.',
         ownerRole: 'finance',
         responsibleParty: 'provider',
         ref: { type: op.target_type, id: op.target_id },

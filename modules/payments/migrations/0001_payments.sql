@@ -590,3 +590,17 @@ create or replace function payments.route_webhook(p_provider text, p_external_ac
 $$;
 revoke execute on function payments.route_webhook(text, text, boolean), payments.sync_account_directory() from public;
 grant execute on function payments.route_webhook(text, text, boolean) to portico_app;
+
+-- Background jobs (apps/worker): which organizations have payments to reconcile. Returns ONLY routing metadata
+-- (tenant id + environment) from the non-RLS directory; all business reads happen afterwards inside a tenant
+-- transaction with RLS. Closed organizations are excluded (tenant_environment returns null for them).
+create or replace function payments.tenants_for_jobs()
+  returns table (tenant_id uuid, environment text)
+  language sql stable security definer set search_path = payments, pg_temp as $$
+    select t.tenant_id, e.env
+      from (select distinct d.tenant_id from payments.account_directory d) t
+      cross join lateral (select platform.tenant_environment(t.tenant_id) as env) e
+     where e.env is not null
+$$;
+revoke execute on function payments.tenants_for_jobs() from public;
+grant execute on function payments.tenants_for_jobs() to portico_app;

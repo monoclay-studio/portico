@@ -27,8 +27,8 @@ import { vccIsActive } from '../domain/schedule';
 import { PaymentsEvents } from '../events';
 import { isSimulatorTestToken } from '../providers/simulator';
 import { charge } from './collect';
-import { recordContext } from './records';
 import { executeOperation, loadBreaker } from './operations';
+import { recordContext } from './records';
 import {
   actorKey,
   assertAccountUsable,
@@ -38,8 +38,8 @@ import {
   loadAccount,
   loadProperty,
   type PaymentsDeps,
-  requireRead,
   type RequestRow,
+  requireRead,
   toProviderAccount,
   toRequestView,
 } from './shared';
@@ -51,7 +51,11 @@ export async function createPaymentRequest(
 ): Promise<{ id: string; replayed: boolean }> {
   requirePermission(tx, 'payments.paymentRequest.create', { propertyId: input.propertyId });
   const businessKey = `request:${input.businessKey}`;
-  const existing = await db(tx).selectFrom('payments.payment_requests').select('id').where('business_key', '=', businessKey).executeTakeFirst();
+  const existing = await db(tx)
+    .selectFrom('payments.payment_requests')
+    .select('id')
+    .where('business_key', '=', businessKey)
+    .executeTakeFirst();
   if (existing) return { id: existing.id, replayed: true };
   await assertPaymentsWritable(d, tx, input.propertyId);
   const property = await loadProperty(d, tx, input.propertyId);
@@ -70,7 +74,9 @@ export async function createPaymentRequest(
       .orderBy('created_at')
       .execute();
     const usable = candidates.find(
-      (a) => a.currencies.includes(input.amount.currency) && ((a.capabilities as string[]) ?? []).includes('paymentLinks'),
+      (a) =>
+        a.currencies.includes(input.amount.currency) &&
+        ((a.capabilities as string[]) ?? []).includes('paymentLinks'),
     );
     if (!usable) {
       throw new BusinessRuleError(
@@ -83,7 +89,10 @@ export async function createPaymentRequest(
   const account = await loadAccount(tx, accountId);
   assertAccountUsable(account, property, input.amount.currency);
   if (!((account.capabilities as string[]) ?? []).includes('paymentLinks')) {
-    throw new BusinessRuleError('capability_not_supported', 'This payment account cannot create payment links.');
+    throw new BusinessRuleError(
+      'capability_not_supported',
+      'This payment account cannot create payment links.',
+    );
   }
   const mode = d.registry.modeFor(tx, account);
   const id = newId(tx.now.getTime());
@@ -124,16 +133,29 @@ export async function createPaymentRequest(
     type: PaymentsEvents.requestCreated,
     propertyId: input.propertyId,
     aggregate: { type: 'payment_request', id },
-    payload: { paymentRequestId: id, ref: input.ref, amountMinor: input.amount.amountMinor, currency: input.amount.currency },
+    payload: {
+      paymentRequestId: id,
+      ref: input.ref,
+      amountMinor: input.amount.amountMinor,
+      currency: input.amount.currency,
+    },
   });
   return { id, replayed: false };
 }
 
 /** Create the provider-hosted link (after commit). Safe to repeat: same idempotency key, no money moves. */
-export async function ensurePaymentLink(d: PaymentsDeps, ctx: RequestContext, requestId: string): Promise<void> {
+export async function ensurePaymentLink(
+  d: PaymentsDeps,
+  ctx: RequestContext,
+  requestId: string,
+): Promise<void> {
   const loaded = await withTenantTx(d.database, ctx, async (tx) => {
-    const r = await db(tx).selectFrom('payments.payment_requests').selectAll().where('id', '=', requestId).executeTakeFirst();
-    if (!r || r.status !== 'open' || r.link_status === 'created' || r.link_status === 'failed') return null;
+    const r = await db(tx)
+      .selectFrom('payments.payment_requests')
+      .selectAll()
+      .where('id', '=', requestId)
+      .executeTakeFirst();
+    if (r?.status !== 'open' || r.link_status === 'created' || r.link_status === 'failed') return null;
     const account = await loadAccount(tx, r.account_id);
     const breaker = decideAttempt(await loadBreaker(tx, account.id), tx.now, d.breaker);
     if (!breaker.allowed) return null; // provider down: the link is created when it is back
@@ -163,7 +185,12 @@ export async function ensurePaymentLink(d: PaymentsDeps, ctx: RequestContext, re
       .updateTable('payments.payment_requests')
       .set(
         outcome.kind === 'created'
-          ? { link_status: 'created', provider_link_ref: outcome.linkRef, link_url: outcome.url, version: r.version + 1 }
+          ? {
+              link_status: 'created',
+              provider_link_ref: outcome.linkRef,
+              link_url: outcome.url,
+              version: r.version + 1,
+            }
           : { link_status: outcome.kind === 'failed' ? 'failed' : 'unknown', version: r.version + 1 },
       )
       .where('id', '=', r.id)
@@ -172,13 +199,21 @@ export async function ensurePaymentLink(d: PaymentsDeps, ctx: RequestContext, re
 }
 
 export async function getPaymentRequest(tx: TxContext, id: string): Promise<PaymentRequest> {
-  const r = await db(tx).selectFrom('payments.payment_requests').selectAll().where('id', '=', id).executeTakeFirst();
+  const r = await db(tx)
+    .selectFrom('payments.payment_requests')
+    .selectAll()
+    .where('id', '=', id)
+    .executeTakeFirst();
   if (!r) throw new NotFoundError('payment_request', id);
-  if (!tx.authz.can('payments.paymentRequest.create', { propertyId: r.property_id })) requireRead(tx, r.property_id);
+  if (!tx.authz.can('payments.paymentRequest.create', { propertyId: r.property_id }))
+    requireRead(tx, r.property_id);
   return toRequestView(r, await recordContext(tx, [{ type: 'payment_request', id }]));
 }
 
-export async function listPaymentRequests(tx: TxContext, ref: { type: string; id: string }): Promise<PaymentRequest[]> {
+export async function listPaymentRequests(
+  tx: TxContext,
+  ref: { type: string; id: string },
+): Promise<PaymentRequest[]> {
   const rows = await db(tx)
     .selectFrom('payments.payment_requests')
     .selectAll()
@@ -205,7 +240,11 @@ export async function cancelPaymentRequest(
   expectedVersion: number,
   reason: string,
 ): Promise<PaymentRequest> {
-  const r = await db(tx).selectFrom('payments.payment_requests').selectAll().where('id', '=', id).executeTakeFirst();
+  const r = await db(tx)
+    .selectFrom('payments.payment_requests')
+    .selectAll()
+    .where('id', '=', id)
+    .executeTakeFirst();
   if (!r) throw new NotFoundError('payment_request', id);
   requirePermission(tx, 'payments.paymentRequest.create', { propertyId: r.property_id });
   await assertPaymentsWritable(d, tx, r.property_id);
@@ -245,7 +284,11 @@ export async function simulateRequestPayment(
   amountMinor?: number,
 ): Promise<void> {
   const { r, account } = await withTenantTx(d.database, ctx, async (tx) => {
-    const r = await db(tx).selectFrom('payments.payment_requests').selectAll().where('id', '=', requestId).executeTakeFirst();
+    const r = await db(tx)
+      .selectFrom('payments.payment_requests')
+      .selectAll()
+      .where('id', '=', requestId)
+      .executeTakeFirst();
     if (!r) throw new NotFoundError('payment_request', requestId);
     requirePermission(tx, 'payments.paymentRequest.create', { propertyId: r.property_id });
     const account = await loadAccount(tx, r.account_id);
@@ -257,7 +300,11 @@ export async function simulateRequestPayment(
     }
     return { r: r as RequestRow, account };
   });
-  await d.registry.simulator.simulateLinkPayment(toProviderAccount(account), r.provider_link_ref as string, amountMinor);
+  await d.registry.simulator.simulateLinkPayment(
+    toProviderAccount(account),
+    r.provider_link_ref as string,
+    amountMinor,
+  );
 }
 
 // ───────────────────────── virtual cards ─────────────────────────
@@ -345,7 +392,8 @@ export async function registerVirtualCard(
       mit_agreement: true,
       mandate: JSON.stringify({ channel: input.channel, channelReference: input.channelReference }),
       token_portability: 'vault_portable',
-      portability_note: 'Virtual card held via a PCI vault/proxy (vendor not yet selected — unresolved dependency).',
+      portability_note:
+        'Virtual card held via a PCI vault/proxy (vendor not yet selected — unresolved dependency).',
       status: 'active',
     })
     .execute();
@@ -378,13 +426,22 @@ export async function registerVirtualCard(
     action: 'payments.vcc.register',
     target: { type: 'virtual_card', id },
     propertyId: input.propertyId,
-    after: { channel: input.channel, channelReference: input.channelReference, amount: input.amount, activationDate: input.activationDate },
+    after: {
+      channel: input.channel,
+      channelReference: input.channelReference,
+      amount: input.amount,
+      activationDate: input.activationDate,
+    },
   });
   return toVccView(row);
 }
 
 export async function getVirtualCard(tx: TxContext, id: string): Promise<VirtualCard> {
-  const v = await db(tx).selectFrom('payments.virtual_cards').selectAll().where('id', '=', id).executeTakeFirst();
+  const v = await db(tx)
+    .selectFrom('payments.virtual_cards')
+    .selectAll()
+    .where('id', '=', id)
+    .executeTakeFirst();
   if (!v) throw new NotFoundError('virtual_card', id);
   requireRead(tx, v.property_id);
   return toVccView(v);
@@ -420,11 +477,18 @@ export async function runDueVirtualCards(
     try {
       const started = await withTenantTx(d.database, ctx, async (tx) => {
         requirePermission(tx, 'payments.vcc.manage', { propertyId: v.property_id });
-        const card = await db(tx).selectFrom('payments.virtual_cards').selectAll().where('id', '=', v.id).forUpdate().executeTakeFirstOrThrow();
-        if (card.status !== 'scheduled' && card.status !== 'funding_retry') return { skip: `status ${card.status}` };
+        const card = await db(tx)
+          .selectFrom('payments.virtual_cards')
+          .selectAll()
+          .where('id', '=', v.id)
+          .forUpdate()
+          .executeTakeFirstOrThrow();
+        if (card.status !== 'scheduled' && card.status !== 'funding_retry')
+          return { skip: `status ${card.status}` };
         const property = await loadProperty(d, tx, card.property_id);
         const today = localDateIn(tx.now, property.timezone);
-        if (!vccIsActive(card.activation_date, today)) return { skip: `activates on ${card.activation_date}` };
+        if (!vccIsActive(card.activation_date, today))
+          return { skip: `activates on ${card.activation_date}` };
         const paid = await db(tx)
           .selectFrom('payments.payments')
           .select('id')

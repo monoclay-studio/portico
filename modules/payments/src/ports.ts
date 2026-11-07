@@ -118,7 +118,10 @@ export interface PropertyInfo {
 export interface PlatformPort {
   /** Property facts payments needs AFTER it has checked its own permission (merchant, time zone). */
   getProperty(tx: TxContext, propertyId: string): Promise<PropertyInfo>;
-  getLegalEntity(tx: TxContext, legalEntityId: string): Promise<{ id: string; countryCode: string; baseCurrency: string }>;
+  getLegalEntity(
+    tx: TxContext,
+    legalEntityId: string,
+  ): Promise<{ id: string; countryCode: string; baseCurrency: string }>;
   /** ADR-0014: throws external_system_of_record when another system owns `payments` here. */
   assertWritable(tx: TxContext, propertyId: string, domain: 'payments'): Promise<'portico' | 'forward'>;
   resolvePolicy<T>(tx: TxContext, propertyId: string, key: string, defaultValue: T): Promise<{ value: T }>;

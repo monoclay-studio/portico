@@ -8,7 +8,10 @@ import { sql, type TxContext } from '@portico/db';
 import { money } from '@portico/kernel';
 import { db, type PaymentsDeps, raiseException, resolveExceptionsByKey } from './shared';
 
-async function withSavepoint<T>(tx: TxContext, fn: () => Promise<T>): Promise<{ ok: true; value: T } | { ok: false; error: string }> {
+async function withSavepoint<T>(
+  tx: TxContext,
+  fn: () => Promise<T>,
+): Promise<{ ok: true; value: T } | { ok: false; error: string }> {
   await sql`savepoint payments_ledger`.execute(tx.db);
   try {
     const value = await fn();
@@ -29,11 +32,17 @@ export const ledgerKey = {
 };
 
 export async function postPaymentLedger(d: PaymentsDeps, tx: TxContext, paymentId: string): Promise<boolean> {
-  const p = await db(tx).selectFrom('payments.payments').selectAll().where('id', '=', paymentId).forUpdate().executeTakeFirstOrThrow();
+  const p = await db(tx)
+    .selectFrom('payments.payments')
+    .selectAll()
+    .where('id', '=', paymentId)
+    .forUpdate()
+    .executeTakeFirstOrThrow();
   if (p.ledger_status !== 'pending' && p.ledger_status !== 'failed') return p.ledger_status === 'posted';
   const amount = money(p.amount_minor, p.currency);
   const paymentRef = { type: 'payment', id: p.id };
-  const verification = p.mode === 'recorded' ? ('recorded_unverified' as const) : ('provider_confirmed' as const);
+  const verification =
+    p.mode === 'recorded' ? ('recorded_unverified' as const) : ('provider_confirmed' as const);
   const result = await withSavepoint(tx, () =>
     p.ref_type === 'folio'
       ? d.ledger.recordPayment(tx, {
@@ -72,8 +81,10 @@ export async function postPaymentLedger(d: PaymentsDeps, tx: TxContext, paymentI
     kind: 'ledger_posting_failed',
     severity: 'urgent',
     problem: `A ${p.status === 'succeeded' ? 'confirmed' : 'recorded'} payment of ${p.currency} ${p.amount_minor} (minor units) could not be posted to the ${p.ref_type}: ${result.error}`,
-    businessImpact: 'The guest has paid but the bill does not show it yet; balances and Day Close are affected.',
-    nextStep: 'Portico retries automatically. If it keeps failing, finance checks the folio/booking and posts the payment.',
+    businessImpact:
+      'The guest has paid but the bill does not show it yet; balances and Day Close are affected.',
+    nextStep:
+      'Portico retries automatically. If it keeps failing, finance checks the folio/booking and posts the payment.',
     ownerRole: 'finance',
     responsibleParty: 'hotel',
     ref: { type: 'payment', id: p.id },
@@ -83,9 +94,18 @@ export async function postPaymentLedger(d: PaymentsDeps, tx: TxContext, paymentI
 }
 
 export async function postRefundLedger(d: PaymentsDeps, tx: TxContext, refundId: string): Promise<boolean> {
-  const r = await db(tx).selectFrom('payments.refunds').selectAll().where('id', '=', refundId).forUpdate().executeTakeFirstOrThrow();
+  const r = await db(tx)
+    .selectFrom('payments.refunds')
+    .selectAll()
+    .where('id', '=', refundId)
+    .forUpdate()
+    .executeTakeFirstOrThrow();
   if (r.ledger_status !== 'pending' && r.ledger_status !== 'failed') return r.ledger_status === 'posted';
-  const p = await db(tx).selectFrom('payments.payments').selectAll().where('id', '=', r.payment_id).executeTakeFirstOrThrow();
+  const p = await db(tx)
+    .selectFrom('payments.payments')
+    .selectAll()
+    .where('id', '=', r.payment_id)
+    .executeTakeFirstOrThrow();
   const result = await withSavepoint(tx, () =>
     d.ledger.recordRefund(tx, {
       folioId: p.ref_type === 'folio' ? p.ref_id : null,
@@ -116,7 +136,8 @@ export async function postRefundLedger(d: PaymentsDeps, tx: TxContext, refundId:
     severity: 'urgent',
     problem: `A refund of ${r.currency} ${r.amount_minor} (minor units) could not be posted to the ledger: ${result.error}`,
     businessImpact: 'Money has left the hotel but the bill does not show the refund yet.',
-    nextStep: 'Portico retries automatically. If it keeps failing, finance posts the refund on the folio/booking.',
+    nextStep:
+      'Portico retries automatically. If it keeps failing, finance posts the refund on the folio/booking.',
     ownerRole: 'finance',
     responsibleParty: 'hotel',
     ref: { type: 'refund', id: r.id },

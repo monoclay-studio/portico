@@ -70,7 +70,8 @@ export function formEncode(params: Record<string, unknown>, prefix = ''): string
     const key = prefix ? `${prefix}[${k}]` : k;
     if (Array.isArray(v)) {
       v.forEach((item, i) => {
-        if (item !== null && typeof item === 'object') parts.push(formEncode(item as Record<string, unknown>, `${key}[${i}]`));
+        if (item !== null && typeof item === 'object')
+          parts.push(formEncode(item as Record<string, unknown>, `${key}[${i}]`));
         else parts.push(`${encodeURIComponent(`${key}[]`)}=${encodeURIComponent(String(item))}`);
       });
     } else if (typeof v === 'object') {
@@ -155,7 +156,10 @@ export class StripeConnectProvider implements PaymentProvider {
 
   private headers(account: ProviderAccount, idempotencyKey?: string): Record<string, string> {
     if (!account.externalAccountId) {
-      throw new DomainError('stripe_account_missing', 'This payment account has no Stripe connected account id.');
+      throw new DomainError(
+        'stripe_account_missing',
+        'This payment account has no Stripe connected account id.',
+      );
     }
     return {
       authorization: `Bearer ${this.opts.secretKey}`,
@@ -201,7 +205,10 @@ export class StripeConnectProvider implements PaymentProvider {
     try {
       body = res.body ? JSON.parse(res.body) : {};
     } catch {
-      return { ok: false, outcome: { kind: 'unknown', reason: `Unreadable provider response (HTTP ${res.status}).` } };
+      return {
+        ok: false,
+        outcome: { kind: 'unknown', reason: `Unreadable provider response (HTTP ${res.status}).` },
+      };
     }
     if (res.status >= 200 && res.status < 300) {
       const lm = (body as { livemode?: unknown }).livemode;
@@ -235,7 +242,9 @@ export class StripeConnectProvider implements PaymentProvider {
       description: call.description ?? undefined,
       statement_descriptor_suffix: account.statementDescriptor ?? undefined,
       application_fee_amount: fee ?? undefined,
-      payment_method_options: manual ? { card: { request_extended_authorization: 'if_available' } } : undefined,
+      payment_method_options: manual
+        ? { card: { request_extended_authorization: 'if_available' } }
+        : undefined,
       metadata: { portico_operation_id: call.operationId },
       expand: ['latest_charge'],
     };
@@ -263,7 +272,10 @@ export class StripeConnectProvider implements PaymentProvider {
     return r.ok ? intentOutcome(r.body, 'charge', call.amount.amountMinor) : r.outcome;
   }
 
-  async incrementAuthorization(account: ProviderAccount, call: CallBase & { providerRef: string; newTotal: Money }) {
+  async incrementAuthorization(
+    account: ProviderAccount,
+    call: CallBase & { providerRef: string; newTotal: Money },
+  ) {
     const r = await this.request<StripePaymentIntent>(
       account,
       'POST',
@@ -303,7 +315,10 @@ export class StripeConnectProvider implements PaymentProvider {
     return r.ok ? intentOutcome(r.body, 'void', 0) : r.outcome;
   }
 
-  async refund(account: ProviderAccount, call: CallBase & { paymentProviderRef: string; amount: Money; reason: string }) {
+  async refund(
+    account: ProviderAccount,
+    call: CallBase & { paymentProviderRef: string; amount: Money; reason: string },
+  ) {
     const r = await this.request<StripeRefund>(
       account,
       'POST',
@@ -321,17 +336,28 @@ export class StripeConnectProvider implements PaymentProvider {
   async lookup(account: ProviderAccount, call: LookupCall): Promise<LookupResult> {
     if (call.kind === 'refund') return this.lookupRefund(account, call);
     let pi: StripePaymentIntent | null = null;
-    const ref = call.kind === 'authorize' || call.kind === 'charge' ? call.providerRef : call.parentProviderRef;
+    const ref =
+      call.kind === 'authorize' || call.kind === 'charge' ? call.providerRef : call.parentProviderRef;
     if (ref) {
-      const r = await this.request<StripePaymentIntent>(account, 'GET', `/v1/payment_intents/${encodeURIComponent(ref)}`, {
-        expand: ['latest_charge'],
-      });
+      const r = await this.request<StripePaymentIntent>(
+        account,
+        'GET',
+        `/v1/payment_intents/${encodeURIComponent(ref)}`,
+        {
+          expand: ['latest_charge'],
+        },
+      );
       if (!r.ok) return lookupFailure(r.outcome);
       pi = r.body;
     } else if (call.kind === 'authorize' || call.kind === 'charge') {
-      const r = await this.request<{ data: StripePaymentIntent[] }>(account, 'GET', '/v1/payment_intents/search', {
-        query: `metadata['portico_operation_id']:'${call.operationId}'`,
-      });
+      const r = await this.request<{ data: StripePaymentIntent[] }>(
+        account,
+        'GET',
+        '/v1/payment_intents/search',
+        {
+          query: `metadata['portico_operation_id']:'${call.operationId}'`,
+        },
+      );
       if (!r.ok) return lookupFailure(r.outcome);
       pi = r.body.data[0] ?? null;
     }
@@ -341,7 +367,12 @@ export class StripeConnectProvider implements PaymentProvider {
 
   private async lookupRefund(account: ProviderAccount, call: LookupCall): Promise<LookupResult> {
     if (call.providerRef) {
-      const r = await this.request<StripeRefund>(account, 'GET', `/v1/refunds/${encodeURIComponent(call.providerRef)}`, {});
+      const r = await this.request<StripeRefund>(
+        account,
+        'GET',
+        `/v1/refunds/${encodeURIComponent(call.providerRef)}`,
+        {},
+      );
       if (!r.ok) return lookupFailure(r.outcome);
       return finalOrUnknown(refundOutcome(r.body));
     }
@@ -381,8 +412,12 @@ export class StripeConnectProvider implements PaymentProvider {
     if (!r.ok) {
       const o = r.outcome;
       if (o.kind === 'failed') return o;
-      if (o.kind === 'declined') return { kind: 'failed', code: o.decline.code, message: 'Link creation declined.' };
-      return { kind: 'unknown', reason: o.kind === 'unknown' || o.kind === 'unavailable' ? o.reason : 'unknown' };
+      if (o.kind === 'declined')
+        return { kind: 'failed', code: o.decline.code, message: 'Link creation declined.' };
+      return {
+        kind: 'unknown',
+        reason: o.kind === 'unknown' || o.kind === 'unavailable' ? o.reason : 'unknown',
+      };
     }
     if (!r.body.url) return { kind: 'failed', code: 'no_url', message: 'Stripe returned no hosted URL.' };
     return { kind: 'created', linkRef: r.body.id, url: r.body.url };
@@ -403,7 +438,11 @@ export class StripeConnectProvider implements PaymentProvider {
     } catch {
       throw new WebhookSignatureError('Body is not JSON.');
     }
-    if (typeof event.id !== 'string' || typeof event.type !== 'string' || typeof event.livemode !== 'boolean') {
+    if (
+      typeof event.id !== 'string' ||
+      typeof event.type !== 'string' ||
+      typeof event.livemode !== 'boolean'
+    ) {
       throw new WebhookSignatureError('Malformed Stripe event.');
     }
     if (event.livemode !== (this.mode === 'live')) {
@@ -429,22 +468,40 @@ export function classifyError(status: number, error: StripeError): ProviderOutco
       kind: 'declined',
       ...(error.payment_intent?.id ? { providerRef: error.payment_intent.id } : {}),
       decline: {
-        code: error.decline_code ?? (error.code === 'card_declined' ? 'generic_decline' : (error.code ?? 'generic_decline')),
+        code:
+          error.decline_code ??
+          (error.code === 'card_declined' ? 'generic_decline' : (error.code ?? 'generic_decline')),
         ...(error.message ? { providerMessage: error.message } : {}),
       },
     };
   }
   if (status === 401) {
-    return { kind: 'failed', code: 'provider_not_configured', message: 'Stripe rejected the platform credentials.' };
+    return {
+      kind: 'failed',
+      code: 'provider_not_configured',
+      message: 'Stripe rejected the platform credentials.',
+    };
   }
   if (status === 403) {
-    return { kind: 'failed', code: 'account_restricted', message: error.message ?? 'Stripe refused this operation.' };
+    return {
+      kind: 'failed',
+      code: 'account_restricted',
+      message: error.message ?? 'Stripe refused this operation.',
+    };
   }
   if (status === 404) {
-    return { kind: 'failed', code: 'resource_missing', message: error.message ?? 'No such object at Stripe.' };
+    return {
+      kind: 'failed',
+      code: 'resource_missing',
+      message: error.message ?? 'No such object at Stripe.',
+    };
   }
   if (status === 429) {
-    return { kind: 'failed', code: 'try_again_later', message: 'Stripe rate-limited the request; it was not executed.' };
+    return {
+      kind: 'failed',
+      code: 'try_again_later',
+      message: 'Stripe rate-limited the request; it was not executed.',
+    };
   }
   if (status === 409) {
     // Concurrent request with the same idempotency key is still running: its result is unknown to us.
@@ -458,7 +515,11 @@ export function classifyError(status: number, error: StripeError): ProviderOutco
       message: 'Stripe saw this idempotency key with different parameters; nothing was executed.',
     };
   }
-  return { kind: 'failed', code: 'invalid_request', message: error.message ?? `Stripe rejected the request (${status}).` };
+  return {
+    kind: 'failed',
+    code: 'invalid_request',
+    message: error.message ?? `Stripe rejected the request (${status}).`,
+  };
 }
 
 function captureBefore(pi: StripePaymentIntent): Date | undefined {
@@ -474,11 +535,17 @@ function networkTxnId(pi: StripePaymentIntent): string | undefined {
 
 function declineFrom(pi: StripePaymentIntent): ProviderOutcome {
   const e = pi.last_payment_error ?? {};
-  const code = pi.status === 'requires_action' ? 'authentication_required' : (e.decline_code ?? e.code ?? 'generic_decline');
+  const code =
+    pi.status === 'requires_action'
+      ? 'authentication_required'
+      : (e.decline_code ?? e.code ?? 'generic_decline');
   return {
     kind: 'declined',
     providerRef: pi.id,
-    decline: { code: code === 'card_declined' ? 'generic_decline' : code, ...(e.message ? { providerMessage: e.message } : {}) },
+    decline: {
+      code: code === 'card_declined' ? 'generic_decline' : code,
+      ...(e.message ? { providerMessage: e.message } : {}),
+    },
   };
 }
 
@@ -531,8 +598,12 @@ export function refundOutcome(r: StripeRefund): ProviderOutcome {
 }
 
 function finalOrUnknown(o: ProviderOutcome): LookupResult {
-  if (o.kind === 'succeeded' || o.kind === 'declined' || o.kind === 'failed') return { found: true, outcome: o };
-  return { found: 'unknown', reason: o.kind === 'unknown' || o.kind === 'unavailable' ? o.reason : 'unknown' };
+  if (o.kind === 'succeeded' || o.kind === 'declined' || o.kind === 'failed')
+    return { found: true, outcome: o };
+  return {
+    found: 'unknown',
+    reason: o.kind === 'unknown' || o.kind === 'unavailable' ? o.reason : 'unknown',
+  };
 }
 
 function lookupFailure(o: ProviderOutcome): LookupResult {
@@ -554,17 +625,39 @@ export function lookupFromIntent(pi: StripePaymentIntent, call: LookupCall): Loo
     case 'charge':
       return finalOrUnknown(intentOutcome(pi, call.kind, call.amountMinor));
     case 'capture':
-      if ((pi.amount_received ?? 0) >= call.amountMinor && (pi.status === 'succeeded' || pi.status === 'requires_capture')) {
-        return { found: true, outcome: { kind: 'succeeded', providerRef: pi.id, amountMinor: call.amountMinor, remainingAuthorizedMinor: pi.amount_capturable ?? 0 } };
+      if (
+        (pi.amount_received ?? 0) >= call.amountMinor &&
+        (pi.status === 'succeeded' || pi.status === 'requires_capture')
+      ) {
+        return {
+          found: true,
+          outcome: {
+            kind: 'succeeded',
+            providerRef: pi.id,
+            amountMinor: call.amountMinor,
+            remainingAuthorizedMinor: pi.amount_capturable ?? 0,
+          },
+        };
       }
       return pi.status === 'processing' ? { found: 'unknown', reason: 'processing' } : { found: false };
     case 'void':
       return pi.status === 'canceled'
-        ? { found: true, outcome: { kind: 'succeeded', providerRef: pi.id, amountMinor: 0, remainingAuthorizedMinor: 0 } }
+        ? {
+            found: true,
+            outcome: { kind: 'succeeded', providerRef: pi.id, amountMinor: 0, remainingAuthorizedMinor: 0 },
+          }
         : { found: false };
     case 'increment':
       return pi.amount >= call.amountMinor
-        ? { found: true, outcome: { kind: 'succeeded', providerRef: pi.id, amountMinor: pi.amount, remainingAuthorizedMinor: pi.amount_capturable ?? 0 } }
+        ? {
+            found: true,
+            outcome: {
+              kind: 'succeeded',
+              providerRef: pi.id,
+              amountMinor: pi.amount,
+              remainingAuthorizedMinor: pi.amount_capturable ?? 0,
+            },
+          }
         : { found: false };
     default:
       return { found: false };
@@ -610,7 +703,12 @@ export function normalizeStripeObject(type: string, o: Record<string, unknown>):
       kind: 'refund',
       providerRef: String(o.id),
       paymentProviderRef: str(o.payment_intent),
-      state: status === 'succeeded' ? 'succeeded' : status === 'failed' || status === 'canceled' ? 'failed' : 'pending',
+      state:
+        status === 'succeeded'
+          ? 'succeeded'
+          : status === 'failed' || status === 'canceled'
+            ? 'failed'
+            : 'pending',
       amountMinor: num(o.amount),
       currency: String(o.currency ?? '').toUpperCase(),
       operationId: meta.portico_operation_id ?? null,
@@ -637,7 +735,8 @@ export function normalizeStripeObject(type: string, o: Record<string, unknown>):
       reason: String(o.reason ?? 'unknown'),
       evidenceDueBy: ed.due_by ? new Date(ed.due_by * 1000) : null,
       fundsWithdrawn:
-        type === 'charge.dispute.funds_withdrawn' || (Array.isArray(o.balance_transactions) && o.balance_transactions.length > 0),
+        type === 'charge.dispute.funds_withdrawn' ||
+        (Array.isArray(o.balance_transactions) && o.balance_transactions.length > 0),
     };
   }
   if (type.startsWith('payout.')) {
@@ -645,7 +744,8 @@ export function normalizeStripeObject(type: string, o: Record<string, unknown>):
     return {
       kind: 'payout',
       providerRef: String(o.id),
-      state: status === 'paid' ? 'paid' : status === 'failed' || status === 'canceled' ? 'failed' : 'in_transit',
+      state:
+        status === 'paid' ? 'paid' : status === 'failed' || status === 'canceled' ? 'failed' : 'in_transit',
       amountMinor: num(o.amount),
       currency: String(o.currency ?? '').toUpperCase(),
       arrivalDate: unixDate(o.arrival_date),

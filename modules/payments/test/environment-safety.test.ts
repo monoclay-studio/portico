@@ -6,6 +6,7 @@
 import { sql } from '@portico/db';
 import { newId } from '@portico/kernel';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { seedPaymentsDemo } from '../src';
 import { type Harness, setupOrg, startHarness } from './harness';
 
 let h: Harness;
@@ -15,59 +16,66 @@ beforeAll(async () => {
 afterAll(async () => h?.close());
 
 describe('environment safety', () => {
-  it.each(['demo', 'trial', 'training'] as const)('%s: a Stripe Connect account never reaches Stripe', async (env) => {
-    h.secrets.live = 'sk_live_mustNeverBeUsed';
-    h.secrets.sandbox = 'sk_test_mustNeverBeUsed';
-    const org = await setupOrg(h, env);
-    const svc = h.module.service;
-    const stripe = await org.tx((tx) =>
-      svc.tx.createAccount(tx, {
-        legalEntityId: org.legalEntityId,
-        provider: 'stripe_connect',
-        externalAccountId: `acct_${newId().replace(/-/g, '').slice(0, 16)}`,
-        displayName: 'Hotel Stripe',
-        currencies: ['USD'],
-      }),
-    );
-    expect(stripe.effectiveMode).toBe('simulate');
-    await org.tx((tx) => svc.tx.updateAccount(tx, stripe.id, stripe.version, { status: 'active' }));
-    // Real-looking tokens are refused where payments are simulated.
-    await expect(
-      org.tx((tx) =>
+  it.each(['demo', 'trial', 'training'] as const)(
+    '%s: a Stripe Connect account never reaches Stripe',
+    async (env) => {
+      h.secrets.live = 'sk_live_mustNeverBeUsed';
+      h.secrets.sandbox = 'sk_test_mustNeverBeUsed';
+      const org = await setupOrg(h, env);
+      const svc = h.module.service;
+      const stripe = await org.tx((tx) =>
+        svc.tx.createAccount(tx, {
+          legalEntityId: org.legalEntityId,
+          provider: 'stripe_connect',
+          externalAccountId: `acct_${newId().replace(/-/g, '').slice(0, 16)}`,
+          displayName: 'Hotel Stripe',
+          currencies: ['USD'],
+        }),
+      );
+      expect(stripe.effectiveMode).toBe('simulate');
+      await org.tx((tx) => svc.tx.updateAccount(tx, stripe.id, stripe.version, { status: 'active' }));
+      // Real-looking tokens are refused where payments are simulated.
+      await expect(
+        org.tx((tx) =>
+          svc.tx.createMethod(tx, {
+            accountId: stripe.id,
+            propertyId: org.propertyId,
+            kind: 'card',
+            providerToken: 'pm_1Pq9ZzRealLookingToken',
+            owner: { type: 'guest_profile', id: newId() },
+            mitAgreement: false,
+          }),
+        ),
+      ).rejects.toThrow(/simulator test tokens/);
+      const m = await org.tx((tx) =>
         svc.tx.createMethod(tx, {
           accountId: stripe.id,
           propertyId: org.propertyId,
           kind: 'card',
-          providerToken: 'pm_1Pq9ZzRealLookingToken',
+          providerToken: 'pm_card_visa',
           owner: { type: 'guest_profile', id: newId() },
           mitAgreement: false,
         }),
-      ),
-    ).rejects.toThrow(/simulator test tokens/);
-    const m = await org.tx((tx) =>
-      svc.tx.createMethod(tx, {
-        accountId: stripe.id,
+      );
+      const p = await svc.chargeNow(org.ctx, {
         propertyId: org.propertyId,
-        kind: 'card',
-        providerToken: 'pm_card_visa',
-        owner: { type: 'guest_profile', id: newId() },
-        mitAgreement: false,
-      }),
-    );
-    const p = await svc.chargeNow(org.ctx, {
-      propertyId: org.propertyId,
-      methodId: m.id,
-      amount: { amountMinor: 1_000, currency: 'USD' },
-      ref: { type: 'folio', id: newId() },
-      initiator: 'customer',
-      businessKey: newId(),
-    });
-    expect(p).toMatchObject({ status: { payment: 'succeeded' }, mode: 'simulate', provenance: 'simulated' });
-    expect(p.presentation.label).toMatch(/simulated — no real money/);
-    expect(h.http.calls).toBe(0);
-    h.secrets.live = null;
-    h.secrets.sandbox = null;
-  });
+        methodId: m.id,
+        amount: { amountMinor: 1_000, currency: 'USD' },
+        ref: { type: 'folio', id: newId() },
+        initiator: 'customer',
+        businessKey: newId(),
+      });
+      expect(p).toMatchObject({
+        status: { payment: 'succeeded' },
+        mode: 'simulate',
+        provenance: 'simulated',
+      });
+      expect(p.presentation.label).toMatch(/simulated — no real money/);
+      expect(h.http.calls).toBe(0);
+      h.secrets.live = null;
+      h.secrets.sandbox = null;
+    },
+  );
 
   it('sandbox: Stripe without TEST keys sends nothing and says why', async () => {
     const org = await setupOrg(h, 'sandbox');
@@ -124,7 +132,12 @@ describe('environment safety', () => {
     const svc = h.module.service;
     await expect(
       org.tx((tx) =>
-        svc.tx.createAccount(tx, { legalEntityId: org.legalEntityId, provider: 'simulator', displayName: 'x', currencies: ['USD'] }),
+        svc.tx.createAccount(tx, {
+          legalEntityId: org.legalEntityId,
+          provider: 'simulator',
+          displayName: 'x',
+          currencies: ['USD'],
+        }),
       ),
     ).rejects.toThrow(/only available in demo, trial, training and sandbox/);
     // Bypass the service (as a buggy migration might) — execution still refuses.
@@ -144,7 +157,9 @@ describe('environment safety', () => {
         }),
       ),
     ).resolves.toBeTruthy();
-    const methods = await sql<{ id: string }>`select id from payments.payment_methods where account_id = ${id}`.execute(h.t.admin.kysely);
+    const methods = await sql<{
+      id: string;
+    }>`select id from payments.payment_methods where account_id = ${id}`.execute(h.t.admin.kysely);
     await expect(
       svc.chargeNow(org.ctx, {
         propertyId: org.propertyId,
@@ -161,7 +176,29 @@ describe('environment safety', () => {
   it('simulator controls are refused for accounts that are not simulated', async () => {
     const org = await setupOrg(h, 'sandbox');
     await expect(
-      org.tx((tx) => h.module.service.tx.setSimulatorControls(tx, org.terminalAccountId, { outage: 'refuse' })),
+      org.tx((tx) =>
+        h.module.service.tx.setSimulatorControls(tx, org.terminalAccountId, { outage: 'refuse' }),
+      ),
     ).rejects.toThrow(/Simulator controls only apply/);
+  });
+
+  it('demo seed: simulated + recorded-only accounts per legal entity; never in live', async () => {
+    const org = await setupOrg(h, 'demo');
+    await org.tx((tx) =>
+      seedPaymentsDemo(tx, { properties: [{ id: org.propertyId, legalEntityId: org.legalEntityId }] }),
+    );
+    const accounts = await org.tx((tx) => h.module.service.tx.listAccounts(tx, org.legalEntityId));
+    expect(accounts.filter((a) => a.displayName.includes('simulated'))).toEqual([
+      expect.objectContaining({ provider: 'simulator', effectiveMode: 'simulate', status: 'active' }),
+    ]);
+    expect(accounts.some((a) => a.provider === 'external_terminal' && a.effectiveMode === 'recorded')).toBe(
+      true,
+    );
+    const live = await setupOrg(h, 'live');
+    await expect(
+      live.tx((tx) =>
+        seedPaymentsDemo(tx, { properties: [{ id: live.propertyId, legalEntityId: live.legalEntityId }] }),
+      ),
+    ).rejects.toThrow(/never created in a live organization/);
   });
 });

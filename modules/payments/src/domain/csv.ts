@@ -4,7 +4,13 @@
  * Amounts are decimal MAJOR units ("840.00", "-120.50"); they are converted to minor units exactly, never via
  * floating point. Refund lines are negative, or positive with type=refund.
  */
-import { BusinessRuleError, currencyExponent, isLocalDate, type LocalDate, ValidationError } from '@portico/kernel';
+import {
+  BusinessRuleError,
+  currencyExponent,
+  isLocalDate,
+  type LocalDate,
+  ValidationError,
+} from '@portico/kernel';
 
 export interface ParsedStatementLine {
   lineNo: number;
@@ -46,7 +52,8 @@ export function parseCsvRecords(text: string): string[][] {
       field = '';
     } else field += ch;
   }
-  if (inQuotes) throw new ValidationError('csv_unterminated_quote', 'The file has an unterminated quoted field.');
+  if (inQuotes)
+    throw new ValidationError('csv_unterminated_quote', 'The file has an unterminated quoted field.');
   if (field.length > 0 || row.length > 0) {
     row.push(field);
     rows.push(row);
@@ -77,7 +84,12 @@ const REQUIRED = ['date', 'amount', 'currency'] as const;
 
 export function parseStatementCsv(text: string, opts: { maxLines?: number } = {}): ParsedStatementLine[] {
   const records = parseCsvRecords(text);
-  const header = records[0]?.map((h) => h.trim().toLowerCase().replace(/[\s-]+/g, '_'));
+  const header = records[0]?.map((h) =>
+    h
+      .trim()
+      .toLowerCase()
+      .replace(/[\s-]+/g, '_'),
+  );
   if (!header) throw new ValidationError('csv_empty', 'The statement file is empty.');
   for (const r of REQUIRED) {
     if (!header.includes(r)) {
@@ -91,7 +103,10 @@ export function parseStatementCsv(text: string, opts: { maxLines?: number } = {}
   const col = (name: string) => header.indexOf(name);
   const max = opts.maxLines ?? 20_000;
   if (records.length - 1 > max) {
-    throw new BusinessRuleError('csv_too_large', `The file has more than ${max} lines; split it by date range.`);
+    throw new BusinessRuleError(
+      'csv_too_large',
+      `The file has more than ${max} lines; split it by date range.`,
+    );
   }
   const out: ParsedStatementLine[] = [];
   for (let i = 1; i < records.length; i++) {
@@ -105,21 +120,31 @@ export function parseStatementCsv(text: string, opts: { maxLines?: number } = {}
     };
     const day = get('date');
     if (!day || !isLocalDate(day)) {
-      throw new ValidationError('csv_invalid_date', `Line ${lineNo}: date must be YYYY-MM-DD (got "${day ?? ''}").`, {
-        lineNo,
-      });
+      throw new ValidationError(
+        'csv_invalid_date',
+        `Line ${lineNo}: date must be YYYY-MM-DD (got "${day ?? ''}").`,
+        {
+          lineNo,
+        },
+      );
     }
     const currency = (get('currency') ?? '').toUpperCase();
     if (!/^[A-Z]{3}$/.test(currency)) {
-      throw new ValidationError('csv_invalid_currency', `Line ${lineNo}: currency must be a 3-letter ISO code.`, {
-        lineNo,
-      });
+      throw new ValidationError(
+        'csv_invalid_currency',
+        `Line ${lineNo}: currency must be a 3-letter ISO code.`,
+        {
+          lineNo,
+        },
+      );
     }
     let amountMinor: number;
     try {
       amountMinor = majorToMinor(get('amount') ?? '', currency);
     } catch (err) {
-      throw new ValidationError('csv_invalid_amount', `Line ${lineNo}: ${(err as Error).message}`, { lineNo });
+      throw new ValidationError('csv_invalid_amount', `Line ${lineNo}: ${(err as Error).message}`, {
+        lineNo,
+      });
     }
     const type = (get('type') ?? '').toLowerCase();
     if ((type === 'refund' || type === 'reversal') && amountMinor > 0) amountMinor = -amountMinor;
@@ -145,6 +170,7 @@ export function parseStatementCsv(text: string, opts: { maxLines?: number } = {}
       description: get('description'),
     });
   }
-  if (out.length === 0) throw new ValidationError('csv_no_lines', 'The statement file has a header but no lines.');
+  if (out.length === 0)
+    throw new ValidationError('csv_no_lines', 'The statement file has a header but no lines.');
   return out;
 }

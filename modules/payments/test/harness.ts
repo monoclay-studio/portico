@@ -11,7 +11,13 @@ import {
   type TxContext,
   withTenantTx,
 } from '@portico/db';
-import { fixedClock, newId, type RequestContext, systemAuthorizer, type TenantEnvironment } from '@portico/kernel';
+import {
+  fixedClock,
+  newId,
+  type RequestContext,
+  systemAuthorizer,
+  type TenantEnvironment,
+} from '@portico/kernel';
 import { platform, platformManifest } from '@portico/platform';
 import { createTestDatabase, type TestDatabase, testContext } from '@portico/testing';
 import {
@@ -55,24 +61,42 @@ export function fakeLedger(controls: LedgerControls): LedgerPort {
   return {
     async recordPayment(tx, i) {
       return {
-        postingId: await post(tx, 'payment', i.idempotencyKey, { type: 'folio', id: i.folioId }, i.amount.amountMinor, i.amount.currency, {
-          method: i.method,
-          verification: i.verification,
-          paymentRef: i.paymentRef,
-        }),
+        postingId: await post(
+          tx,
+          'payment',
+          i.idempotencyKey,
+          { type: 'folio', id: i.folioId },
+          i.amount.amountMinor,
+          i.amount.currency,
+          {
+            method: i.method,
+            verification: i.verification,
+            paymentRef: i.paymentRef,
+          },
+        ),
       };
     },
     async recordDeposit(tx, i) {
       return {
-        postingId: await post(tx, 'deposit', i.idempotencyKey, { type: 'booking', id: i.bookingId }, i.amount.amountMinor, i.amount.currency, {
-          method: i.method,
-          verification: i.verification,
-          paymentRef: i.paymentRef,
-        }),
+        postingId: await post(
+          tx,
+          'deposit',
+          i.idempotencyKey,
+          { type: 'booking', id: i.bookingId },
+          i.amount.amountMinor,
+          i.amount.currency,
+          {
+            method: i.method,
+            verification: i.verification,
+            paymentRef: i.paymentRef,
+          },
+        ),
       };
     },
     async recordRefund(tx, i) {
-      const ref = i.folioId ? { type: 'folio', id: i.folioId } : { type: 'booking', id: i.bookingId as string };
+      const ref = i.folioId
+        ? { type: 'folio', id: i.folioId }
+        : { type: 'booking', id: i.bookingId as string };
       return {
         postingId: await post(tx, 'refund', i.idempotencyKey, ref, -i.amount.amountMinor, i.amount.currency, {
           originalPaymentRef: i.originalPaymentRef,
@@ -81,15 +105,35 @@ export function fakeLedger(controls: LedgerControls): LedgerPort {
     },
     async recordPayout(tx, i) {
       return {
-        journalEntryId: await post(tx, 'payout', i.idempotencyKey, { type: 'legal_entity', id: i.legalEntityId }, i.net.amountMinor, i.currency, {
-          gross: i.gross.amountMinor,
-          fees: i.fees.amountMinor,
-        }),
+        journalEntryId: await post(
+          tx,
+          'payout',
+          i.idempotencyKey,
+          { type: 'legal_entity', id: i.legalEntityId },
+          i.net.amountMinor,
+          i.currency,
+          {
+            gross: i.gross.amountMinor,
+            fees: i.fees.amountMinor,
+          },
+        ),
       };
     },
     async recordPaymentAdjustment(tx, i) {
-      const ref = i.folioId ? { type: 'folio', id: i.folioId } : { type: 'booking', id: i.bookingId as string };
-      return { postingId: await post(tx, 'adjustment', i.idempotencyKey, ref, i.amount.amountMinor, i.amount.currency, { reason: i.reason }) };
+      const ref = i.folioId
+        ? { type: 'folio', id: i.folioId }
+        : { type: 'booking', id: i.bookingId as string };
+      return {
+        postingId: await post(
+          tx,
+          'adjustment',
+          i.idempotencyKey,
+          ref,
+          i.amount.amountMinor,
+          i.amount.currency,
+          { reason: i.reason },
+        ),
+      };
     },
     async recordDisputeMovement(tx, i) {
       return {
@@ -154,7 +198,11 @@ export async function startHarness(): Promise<Harness> {
       },
     } as HttpClient,
   };
-  const secrets = { live: null as string | null, sandbox: null as string | null, webhookSecret: 'whsec_test_harness' };
+  const secrets = {
+    live: null as string | null,
+    sandbox: null as string | null,
+    webhookSecret: 'whsec_test_harness',
+  };
   const secretsPort: ProviderSecretsPort = {
     stripeSecretKey: (mode) => (mode === 'live' ? secrets.live : secrets.sandbox),
     stripeWebhookSecrets: () => [secrets.webhookSecret],
@@ -269,7 +317,12 @@ export async function setupOrg(h: Harness, environment: TenantEnvironment = 'dem
   };
 }
 
-export async function addMethod(h: Harness, org: Org, token = 'pm_card_visa', mitAgreement = true): Promise<string> {
+export async function addMethod(
+  h: Harness,
+  org: Org,
+  token = 'pm_card_visa',
+  mitAgreement = true,
+): Promise<string> {
   const m = await org.tx((tx) =>
     h.module.service.tx.createMethod(tx, {
       accountId: org.simAccountId,
@@ -293,7 +346,13 @@ export async function setControls(h: Harness, org: Org, controls: Record<string,
 }
 
 export async function postings(h: Harness, org: Org, kind?: string) {
-  const { rows } = await sql<{ kind: string; amount_minor: number; idempotency_key: string; ref_id: string; extra: Record<string, unknown> }>`
+  const { rows } = await sql<{
+    kind: string;
+    amount_minor: number;
+    idempotency_key: string;
+    ref_id: string;
+    extra: Record<string, unknown>;
+  }>`
     select kind, amount_minor, idempotency_key, ref_id, extra from test_ledger.postings
      where tenant_id = ${org.tenantId} ${kind ? sql`and kind = ${kind}` : sql``}
      order by idempotency_key`.execute(h.t.admin.kysely);
@@ -309,9 +368,9 @@ export async function drain(h: Harness): Promise<void> {
   await drainOutbox(h.db, {
     subscriptions: h.module.subscriptions,
     environmentOf: async (tenantId) => {
-      const { rows } = await sql<{ e: TenantEnvironment }>`select platform.tenant_environment(${tenantId}::uuid) as e`.execute(
-        h.db.kysely,
-      );
+      const { rows } = await sql<{
+        e: TenantEnvironment;
+      }>`select platform.tenant_environment(${tenantId}::uuid) as e`.execute(h.db.kysely);
       return rows[0]?.e ?? 'demo';
     },
   });

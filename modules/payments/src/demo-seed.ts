@@ -12,7 +12,8 @@ export interface DemoOrgLike {
 }
 
 export async function seedPaymentsDemo(tx: TxContext, org: DemoOrgLike): Promise<void> {
-  if (tx.environment === 'live') throw new Error('Payments demo data is never created in a live organization.');
+  if (tx.environment === 'live')
+    throw new Error('Payments demo data is never created in a live organization.');
   const db = typed<PaymentsDB>(tx.db);
   const legalEntities = [...new Set(org.properties.map((p) => p.legalEntityId))];
   for (const le of legalEntities) {

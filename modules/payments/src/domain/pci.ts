@@ -39,7 +39,8 @@ export function containsLongDigitRun(value: string): boolean {
   return /\d(?:[ -]?\d){11,}/.test(value);
 }
 
-const FORBIDDEN_KEYS = /^(pan|card_?number|cardnumber|number|cvc|cvv|cvc2|cvv2|security_?code|track_?\d?|pin)$/i;
+const FORBIDDEN_KEYS =
+  /^(pan|card_?number|cardnumber|number|cvc|cvv|cvc2|cvv2|security_?code|track_?\d?|pin)$/i;
 
 /** Recursively remove card-data-shaped fields from provider payloads before they are stored for audit. */
 export function scrubCardData(value: unknown): unknown {

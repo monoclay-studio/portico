@@ -39,7 +39,11 @@ export type AttemptDecision =
   | { allowed: false; retryAfter: Date; next: BreakerState };
 
 /** Decide whether a provider call may be sent now. A half-open breaker lets exactly one probe through. */
-export function decideAttempt(s: BreakerState, now: Date, cfg: BreakerConfig = DEFAULT_BREAKER): AttemptDecision {
+export function decideAttempt(
+  s: BreakerState,
+  now: Date,
+  cfg: BreakerConfig = DEFAULT_BREAKER,
+): AttemptDecision {
   if (s.state === 'closed') return { allowed: true, probe: false, next: s };
   const probeAt = s.probeAfter ?? new Date((s.openedAt ?? now).getTime() + cfg.cooldownMs);
   if (now.getTime() < probeAt.getTime()) return { allowed: false, retryAfter: probeAt, next: s };
@@ -104,7 +108,8 @@ export const OUTAGE_ACTIONS: readonly StaffAction[] = [
   {
     key: 'send_payment_link_later',
     label: 'Send a payment link later',
-    detail: 'Create a payment request now; the guest pays when the provider is back. Nothing is charged until then.',
+    detail:
+      'Create a payment request now; the guest pays when the provider is back. Nothing is charged until then.',
   },
   {
     key: 'record_manual_authorization',

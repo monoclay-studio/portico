@@ -8,7 +8,13 @@ import { HttpTransportError } from './http-client';
 import type { ProviderAccount } from './provider';
 import { WebhookSignatureError } from './provider';
 import { signatureHeader } from './signature';
-import { classifyError, formEncode, normalizeStripeObject, STRIPE_SIGNATURE_HEADER, StripeConnectProvider } from './stripe-connect';
+import {
+  classifyError,
+  formEncode,
+  normalizeStripeObject,
+  STRIPE_SIGNATURE_HEADER,
+  StripeConnectProvider,
+} from './stripe-connect';
 
 const account: ProviderAccount = {
   id: '018f0000-0000-7000-8000-000000000001',
@@ -104,8 +110,14 @@ describe('StripeConnectProvider requests', () => {
   });
 
   it('charges with the optional platform application fee and flags merchant-initiated charges off-session', async () => {
-    const http = fakeHttp([json(200, { ...PI_REQUIRES_CAPTURE, status: 'succeeded', amount_received: 50_000 })]);
-    const out = await provider(http).charge(account, { ...call, initiator: 'merchant', applicationFeeMinor: 250 });
+    const http = fakeHttp([
+      json(200, { ...PI_REQUIRES_CAPTURE, status: 'succeeded', amount_received: 50_000 }),
+    ]);
+    const out = await provider(http).charge(account, {
+      ...call,
+      initiator: 'merchant',
+      applicationFeeMinor: 250,
+    });
     expect(out).toMatchObject({ kind: 'succeeded', amountMinor: 50_000 });
     const body = new URLSearchParams(http.requests[0]?.body);
     expect(body.get('capture_method')).toBe('automatic');
@@ -115,26 +127,54 @@ describe('StripeConnectProvider requests', () => {
 
   it('captures, increments, voids and refunds against the intent', async () => {
     const http = fakeHttp([
-      json(200, { ...PI_REQUIRES_CAPTURE, status: 'succeeded', amount_capturable: 0, amount_received: 30_000 }),
+      json(200, {
+        ...PI_REQUIRES_CAPTURE,
+        status: 'succeeded',
+        amount_capturable: 0,
+        amount_received: 30_000,
+      }),
       json(200, { ...PI_REQUIRES_CAPTURE, amount: 70_000, amount_capturable: 70_000 }),
       json(200, { ...PI_REQUIRES_CAPTURE, status: 'canceled', amount_capturable: 0 }),
-      json(200, { id: 're_1', object: 'refund', status: 'succeeded', amount: 1_000, currency: 'usd', payment_intent: 'pi_3PabcHotel' }),
+      json(200, {
+        id: 're_1',
+        object: 'refund',
+        status: 'succeeded',
+        amount: 1_000,
+        currency: 'usd',
+        payment_intent: 'pi_3PabcHotel',
+      }),
     ]);
     const p = provider(http);
     const base = { operationId: 'op-2', idempotencyKey: 'k2' };
     expect(
-      await p.capture(account, { ...base, providerRef: 'pi_3PabcHotel', amount: { amountMinor: 30_000, currency: 'USD' }, applicationFeeMinor: 150 }),
+      await p.capture(account, {
+        ...base,
+        providerRef: 'pi_3PabcHotel',
+        amount: { amountMinor: 30_000, currency: 'USD' },
+        applicationFeeMinor: 150,
+      }),
     ).toMatchObject({ kind: 'succeeded', amountMinor: 30_000, remainingAuthorizedMinor: 0 });
     expect(http.requests[0]?.url).toBe('https://api.stripe.com/v1/payment_intents/pi_3PabcHotel/capture');
     expect(new URLSearchParams(http.requests[0]?.body).get('amount_to_capture')).toBe('30000');
     expect(
-      await p.incrementAuthorization(account, { ...base, providerRef: 'pi_3PabcHotel', newTotal: { amountMinor: 70_000, currency: 'USD' } }),
+      await p.incrementAuthorization(account, {
+        ...base,
+        providerRef: 'pi_3PabcHotel',
+        newTotal: { amountMinor: 70_000, currency: 'USD' },
+      }),
     ).toMatchObject({ kind: 'succeeded', amountMinor: 70_000 });
     expect(http.requests[1]?.url).toMatch(/increment_authorization$/);
-    expect(await p.void(account, { ...base, providerRef: 'pi_3PabcHotel' })).toMatchObject({ kind: 'succeeded' });
+    expect(await p.void(account, { ...base, providerRef: 'pi_3PabcHotel' })).toMatchObject({
+      kind: 'succeeded',
+    });
     expect(http.requests[2]?.url).toMatch(/\/cancel$/);
     expect(
-      await p.refund(account, { ...base, paymentProviderRef: 'pi_3PabcHotel', amount: { amountMinor: 1_000, currency: 'USD' }, reason: 'x' }),
+      await p.refund(account, {
+        ...base,
+        paymentProviderRef: 'pi_3PabcHotel',
+        amount: { amountMinor: 1_000, currency: 'USD' },
+        reason: 'x',
+      }),
     ).toMatchObject({ kind: 'succeeded', providerRef: 're_1' });
     expect(new URLSearchParams(http.requests[3]?.body).get('payment_intent')).toBe('pi_3PabcHotel');
   });
@@ -183,7 +223,9 @@ describe('StripeConnectProvider outcomes are never guessed', () => {
     expect(classifyError(404, {})).toMatchObject({ kind: 'failed', code: 'resource_missing' });
     expect(classifyError(429, {})).toMatchObject({ kind: 'failed', code: 'try_again_later' });
     expect(classifyError(400, { type: 'idempotency_error' })).toMatchObject({ code: 'idempotency_conflict' });
-    expect(classifyError(400, { type: 'invalid_request_error', message: 'bad' })).toMatchObject({ code: 'invalid_request' });
+    expect(classifyError(400, { type: 'invalid_request_error', message: 'bad' })).toMatchObject({
+      code: 'invalid_request',
+    });
   });
 
   it('treats processing and requires_action correctly', async () => {
@@ -201,22 +243,42 @@ describe('StripeConnectProvider outcomes are never guessed', () => {
 
   it('refuses a response from the other mode', async () => {
     const http = fakeHttp([json(200, { ...PI_REQUIRES_CAPTURE, livemode: true })]);
-    expect(await provider(http).authorize(account, call)).toMatchObject({ kind: 'failed', code: 'environment_mismatch' });
+    expect(await provider(http).authorize(account, call)).toMatchObject({
+      kind: 'failed',
+      code: 'environment_mismatch',
+    });
   });
 
   it('refuses keys of the wrong mode before any request', () => {
     expect(
-      () => new StripeConnectProvider({ mode: 'sandbox', secretKey: 'sk_live_x', webhookSecrets: [], http: fakeHttp([]) }),
+      () =>
+        new StripeConnectProvider({
+          mode: 'sandbox',
+          secretKey: 'sk_live_x',
+          webhookSecrets: [],
+          http: fakeHttp([]),
+        }),
     ).toThrow(/TEST keys/);
     expect(
-      () => new StripeConnectProvider({ mode: 'live', secretKey: 'sk_test_x', webhookSecrets: [], http: fakeHttp([]) }),
+      () =>
+        new StripeConnectProvider({
+          mode: 'live',
+          secretKey: 'sk_test_x',
+          webhookSecrets: [],
+          http: fakeHttp([]),
+        }),
     ).toThrow(/LIVE key/);
   });
 });
 
 describe('StripeConnectProvider lookups', () => {
   it('finds an intent by operation metadata when the call timed out before returning an id', async () => {
-    const http = fakeHttp([json(200, { object: 'search_result', data: [{ ...PI_REQUIRES_CAPTURE, status: 'succeeded', amount_received: 50_000 }] })]);
+    const http = fakeHttp([
+      json(200, {
+        object: 'search_result',
+        data: [{ ...PI_REQUIRES_CAPTURE, status: 'succeeded', amount_received: 50_000 }],
+      }),
+    ]);
     const r = await provider(http).lookup(account, {
       operationId: 'op-1',
       kind: 'charge',
@@ -227,13 +289,25 @@ describe('StripeConnectProvider lookups', () => {
     });
     expect(r).toMatchObject({ found: true, outcome: { kind: 'succeeded', providerRef: 'pi_3PabcHotel' } });
     expect(http.requests[0]?.method).toBe('GET');
-    expect(decodeURIComponent(http.requests[0]?.url ?? '')).toContain("metadata['portico_operation_id']:'op-1'");
+    expect(decodeURIComponent(http.requests[0]?.url ?? '')).toContain(
+      "metadata['portico_operation_id']:'op-1'",
+    );
   });
 
   it('reports not-found and unknown honestly', async () => {
-    const http = fakeHttp([json(200, { data: [] }), json(404, { error: { type: 'invalid_request_error' } }), new HttpTransportError('timeout', 't')]);
+    const http = fakeHttp([
+      json(200, { data: [] }),
+      json(404, { error: { type: 'invalid_request_error' } }),
+      new HttpTransportError('timeout', 't'),
+    ]);
     const p = provider(http);
-    const base = { operationId: 'op', kind: 'charge' as const, idempotencyKey: 'k', parentProviderRef: null, amountMinor: 1 };
+    const base = {
+      operationId: 'op',
+      kind: 'charge' as const,
+      idempotencyKey: 'k',
+      parentProviderRef: null,
+      amountMinor: 1,
+    };
     expect(await p.lookup(account, { ...base, providerRef: null })).toEqual({ found: false });
     expect(await p.lookup(account, { ...base, providerRef: 'pi_missing' })).toEqual({ found: false });
     expect((await p.lookup(account, { ...base, providerRef: 'pi_x' })).found).toBe('unknown');
@@ -243,8 +317,22 @@ describe('StripeConnectProvider lookups', () => {
     const http = fakeHttp([
       json(200, {
         data: [
-          { id: 're_other', object: 'refund', status: 'succeeded', amount: 1, currency: 'usd', metadata: { portico_operation_id: 'x' } },
-          { id: 're_mine', object: 'refund', status: 'succeeded', amount: 500, currency: 'usd', metadata: { portico_operation_id: 'op-r' } },
+          {
+            id: 're_other',
+            object: 'refund',
+            status: 'succeeded',
+            amount: 1,
+            currency: 'usd',
+            metadata: { portico_operation_id: 'x' },
+          },
+          {
+            id: 're_mine',
+            object: 'refund',
+            status: 'succeeded',
+            amount: 500,
+            currency: 'usd',
+            metadata: { portico_operation_id: 'op-r' },
+          },
         ],
       }),
     ]);
@@ -264,34 +352,71 @@ describe('Stripe webhooks', () => {
   const now = new Date('2026-11-07T10:00:00Z');
   const t = Math.floor(now.getTime() / 1000);
   const event = (type: string, object: Record<string, unknown>, livemode = false) =>
-    JSON.stringify({ id: 'evt_1', type, livemode, account: 'acct_1HotelMaldives', created: t, data: { object } });
+    JSON.stringify({
+      id: 'evt_1',
+      type,
+      livemode,
+      account: 'acct_1HotelMaldives',
+      created: t,
+      data: { object },
+    });
 
   it('verifies signatures (constant-time, tolerance window) and normalizes objects', () => {
     const p = provider(fakeHttp([]));
-    const body = event('payment_intent.succeeded', { ...PI_REQUIRES_CAPTURE, status: 'succeeded', amount_received: 50_000 });
-    const ok = p.parseWebhook(body, { [STRIPE_SIGNATURE_HEADER]: signatureHeader('whsec_fixture', t, body) }, now);
+    const body = event('payment_intent.succeeded', {
+      ...PI_REQUIRES_CAPTURE,
+      status: 'succeeded',
+      amount_received: 50_000,
+    });
+    const ok = p.parseWebhook(
+      body,
+      { [STRIPE_SIGNATURE_HEADER]: signatureHeader('whsec_fixture', t, body) },
+      now,
+    );
     expect(ok).toMatchObject({
       eventId: 'evt_1',
       externalAccountId: 'acct_1HotelMaldives',
-      object: { kind: 'payment', state: 'succeeded', amountReceivedMinor: 50_000, currency: 'USD', operationId: 'op-1' },
+      object: {
+        kind: 'payment',
+        state: 'succeeded',
+        amountReceivedMinor: 50_000,
+        currency: 'USD',
+        operationId: 'op-1',
+      },
     });
-    expect(() => p.parseWebhook(body, { [STRIPE_SIGNATURE_HEADER]: signatureHeader('whsec_wrong', t, body) }, now)).toThrow(
-      WebhookSignatureError,
-    );
     expect(() =>
-      p.parseWebhook(body, { [STRIPE_SIGNATURE_HEADER]: signatureHeader('whsec_fixture', t - 3600, body) }, now),
+      p.parseWebhook(body, { [STRIPE_SIGNATURE_HEADER]: signatureHeader('whsec_wrong', t, body) }, now),
+    ).toThrow(WebhookSignatureError);
+    expect(() =>
+      p.parseWebhook(
+        body,
+        { [STRIPE_SIGNATURE_HEADER]: signatureHeader('whsec_fixture', t - 3600, body) },
+        now,
+      ),
     ).toThrow(/tolerance/);
-    expect(() => p.parseWebhook(`${body} `, { [STRIPE_SIGNATURE_HEADER]: signatureHeader('whsec_fixture', t, body) }, now)).toThrow(
-      /does not match/,
-    );
+    expect(() =>
+      p.parseWebhook(
+        `${body} `,
+        { [STRIPE_SIGNATURE_HEADER]: signatureHeader('whsec_fixture', t, body) },
+        now,
+      ),
+    ).toThrow(/does not match/);
     const live = event('payment_intent.succeeded', PI_REQUIRES_CAPTURE, true);
-    expect(() => p.parseWebhook(live, { [STRIPE_SIGNATURE_HEADER]: signatureHeader('whsec_fixture', t, live) }, now)).toThrow(
-      /mode does not match/,
-    );
+    expect(() =>
+      p.parseWebhook(live, { [STRIPE_SIGNATURE_HEADER]: signatureHeader('whsec_fixture', t, live) }, now),
+    ).toThrow(/mode does not match/);
   });
 
   it('normalizes refunds, disputes, payouts, checkout sessions, accounts and unknown events', () => {
-    expect(normalizeStripeObject('charge.refund.updated', { id: 're_1', status: 'failed', amount: 5, currency: 'usd', payment_intent: 'pi_1' })).toMatchObject({
+    expect(
+      normalizeStripeObject('charge.refund.updated', {
+        id: 're_1',
+        status: 'failed',
+        amount: 5,
+        currency: 'usd',
+        payment_intent: 'pi_1',
+      }),
+    ).toMatchObject({
       kind: 'refund',
       state: 'failed',
     });
@@ -306,8 +431,22 @@ describe('Stripe webhooks', () => {
         evidence_details: { due_by: t },
         balance_transactions: [{ id: 'txn_1' }],
       }),
-    ).toMatchObject({ kind: 'dispute', state: 'evidence_required', fundsWithdrawn: true, evidenceDueBy: now });
-    expect(normalizeStripeObject('payout.failed', { id: 'po_1', status: 'failed', amount: 10, currency: 'usd', failure_code: 'account_closed', arrival_date: t })).toMatchObject({
+    ).toMatchObject({
+      kind: 'dispute',
+      state: 'evidence_required',
+      fundsWithdrawn: true,
+      evidenceDueBy: now,
+    });
+    expect(
+      normalizeStripeObject('payout.failed', {
+        id: 'po_1',
+        status: 'failed',
+        amount: 10,
+        currency: 'usd',
+        failure_code: 'account_closed',
+        arrival_date: t,
+      }),
+    ).toMatchObject({
       kind: 'payout',
       state: 'failed',
       arrivalDate: '2026-11-07',
@@ -322,21 +461,42 @@ describe('Stripe webhooks', () => {
         payment_intent: 'pi_9',
         metadata: { portico_payment_request_id: 'req-1' },
       }),
-    ).toMatchObject({ kind: 'payment_link', state: 'completed', requestId: 'req-1', paymentProviderRef: 'pi_9' });
-    expect(normalizeStripeObject('account.updated', { charges_enabled: false, requirements: { disabled_reason: 'requirements.past_due' } })).toEqual({
+    ).toMatchObject({
+      kind: 'payment_link',
+      state: 'completed',
+      requestId: 'req-1',
+      paymentProviderRef: 'pi_9',
+    });
+    expect(
+      normalizeStripeObject('account.updated', {
+        charges_enabled: false,
+        requirements: { disabled_reason: 'requirements.past_due' },
+      }),
+    ).toEqual({
       kind: 'account',
       chargesEnabled: false,
       payoutsEnabled: false,
       disabledReason: 'requirements.past_due',
     });
-    expect(normalizeStripeObject('issuing_card.created', {})).toEqual({ kind: 'unknown', rawType: 'issuing_card.created' });
+    expect(normalizeStripeObject('issuing_card.created', {})).toEqual({
+      kind: 'unknown',
+      rawType: 'issuing_card.created',
+    });
   });
 });
 
 describe('form encoding', () => {
   it('uses Stripe bracket notation and skips undefined values', () => {
     expect(
-      decodeURIComponent(formEncode({ a: 1, b: undefined, metadata: { x: 'y' }, list: ['card'], items: [{ q: 1, p: { c: 'usd' } }] })),
+      decodeURIComponent(
+        formEncode({
+          a: 1,
+          b: undefined,
+          metadata: { x: 'y' },
+          list: ['card'],
+          items: [{ q: 1, p: { c: 'usd' } }],
+        }),
+      ),
     ).toBe('a=1&metadata[x]=y&list[]=card&items[0][q]=1&items[0][p][c]=usd');
   });
 });

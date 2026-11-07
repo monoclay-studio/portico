@@ -2,12 +2,20 @@ export * from './contracts';
 export { seedPaymentsDemo } from './demo-seed';
 export { explainDecline } from './domain/declines';
 export { PaymentsEvents } from './events';
+export { paymentsJobs } from './jobs';
 export * from './manifest';
 export type { EntityRef, LedgerPaymentMethod, LedgerPort, PlatformPort, PropertyInfo } from './ports';
-export { type HttpClient, type HttpRequest, type HttpResponse, HttpTransportError, fetchHttpClient } from './providers/http-client';
+export {
+  fetchHttpClient,
+  type HttpClient,
+  type HttpRequest,
+  type HttpResponse,
+  HttpTransportError,
+} from './providers/http-client';
 export type { PaymentProvider, ProviderAccount, SimulatorControls } from './providers/provider';
 export {
   createProviderRegistry,
+  envProviderSecrets,
   noProviderSecrets,
   type ProviderRegistry,
   type ProviderSecretsPort,
@@ -20,7 +28,8 @@ export { createPaymentsService, type PaymentsService, type PaymentsServiceDeps }
 export type { PaymentsDB } from './tables';
 
 import type { PorticoDatabase } from '@portico/db';
-import { DEFAULT_BREAKER, type BreakerConfig } from './domain/circuit-breaker';
+import { type BreakerConfig, DEFAULT_BREAKER } from './domain/circuit-breaker';
+import { paymentsJobs } from './jobs';
 import type { LedgerPort, PlatformPort } from './ports';
 import { fetchHttpClient, type HttpClient } from './providers/http-client';
 import { createProviderRegistry, type ProviderSecretsPort } from './providers/registry';
@@ -40,7 +49,11 @@ export function createPaymentsModule(deps: {
   breaker?: BreakerConfig;
 }) {
   const simulator = new SimulatorProvider(deps.database, deps.simulatorSigningSecret);
-  const registry = createProviderRegistry({ simulator, secrets: deps.secrets, http: deps.http ?? fetchHttpClient });
+  const registry = createProviderRegistry({
+    simulator,
+    secrets: deps.secrets,
+    http: deps.http ?? fetchHttpClient,
+  });
   const service = createPaymentsService({
     database: deps.database,
     ledger: deps.ledger,
@@ -54,5 +67,17 @@ export function createPaymentsModule(deps: {
     simulator,
     http: paymentsHttp({ database: deps.database, service }),
     subscriptions: service.subscriptions(),
+    jobs: paymentsJobs(service, {
+      onTenantError: (job, tenantId, err) =>
+        console.error(
+          JSON.stringify({
+            level: 'error',
+            msg: 'payments job failed for tenant',
+            job,
+            tenantId,
+            err: String(err),
+          }),
+        ),
+    }),
   };
 }

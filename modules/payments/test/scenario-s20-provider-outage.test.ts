@@ -150,7 +150,9 @@ describe('scenario s20: card payments go down during a busy shift', () => {
     const final = await svc.view.payment(org.ctx, p.id);
     expect(final.status.payment).toBe('failed');
     expect(final.decline?.code).toBe('not_received_by_provider');
-    const history = await org.tx((tx) => svc.tx.operationHistory(tx, { type: 'payment', id: p.id, propertyId: org.propertyId }));
+    const history = await org.tx((tx) =>
+      svc.tx.operationHistory(tx, { type: 'payment', id: p.id, propertyId: org.propertyId }),
+    );
     expect(history[0]?.attempts).toBe(1);
     expect(await postings(h, org)).toHaveLength(0);
   });

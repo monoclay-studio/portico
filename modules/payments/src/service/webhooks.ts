@@ -19,7 +19,7 @@ import { scrubCardData } from '../domain/pci';
 import { type AuthorizationStatus, authorizationTransition, disputeTransition } from '../domain/states';
 import { PaymentsEvents } from '../events';
 import { type VerifiedWebhook, type WebhookObject, WebhookSignatureError } from '../providers/provider';
-import { postPaymentLedger, tryLedger, ledgerKey } from './ledger';
+import { ledgerKey, postPaymentLedger, tryLedger } from './ledger';
 import { creditPaymentRequest, verifyOperation } from './operations';
 import {
   db,
@@ -67,9 +67,13 @@ export async function receiveStripeWebhook(
     );
   }
   if (!event) {
-    throw new DomainError('webhook_signature_invalid', 'The webhook signature could not be verified; the event was ignored.', {
-      status: 400,
-    });
+    throw new DomainError(
+      'webhook_signature_invalid',
+      'The webhook signature could not be verified; the event was ignored.',
+      {
+        status: 400,
+      },
+    );
   }
   const { rows } = await sql<{ tenant_id: string; account_id: string; environment: TenantEnvironment }>`
     select tenant_id, account_id, environment
@@ -78,7 +82,12 @@ export async function receiveStripeWebhook(
   );
   const route = rows[0];
   if (!route) return { status: 'ignored', detail: 'No payment account matches this event.' };
-  const ctx = systemContext(route.tenant_id, 'payments-webhook', route.environment, `webhook:${event.eventId}`);
+  const ctx = systemContext(
+    route.tenant_id,
+    'payments-webhook',
+    route.environment,
+    `webhook:${event.eventId}`,
+  );
   return processVerifiedWebhook(d, ctx, route.account_id, 'stripe_connect', event);
 }
 
@@ -218,14 +227,18 @@ async function handlePaymentObject(
       op.status === 'sent' ||
       op.status === 'pending_verification' ||
       (op.status === 'failed' && op.kind === 'charge' && o.state === 'succeeded') ||
-      (op.status === 'failed' && op.kind === 'authorize' && (o.state === 'authorized' || o.state === 'succeeded')),
+      (op.status === 'failed' &&
+        op.kind === 'authorize' &&
+        (o.state === 'authorized' || o.state === 'succeeded')),
   );
   let changed = false;
   for (const op of toVerify) {
     const r = await verifyOperation(d, ctx, op.id, { force: true });
     changed = changed || r.changed;
   }
-  const snapshot = await withTenantTx(d.database, ctx, (tx) => reconcileAuthorizationSnapshot(tx, accountId, o));
+  const snapshot = await withTenantTx(d.database, ctx, (tx) =>
+    reconcileAuthorizationSnapshot(tx, accountId, o),
+  );
   if (changed || snapshot === 'applied') return 'applied';
   if (!related.known) return 'no_match';
   return snapshot === 'stale' ? 'stale' : 'no_change';
@@ -279,7 +292,11 @@ async function reconcileAuthorizationSnapshot(
     });
     return 'none';
   }
-  await db(tx).updateTable('payments.authorizations').set({ status: implied, version: a.version + 1 }).where('id', '=', a.id).execute();
+  await db(tx)
+    .updateTable('payments.authorizations')
+    .set({ status: implied, version: a.version + 1 })
+    .where('id', '=', a.id)
+    .execute();
   await tx.audit({
     action: 'payments.authorization.providerUpdate',
     target: { type: 'authorization', id: a.id },
@@ -322,7 +339,9 @@ async function handleRefundObject(
   if (ops.length === 0) return 'no_match';
   let changed = false;
   for (const op of ops) {
-    const contradicted = (op.status === 'succeeded' && o.state === 'failed') || (op.status === 'failed' && o.state === 'succeeded');
+    const contradicted =
+      (op.status === 'succeeded' && o.state === 'failed') ||
+      (op.status === 'failed' && o.state === 'succeeded');
     if (op.status === 'sent' || op.status === 'pending_verification' || contradicted) {
       const r = await verifyOperation(d, ctx, op.id, { force: true });
       changed = changed || r.changed;
@@ -334,7 +353,10 @@ async function handleRefundObject(
 // ───────────────────────── disputes ─────────────────────────
 
 const EVIDENCE_CHECKLIST: ReadonlyArray<{ key: string; label: string }> = [
-  { key: 'agreed_terms', label: 'Agreed terms snapshot with cancellation/no-show policy and acceptance proof' },
+  {
+    key: 'agreed_terms',
+    label: 'Agreed terms snapshot with cancellation/no-show policy and acceptance proof',
+  },
   { key: 'registration_card', label: 'Signed or e-signed registration card' },
   { key: 'authentication', label: '3-D Secure / authentication result of the original transaction' },
   { key: 'folio', label: 'Itemized folio for the stay' },
@@ -376,7 +398,8 @@ async function applyDispute(
     .where('provider_dispute_id', '=', o.providerRef)
     .forUpdate()
     .executeTakeFirst();
-  const movements: Array<Record<string, unknown>> = (existing?.ledger_movements as Array<Record<string, unknown>>) ?? [];
+  const movements: Array<Record<string, unknown>> =
+    (existing?.ledger_movements as Array<Record<string, unknown>>) ?? [];
   let id = existing?.id;
   if (!existing) {
     id = newId(tx.now.getTime());
@@ -405,14 +428,21 @@ async function applyDispute(
       type: PaymentsEvents.disputeOpened,
       propertyId: payment.property_id,
       aggregate: { type: 'dispute', id },
-      payload: { disputeId: id, paymentId: payment.id, amountMinor: o.amountMinor, currency: o.currency, reason: o.reason },
+      payload: {
+        disputeId: id,
+        paymentId: payment.id,
+        amountMinor: o.amountMinor,
+        currency: o.currency,
+        reason: o.reason,
+      },
     });
     await raiseException(tx, {
       propertyId: payment.property_id,
       kind: 'dispute_opened',
       severity: 'urgent',
       problem: `The guest's bank disputed a payment of ${o.currency} ${o.amountMinor} (minor units), reason: ${o.reason}.`,
-      businessImpact: 'The amount (and a dispute fee) is debited from the hotel unless evidence wins the case.',
+      businessImpact:
+        'The amount (and a dispute fee) is debited from the hotel unless evidence wins the case.',
       nextStep: `Collect the evidence checklist${o.evidenceDueBy ? ` before ${o.evidenceDueBy.toISOString()}` : ''} and submit it in the provider dashboard.`,
       ownerRole: 'finance',
       responsibleParty: 'hotel',
@@ -449,7 +479,10 @@ async function applyDispute(
   // Ledger implications (finance port): funds withdrawn → debit; won after withdrawal → reversal.
   const wantDebit = o.fundsWithdrawn && !has('debit');
   const wantReversal = o.state === 'won' && has('debit') && !has('reversal');
-  for (const kind of [...(wantDebit ? ['debit' as const] : []), ...(wantReversal ? ['reversal' as const] : [])]) {
+  for (const kind of [
+    ...(wantDebit ? ['debit' as const] : []),
+    ...(wantReversal ? ['reversal' as const] : []),
+  ]) {
     const r = await tryLedger(tx, () =>
       d.ledger.recordDisputeMovement(tx, {
         legalEntityId: payment.legal_entity_id,
@@ -479,7 +512,10 @@ async function applyDispute(
   if (wantDebit || wantReversal) {
     await db(tx)
       .updateTable('payments.disputes')
-      .set({ funds_withdrawn: o.fundsWithdrawn || (existing?.funds_withdrawn ?? false), ledger_movements: JSON.stringify(movements) })
+      .set({
+        funds_withdrawn: o.fundsWithdrawn || (existing?.funds_withdrawn ?? false),
+        ledger_movements: JSON.stringify(movements),
+      })
       .where('id', '=', disputeId)
       .execute();
   }
@@ -532,10 +568,22 @@ async function applyPayoutEvent(
   if (existing.status === o.state || rank[o.state] < rank[existing.status]) return 'stale';
   await db(tx)
     .updateTable('payments.payouts')
-    .set({ status: o.state, failure_reason: o.failureCode, arrival_date: o.arrivalDate ?? existing.arrival_date, version: existing.version + 1 })
+    .set({
+      status: o.state,
+      failure_reason: o.failureCode,
+      arrival_date: o.arrivalDate ?? existing.arrival_date,
+      version: existing.version + 1,
+    })
     .where('id', '=', existing.id)
     .execute();
-  await payoutFollowUp(tx, existing.id, existing.legal_entity_id, o.state, o.failureCode, existing.ledger_status === 'posted');
+  await payoutFollowUp(
+    tx,
+    existing.id,
+    existing.legal_entity_id,
+    o.state,
+    o.failureCode,
+    existing.ledger_status === 'posted',
+  );
   return 'applied';
 }
 
@@ -548,7 +596,11 @@ export async function payoutFollowUp(
   failureCode: string | null,
   ledgerPosted: boolean,
 ): Promise<void> {
-  const p = await db(tx).selectFrom('payments.payouts').selectAll().where('id', '=', payoutId).executeTakeFirstOrThrow();
+  const p = await db(tx)
+    .selectFrom('payments.payouts')
+    .selectAll()
+    .where('id', '=', payoutId)
+    .executeTakeFirstOrThrow();
   if (state === 'failed') {
     await tx.emit({
       type: PaymentsEvents.payoutFailed,
@@ -582,8 +634,10 @@ export async function payoutFollowUp(
         kind: 'payout_breakdown_missing',
         severity: 'routine',
         problem: `Payout ${p.provider_payout_id} (net ${p.currency} ${p.net_minor} minor units) arrived without its gross/fees breakdown.`,
-        businessImpact: 'The payout cannot be reconciled to payments and fees, so it is not yet in the ledger.',
-        nextStep: 'Import the provider payout report or record the payout with gross, fees and included payments.',
+        businessImpact:
+          'The payout cannot be reconciled to payments and fees, so it is not yet in the ledger.',
+        nextStep:
+          'Import the provider payout report or record the payout with gross, fees and included payments.',
         ownerRole: 'finance',
         responsibleParty: 'hotel',
         ref: { type: 'payout', id: payoutId },
@@ -611,7 +665,11 @@ async function applyLinkEvent(
   if (!r) return 'no_match';
   if (o.state === 'expired') {
     if (r.status !== 'open') return 'stale';
-    await db(tx).updateTable('payments.payment_requests').set({ status: 'expired', version: r.version + 1 }).where('id', '=', r.id).execute();
+    await db(tx)
+      .updateTable('payments.payment_requests')
+      .set({ status: 'expired', version: r.version + 1 })
+      .where('id', '=', r.id)
+      .execute();
     await tx.emit({
       type: PaymentsEvents.requestExpired,
       propertyId: r.property_id,
@@ -621,7 +679,11 @@ async function applyLinkEvent(
     return 'applied';
   }
   const businessKey = `link:${o.providerRef}:${o.paymentProviderRef ?? 'unknown'}`;
-  const existing = await db(tx).selectFrom('payments.payments').select('id').where('business_key', '=', businessKey).executeTakeFirst();
+  const existing = await db(tx)
+    .selectFrom('payments.payments')
+    .select('id')
+    .where('business_key', '=', businessKey)
+    .executeTakeFirst();
   if (existing) return 'no_change';
   if (o.currency !== r.currency) {
     await raiseException(tx, {
@@ -705,7 +767,9 @@ async function applyAccountEvent(
 ): Promise<WebhookOutcome> {
   const a = await loadAccount(tx, accountId, true);
   const status = o.chargesEnabled ? 'active' : a.onboarding_status === 'complete' ? 'restricted' : 'pending';
-  const reason = o.chargesEnabled ? null : (o.disabledReason ?? 'The provider has not enabled card payments.');
+  const reason = o.chargesEnabled
+    ? null
+    : (o.disabledReason ?? 'The provider has not enabled card payments.');
   if (status === a.status && reason === a.status_reason) return 'no_change';
   await db(tx)
     .updateTable('payments.accounts')

@@ -98,6 +98,9 @@ importers:
       '@portico/kernel':
         specifier: workspace:*
         version: link:../../packages/kernel
+      '@portico/payments':
+        specifier: workspace:*
+        version: link:../../modules/payments
       '@portico/platform':
         specifier: workspace:*
         version: link:../../modules/platform

@@ -80,7 +80,9 @@ describe('payment and refund state machines', () => {
   it('computes refundable and capturable amounts including in-flight reservations', () => {
     expect(refundableMinor({ amountMinor: 1000, refundedMinor: 300, refundReservedMinor: 200 })).toBe(500);
     expect(refundableMinor({ amountMinor: 1000, refundedMinor: 1000, refundReservedMinor: 0 })).toBe(0);
-    expect(capturableMinor({ amountMinor: 5000, capturedMinor: 2000, captureReservedMinor: 1000 })).toBe(2000);
+    expect(capturableMinor({ amountMinor: 5000, capturedMinor: 2000, captureReservedMinor: 1000 })).toBe(
+      2000,
+    );
   });
   it('dispute transitions are monotonic', () => {
     expect(disputeTransition('opened', 'evidence_required')).toEqual({ kind: 'apply' });
@@ -178,17 +180,30 @@ describe('verification and VCC schedules', () => {
     expect(vccIsActive('2026-11-08', '2026-11-08')).toBe(true);
   });
   it('retries funding delays on a schedule and gives up after the last attempt or on expiry', () => {
-    const r1 = vccRetryDecision({ attempts: 1, now, expiresOn: null, todayLocal: '2026-11-07', retryable: true });
+    const r1 = vccRetryDecision({
+      attempts: 1,
+      now,
+      expiresOn: null,
+      todayLocal: '2026-11-07',
+      retryable: true,
+    });
     expect(r1).toEqual({ kind: 'retry', at: new Date(now.getTime() + 6 * 3_600_000) });
-    expect(vccRetryDecision({ attempts: 6, now, expiresOn: null, todayLocal: '2026-11-07', retryable: true }).kind).toBe(
-      'give_up',
-    );
     expect(
-      vccRetryDecision({ attempts: 1, now, expiresOn: '2026-11-07', todayLocal: '2026-11-07', retryable: true }).kind,
+      vccRetryDecision({ attempts: 6, now, expiresOn: null, todayLocal: '2026-11-07', retryable: true }).kind,
     ).toBe('give_up');
-    expect(vccRetryDecision({ attempts: 1, now, expiresOn: null, todayLocal: '2026-11-07', retryable: false }).kind).toBe(
-      'give_up',
-    );
+    expect(
+      vccRetryDecision({
+        attempts: 1,
+        now,
+        expiresOn: '2026-11-07',
+        todayLocal: '2026-11-07',
+        retryable: true,
+      }).kind,
+    ).toBe('give_up');
+    expect(
+      vccRetryDecision({ attempts: 1, now, expiresOn: null, todayLocal: '2026-11-07', retryable: false })
+        .kind,
+    ).toBe('give_up');
   });
 });
 
@@ -241,9 +256,9 @@ describe('statement CSV parsing', () => {
   it('explains malformed files', () => {
     expect(() => parseStatementCsv('date,amount\n2026-11-07,1.00\n')).toThrow(/no "currency" column/);
     expect(() => parseStatementCsv('date,amount,currency\n07/11/2026,1.00,USD\n')).toThrow(/YYYY-MM-DD/);
-    expect(() => parseStatementCsv('date,amount,currency,last4\n2026-11-07,1.00,USD,4242424242424242\n')).toThrow(
-      /Never put full card numbers/,
-    );
+    expect(() =>
+      parseStatementCsv('date,amount,currency,last4\n2026-11-07,1.00,USD,4242424242424242\n'),
+    ).toThrow(/Never put full card numbers/);
     expect(() => parseStatementCsv('date,amount,currency\n')).toThrow(/no lines/);
   });
 });

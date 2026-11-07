@@ -42,7 +42,11 @@ export function createPaymentsService(input: PaymentsServiceDeps) {
   }
 
   /** Execute never-sent operations of a record; optionally verify unresolved ones now ("check now"). */
-  async function settle(ctx: RequestContext, target: Target, opts: { verifyPending?: boolean } = {}): Promise<void> {
+  async function settle(
+    ctx: RequestContext,
+    target: Target,
+    opts: { verifyPending?: boolean } = {},
+  ): Promise<void> {
     const ops = await withTenantTx(d.database, ctx, (tx) =>
       db(tx)
         .selectFrom('payments.provider_operations')
@@ -64,11 +68,14 @@ export function createPaymentsService(input: PaymentsServiceDeps) {
   }
 
   const view = {
-    payment: (ctx: RequestContext, id: string) => withTenantTx(d.database, ctx, (tx) => queries.getPayment(tx, id)),
+    payment: (ctx: RequestContext, id: string) =>
+      withTenantTx(d.database, ctx, (tx) => queries.getPayment(tx, id)),
     authorization: (ctx: RequestContext, id: string) =>
       withTenantTx(d.database, ctx, (tx) => queries.getAuthorization(tx, id)),
-    refund: (ctx: RequestContext, id: string) => withTenantTx(d.database, ctx, (tx) => queries.getRefund(tx, id)),
-    request: (ctx: RequestContext, id: string) => withTenantTx(d.database, ctx, (tx) => requests.getPaymentRequest(tx, id)),
+    refund: (ctx: RequestContext, id: string) =>
+      withTenantTx(d.database, ctx, (tx) => queries.getRefund(tx, id)),
+    request: (ctx: RequestContext, id: string) =>
+      withTenantTx(d.database, ctx, (tx) => requests.getPaymentRequest(tx, id)),
   };
 
   return {
@@ -81,7 +88,12 @@ export function createPaymentsService(input: PaymentsServiceDeps) {
         i: {
           propertyId: string;
           legalEntityId?: string;
-          payer: { type: 'guest_profile' | 'company' | 'agency' | 'other'; id?: string; name: string; email?: string };
+          payer: {
+            type: 'guest_profile' | 'company' | 'agency' | 'other';
+            id?: string;
+            name: string;
+            email?: string;
+          };
           amount: { amountMinor: number; currency: string };
           purpose: 'deposit' | 'balance' | 'incidentals_preauth' | 'custom';
           ref: { type: 'folio' | 'booking'; id: string };
@@ -156,13 +168,19 @@ export function createPaymentsService(input: PaymentsServiceDeps) {
       },
       async refund(
         tx: TxContext,
-        i: { paymentId: string; amount: { amountMinor: number; currency: string }; reason: string; idempotencyKey: string },
+        i: {
+          paymentId: string;
+          amount: { amountMinor: number; currency: string };
+          reason: string;
+          idempotencyKey: string;
+        },
       ): Promise<Refund> {
         const s = await collect.refund(d, tx, { ...i, businessKey: i.idempotencyKey });
         scheduleAfterCommit(tx, s.operationId);
         return queries.getRefund(tx, s.id);
       },
-      getPaymentStatus: (tx: TxContext, ref: { type: string; id: string }) => queries.getPaymentStatus(tx, ref),
+      getPaymentStatus: (tx: TxContext, ref: { type: string; id: string }) =>
+        queries.getPaymentStatus(tx, ref),
       listUnresolved: (tx: TxContext, i: { propertyId: string }) => queries.listUnresolved(tx, i),
     },
 
@@ -178,38 +196,63 @@ export function createPaymentsService(input: PaymentsServiceDeps) {
     settle,
     view,
     execute: (ctx: RequestContext, operationId: string) => executeOperation(d, ctx, operationId),
-    verify: (ctx: RequestContext, operationId: string, force = true) => verifyOperation(d, ctx, operationId, { force }),
+    verify: (ctx: RequestContext, operationId: string, force = true) =>
+      verifyOperation(d, ctx, operationId, { force }),
     /** "Check now" on a record: verify its unresolved operations with the provider immediately. */
     async checkNow(ctx: RequestContext, target: Target): Promise<void> {
       await withTenantTx(d.database, ctx, async (tx) => {
         const table =
-          target.type === 'payment' ? 'payments.payments' : target.type === 'refund' ? 'payments.refunds' : 'payments.authorizations';
-        const row = await db(tx).selectFrom(table).select(['property_id']).where('id', '=', target.id).executeTakeFirst();
-        if (!row) throw new DomainError(`${target.type}_not_found`, `${target.type} ${target.id} was not found.`, { status: 404 });
+          target.type === 'payment'
+            ? 'payments.payments'
+            : target.type === 'refund'
+              ? 'payments.refunds'
+              : 'payments.authorizations';
+        const row = await db(tx)
+          .selectFrom(table)
+          .select(['property_id'])
+          .where('id', '=', target.id)
+          .executeTakeFirst();
+        if (!row)
+          throw new DomainError(`${target.type}_not_found`, `${target.type} ${target.id} was not found.`, {
+            status: 404,
+          });
         requireRead(tx, row.property_id);
       });
       await settle(ctx, target, { verifyPending: true });
     },
-    runReconciliation: (ctx: RequestContext, opts: { propertyId?: string } = {}) => reconcile.runReconciliation(d, ctx, opts),
-    runDueVirtualCards: (ctx: RequestContext, opts: { propertyId?: string } = {}) => requests.runDueVirtualCards(d, ctx, opts),
-    ensurePaymentLink: (ctx: RequestContext, requestId: string) => requests.ensurePaymentLink(d, ctx, requestId),
+    runReconciliation: (ctx: RequestContext, opts: { propertyId?: string } = {}) =>
+      reconcile.runReconciliation(d, ctx, opts),
+    runDueVirtualCards: (ctx: RequestContext, opts: { propertyId?: string } = {}) =>
+      requests.runDueVirtualCards(d, ctx, opts),
+    ensurePaymentLink: (ctx: RequestContext, requestId: string) =>
+      requests.ensurePaymentLink(d, ctx, requestId),
     simulateRequestPayment: (ctx: RequestContext, requestId: string, amountMinor?: number) =>
       requests.simulateRequestPayment(d, ctx, requestId, amountMinor),
-    deliverSimulatorWebhooks: (ctx: RequestContext, accountId: string) => webhooks.deliverSimulatorWebhooks(d, ctx, accountId),
+    deliverSimulatorWebhooks: (ctx: RequestContext, accountId: string) =>
+      webhooks.deliverSimulatorWebhooks(d, ctx, accountId),
     receiveStripeWebhook: (rawBody: string, headers: Record<string, string | undefined>) =>
       webhooks.receiveStripeWebhook(d, rawBody, headers),
 
     // ── tx-level commands and queries (routes wrap them in transactions) ──
     tx: {
-      createAccount: (tx: TxContext, i: Parameters<typeof accounts.createAccount>[2]) => accounts.createAccount(d, tx, i),
+      createAccount: (tx: TxContext, i: Parameters<typeof accounts.createAccount>[2]) =>
+        accounts.createAccount(d, tx, i),
       listAccounts: (tx: TxContext, legalEntityId?: string) => accounts.listAccounts(d, tx, legalEntityId),
       getAccount: (tx: TxContext, id: string) => accounts.getAccount(d, tx, id),
-      updateAccount: (tx: TxContext, id: string, v: number, p: Parameters<typeof accounts.updateAccount>[4]) =>
-        accounts.updateAccount(d, tx, id, v, p),
-      setSimulatorControls: (tx: TxContext, id: string, c: Parameters<typeof accounts.setSimulatorControls>[3]) =>
-        accounts.setSimulatorControls(d, tx, id, c),
+      updateAccount: (
+        tx: TxContext,
+        id: string,
+        v: number,
+        p: Parameters<typeof accounts.updateAccount>[4],
+      ) => accounts.updateAccount(d, tx, id, v, p),
+      setSimulatorControls: (
+        tx: TxContext,
+        id: string,
+        c: Parameters<typeof accounts.setSimulatorControls>[3],
+      ) => accounts.setSimulatorControls(d, tx, id, c),
       accountHealth: (tx: TxContext, id: string) => accounts.accountHealth(d, tx, id),
-      createMethod: (tx: TxContext, i: Parameters<typeof accounts.createMethod>[2]) => accounts.createMethod(d, tx, i),
+      createMethod: (tx: TxContext, i: Parameters<typeof accounts.createMethod>[2]) =>
+        accounts.createMethod(d, tx, i),
       getMethod: accounts.getMethod,
       listMethods: accounts.listMethods,
       detachMethod: (tx: TxContext, id: string, v: number) => accounts.detachMethod(d, tx, id, v),
@@ -217,13 +260,16 @@ export function createPaymentsService(input: PaymentsServiceDeps) {
       increment: (tx: TxContext, i: Parameters<typeof collect.incrementAuthorization>[2]) =>
         collect.incrementAuthorization(d, tx, i),
       capture: (tx: TxContext, i: Parameters<typeof collect.capture>[2]) => collect.capture(d, tx, i),
-      void: (tx: TxContext, i: Parameters<typeof collect.voidAuthorization>[2]) => collect.voidAuthorization(d, tx, i),
+      void: (tx: TxContext, i: Parameters<typeof collect.voidAuthorization>[2]) =>
+        collect.voidAuthorization(d, tx, i),
       charge: (tx: TxContext, i: Parameters<typeof collect.charge>[2]) => collect.charge(d, tx, i),
       refund: (tx: TxContext, i: Parameters<typeof collect.refund>[2]) => collect.refund(d, tx, i),
-      recordPayment: (tx: TxContext, i: Parameters<typeof collect.recordPayment>[2]) => collect.recordPayment(d, tx, i),
+      recordPayment: (tx: TxContext, i: Parameters<typeof collect.recordPayment>[2]) =>
+        collect.recordPayment(d, tx, i),
       recordAuthorization: (tx: TxContext, i: Parameters<typeof collect.recordAuthorization>[2]) =>
         collect.recordAuthorization(d, tx, i),
-      recordRefund: (tx: TxContext, i: Parameters<typeof collect.recordRefund>[2]) => collect.recordRefund(d, tx, i),
+      recordRefund: (tx: TxContext, i: Parameters<typeof collect.recordRefund>[2]) =>
+        collect.recordRefund(d, tx, i),
       adjustRecordedPayment: (tx: TxContext, i: Parameters<typeof collect.adjustRecordedPayment>[2]) =>
         collect.adjustRecordedPayment(d, tx, i),
       createPaymentRequest: (tx: TxContext, i: Parameters<typeof requests.createPaymentRequest>[2]) =>
@@ -237,7 +283,8 @@ export function createPaymentsService(input: PaymentsServiceDeps) {
       getVirtualCard: requests.getVirtualCard,
       importStatement: (tx: TxContext, i: Parameters<typeof reconcile.importStatement>[2]) =>
         reconcile.importStatement(d, tx, i),
-      recordPayout: (tx: TxContext, i: Parameters<typeof reconcile.recordPayout>[2]) => reconcile.recordPayout(d, tx, i),
+      recordPayout: (tx: TxContext, i: Parameters<typeof reconcile.recordPayout>[2]) =>
+        reconcile.recordPayout(d, tx, i),
       listPayouts: reconcile.listPayouts,
       getDispute: reconcile.getDispute,
       listDisputes: reconcile.listDisputes,

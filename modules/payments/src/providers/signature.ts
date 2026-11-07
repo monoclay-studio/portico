@@ -36,7 +36,8 @@ export function verifySignature(
     throw new WebhookSignatureError('Malformed signature header.');
   }
   const age = Math.abs(Math.floor(now.getTime() / 1000) - timestamp);
-  if (age > toleranceSeconds) throw new WebhookSignatureError('Signature timestamp outside the tolerance window.');
+  if (age > toleranceSeconds)
+    throw new WebhookSignatureError('Signature timestamp outside the tolerance window.');
   for (const secret of secrets) {
     const expected = Buffer.from(computeSignature(secret, timestamp, rawBody), 'hex');
     for (const c of candidates) {

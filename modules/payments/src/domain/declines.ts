@@ -89,7 +89,8 @@ const TABLE: Record<string, Omit<DeclineExplanation, 'code'>> = {
   currency_not_supported: {
     category: 'configuration',
     message: 'The card or the hotel account does not support this currency.',
-    recovery: 'Charge in a supported currency or use another payment method; finance can review the account currencies.',
+    recovery:
+      'Charge in a supported currency or use another payment method; finance can review the account currencies.',
     retryable: false,
   },
   invalid_account: {
@@ -138,7 +139,8 @@ const TABLE: Record<string, Omit<DeclineExplanation, 'code'>> = {
   },
   provider_unavailable: {
     category: 'soft',
-    message: 'Card payments are unavailable right now: the payment provider cannot be reached. Nothing was charged.',
+    message:
+      'Card payments are unavailable right now: the payment provider cannot be reached. Nothing was charged.',
     recovery:
       'Accept cash, send a payment link to use later, or take the card on your own terminal and record it in Portico (manual authorization or recorded payment).',
     retryable: true,
@@ -152,7 +154,8 @@ const TABLE: Record<string, Omit<DeclineExplanation, 'code'>> = {
   account_restricted: {
     category: 'configuration',
     message: "The hotel's payment account is restricted by the provider. Nothing was charged.",
-    recovery: 'Use cash, a payment link from another account, or your own terminal; finance must resolve the account.',
+    recovery:
+      'Use cash, a payment link from another account, or your own terminal; finance must resolve the account.',
     retryable: false,
   },
   not_received_by_provider: {
@@ -193,7 +196,8 @@ const TABLE: Record<string, Omit<DeclineExplanation, 'code'>> = {
   },
   idempotency_conflict: {
     category: 'configuration',
-    message: 'The provider saw this request reference with different details and refused it. Nothing was charged.',
+    message:
+      'The provider saw this request reference with different details and refused it. Nothing was charged.',
     recovery: 'Start a new payment; contact support with the reference if it happens again.',
     retryable: false,
   },
@@ -212,7 +216,8 @@ const TABLE: Record<string, Omit<DeclineExplanation, 'code'>> = {
   invalid_request: {
     category: 'configuration',
     message: 'The payment provider rejected the request as invalid. Nothing was charged.',
-    recovery: 'Check the amount, currency and payment method; contact support with the reference if it persists.',
+    recovery:
+      'Check the amount, currency and payment method; contact support with the reference if it persists.',
     retryable: false,
   },
 };

@@ -13,7 +13,12 @@ beforeAll(async () => {
 });
 afterAll(async () => h?.close());
 
-async function authorize(org: Org, methodId: string, amountMinor: number, ref = { type: 'folio', id: newId() }) {
+async function authorize(
+  org: Org,
+  methodId: string,
+  amountMinor: number,
+  ref = { type: 'folio', id: newId() },
+) {
   const svc = h.module.service;
   const s = await org.tx((tx) =>
     svc.tx.authorize(tx, {
@@ -58,7 +63,11 @@ describe('authorizations', () => {
     const c1 = await capture(org, auth.id, 20_000);
     expect(c1.status.payment).toBe('succeeded');
     let a = await h.module.service.view.authorization(org.ctx, auth.id);
-    expect(a).toMatchObject({ status: { authorization: 'partially_captured' }, capturedMinor: 20_000, capturableMinor: 30_000 });
+    expect(a).toMatchObject({
+      status: { authorization: 'partially_captured' },
+      capturedMinor: 20_000,
+      capturableMinor: 30_000,
+    });
 
     await expect(capture(org, auth.id, 40_000)).rejects.toThrow(/can still be collected/);
     await capture(org, auth.id);
@@ -77,11 +86,18 @@ describe('authorizations', () => {
     const methodId = await addMethod(h, org);
     const auth = await authorize(org, methodId, 10_000);
     const svc = h.module.service;
-    await org.tx((tx) => svc.tx.increment(tx, { authorizationId: auth.id, additionalAmount: { amountMinor: 5_000, currency: 'USD' } }));
+    await org.tx((tx) =>
+      svc.tx.increment(tx, {
+        authorizationId: auth.id,
+        additionalAmount: { amountMinor: 5_000, currency: 'USD' },
+      }),
+    );
     await svc.settle(org.ctx, { type: 'authorization', id: auth.id });
     let a = await svc.view.authorization(org.ctx, auth.id);
     expect(a.amount.amountMinor).toBe(15_000);
-    await org.tx((tx) => svc.tx.void(tx, { authorizationId: auth.id, reason: 'Guest paid cash at checkout' }));
+    await org.tx((tx) =>
+      svc.tx.void(tx, { authorizationId: auth.id, reason: 'Guest paid cash at checkout' }),
+    );
     await svc.settle(org.ctx, { type: 'authorization', id: auth.id });
     a = await svc.view.authorization(org.ctx, auth.id);
     expect(a.status.authorization).toBe('voided');
@@ -89,11 +105,17 @@ describe('authorizations', () => {
     expect(await postings(h, org)).toHaveLength(0);
   });
 
-  it('expires holds after their validity and says so', async () => {
+  it('warns before a hold expires, then expires it and says so', async () => {
     const org = await setupOrg(h);
     const methodId = await addMethod(h, org);
     const auth = await authorize(org, methodId, 10_000);
-    h.clock.advance(8 * 86_400_000);
+    h.clock.advance(6 * 86_400_000); // simulator holds last 7 days; renewal warning 2 days before
+    await h.module.service.runReconciliation(org.ctx, { propertyId: org.propertyId });
+    const warn = await org.tx((tx) => h.module.service.tx.listExceptions(tx, { status: 'open' }));
+    expect(warn.find((e) => e.kind === 'authorization_expiring')).toMatchObject({
+      ref: { type: 'authorization', id: auth.id },
+    });
+    h.clock.advance(2 * 86_400_000);
     const run = await h.module.service.runReconciliation(org.ctx, { propertyId: org.propertyId });
     expect(run.authorizationsExpired).toBe(1);
     const a = await h.module.service.view.authorization(org.ctx, auth.id);
@@ -148,7 +170,12 @@ describe('authorizations', () => {
     // account of a different legal entity is refused. Create a second legal entity in the same org:
     const { platform } = await import('@portico/platform');
     const le2 = await org.tx((tx) =>
-      platform.createLegalEntity(tx, { name: 'Other Co', legalName: 'Other Co Pvt Ltd', countryCode: 'MV', baseCurrency: 'USD' }),
+      platform.createLegalEntity(tx, {
+        name: 'Other Co',
+        legalName: 'Other Co Pvt Ltd',
+        countryCode: 'MV',
+        baseCurrency: 'USD',
+      }),
     );
     const acct = await org.tx((tx) =>
       h.module.service.tx.createAccount(tx, {

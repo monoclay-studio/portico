@@ -37,7 +37,13 @@ export type DisputeStatus =
   | 'lost'
   | 'accepted';
 
-export type VirtualCardStatus = 'scheduled' | 'charging' | 'charged' | 'funding_retry' | 'failed' | 'cancelled';
+export type VirtualCardStatus =
+  | 'scheduled'
+  | 'charging'
+  | 'charged'
+  | 'funding_retry'
+  | 'failed'
+  | 'cancelled';
 
 /** Result of asking whether `from → to` may be applied. */
 export type TransitionVerdict =
@@ -103,7 +109,10 @@ function verdict<S extends string>(
   return { kind: 'mismatch', reason: `cannot move from ${from} to ${to}` };
 }
 
-export function authorizationTransition(from: AuthorizationStatus, to: AuthorizationStatus): TransitionVerdict {
+export function authorizationTransition(
+  from: AuthorizationStatus,
+  to: AuthorizationStatus,
+): TransitionVerdict {
   return verdict(AUTHORIZATION_EDGES, AUTHORIZATION_RANK, from, to);
 }
 

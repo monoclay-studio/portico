@@ -4,7 +4,14 @@
  * and `provenance`. Permissions are evaluated here so the UI, API, integrations and AI see the same truth.
  */
 import { type TxContext, typed } from '@portico/db';
-import type { Authorizer, Provenance, RecordAction, RecordIssue, RecordLink, RecordOwner } from '@portico/kernel';
+import type {
+  Authorizer,
+  Provenance,
+  RecordAction,
+  RecordIssue,
+  RecordLink,
+  RecordOwner,
+} from '@portico/kernel';
 import { capturableMinor, refundableMinor } from '../domain/states';
 import type { PaymentsDB } from '../tables';
 import type { AuthorizationRow, ExceptionRow, PaymentRow, RefundRow, RequestRow } from './shared';
@@ -37,7 +44,10 @@ export function exceptionOwner(role: string): RecordOwner {
 }
 
 /** Load open exceptions for the given records in one query. */
-export async function recordContext(tx: TxContext, refs: ReadonlyArray<{ type: string; id: string }>): Promise<RecordContext> {
+export async function recordContext(
+  tx: TxContext,
+  refs: ReadonlyArray<{ type: string; id: string }>,
+): Promise<RecordContext> {
   const issues = new Map<string, RecordIssue[]>();
   if (refs.length) {
     const rows = await db(tx)
@@ -106,7 +116,8 @@ export function paymentRecord(p: PaymentRow, rc: RecordContext): RecordParts {
   });
   const pending = p.status === 'processing' || p.status === 'pending_verification';
   const recorded = p.mode === 'recorded';
-  const collected = p.status === 'succeeded' || p.status === 'recorded_unverified' || p.status === 'recorded_verified';
+  const collected =
+    p.status === 'succeeded' || p.status === 'recorded_unverified' || p.status === 'recorded_verified';
   const refundReason = !collected
     ? pending
       ? 'The payment is still being verified with the provider; a refund is possible once it is confirmed.'
@@ -158,19 +169,25 @@ export function paymentRecord(p: PaymentRow, rc: RecordContext): RecordParts {
     issues.push({
       code: 'ledger_not_posted',
       severity: 'blocking',
-      message: 'Collected but not yet shown on the bill (ledger posting pending/failed). Portico retries automatically.',
+      message:
+        'Collected but not yet shown on the bill (ledger posting pending/failed). Portico retries automatically.',
     });
   }
   issues.push(...(rc.issues.get(`payment:${p.id}`) ?? []));
   const links: RecordLink[] = [refLink(p.ref_type, p.ref_id)];
   if (p.account_id) links.push({ rel: 'paymentAccount', type: 'payment_account', id: p.account_id });
   if (p.authorization_id) links.push({ rel: 'authorization', type: 'authorization', id: p.authorization_id });
-  if (p.payment_request_id) links.push({ rel: 'paymentRequest', type: 'payment_request', id: p.payment_request_id });
+  if (p.payment_request_id)
+    links.push({ rel: 'paymentRequest', type: 'payment_request', id: p.payment_request_id });
   if (p.virtual_card_id) links.push({ rel: 'virtualCard', type: 'virtual_card', id: p.virtual_card_id });
   if (p.payout_id) links.push({ rel: 'payout', type: 'payout', id: p.payout_id });
   if (p.method_id) links.push({ rel: 'paymentMethod', type: 'payment_method', id: p.method_id });
   return {
-    status: { payment: p.status, ledger: p.ledger_status, ...(p.payout_id ? { settlement: 'in_payout' } : {}) },
+    status: {
+      payment: p.status,
+      ledger: p.ledger_status,
+      ...(p.payout_id ? { settlement: 'in_payout' } : {}),
+    },
     allowedActions: actions,
     issues,
     links,
@@ -178,7 +195,11 @@ export function paymentRecord(p: PaymentRow, rc: RecordContext): RecordParts {
   };
 }
 
-export function authorizationRecord(a: AuthorizationRow, rc: RecordContext, capabilities: readonly string[]): RecordParts {
+export function authorizationRecord(
+  a: AuthorizationRow,
+  rc: RecordContext,
+  capabilities: readonly string[],
+): RecordParts {
   const can = (perm: string) => rc.authz.can(perm, { propertyId: a.property_id });
   const open = a.status === 'authorized' || a.status === 'partially_captured';
   const capturable = capturableMinor({
@@ -209,7 +230,8 @@ export function authorizationRecord(a: AuthorizationRow, rc: RecordContext, capa
     );
   } else {
     const captureReason =
-      notOpenReason ?? (capturable <= 0 ? 'A collection from this hold is already in progress.' : collectPerm);
+      notOpenReason ??
+      (capturable <= 0 ? 'A collection from this hold is already in progress.' : collectPerm);
     const incrementReason =
       notOpenReason ??
       (capabilities.includes('incrementalAuthorize')
@@ -217,12 +239,19 @@ export function authorizationRecord(a: AuthorizationRow, rc: RecordContext, capa
         : 'The provider of this account does not support increasing a hold.');
     const voidReason =
       notOpenReason ??
-      (a.capture_reserved_minor > 0 ? 'A collection is in progress; wait for it before releasing the rest.' : collectPerm);
+      (a.capture_reserved_minor > 0
+        ? 'A collection is in progress; wait for it before releasing the rest.'
+        : collectPerm);
     actions.push(
       action('capture', 'Collect', !captureReason, captureReason, true),
       action('increment', 'Increase hold', !incrementReason, incrementReason, true),
       action('void', 'Release hold', !voidReason, voidReason, true),
-      action('checkStatus', 'Check with provider now', pending, pending ? undefined : 'The hold is not pending verification.'),
+      action(
+        'checkStatus',
+        'Check with provider now',
+        pending,
+        pending ? undefined : 'The hold is not pending verification.',
+      ),
     );
   }
   const issues: RecordIssue[] = [];
@@ -241,7 +270,10 @@ export function authorizationRecord(a: AuthorizationRow, rc: RecordContext, capa
     });
   }
   issues.push(...(rc.issues.get(`authorization:${a.id}`) ?? []));
-  const links: RecordLink[] = [refLink(a.ref_type, a.ref_id), { rel: 'paymentAccount', type: 'payment_account', id: a.account_id }];
+  const links: RecordLink[] = [
+    refLink(a.ref_type, a.ref_id),
+    { rel: 'paymentAccount', type: 'payment_account', id: a.account_id },
+  ];
   if (a.method_id) links.push({ rel: 'paymentMethod', type: 'payment_method', id: a.method_id });
   return {
     status: { authorization: a.status },
@@ -263,13 +295,22 @@ export function refundRecord(r: RefundRow, rc: RecordContext): RecordParts {
     });
   }
   if (r.ledger_status === 'failed') {
-    issues.push({ code: 'ledger_not_posted', severity: 'blocking', message: 'The refund is not yet shown on the bill.' });
+    issues.push({
+      code: 'ledger_not_posted',
+      severity: 'blocking',
+      message: 'The refund is not yet shown on the bill.',
+    });
   }
   issues.push(...(rc.issues.get(`refund:${r.id}`) ?? []));
   return {
     status: { refund: r.status, ledger: r.ledger_status },
     allowedActions: [
-      action('checkStatus', 'Check with provider now', pending, pending ? undefined : 'The outcome is already final.'),
+      action(
+        'checkStatus',
+        'Check with provider now',
+        pending,
+        pending ? undefined : 'The outcome is already final.',
+      ),
     ],
     issues,
     links: [{ rel: 'payment', type: 'payment', id: r.payment_id }],
@@ -280,7 +321,11 @@ export function refundRecord(r: RefundRow, rc: RecordContext): RecordParts {
 export function requestRecord(r: RequestRow, rc: RecordContext): RecordParts {
   const can = rc.authz.can('payments.paymentRequest.create', { propertyId: r.property_id });
   const open = r.status === 'open' || r.status === 'partially_paid';
-  const cancelReason = !open ? `The request is already ${r.status}.` : can ? undefined : noPermission('payments.paymentRequest.create');
+  const cancelReason = !open
+    ? `The request is already ${r.status}.`
+    : can
+      ? undefined
+      : noPermission('payments.paymentRequest.create');
   const actions: RecordAction[] = [
     action('cancel', 'Cancel request', !cancelReason, cancelReason, true),
     action(
@@ -296,7 +341,12 @@ export function requestRecord(r: RequestRow, rc: RecordContext): RecordParts {
   ];
   if (r.mode === 'simulate') {
     actions.push(
-      action('simulatePayment', 'Simulate the guest paying', open && r.link_status === 'created', 'The link is not ready.'),
+      action(
+        'simulatePayment',
+        'Simulate the guest paying',
+        open && r.link_status === 'created',
+        'The link is not ready.',
+      ),
     );
   }
   const issues: RecordIssue[] = [...(rc.issues.get(`payment_request:${r.id}`) ?? [])];
@@ -310,10 +360,18 @@ export function requestRecord(r: RequestRow, rc: RecordContext): RecordParts {
           : 'The payment link has not been created yet; it will be created when the provider is available.',
     });
   }
-  const links: RecordLink[] = [refLink(r.ref_type, r.ref_id), { rel: 'paymentAccount', type: 'payment_account', id: r.account_id }];
+  const links: RecordLink[] = [
+    refLink(r.ref_type, r.ref_id),
+    { rel: 'paymentAccount', type: 'payment_account', id: r.account_id },
+  ];
   const payer = (r.payer ?? {}) as { type?: string; id?: string; name?: string };
   if (payer.id && payer.type && payer.type !== 'other') {
-    links.push({ rel: 'payer', type: payer.type, id: payer.id, ...(payer.name ? { title: payer.name } : {}) });
+    links.push({
+      rel: 'payer',
+      type: payer.type,
+      id: payer.id,
+      ...(payer.name ? { title: payer.name } : {}),
+    });
   }
   return {
     status: { paymentRequest: r.status, link: r.link_status },

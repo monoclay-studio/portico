@@ -12,8 +12,8 @@ import {
   BusinessRuleError,
   ConflictError,
   money,
-  newId,
   NotFoundError,
+  newId,
   requirePermission,
   ValidationError,
 } from '@portico/kernel';
@@ -45,7 +45,6 @@ import {
   type PaymentsDeps,
   PendingVerificationBlockError,
   resolveExceptionsByKey,
-  uniqueViolation,
 } from './shared';
 
 export interface Started {
@@ -69,7 +68,11 @@ function requireCapability(account: AccountRow, cap: string, what: string): void
 }
 
 async function loadActiveMethod(tx: TxContext, methodId: string): Promise<MethodRow> {
-  const m = await db(tx).selectFrom('payments.payment_methods').selectAll().where('id', '=', methodId).executeTakeFirst();
+  const m = await db(tx)
+    .selectFrom('payments.payment_methods')
+    .selectAll()
+    .where('id', '=', methodId)
+    .executeTakeFirst();
   if (!m) throw new NotFoundError('payment_method', methodId);
   if (m.status !== 'active') {
     throw new BusinessRuleError(
@@ -120,7 +123,11 @@ export async function authorize(
 ): Promise<Started> {
   requirePermission(tx, 'payments.payment.collect', { propertyId: input.propertyId });
   const businessKey = `authorize:${input.businessKey}`;
-  const existing = await db(tx).selectFrom('payments.authorizations').select(['id']).where('business_key', '=', businessKey).executeTakeFirst();
+  const existing = await db(tx)
+    .selectFrom('payments.authorizations')
+    .select(['id'])
+    .where('business_key', '=', businessKey)
+    .executeTakeFirst();
   if (existing) return { id: existing.id, operationId: null, replayed: true };
   await assertPaymentsWritable(d, tx, input.propertyId);
   const property = await loadProperty(d, tx, input.propertyId);
@@ -193,7 +200,12 @@ export async function authorize(
 }
 
 async function loadAuthorization(tx: TxContext, id: string): Promise<AuthorizationRow> {
-  const a = await db(tx).selectFrom('payments.authorizations').selectAll().where('id', '=', id).forUpdate().executeTakeFirst();
+  const a = await db(tx)
+    .selectFrom('payments.authorizations')
+    .selectAll()
+    .where('id', '=', id)
+    .forUpdate()
+    .executeTakeFirst();
   if (!a) throw new NotFoundError('authorization', id);
   return a;
 }
@@ -208,11 +220,10 @@ function assertOpenAuthorization(a: AuthorizationRow, action: string): void {
     expired: 'the hold has expired — take a new authorization or payment',
     failed: 'the hold was declined',
   };
-  throw new BusinessRuleError(
-    'authorization_not_open',
-    `Cannot ${action}: ${why[a.status] ?? a.status}.`,
-    { authorizationId: a.id, status: a.status },
-  );
+  throw new BusinessRuleError('authorization_not_open', `Cannot ${action}: ${why[a.status] ?? a.status}.`, {
+    authorizationId: a.id,
+    status: a.status,
+  });
 }
 
 export async function incrementAuthorization(
@@ -231,7 +242,10 @@ export async function incrementAuthorization(
     );
   }
   if (input.additionalAmount.currency !== a.currency) {
-    throw new ValidationError('currency_mismatch', `The hold is in ${a.currency}; increase it in the same currency.`);
+    throw new ValidationError(
+      'currency_mismatch',
+      `The hold is in ${a.currency}; increase it in the same currency.`,
+    );
   }
   const account = await loadAccount(tx, a.account_id);
   requireCapability(account, 'incrementalAuthorize', 'Increasing a hold');
@@ -279,7 +293,11 @@ export async function capture(
   },
 ): Promise<Started> {
   const businessKey = `capture:${input.businessKey}`;
-  const existing = await db(tx).selectFrom('payments.payments').select(['id']).where('business_key', '=', businessKey).executeTakeFirst();
+  const existing = await db(tx)
+    .selectFrom('payments.payments')
+    .select(['id'])
+    .where('business_key', '=', businessKey)
+    .executeTakeFirst();
   if (existing) return { id: existing.id, operationId: null, replayed: true };
   const a = await loadAuthorization(tx, input.authorizationId);
   requirePermission(tx, 'payments.payment.collect', { propertyId: a.property_id });
@@ -298,7 +316,10 @@ export async function capture(
   });
   const amountMinor = input.amount?.amountMinor ?? capturable;
   if (input.amount && input.amount.currency !== a.currency) {
-    throw new ValidationError('currency_mismatch', `The hold is in ${a.currency}; collect in the same currency.`);
+    throw new ValidationError(
+      'currency_mismatch',
+      `The hold is in ${a.currency}; collect in the same currency.`,
+    );
   }
   if (amountMinor <= 0 || amountMinor > capturable) {
     throw new BusinessRuleError(
@@ -311,7 +332,9 @@ export async function capture(
   if (amountMinor < capturable) requireCapability(account, 'partialCapture', 'Collecting part of a hold');
   const ref =
     input.ledgerRef ??
-    (a.ref_type === 'folio' || a.ref_type === 'booking' ? { type: a.ref_type as 'folio' | 'booking', id: a.ref_id } : null);
+    (a.ref_type === 'folio' || a.ref_type === 'booking'
+      ? { type: a.ref_type as 'folio' | 'booking', id: a.ref_id }
+      : null);
   if (!ref) {
     throw new ValidationError(
       'ledger_target_required',
@@ -465,7 +488,11 @@ export async function charge(
 ): Promise<Started> {
   requirePermission(tx, 'payments.payment.collect', { propertyId: input.propertyId });
   const businessKey = `charge:${input.businessKey}`;
-  const existing = await db(tx).selectFrom('payments.payments').select(['id']).where('business_key', '=', businessKey).executeTakeFirst();
+  const existing = await db(tx)
+    .selectFrom('payments.payments')
+    .select(['id'])
+    .where('business_key', '=', businessKey)
+    .executeTakeFirst();
   if (existing) return { id: existing.id, operationId: null, replayed: true };
   await assertPaymentsWritable(d, tx, input.propertyId);
   const property = await loadProperty(d, tx, input.propertyId);
@@ -529,7 +556,14 @@ export async function charge(
     action: 'payments.payment.chargeRequest',
     target: { type: 'payment', id },
     propertyId: input.propertyId,
-    after: { amount: input.amount, ref: input.ref, methodId: method.id, initiator: input.initiator, mode, operationId },
+    after: {
+      amount: input.amount,
+      ref: input.ref,
+      methodId: method.id,
+      initiator: input.initiator,
+      mode,
+      operationId,
+    },
   });
   return { id, operationId, replayed: false };
 }
@@ -537,14 +571,22 @@ export async function charge(
 // ───────────────────────── refunds ─────────────────────────
 
 async function loadPaymentForUpdate(tx: TxContext, id: string): Promise<PaymentRow> {
-  const p = await db(tx).selectFrom('payments.payments').selectAll().where('id', '=', id).forUpdate().executeTakeFirst();
+  const p = await db(tx)
+    .selectFrom('payments.payments')
+    .selectAll()
+    .where('id', '=', id)
+    .forUpdate()
+    .executeTakeFirst();
   if (!p) throw new NotFoundError('payment', id);
   return p;
 }
 
 function assertRefundAmount(p: PaymentRow, amount: { amountMinor: number; currency: string }): void {
   if (amount.currency !== p.currency) {
-    throw new ValidationError('currency_mismatch', `The payment was in ${p.currency}; refund in the same currency.`);
+    throw new ValidationError(
+      'currency_mismatch',
+      `The payment was in ${p.currency}; refund in the same currency.`,
+    );
   }
   const refundable = refundableMinor({
     amountMinor: p.amount_minor,
@@ -566,7 +608,11 @@ export async function refund(
   input: z.infer<typeof refundInput> & { businessKey: string },
 ): Promise<Started> {
   const businessKey = `refund:${input.businessKey}`;
-  const existing = await db(tx).selectFrom('payments.refunds').select(['id']).where('business_key', '=', businessKey).executeTakeFirst();
+  const existing = await db(tx)
+    .selectFrom('payments.refunds')
+    .select(['id'])
+    .where('business_key', '=', businessKey)
+    .executeTakeFirst();
   if (existing) return { id: existing.id, operationId: null, replayed: true };
   const p = await loadPaymentForUpdate(tx, input.paymentId);
   requirePermission(tx, 'payments.payment.refund', { propertyId: p.property_id });
@@ -574,7 +620,7 @@ export async function refund(
   if (p.mode === 'recorded') {
     throw new BusinessRuleError(
       'recorded_payment_refund',
-      "This payment was taken outside Portico (own terminal, cash or bank transfer). Refund it the same way and record the refund with its reference.",
+      'This payment was taken outside Portico (own terminal, cash or bank transfer). Refund it the same way and record the refund with its reference.',
     );
   }
   if (p.status !== 'succeeded') {
@@ -588,11 +634,15 @@ export async function refund(
   }
   assertRefundAmount(p, input.amount);
   const account = await loadAccount(tx, p.account_id as string);
-  if (input.amount.amountMinor < p.amount_minor) requireCapability(account, 'partialRefund', 'Partial refunds');
+  if (input.amount.amountMinor < p.amount_minor)
+    requireCapability(account, 'partialRefund', 'Partial refunds');
   await assertBreakerAllows(d, tx, account);
   await db(tx)
     .updateTable('payments.payments')
-    .set({ refund_reserved_minor: p.refund_reserved_minor + input.amount.amountMinor, version: p.version + 1 })
+    .set({
+      refund_reserved_minor: p.refund_reserved_minor + input.amount.amountMinor,
+      version: p.version + 1,
+    })
     .where('id', '=', p.id)
     .execute();
   const id = newId(tx.now.getTime());
@@ -648,7 +698,11 @@ export async function recordPayment(
 ): Promise<Started> {
   requirePermission(tx, 'payments.payment.collect', { propertyId: input.propertyId });
   const businessKey = `record:${input.businessKey}`;
-  const existing = await db(tx).selectFrom('payments.payments').select(['id']).where('business_key', '=', businessKey).executeTakeFirst();
+  const existing = await db(tx)
+    .selectFrom('payments.payments')
+    .select(['id'])
+    .where('business_key', '=', businessKey)
+    .executeTakeFirst();
   if (existing) return { id: existing.id, operationId: null, replayed: true };
   await assertPaymentsWritable(d, tx, input.propertyId);
   const property = await loadProperty(d, tx, input.propertyId);
@@ -669,7 +723,10 @@ export async function recordPayment(
     }
     assertAccountUsable(account, property, input.amount.currency);
   } else if (input.accountId) {
-    throw new ValidationError('account_not_applicable', `${input.method} payments are not linked to a provider account.`);
+    throw new ValidationError(
+      'account_not_applicable',
+      `${input.method} payments are not linked to a provider account.`,
+    );
   }
   if (new Date(input.receivedAt).getTime() > tx.now.getTime() + 5 * 60_000) {
     throw new ValidationError('received_in_future', 'The payment time cannot be in the future.');
@@ -791,7 +848,11 @@ export async function recordAuthorization(
 ): Promise<Started> {
   requirePermission(tx, 'payments.payment.collect', { propertyId: input.propertyId });
   const businessKey = `record-authorization:${input.businessKey}`;
-  const existing = await db(tx).selectFrom('payments.authorizations').select(['id']).where('business_key', '=', businessKey).executeTakeFirst();
+  const existing = await db(tx)
+    .selectFrom('payments.authorizations')
+    .select(['id'])
+    .where('business_key', '=', businessKey)
+    .executeTakeFirst();
   if (existing) return { id: existing.id, operationId: null, replayed: true };
   await assertPaymentsWritable(d, tx, input.propertyId);
   const property = await loadProperty(d, tx, input.propertyId);
@@ -803,7 +864,12 @@ export async function recordAuthorization(
     );
   }
   assertAccountUsable(account, property, input.amount.currency);
-  const validity = await d.platform.resolvePolicy(tx, input.propertyId, 'payments.authorization.validityDays', 7);
+  const validity = await d.platform.resolvePolicy(
+    tx,
+    input.propertyId,
+    'payments.authorization.validityDays',
+    7,
+  );
   const id = newId(tx.now.getTime());
   await db(tx)
     .insertInto('payments.authorizations')
@@ -836,13 +902,24 @@ export async function recordAuthorization(
     action: 'payments.authorization.record',
     target: { type: 'authorization', id },
     propertyId: input.propertyId,
-    after: { amount: input.amount, approvalCode: input.approvalCode, ref: input.ref, cardLast4: input.cardLast4 ?? null },
+    after: {
+      amount: input.amount,
+      approvalCode: input.approvalCode,
+      ref: input.ref,
+      cardLast4: input.cardLast4 ?? null,
+    },
   });
   await tx.emit({
     type: PaymentsEvents.authorizationAuthorized,
     propertyId: input.propertyId,
     aggregate: { type: 'authorization', id },
-    payload: { authorizationId: id, ref: input.ref, amountMinor: input.amount.amountMinor, currency: input.amount.currency, recorded: true },
+    payload: {
+      authorizationId: id,
+      ref: input.ref,
+      amountMinor: input.amount.amountMinor,
+      currency: input.amount.currency,
+      recorded: true,
+    },
   });
   return { id, operationId: null, replayed: false };
 }
@@ -853,7 +930,11 @@ export async function recordRefund(
   input: z.infer<typeof recordRefundInput> & { businessKey: string },
 ): Promise<Started> {
   const businessKey = `record-refund:${input.businessKey}`;
-  const existing = await db(tx).selectFrom('payments.refunds').select(['id']).where('business_key', '=', businessKey).executeTakeFirst();
+  const existing = await db(tx)
+    .selectFrom('payments.refunds')
+    .select(['id'])
+    .where('business_key', '=', businessKey)
+    .executeTakeFirst();
   if (existing) return { id: existing.id, operationId: null, replayed: true };
   const p = await loadPaymentForUpdate(tx, input.paymentId);
   requirePermission(tx, 'payments.payment.refund', { propertyId: p.property_id });
@@ -922,7 +1003,11 @@ export async function adjustRecordedPayment(
   input: z.infer<typeof adjustmentInput> & { businessKey: string },
 ) {
   const businessKey = `adjust:${input.businessKey}`;
-  const existing = await db(tx).selectFrom('payments.payment_adjustments').selectAll().where('business_key', '=', businessKey).executeTakeFirst();
+  const existing = await db(tx)
+    .selectFrom('payments.payment_adjustments')
+    .selectAll()
+    .where('business_key', '=', businessKey)
+    .executeTakeFirst();
   if (existing) return existing;
   const p = await loadPaymentForUpdate(tx, input.paymentId);
   requirePermission(tx, 'payments.reconciliation.manage', { propertyId: p.property_id });
@@ -985,7 +1070,11 @@ export async function adjustRecordedPayment(
     .returningAll()
     .executeTakeFirstOrThrow();
   if (input.exceptionId) {
-    const ex = await db(tx).selectFrom('payments.exceptions').select(['dedupe_key']).where('id', '=', input.exceptionId).executeTakeFirst();
+    const ex = await db(tx)
+      .selectFrom('payments.exceptions')
+      .select(['dedupe_key'])
+      .where('id', '=', input.exceptionId)
+      .executeTakeFirst();
     if (ex) await resolveExceptionsByKey(tx, ex.dedupe_key, `Corrected by adjustment ${id}: ${input.reason}`);
   }
   // If a statement line disagreed only in amount and the correction makes them agree, the statement line is
@@ -1021,7 +1110,12 @@ export async function adjustRecordedPayment(
     type: PaymentsEvents.paymentAdjusted,
     propertyId: p.property_id,
     aggregate: { type: 'payment', id: p.id },
-    payload: { paymentId: p.id, adjustmentId: id, amountMinor: input.amount.amountMinor, currency: p.currency },
+    payload: {
+      paymentId: p.id,
+      adjustmentId: id,
+      amountMinor: input.amount.amountMinor,
+      currency: p.currency,
+    },
   });
   return row;
 }
