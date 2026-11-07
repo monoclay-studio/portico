@@ -281,4 +281,12 @@ Each agent's brief and report are in `agents/`.
     would have blocked Stripe, identity providers and webhooks; trusted proxies that needed CloudFront's ranges.
   - Costs from AWS list prices: lean ≈ $121/month, resilient ≈ $407–538/month.
   - Owner choices are recorded as Q158. A steward security review is queued before merge.
+- **19:28 — Integration-step fix round 2 done** <!-- t: agent-a29fdf2e9c7d0e9dc @ 2026-11-07T19:28:21.798Z (Integration step: bind module ports) -->. Covers the 3 re-review P1s and the payments residuals from the
+  sweep.
+  - Invariants (a)–(f) were closed with every writer tested. The builder ran its new tests against the pre-fix
+    commit: api 15/15, payments 22/24, finance 3/3 and reservations 4/5 failed there; every test that passed pre-fix
+    covered a guard that already existed.
+  - One invariant is declared not yet closed: "card owned by the payer" on payments' own routes, which needs a payer
+    directory.
+  - The focused re-review (re-check #3) is queued for the next window, because the 5-hour window is ≥ 80%.
 
