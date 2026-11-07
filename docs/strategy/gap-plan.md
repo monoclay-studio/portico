@@ -145,7 +145,7 @@ Each move names the evidence for the gap, the modules involved, its 10x measure 
 - **Sequence:** Phase A (contract), then every module as it ships.
 
 ### M4 — Productive in one shift (learnability as a product feature, measured)
-- **Why:** training is the top switching barrier after reliability (26%, DD08 §2.1 [3P]); nobody publishes
+- **Why:** training is the most-cited barrier to switching PMS (26%, ahead of migration at 24% — DD08 §2.1 [3P], sponsored); nobody publishes
   time-to-competency (DD03 §2.2, §11). UX1: help and lessons are empty shells; copy is developer language.
 - **What:** role workspaces that open on the day's work; inline guided tasks generated from the action registry (M2);
   plain-language copy and error contract ("what happened, what it means, what to do") enforced by a lint on strings;
@@ -407,17 +407,39 @@ Added to `docs/OPEN_QUESTIONS.md` (Q150–Q155; defaults in force):
 
 ---
 
-## 10. Index of module briefs
+## 10. Module briefs and their headline 10x targets (TARGETS)
 
-Built (wave 1): [platform](modules/platform.md) · [identity](modules/identity.md) · [inventory](modules/inventory.md) ·
-[rates](modules/rates.md) · [guests](modules/guests.md) · [reservations](modules/reservations.md) ·
-[finance](modules/finance.md) · [payments](modules/payments.md) · [operations](modules/operations.md) ·
-[integration](modules/integration.md) · staff web app [backoffice](modules/backoffice.md).
-
-Planned: [migration](modules/migration.md) · [day-close](modules/day-close.md) · [distribution](modules/distribution.md) ·
-[groups](modules/groups.md) · [comms](modules/comms.md) · [analytics](modules/analytics.md) ·
-[access](modules/access.md) · [contracting](modules/contracting.md) · [guest-services](modules/guest-services.md) ·
-[guest-experience](modules/guest-experience.md) · [resort](modules/resort.md) · [ai](modules/ai.md) ·
-[crm](modules/crm.md) · [billing](modules/billing.md) · [fnb-pos](modules/fnb-pos.md) ·
-[accounting](modules/accounting.md) · [procurement](modules/procurement.md) · [stock](modules/stock.md) ·
-[workforce](modules/workforce.md) · [concessions](modules/concessions.md) · [utilities](modules/utilities.md).
+| Module | State | Headline 10x target | Brief |
+|---|---|---|---|
+| reservations | built R3 | Walk-in ≤ 3 min; check-out with split folios ≤ 90 s; a grounded seaplane re-plans all affected arrivals in 1 previewed action | [reservations](modules/reservations.md) |
+| inventory | built R3 | Every availability number explained in 1 click; 0 oversells without a conflict record across desk, web and channels; tomorrow's assignments suggested with reasons | [inventory](modules/inventory.md) |
+| rates | built R3 | Explainable pricing assistant in every edition; season change across N plans in ≤ 5 interactions; 0 tax differences vs adviser-confirmed examples | [rates](modules/rates.md) |
+| guests | built R3 | Find anyone in ≤ 5 s by name/phone/email/code; ≥ 95% duplicates caught before creation; 0 fields re-typed for known guests | [guests](modules/guests.md) |
+| finance | built R3 | Fiscal documents within the legal window 100%; 0 unexplained ledger differences; 40-invoice bank transfer allocated in ≤ 2 min | [finance](modules/finance.md) |
+| payments | built R3 | 0 duplicate charges under the full fault matrix; ≥ 98% of payments verified within 1 business day, incl. Maldivian bank transfers and QR | [payments](modules/payments.md) |
+| operations | built R3 | Condition update ≤ 2 taps; tomorrow's plan for 40 units ≤ 5 min; standalone loop next to OPERA/Mews end to end | [operations](modules/operations.md) |
+| integration | built R3 | First read-only connection by hotel staff ≤ 30 min; all 10 data-authority domains mirror + forward; partners self-serve in ≤ 15 min | [integration](modules/integration.md) |
+| platform | built R3 (+ branch) | Portfolio policy change previewed with overrides in ≤ 3 interactions; guesthouse sign-up to first booking ≤ 30 min | [platform](modules/platform.md) |
+| identity | wave 0 (+ branch, P0 open) | 0 open P0/P1; PIN user switch ≤ 3 s on shared desks; invite to one property ≤ 45 s | [identity](modules/identity.md) |
+| backoffice / staff PWA | branch | New user completes 100% of core tasks unaided (today 5 of 34); new desk agent productive in one shift | [backoffice](modules/backoffice.md) |
+| migration | planned | Guesthouse same day; OPERA Cloud resort ≤ 5 days with ≤ 15-min freeze; 7 human steps; 0 duplicate reservations | [migration](modules/migration.md) |
+| day-close | planned | ≤ 2 min auditor attention; 0 logouts; 0 duplicate postings after any interruption | [day-close](modules/day-close.md) |
+| distribution | planned | Median ARI ≤ 60 s; 0 lost or silently unapplied bookings; outages visible ≤ 2 min with impact | [distribution](modules/distribution.md) |
+| groups | planned | 30-room × 5-night block with rates ≤ 5 min; post-deadline cuts previewed with contract consequences | [groups](modules/groups.md) |
+| comms | planned | 0 duplicate or contradictory replies; automations re-evaluate on every booking change | [comms](modules/comms.md) |
+| analytics | planned | 0 figures without definition and drill-down; 0 unexplained differences to the ledger | [analytics](modules/analytics.md) |
+| access | planned | 0 credentials valid after checkout without an exception; keys never "issued" before confirmation | [access](modules/access.md) |
+| contracting | planned | ≥ 95% of voucher bookings priced and checked automatically against the contract | [contracting](modules/contracting.md) |
+| guest-services | planned | 0 unacknowledged allergies at service time; offline in-house list in ≤ 30 s | [guest-services](modules/guest-services.md) |
+| guest-experience | planned | Online check-in ≤ 4 min; 0 desk re-typing; every self-service failure handed to staff with context | [guest-experience](modules/guest-experience.md) |
+| resort | planned | One action re-plans transfer, check-in, dining and activity; outlet post with entitlement ≤ 20 s | [resort](modules/resort.md) |
+| ai | planned | 100% cited answers; 0 invented facts and 0 unsafe actions in a published evaluation suite | [ai](modules/ai.md) |
+| crm | planned | 0 messages without consent; negative survey → owned case ≤ 5 min | [crm](modules/crm.md) |
+| billing | planned | 0 paths from guest money to Monoclay; 0 usage costs without a prior estimate and cap | [billing](modules/billing.md) |
+| fnb-pos | planned | Every outlet charge lands once with the right entitlement and tax; outlet close balanced | [fnb-pos](modules/fnb-pos.md) |
+| accounting | planned | Month close inside Portico ≤ 3 working days; 0 re-keying between PMS and books | [accounting](modules/accounting.md) |
+| procurement | planned | ≥ 85% invoices auto-matched; island shipment delays propagate before receiving | [procurement](modules/procurement.md) |
+| stock | planned | Days of cover for every critical island supply; stock value = ledger at month end | [stock](modules/stock.md) |
+| workforce | planned | Rosters from forecast ≤ 15 min; service-charge runs reproducible to the cent | [workforce](modules/workforce.md) |
+| concessions | planned | Partner settlements tie to folio postings, approved in ≤ 10 min | [concessions](modules/concessions.md) |
+| utilities | planned | Diesel/water per guest-night daily after each Day Close; anomalies always owned | [utilities](modules/utilities.md) |
