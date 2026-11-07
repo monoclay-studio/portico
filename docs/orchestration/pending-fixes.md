@@ -17,3 +17,4 @@
 - finance: add reservations' penalty/fee charge codes (5) or a mapping; accept late-checkout/early-check-in fees with the correct service date rules
 - unowned: `reservations.booking.cancelled` deposit treatment (forfeit/refund per terms) and no-show merchant-initiated charging — assign at integration step (payments + finance + reservations)
 - foundation (later): extract integration's safeFetch (resolve-and-pin, private/link-local/metadata range blocking, port rules) into a shared package for every outbound HTTP adapter (payments/Stripe, comms, channels)
+- infra: set the API's `TRUSTED_PROXY_CIDRS` env to the VPC CIDR (the ALB's subnets) — without it the API sees the ALB as every client and per-IP rate limits throttle everyone together; never use `0.0.0.0/0` (main replaced `trustProxy: true` after identity-plus review P1-8)
