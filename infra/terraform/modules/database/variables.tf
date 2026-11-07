@@ -82,9 +82,15 @@ variable "database_name" {
 }
 
 variable "master_username" {
-  description = "Break-glass/bootstrap user only. The application connects as portico_app_* login roles."
+  description = "Break-glass/bootstrap user only. The application connects as portico_app_* / portico_worker_* login roles."
   type        = string
-  default     = "portico_master"
+  default     = "dbmaster"
+  validation {
+    # bootstrap-roles.mjs and the restore drill refuse to continue if ANY portico_* role is privileged; the RDS
+    # master is privileged by design (CREATEROLE, CREATEDB, rds_superuser), so it must not carry that prefix.
+    condition     = !startswith(var.master_username, "portico_") && can(regex("^[a-z][a-z0-9_]{0,62}$", var.master_username))
+    error_message = "master_username must not start with portico_ (reserved for unprivileged application roles) and must be a lowercase identifier."
+  }
 }
 
 variable "subnet_ids" {
