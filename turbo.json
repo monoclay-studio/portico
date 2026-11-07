@@ -1,0 +1,9 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "tasks": {
+    "build": { "dependsOn": ["^build"], "outputs": ["dist/**"] },
+    "typecheck": { "dependsOn": [], "outputs": [] },
+    "test": { "dependsOn": [], "outputs": [], "env": ["DATABASE_URL", "PORTICO_TEST_DB_PREFIX"] },
+    "dev": { "cache": false, "persistent": true }
+  }
+}
