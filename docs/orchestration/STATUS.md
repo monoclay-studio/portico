@@ -3,6 +3,14 @@
 > **Resume here.** This is the orchestrator's complete working state so a new or resumed session continues
 > exactly as if it never stopped. Read top to bottom, then follow "Resume procedure".
 
+## 0. Resume log
+
+- 2026-11-07 ~08:30 UTC checkpoint (usage limit). All branches pushed.
+- 2026-11-07 11:12 UTC resumed: Postgres restarted; all branches re-pushed; resumed module builders (reservations,
+  finance, operations, integration, backoffice, identity-plus), steward reviews (guests, inventory, rates) and
+  docs audits (journey, backofhouse); launched payments steward review. **Deferred to limit usage:** infra and the
+  three parity researchers — resume them when the first builders finish (they keep their saved progress).
+
 ## 1. Owner, product and how to work with the owner
 
 - Owner: founder of **Monoclay LLC** (Delaware, Stripe Atlas), based in the Maldives. Product: **Portico** (final name).
