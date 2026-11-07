@@ -1,0 +1,27 @@
+{
+  "name": "@portico/finance",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./contracts": "./src/contracts.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@portico/db": "workspace:*",
+    "@portico/http": "workspace:*",
+    "@portico/kernel": "workspace:*",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@portico/testing": "workspace:*",
+    "@portico/platform": "workspace:*",
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}
