@@ -614,6 +614,14 @@ describe('INV-13: holds beyond the policy maximum need permission', () => {
         reason: 'Island weddings need longer options',
       }),
     );
-    await create(desk, days(20));
+    const { holdId } = await create(desk, days(20));
+    // extending follows the same rule
+    await expect(
+      p.as(desk, (tx) => inventory.extendHold(tx, { holdId, expiresAt: days(40) })),
+    ).rejects.toThrow(/inventory\.availability\.manage/);
+    const extended = await p.as([...desk, 'inventory.availability.manage'], (tx) =>
+      inventory.extendHold(tx, { holdId, expiresAt: days(40) }),
+    );
+    expect(extended.status).toBe('active');
   });
 });

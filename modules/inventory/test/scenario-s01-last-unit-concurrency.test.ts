@@ -156,11 +156,11 @@ describe('S01 — two agents sell the last villa', () => {
     ]);
   });
 
-  it('20 agents racing for the last 3 villas: exactly 3 sell, 17 are told what is left', async () => {
+  it('50 agents racing for the last 3 villas: exactly 3 sell, 47 are told what is left (EC-INV-002)', async () => {
     const p = await setupProperty(t);
     const { type } = await unitTypeWithUnits(p, { code: 'BV', count: 3 });
     const results = await Promise.allSettled(
-      Array.from({ length: 20 }, () =>
+      Array.from({ length: 50 }, () =>
         withTenantTx(t.db, p.ctxWith(AGENT), (tx) =>
           inventory.consume(tx, {
             propertyId: p.propertyId,
@@ -175,7 +175,7 @@ describe('S01 — two agents sell the last villa', () => {
     const ok = results.filter((r) => r.status === 'fulfilled');
     const failed = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
     expect(ok).toHaveLength(3);
-    expect(failed).toHaveLength(17);
+    expect(failed).toHaveLength(47);
     for (const f of failed) {
       expect(f.reason).toBeInstanceOf(InventoryUnavailableError);
       expect(f.reason.shortNights).toHaveLength(4);
