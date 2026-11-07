@@ -1,7 +1,6 @@
 # Portico — engineering operating manual
 
-**Portico** (working name — the final product name is not decided) is a cloud hospitality management platform
-built by **Monoclay LLC**. It must support everything from a 6-room guesthouse to a 400-villa resort and
+**Portico** is a cloud hospitality management platform built by **Monoclay LLC** (Delaware). It must support everything from a 6-room guesthouse to a 400-villa resort and
 multi-brand hotel groups, with the operational depth of OPERA Cloud and the clarity of the best modern systems.
 First market: **Maldives / Indian Ocean**. No hotel has agreed to a pilot yet.
 
@@ -110,7 +109,7 @@ named from `PORTICO_TEST_DB_PREFIX` (agents: set a unique prefix so parallel run
 11. **Pure domain logic** lives in `src/domain/` with no IO, and is unit-tested exhaustively.
 12. **Environment safety (demo / trial / training / sandbox).** Every adapter that causes an external effect (card
     charges, guest messages, channel publication, government/fiscal submission, paid AI, production key issue)
-    must call `assertExternalEffectAllowed(ctx, effect)` from `@portico/db` before acting. Non-live environments
+    must call `assertExternalEffectAllowed(ctx, effect)` from `@portico/kernel` before acting. Non-live environments
     route effects to simulators/sandboxes or block them, and the UI labels results as *simulated* or *sandbox*.
 13. **Tax rules and rates are data, never code constants.** Rules are effective-dated configuration with a
     source citation and verification date; historical calculations keep the rule version they used.

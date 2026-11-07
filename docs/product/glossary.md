@@ -11,7 +11,7 @@ Portico's terms are original. Where staff know an industry term, the UI may show
 | Term | Meaning |
 |---|---|
 | **Organization** [`tenant`] | The software customer (a hotel company, group, or single-property owner). The hard isolation boundary for data and money. Code uses `tenantId`. |
-| **Environment** | Every organization has a `live` environment and may have `training` and `demo` environments. They are separate tenants, visibly labeled, and never share data or money. |
+| **Environment** | Every organization has a `live` environment and may have `trial` (isolated organization holding an authorized copy of a hotel's data), `sandbox` (partner/integration testing against provider sandboxes), `training` and `demo` environments. They are separate tenants, visibly labeled, and never share data or money. Non-live environments cannot cause real-world effects. |
 | **Brand** | A named product line within an organization (e.g. "Azure Isles Resorts"). Optional. |
 | **Region** | A geographic or management grouping of properties. Optional; nestable. |
 | **Portfolio** | The hierarchy Organization → Brand/Region → Property used for policy inheritance and reporting. |
@@ -140,3 +140,33 @@ Portico's terms are original. Where staff know an industry term, the UI may show
 | **Connection health** | Last successful exchange, pending updates, failures, mapping problems, open discrepancies. |
 | **Discrepancy** | A detected mismatch between Portico and an external system (inventory, reservation, payment), with a resolution workflow. |
 | **Import job** | A migration run with mapping, validation, a comparison report, and financial reconciliation. |
+
+## Adoption and integration
+
+| Term | Meaning |
+|---|---|
+| **Adoption path** | A: connect alongside existing systems; B: replace selected capabilities; C: full migration to Portico. Defined by data authority, so it is checkable in data. |
+| **System of record** [`dataAuthority`] | The one system authoritative for a governed data domain at a property: Portico or an external connection. |
+| **Governed domain** | `reservations`, `availability`, `rates`, `guestProfiles`, `charges`, `payments`, `roomStatus`, `maintenance`, `accounting`. |
+| **Room status** [`roomStatus`] | The governed domain covering unit condition, occupancy discrepancies and DND. UI copy keeps the term **unit condition** for the housekeeping state. |
+| **Write mode** | `exclusive` (Portico authoritative), `forward` or `read_only` (external authoritative). |
+| **Authority transition** | A controlled move of a domain's system of record: `planned → frozen → effective`. |
+| **Connected mode** | A module working on mirrored records whose system of record is external. |
+| **Standalone module** | A capability offered without the Portico PMS core, running in connected mode. |
+| **Connection** | An authorized link between a Portico organization/property and one external product. |
+| **Connector** | Portico's adapter code for a provider product/version. |
+| **Local connector** | Portico software installed on the hotel network for systems that cannot reach the cloud. |
+| **Workflow** | A defined exchange (e.g. POS charge posting) with capabilities read / create / update / receive-changes and a sync mode. |
+| **Sync mode** | Immediate, periodic, manual or file. A file exchange is never presented as a live connection. |
+| **Mapping** / **Mapping suggestion** | A link between a Portico entity and an external one / a proposed link with confidence and reasons, requiring review when ambiguous or financially significant. |
+| **Validation run** | Recorded checks proving a connection behaves correctly before activation. |
+| **Activation scope** | The approved set of properties, workflows and external effects a connection or pilot may perform. |
+| **Exchange** / **Exchange log** | One message or record sent or received / the log of all of them. |
+| **Outbound operation** | A change Portico sends to another system, tracked until confirmed or resolved. Never blindly replayed after reconnection. |
+| **Integration exception** | A failed or incomplete exchange or workflow needing a person; severity urgent or routine; with business impact, responsible party and next step. |
+| **Sender register** | Per property, which system sends each automated guest message type (prevents duplicate messages). |
+| **Promotion package** | Configuration carried from a trial to production after review. |
+| **Cutover journal** | Record of every business change after a migration switch, used for rollback without losing post-cutover activity. |
+| **Historical archive** | Read-only record of source-system history that was not migrated. |
+| **Continuity snapshot** | Read-only local copy of essential operational lists for outages. |
+| **Provenance** | Where displayed information comes from: `live`, `simulated`, `copied`, `delayed`, `incomplete`, `external`. |
