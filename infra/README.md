@@ -140,7 +140,7 @@ appends the address it saw. The CloudFront list comes from the AWS-managed prefi
 | Workflow file | parses; every action pinned to a commit SHA (resolved with `git ls-remote`, tags ≥ 2 weeks old) | never run on GitHub |
 | Dockerfiles | reviewed statically; runtime layout exercised (row above) | **NOT built** — no Docker daemon |
 | `pnpm lint` | exit 0 | repository root |
-| Gate block after merging `main` (module-builder self-check §1) | install (frozen) exit 0; `turbo typecheck --force` exit 0 (18/18); `pnpm test` exit 0 (16/16 packages); `turbo run test --force` **exit 1**: `apps/api` demo-seed tests time out at 30 s (`inventory.test.ts` 30.2 s, `rates.test.ts` 30.5 s) under default concurrency at load average ≈ 42; reproduced on a re-run (1 test) | this branch changes nothing outside infra/, docs/runbooks/ and the Dockerfiles — a known main-side timing issue, reported, not fixed here |
+| Gate block after the final merge of `main` (module-builder self-check §1) | install (frozen) exit 0; `turbo typecheck --force` exit 0 (18/18); `pnpm test` exit 0 (16/16 packages); `turbo run test --force` exit 0 (16/16) at load ≈ 20. Before that merge, the same command failed twice at load ≈ 42: `apps/api` demo-seed tests hit their 30 s timeout (`inventory.test.ts` 30.2 s, `rates.test.ts` 30.5 s) | load-sensitive timing in main's demo-seed tests; this branch changes nothing outside infra/, docs/runbooks/ and the Dockerfiles |
 
 **Never verified:** `terraform plan/apply` against AWS (provider-side validation, quotas, IAM policy correctness,
 service-linked roles, ACM/DNS validation, WAF capacity units, Aurora/RDS engine version availability — `engine_version`
