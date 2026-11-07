@@ -31,21 +31,25 @@ locals {
       env         = "PORTICO_FIELD_KEY"
       description = "IRREPLACEABLE. Field-encryption key (base64) for identity documents, TOTP and SSO secrets. Never rotate without the kernel's key-rotation support."
       replicate   = true
+      protect     = true
     }
     blind-index-key = {
       env         = "PORTICO_BLIND_INDEX_KEY"
       description = "IRREPLACEABLE. Blind-index HMAC key (base64) for searchable encrypted fields. Distinct from the field key by construction."
       replicate   = true
+      protect     = true
     }
     terms-seal-key = {
       env         = "PORTICO_TERMS_SEAL_KEY"
       description = "IRREPLACEABLE. HMAC key (base64) that seals agreed booking terms (rates). Changing it invalidates every sealed term."
       replicate   = true
+      protect     = true
     }
     payments-simulator-signing-secret = {
       env         = "PAYMENTS_SIMULATOR_SIGNING_SECRET"
       description = "Signs payment-simulator webhooks (non-live organizations only). Shared by every api/worker task so a signature made by one verifies on another. Rotatable."
       replicate   = false
+      protect     = false
     }
   }
 }
@@ -144,14 +148,23 @@ resource "aws_secretsmanager_secret_version" "db" {
 
 # ── Application keys ──────────────────────────────────────────────────────────────────────────────────────────
 # Keys are base64 of 64 random alphanumeric characters (≈ 381 bits of entropy; canonical base64, 64 bytes decoded).
+# A DR cell passes `existing_app_key_secret_arns` (the replicas of the primary cell's keys) and generates only what
+# is missing (the rotatable simulator secret) — new keys would make every encrypted field unreadable.
+locals {
+  existing      = var.existing_app_key_secret_arns == null ? {} : var.existing_app_key_secret_arns
+  generated     = { for k, v in local.app_keys : k => v if !contains(keys(local.existing), v.env) }
+  generated_raw = { for k, v in local.generated : k => v if !(var.protect_app_keys && v.protect) }
+  generated_pro = { for k, v in local.generated : k => v if var.protect_app_keys && v.protect }
+}
+
 ephemeral "random_password" "app_key" {
-  for_each = local.app_keys
+  for_each = local.generated
   length   = 64
   special  = false
 }
 
 resource "aws_secretsmanager_secret" "app_key" {
-  for_each                = local.app_keys
+  for_each                = local.generated_raw
   name                    = "${var.secret_path}/app/${each.key}"
   description             = "${each.value.env}: ${each.value.description}"
   kms_key_id              = aws_kms_key.secrets.arn
@@ -165,11 +178,107 @@ resource "aws_secretsmanager_secret" "app_key" {
   }
 }
 
+# Production: identical, but Terraform refuses to destroy them (prevent_destroy cannot be conditional, hence the
+# second resource) and a resource policy limits destruction and replacement to the break-glass role (below).
+resource "aws_secretsmanager_secret" "app_key_protected" {
+  for_each                = local.generated_pro
+  name                    = "${var.secret_path}/app/${each.key}"
+  description             = "${each.value.env}: ${each.value.description}"
+  kms_key_id              = aws_kms_key.secrets.arn
+  recovery_window_in_days = 30
+
+  dynamic "replica" {
+    for_each = each.value.replicate && var.replica_region != null ? [var.replica_region] : []
+    content {
+      region = replica.value
+    }
+  }
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+locals {
+  app_key_secret_ids = merge(
+    { for k, sec in aws_secretsmanager_secret.app_key : k => sec.id },
+    { for k, sec in aws_secretsmanager_secret.app_key_protected : k => sec.id },
+  )
+  app_key_secret_arns = merge(
+    { for k, sec in aws_secretsmanager_secret.app_key : local.app_keys[k].env => sec.arn },
+    { for k, sec in aws_secretsmanager_secret.app_key_protected : local.app_keys[k].env => sec.arn },
+    local.existing,
+  )
+}
+
 resource "aws_secretsmanager_secret_version" "app_key" {
-  for_each                 = local.app_keys
-  secret_id                = aws_secretsmanager_secret.app_key[each.key].id
+  for_each                 = local.generated
+  secret_id                = local.app_key_secret_ids[each.key]
   secret_string_wo         = base64encode(ephemeral.random_password.app_key[each.key].result)
   secret_string_wo_version = 1 # NEVER bump for the irreplaceable keys: it would replace them (see header)
+}
+
+# ── Who may read or destroy the guest-money and encryption secrets (resource policies) ───────────────────────
+# Invariant: no principal reachable from CI can read the application keys or the payment-provider keys. Only the
+# api/worker execution roles (ECS injects the values at task start) and the break-glass role may call
+# GetSecretValue; the deploy role has no Secrets Manager permission at all (modules/ci-deploy-role) and cannot pass
+# these execution roles. Protected (production) secrets additionally refuse forced or short-window deletion and any
+# replacement, re-staging, replica removal or policy change except by the break-glass role. The account root can
+# still override a resource policy: CloudTrail alarms (envs/bootstrap) page on every such call.
+locals {
+  break_glass = length(var.key_admin_role_arns) > 0 ? var.key_admin_role_arns : ["arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:role/portico-key-break-glass"]
+  # Terraform's own principal must stay a reader: refreshing a secret version calls GetSecretValue.
+  terraform_principals = length(var.terraform_principal_arns) > 0 ? var.terraform_principal_arns : ["arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:role/portico-infra-admin"]
+  readers              = concat(var.reader_role_arns, local.break_glass, local.terraform_principals)
+
+  read_restriction = {
+    Sid       = "OnlyExecutionRolesAndBreakGlassRead"
+    Effect    = "Deny"
+    Principal = "*"
+    Action    = ["secretsmanager:GetSecretValue"]
+    Resource  = "*"
+    Condition = { ArnNotLike = { "aws:PrincipalArn" = local.readers } }
+  }
+  protection = [
+    {
+      Sid       = "NoForcedOrShortWindowDeletion"
+      Effect    = "Deny"
+      Principal = "*"
+      Action    = ["secretsmanager:DeleteSecret"]
+      Resource  = "*"
+      Condition = { Bool = { "secretsmanager:ForceDeleteWithoutRecovery" = "true" } }
+    },
+    {
+      Sid       = "NoShortRecoveryWindow"
+      Effect    = "Deny"
+      Principal = "*"
+      Action    = ["secretsmanager:DeleteSecret"]
+      Resource  = "*"
+      Condition = { NumericLessThan = { "secretsmanager:RecoveryWindowInDays" = "30" } }
+    },
+    {
+      Sid       = "OnlyBreakGlassReplacesOrDestroys"
+      Effect    = "Deny"
+      Principal = "*"
+      Action = [
+        "secretsmanager:DeleteSecret", "secretsmanager:PutSecretValue", "secretsmanager:UpdateSecret",
+        "secretsmanager:UpdateSecretVersionStage", "secretsmanager:RotateSecret", "secretsmanager:CancelRotateSecret",
+        "secretsmanager:RemoveRegionsFromReplication", "secretsmanager:StopReplicationToReplica",
+        "secretsmanager:PutResourcePolicy", "secretsmanager:DeleteResourcePolicy",
+      ]
+      Resource  = "*"
+      Condition = { ArnNotLike = { "aws:PrincipalArn" = local.break_glass } }
+    },
+  ]
+  key_policy           = jsonencode({ Version = "2012-10-17", Statement = concat([local.read_restriction], local.protection) })
+  key_policy_read_only = jsonencode({ Version = "2012-10-17", Statement = [local.read_restriction] })
+}
+
+resource "aws_secretsmanager_secret_policy" "app_key" {
+  for_each   = local.generated
+  secret_arn = local.app_key_secret_ids[each.key]
+  policy     = contains(keys(local.generated_pro), each.key) ? local.key_policy : local.key_policy_read_only
+  depends_on = [aws_secretsmanager_secret_version.app_key]
 }
 
 # ── Integration placeholders (no values, ever, in Terraform) ─────────────────────────────────────────────────
@@ -179,4 +288,12 @@ resource "aws_secretsmanager_secret" "integration" {
   description             = "PLACEHOLDER — ${each.value}. Value set manually by the owner after authorization; never stored in Terraform."
   kms_key_id              = aws_kms_key.secrets.arn
   recovery_window_in_days = var.recovery_window_days
+}
+
+# Payment-provider keys move guest money: same read restriction as the application keys. (The owner still writes
+# the value with PutSecretValue; reading it back is break-glass.)
+resource "aws_secretsmanager_secret_policy" "integration" {
+  for_each   = { for k, v in var.integration_secrets : k => v if startswith(k, "payments-") }
+  secret_arn = aws_secretsmanager_secret.integration[each.key].arn
+  policy     = jsonencode({ Version = "2012-10-17", Statement = [local.read_restriction] })
 }

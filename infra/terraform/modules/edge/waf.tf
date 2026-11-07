@@ -2,8 +2,9 @@
 # $1/rule/month (each managed rule group counts as one rule), $0.60 per million requests.
 #
 #   waf_level = "none"   demo tier (sample data, CloudFront + Shield Standard only)
-#   waf_level = "basic"  IP reputation + core rule set + per-IP rate limit                      ≈ $9/month + requests
-#   waf_level = "full"   basic + known bad inputs + SQL injection + strict login rate limit     ≈ $11/month + requests
+#   waf_level = "basic"  IP reputation + core rule set + per-IP rate limit + strict login rate limit ≈ $10/month + requests
+#   waf_level = "full"   basic + known bad inputs + SQL injection                                    ≈ $12/month + requests
+# The login rate limit is on every WAF level (review P3-12): credential stuffing is the cheapest attack there is.
 #
 # Not used on purpose: the anonymous-IP list (would block hotel partners and channel managers calling from cloud
 # hosts) and paid Bot Control / ATP groups ($10/month each) — revisit with real traffic.
@@ -88,7 +89,7 @@ resource "aws_wafv2_web_acl" "this" {
   }
 
   dynamic "rule" {
-    for_each = var.waf_level == "full" ? [1] : []
+    for_each = var.waf_level == "none" ? [] : [1]
     content {
       name     = "login-rate-limit-per-ip"
       priority = 110

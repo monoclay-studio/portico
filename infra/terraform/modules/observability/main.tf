@@ -49,12 +49,18 @@ data "aws_iam_policy_document" "logs_key" {
     }
   }
   statement {
-    sid       = "AlarmAndBudgetPublishers"
+    # Every service that publishes to the on-call topic needs the topic key too (review P2-10: Backup and SES).
+    sid       = "OnCallPublishers"
     actions   = ["kms:Decrypt", "kms:GenerateDataKey*"]
     resources = ["*"]
     principals {
       type        = "Service"
-      identifiers = ["cloudwatch.amazonaws.com", "budgets.amazonaws.com", "events.amazonaws.com"]
+      identifiers = local.oncall_publishers
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceAccount"
+      values   = [local.account]
     }
   }
 }
@@ -79,6 +85,12 @@ resource "aws_cloudwatch_log_group" "this" {
   kms_key_id        = aws_kms_key.logs.arn
 }
 
+# AWS services allowed to page on-call: alarms, budgets, EventBridge rules (drill task stops, security events),
+# AWS Backup (failed backup/copy jobs) and SES (bounces and complaints).
+locals {
+  oncall_publishers = ["cloudwatch.amazonaws.com", "budgets.amazonaws.com", "events.amazonaws.com", "backup.amazonaws.com", "ses.amazonaws.com"]
+}
+
 # ── On-call topic ─────────────────────────────────────────────────────────────────────────────────────────────
 resource "aws_sns_topic" "oncall" {
   name              = "${var.name_prefix}-oncall"
@@ -92,7 +104,7 @@ data "aws_iam_policy_document" "oncall" {
     resources = [aws_sns_topic.oncall.arn]
     principals {
       type        = "Service"
-      identifiers = ["cloudwatch.amazonaws.com", "budgets.amazonaws.com", "events.amazonaws.com"]
+      identifiers = local.oncall_publishers
     }
     condition {
       test     = "StringEquals"

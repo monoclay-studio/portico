@@ -7,8 +7,8 @@ variable "tier" {
     Cost/resilience tier (docs/readiness/cost-model.md §4a):
       demo       T1 — one small instance running api + worker + Postgres, CloudFront in front, no NAT/WAF/managed DB,
                       office-hours auto-stop, budget stop action. SAMPLE DATA ONLY.
-      lean       T2 — Fargate (1 api + 1 worker), single-AZ RDS PostgreSQL with PITR + monthly restore drill,
-                      VPC endpoints (one AZ) instead of NAT, basic WAF.
+      lean       T2 — Fargate (1 api + 1 worker) in private subnets behind one NAT gateway (public task IPs only
+                      as an opt-in), single-AZ RDS PostgreSQL with PITR + monthly restore drill, basic WAF.
       resilient  T3 — Fargate across 3 AZs, Aurora PostgreSQL with a cross-AZ replica, NAT per AZ, full WAF,
                       AWS Backup with cross-region copies and vault lock.
   EOT
@@ -126,6 +126,20 @@ variable "office_hours" {
   }
 }
 
+variable "public_task_ips" {
+  description = <<-EOT
+    Lean tier only. false (default, Q158): tasks in private subnets behind one NAT gateway. true: tasks in public
+    subnets with a public IP and no inbound rule except from the ALB — saves ≈ $38/month, but AWS Security Hub
+    control ECS.2 flags it, there is no fixed egress IP, and a mistaken inbound rule would expose the task directly.
+  EOT
+  type        = bool
+  default     = false
+  validation {
+    condition     = !var.public_task_ips || var.tier == "lean"
+    error_message = "public_task_ips is a lean-tier opt-in (resilient keeps private tasks behind NAT per AZ)."
+  }
+}
+
 variable "always_on" {
   description = "Disable the office-hours schedule for a non-production cell."
   type        = bool
@@ -140,9 +154,41 @@ variable "image_tag" {
 }
 
 variable "github_repository" {
-  description = "owner/name allowed to deploy through OIDC; null = no CI role."
+  description = "owner/name allowed to deploy through OIDC (monoclay-studio/portico); null = no CI role."
   type        = string
   default     = null
+}
+
+variable "github_repository_id" {
+  description = "Immutable numeric repository id (required with github_repository)."
+  type        = number
+  default     = null
+  validation {
+    condition     = var.github_repository == null || try(var.github_repository_id > 0, false)
+    error_message = "github_repository_id is required with github_repository: names can be re-registered, ids cannot."
+  }
+}
+
+variable "github_owner_id" {
+  description = "Immutable numeric id of the repository owner (required with github_repository)."
+  type        = number
+  default     = null
+  validation {
+    condition     = var.github_repository == null || try(var.github_owner_id > 0, false)
+    error_message = "github_owner_id is required with github_repository."
+  }
+}
+
+variable "github_allowed_refs" {
+  description = "Exact refs that may deploy (default: main)."
+  type        = list(string)
+  default     = ["refs/heads/main"]
+}
+
+variable "github_allow_release_tags" {
+  description = "Also allow refs/tags/v* (needs a tag-protection ruleset)."
+  type        = bool
+  default     = false
 }
 
 variable "github_environments" {
@@ -187,7 +233,8 @@ variable "integration_secrets" {
     # Monoclay SaaS billing: Monoclay's OWN Stripe account (billing module, not built). Never injected as PAYMENTS_*.
     "stripe-billing-secret-key"     = "Monoclay SaaS billing — Monoclay's own Stripe account (never hotel guest money)"
     "stripe-billing-webhook-secret" = "Monoclay SaaS billing webhook signing secret"
-    "channex-api-key"               = "Channex channel manager API key (production activation is OPEN_QUESTIONS Q23)"
+    "channex-api-key"               = "Channex channel manager API key, PRODUCTION (activation is OPEN_QUESTIONS Q23) — production deployment only"
+    "channex-api-key-sandbox"       = "Channex staging/sandbox API key (non-production deployments)"
     # Operator console (identity): static tokens are refused in production until IAM Identity Center replaces them.
     "operator-token"    = "OPERATOR_TOKEN for the internal provisioning endpoint (endpoint disabled while unset; never in production)"
     "portico-operators" = "PORTICO_OPERATORS JSON [{id,name,email,tokenSha256}] for the operator console (non-production only)"
@@ -211,8 +258,13 @@ variable "injected_integration_secrets" {
     error_message = "OPERATOR_TOKEN / PORTICO_OPERATORS must not be injected into production (operator console is disabled there until IAM Identity Center)."
   }
   validation {
-    condition     = var.deployment == "production" || length([for k in keys(var.injected_integration_secrets) : k if endswith(k, "_LIVE")]) == 0
-    error_message = "LIVE-mode provider keys may only be injected into the production deployment."
+    # By env name AND by secret key (review P2-1): a LIVE key under a TEST name, the Channex production key or
+    # Monoclay's billing keys never reach demo or staging. Values are checked at start-up by /app/ops/env-guard.mjs.
+    condition = var.deployment == "production" || (
+      length([for k in keys(var.injected_integration_secrets) : k if endswith(k, "_LIVE")]) == 0 &&
+      length([for v in values(var.injected_integration_secrets) : v if endswith(v, "-live") || v == "channex-api-key" || startswith(v, "stripe-billing")]) == 0
+    )
+    error_message = "Live-capable credentials (LIVE Stripe keys under any name, the Channex production key, Monoclay billing keys) may only be injected into the production deployment."
   }
   validation {
     # Two money worlds never mix (CLAUDE.md §4.14): Monoclay's billing account never feeds the guest-payments module.
@@ -267,4 +319,22 @@ variable "overrides" {
     }))
   })
   default = {}
+}
+
+variable "key_break_glass_role_arns" {
+  description = "Break-glass role(s) that may read, replace or delete the irreplaceable keys (default role/portico-key-break-glass; two-person use, see database-roles.md)."
+  type        = list(string)
+  default     = []
+}
+
+variable "terraform_principal_arns" {
+  description = "Role(s) that run terraform apply for this cell (default role/portico-infra-admin)."
+  type        = list(string)
+  default     = []
+}
+
+variable "existing_app_key_secret_arns" {
+  description = "DR cell only: ENV_VAR => ARN of the primary cell's key replicas in this region (never generate new keys for restored data)."
+  type        = map(string)
+  default     = null
 }

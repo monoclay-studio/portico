@@ -23,12 +23,17 @@ output "db_worker_secret_arn" {
 }
 
 output "app_key_secret_arns" {
-  description = "ENV_VAR_NAME => secret ARN for the generated application keys (injected into api and worker)."
-  value       = { for k, v in local.app_keys : v.env => aws_secretsmanager_secret.app_key[k].arn }
+  description = "ENV_VAR_NAME => secret ARN of the application keys (generated here, or the DR replicas passed in)."
+  value       = local.app_key_secret_arns
 }
 
-output "app_key_secret_names" {
-  value = { for k, v in local.app_keys : v.env => aws_secretsmanager_secret.app_key[k].name }
+output "key_policy" {
+  description = "Resource policy on the application keys (decoded), for tests."
+  value       = jsondecode(local.key_policy)
+}
+
+output "protected_keys" {
+  value = keys(aws_secretsmanager_secret.app_key_protected)
 }
 
 output "integration_secret_arns" {
@@ -38,4 +43,9 @@ output "integration_secret_arns" {
 output "app_key_replica_region" {
   description = "Region holding replicas of the irreplaceable application keys (null = none)."
   value       = var.replica_region
+}
+
+output "secret_readers" {
+  description = "Principals allowed to read the keys and payment secrets."
+  value       = local.readers
 }

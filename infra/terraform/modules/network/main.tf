@@ -13,6 +13,8 @@
 # Interface endpoints cost $0.013/hour per endpoint per AZ in ap-south-1 (≈ $9.50/month) — four endpoints in two
 # AZs cost more than a NAT gateway. `endpoint_az_count` limits how many AZs carry endpoint ENIs.
 
+data "aws_caller_identity" "current" {}
+
 data "aws_availability_zones" "available" {
   state = "available"
   filter {
@@ -205,6 +207,12 @@ data "aws_iam_policy_document" "flow_assume" {
     principals {
       type        = "Service"
       identifiers = ["vpc-flow-logs.amazonaws.com"]
+    }
+    # Confused-deputy guard (review P3-4): only this account's use of the service may assume the role.
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceAccount"
+      values   = [data.aws_caller_identity.current.account_id]
     }
   }
 }

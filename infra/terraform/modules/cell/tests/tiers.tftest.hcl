@@ -46,12 +46,14 @@ mock_provider "aws" {
 }
 
 variables {
-  cidr_block          = "10.20.0.0/16"
-  budget_monthly_usd  = 50
-  budget_alert_emails = ["owner@example.invalid"]
-  oncall_emails       = ["oncall@example.invalid"]
-  github_repository   = "monoclay/portico"
-  github_environments = ["test"]
+  cidr_block           = "10.20.0.0/16"
+  budget_monthly_usd   = 50
+  budget_alert_emails  = ["owner@example.invalid"]
+  oncall_emails        = ["oncall@example.invalid"]
+  github_repository    = "monoclay-studio/portico"
+  github_repository_id = 987654321
+  github_owner_id      = 123456
+  github_environments  = ["test"]
 }
 
 # ── Tier shapes ───────────────────────────────────────────────────────────────────────────────────────────────
@@ -99,9 +101,9 @@ run "lean_tier_plans" {
     error_message = "lean tier must run Fargate + managed database."
   }
   assert {
-    # Egress for Stripe / identity providers / webhooks without a NAT gateway or interface endpoints.
-    condition     = output.effective_settings.nat_mode == "none" && !output.effective_settings.private_tasks && length(output.effective_settings.interface_endpoints) == 0
-    error_message = "lean tier: no NAT, no interface endpoints; tasks in public subnets with a public IP (inbound from the ALB only)."
+    # Q158 default: the stricter posture — private tasks behind one NAT gateway (egress to Stripe, IdPs, webhooks).
+    condition     = output.effective_settings.nat_mode == "single" && output.effective_settings.private_tasks && length(output.effective_settings.interface_endpoints) == 0
+    error_message = "lean tier default: one NAT gateway, private tasks, no paid interface endpoints."
   }
   assert {
     condition     = output.effective_settings.db == "rds db.t4g.small x1"
@@ -116,9 +118,37 @@ run "lean_tier_plans" {
     error_message = "lean tier: no AWS Backup plan, but the monthly restore drill runs."
   }
   assert {
-    condition     = output.app_key_replica_region == null
-    error_message = "lean tier has no cross-region copies, so no key replica either."
+    condition     = output.app_key_replica_region == "ap-south-2" && length(output.protected_keys) == 3
+    error_message = "production (any tier): the three irreplaceable keys are protected and replicated to the DR region."
   }
+}
+
+run "lean_public_task_ips_is_an_explicit_opt_in" {
+  command = plan
+  variables {
+    tier            = "lean"
+    deployment      = "production"
+    domain_name     = "portico.example"
+    route53_zone_id = "Z0000000000000000000"
+    public_task_ips = true
+  }
+  expect_failures = [check.public_task_ips_warning] # a warning in a real plan
+  assert {
+    condition     = output.effective_settings.nat_mode == "none" && !output.effective_settings.private_tasks
+    error_message = "public_task_ips = true: no NAT, tasks in public subnets (warned by the check block)."
+  }
+}
+
+run "public_task_ips_refused_on_resilient" {
+  command = plan
+  variables {
+    tier            = "resilient"
+    deployment      = "production"
+    domain_name     = "portico.example"
+    route53_zone_id = "Z0000000000000000000"
+    public_task_ips = true
+  }
+  expect_failures = [var.public_task_ips]
 }
 
 run "resilient_tier_plans" {
@@ -140,6 +170,10 @@ run "resilient_tier_plans" {
   assert {
     condition     = output.effective_settings.waf_level == "full"
     error_message = "resilient tier: full WAF."
+  }
+  assert {
+    condition     = alltrue([for a in values(module.backup[0].missing_job_alarms) : a.treat_missing_data == "breaching" && length(a.actions) == 1]) && length(module.backup[0].missing_job_alarms) == 2
+    error_message = "a backup or DR copy job that never ran must page (missing data = breaching)."
   }
   assert {
     # A database restored in the DR region is useless without the field/blind-index/seal keys.
@@ -228,6 +262,73 @@ run "runtime_contract_lean_production" {
     condition     = module.network.vpc_dns_support
     error_message = "the SSO domain re-check job resolves DNS TXT records through the VPC resolver."
   }
+  assert {
+    condition     = alltrue([for svc in ["backup.amazonaws.com", "ses.amazonaws.com", "cloudwatch.amazonaws.com", "events.amazonaws.com"] : contains(module.observability[0].oncall_publishers, svc)])
+    error_message = "AWS Backup and SES must be able to publish to the on-call topic (and use its key) — review P2-10."
+  }
+  assert {
+    condition     = alltrue([for c in output.trusted_proxy_cidrs : tonumber(split("/", c)[1]) >= 8])
+    error_message = "no trusted proxy range shorter than /8 (review P3-1)."
+  }
+  assert {
+    condition     = output.runtime_contract.api.values.NODE_ENV == "production" && output.runtime_contract.api.values.PORTICO_DEPLOYMENT == "production" && output.runtime_contract.worker.values.PORTICO_DEPLOYMENT == "production"
+    error_message = "production runs NODE_ENV=production and PORTICO_DEPLOYMENT=production (values, not just names; review P2-9)."
+  }
+  assert {
+    condition     = alltrue([for c in output.runtime_contract.every_command : slice(c, 0, 3) == ["node", "--import", "/app/ops/env-guard.mjs"]])
+    error_message = "every container starts behind the env guard (live-key refusal by value, mandatory keys)."
+  }
+  assert {
+    condition = jsonencode([for c in output.runtime_contract.api_task_containers : [c.name, c.essential, c.depends_on, c.node_env]]) == jsonencode([
+      ["migrate", false, [], "production"], ["grants", false, ["migrate:SUCCESS"], "production"], ["api", true, ["grants:SUCCESS"], "production"],
+    ])
+    error_message = "api tasks: migrate → grants (both must SUCCEED, NODE_ENV=production) → api."
+  }
+  assert {
+    condition     = output.runtime_contract.api_task_containers[1].command[4] == "grants" && contains(output.runtime_contract.api_task_containers[0].secrets, "DATABASE_URL") && !contains(output.runtime_contract.api_task_containers[2].secrets, "DATABASE_URL")
+    error_message = "only the init containers get the owner URL; the api container never does."
+  }
+  assert {
+    condition     = output.runtime_contract.api.image_tag == "release" && output.runtime_contract.worker.image_tag == "release"
+    error_message = "Terraform's task definitions reference the release tag; the pipeline never registers revisions."
+  }
+}
+
+run "staging_runs_development_mode_behind_the_guard" {
+  command = plan
+  variables {
+    tier            = "lean"
+    deployment      = "staging"
+    domain_name     = "portico.example"
+    route53_zone_id = "Z0000000000000000000"
+  }
+  assert {
+    condition     = output.runtime_contract.api.values.NODE_ENV == "development" && output.runtime_contract.api.values.PORTICO_DEPLOYMENT == "staging" && output.runtime_contract.api_task_containers[0].node_env == "production"
+    error_message = "staging: app NODE_ENV=development (operator console works), migrations still NODE_ENV=production."
+  }
+  assert {
+    condition     = length(output.protected_keys) == 0 && output.app_key_replica_region == null
+    error_message = "staging keys stay destroyable (synthetic data, `active = false`)."
+  }
+}
+
+# Invariant (§5): no principal reachable from CI can read the keys that protect guest data and move guest money.
+run "ci_cannot_reach_guest_money_keys" {
+  command = plan
+  variables {
+    tier            = "lean"
+    deployment      = "production"
+    domain_name     = "portico.example"
+    route53_zone_id = "Z0000000000000000000"
+  }
+  assert {
+    condition     = length([for st in output.ci_deploy_policy.Statement : st if length(setintersection(st.Action, ["iam:PassRole", "ecs:RunTask", "ecs:RegisterTaskDefinition", "secretsmanager:GetSecretValue", "ssm:SendCommand"])) > 0]) == 0
+    error_message = "the deploy role cannot read secrets, pass the execution roles, register task definitions or run tasks."
+  }
+  assert {
+    condition     = alltrue([for r in output.secret_readers : !strcontains(r, "github-deploy") && !strcontains(r, "*")]) && contains(output.secret_readers, "arn:aws:iam::123456789012:role/portico-prod-aps1-c01-api-exec")
+    error_message = "only the api/worker execution roles, break-glass and the Terraform role may read the keys — never a CI role."
+  }
 }
 
 run "api_may_hold_worker_credentials_when_asked" {
@@ -315,6 +416,30 @@ run "operator_token_refused_in_production" {
     domain_name                  = "portico.example"
     route53_zone_id              = "Z0000000000000000000"
     injected_integration_secrets = { OPERATOR_TOKEN = "operator-token" }
+  }
+  expect_failures = [var.injected_integration_secrets]
+}
+
+run "live_key_under_a_test_name_refused_outside_production" {
+  command = plan
+  variables {
+    tier                         = "lean"
+    deployment                   = "staging"
+    domain_name                  = "portico.example"
+    route53_zone_id              = "Z0000000000000000000"
+    injected_integration_secrets = { PAYMENTS_STRIPE_SECRET_KEY_TEST = "payments-stripe-connect-secret-key-live" }
+  }
+  expect_failures = [var.injected_integration_secrets]
+}
+
+run "channex_production_and_billing_keys_refused_outside_production" {
+  command = plan
+  variables {
+    tier                         = "lean"
+    deployment                   = "staging"
+    domain_name                  = "portico.example"
+    route53_zone_id              = "Z0000000000000000000"
+    injected_integration_secrets = { SOME_NAME = "channex-api-key", OTHER = "stripe-billing-secret-key" }
   }
   expect_failures = [var.injected_integration_secrets]
 }

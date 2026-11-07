@@ -4,7 +4,8 @@
 #              app). SSE-KMS, versioned, browser access ONLY through short-lived presigned URLs.
 #   exports    tenant exports and reports; short-lived by design (expire after `exports_expiration_days`).
 #   backups    application-level backups (tenant exports kept for recovery, migration snapshots, restore-drill
-#              evidence). Object Lock (governance) where enabled so a compromised credential cannot delete them.
+#              evidence). Object Lock (governance) where enabled: ordinary credentials cannot delete them; an admin
+#              with the bypass permission can (alarmed by envs/bootstrap; compliance mode is an owner decision).
 #   logs       S3 server-access and load-balancer access logs. SSE-S3, because those AWS log-delivery services
 #              cannot write to SSE-KMS buckets.
 #

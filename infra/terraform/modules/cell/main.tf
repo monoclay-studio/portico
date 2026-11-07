@@ -7,8 +7,8 @@ resource "terraform_data" "guards" {
     }
     precondition {
       # Never trust every address to set the client IP: per-IP rate limits would then trust spoofed headers.
-      condition     = alltrue([for c in local.trusted_proxy_cidrs : can(cidrhost(c, 0)) && !endswith(c, "/0")])
-      error_message = "TRUSTED_PROXY_CIDRS must be specific CIDRs (ALB subnets and CloudFront origin-facing ranges), never 0.0.0.0/0."
+      condition     = alltrue([for c in local.trusted_proxy_cidrs : can(cidrhost(c, 0)) && try(tonumber(split("/", c)[1]) >= 8, false)])
+      error_message = "TRUSTED_PROXY_CIDRS must be specific CIDRs (ALB subnets and CloudFront origin-facing ranges), never 0.0.0.0/0 or any prefix shorter than /8."
     }
   }
 }
@@ -115,8 +115,15 @@ module "secrets" {
   db_host              = module.database[0].writer_endpoint
   recovery_window_days = local.ephemeral ? 0 : 30
   integration_secrets  = local.integration_secrets
-  # Keys travel with the cross-region backup copies: a restored database is useless without them.
-  replica_region = local.s.aws_backup ? var.dr_region : null
+  # Keys travel to the DR region in production (and with the cross-region backups): a restored database is useless
+  # without them, and a replica also survives an accidental deletion of the primary.
+  replica_region               = local.production || local.s.aws_backup ? var.dr_region : null
+  protect_app_keys             = local.production
+  key_admin_role_arns          = var.key_break_glass_role_arns
+  terraform_principal_arns     = var.terraform_principal_arns
+  existing_app_key_secret_arns = var.existing_app_key_secret_arns
+  # Deterministic names of the execution roles (modules/compute): the only readers besides break-glass/Terraform.
+  reader_role_arns = [for r in ["api", "worker"] : "arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:role/${local.name_prefix}-${r}-exec"]
 }
 
 module "database" {
@@ -179,7 +186,6 @@ module "compute" {
   cpu_architecture             = var.cpu_architecture
   repository_urls              = module.registry.repository_urls
   repository_arns              = module.registry.repository_arns
-  image_tag                    = var.image_tag
   api                          = local.s.api
   worker                       = local.s.worker
   schedule                     = local.schedule
@@ -240,7 +246,8 @@ module "restore_drill" {
   db_subnet_group_name    = module.database[0].subnet_group_name
   drill_security_group_id = module.network.security_group_ids["drill_database"]
   ops_security_group_id   = module.network.security_group_ids["ops"]
-  subnet_ids              = module.network.public_subnet_ids
+  subnet_ids              = local.private_tasks ? module.network.app_subnet_ids : module.network.public_subnet_ids
+  assign_public_ip        = !local.private_tasks
   db_kms_key_arn          = module.database[0].kms_key_arn
   drill_instance_class    = local.s.db_engine == "aurora" ? "db.t4g.medium" : local.s.db_instance_class
   evidence_bucket         = module.storage[0].bucket_names["backups"]
@@ -272,17 +279,30 @@ module "edge" {
 
 # ── CI deploy role ───────────────────────────────────────────────────────────────────────────────────────────
 module "ci_deploy_role" {
-  source                  = "../ci-deploy-role"
-  count                   = local.run_any && var.github_repository != null ? 1 : 0
-  name_prefix             = local.name_prefix
-  github_repository       = coalesce(var.github_repository, "unset/unset")
-  github_environments     = var.github_environments
-  runtime                 = local.is_demo ? "single_host" : "fargate"
-  repository_arns         = values(module.registry.repository_arns)
-  deploy_config_parameter = "/portico/${local.name_prefix}/deploy-config"
-  web_bucket_arn          = "arn:aws:s3:::${module.edge[0].web_bucket_name}"
-  distribution_arn        = module.edge[0].distribution_arn
-  ecs_cluster_name        = local.name_prefix
-  pass_role_arns          = local.run_managed ? concat(values(module.compute[0].task_role_arns), values(module.compute[0].execution_role_arns)) : []
-  host_instance_arn       = local.run_host ? module.single_host[0].instance_arn : ""
+  source                   = "../ci-deploy-role"
+  count                    = local.run_any && var.github_repository != null ? 1 : 0
+  name_prefix              = local.name_prefix
+  github_repository        = coalesce(var.github_repository, "unset/unset")
+  github_repository_id     = coalesce(var.github_repository_id, 0)
+  github_owner_id          = coalesce(var.github_owner_id, 0)
+  allowed_refs             = var.github_allowed_refs
+  allow_release_tags       = var.github_allow_release_tags
+  github_environments      = var.github_environments
+  runtime                  = local.is_demo ? "single_host" : "fargate"
+  repository_arns          = values(module.registry.repository_arns)
+  deploy_config_parameter  = "/portico/${local.name_prefix}/deploy-config"
+  web_bucket_arn           = "arn:aws:s3:::${module.edge[0].web_bucket_name}"
+  distribution_arn         = module.edge[0].distribution_arn
+  ecs_cluster_name         = local.name_prefix
+  service_task_families    = local.run_managed ? [module.compute[0].task_definition_families.api, module.compute[0].task_definition_families.worker] : []
+  host_instance_arn        = local.run_host ? module.single_host[0].instance_arn : ""
+  host_deploy_document_arn = local.run_host ? module.single_host[0].deploy_document_arn : ""
+}
+
+# Opt-in public task IPs: allowed, but never silent.
+check "public_task_ips_warning" {
+  assert {
+    condition     = !var.public_task_ips
+    error_message = "public_task_ips = true: lean tasks get public IPs (no inbound rule except from the ALB). AWS Security Hub control ECS.2 will flag the services, there is no fixed egress IP, and one mistaken inbound rule would expose a task directly. Default (Q158) is private tasks behind a NAT gateway."
+  }
 }

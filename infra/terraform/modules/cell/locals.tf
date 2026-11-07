@@ -3,6 +3,7 @@
 
 data "aws_caller_identity" "current" {}
 data "aws_region" "current" {}
+data "aws_partition" "current" {}
 
 locals {
   region = data.aws_region.current.region
@@ -32,15 +33,13 @@ locals {
 
   preset = {
     az_count = { demo = 2, lean = 2, resilient = 3 }[local.t]
-    nat_mode = { demo = "none", lean = "none", resilient = "per_az" }[local.t]
-    # Egress (lean): tasks run in public subnets with a public IP and NO inbound rule except the API port from the
-    # ALB's security group. That reaches AWS APIs AND the third parties the app calls (Stripe Connect, OIDC
-    # identity providers, outbound webhooks, Channex) for ≈ $3.65/month per task. Interface endpoints (≈ $9.49 each
-    # per AZ) reach AWS APIs only, so the app's payment/SSO/webhook calls would fail. Fixed egress IP or private
-    # tasks: overrides = { nat_mode = "single" } (≈ +$45/month). README § Egress.
-    # Resilient: NAT per AZ already reaches AWS APIs. Interface endpoints for ecr.api/ecr.dkr/logs/secretsmanager in 3
-    # AZs would add 12 endpoint-hours ≈ $114/month to save cents of NAT data processing; opt in with overrides =
-    # { interface_endpoints = [...], endpoint_az_count = 3 } when AWS-API traffic must not depend on the NAT gateways.
+    # Lean default (Q158): ONE NAT gateway, tasks in private subnets — the stricter posture, ≈ +$45/month.
+    # `public_task_ips = true` opts into public task IPs instead (cheaper; AWS Security Hub ECS.2 flags it).
+    nat_mode = { demo = "none", lean = var.public_task_ips ? "none" : "single", resilient = "per_az" }[local.t]
+    # No interface endpoints by default: NAT (or the opt-in public task IPs) reaches AWS APIs AND the third parties
+    # the app calls (Stripe Connect, OIDC identity providers, webhook targets, Channex); endpoints reach AWS APIs
+    # only. Resilient: 4 endpoints in 3 AZs would add ≈ $114/month to save cents of NAT data processing; opt in with
+    # overrides = { interface_endpoints = [...], endpoint_az_count = 3 } if AWS-API traffic must bypass NAT.
     interface_endpoints = { demo = [], lean = [], resilient = [] }[local.t]
     endpoint_az_count   = { demo = 1, lean = 1, resilient = 3 }[local.t]
     flow_logs           = { demo = null, lean = null, resilient = "ALL" }[local.t]

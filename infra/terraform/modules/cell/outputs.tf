@@ -77,3 +77,17 @@ output "runtime_contract" {
 output "app_key_replica_region" {
   value = one(module.secrets[*].app_key_replica_region)
 }
+
+output "ci_deploy_policy" {
+  description = "The deploy role's permissions (decoded)."
+  value       = one(module.ci_deploy_role[*].policy)
+}
+
+output "secret_readers" {
+  description = "Principals allowed to read the application keys and payment-provider secrets."
+  value       = one(module.secrets[*].secret_readers)
+}
+
+output "protected_keys" {
+  value = one(module.secrets[*].protected_keys)
+}

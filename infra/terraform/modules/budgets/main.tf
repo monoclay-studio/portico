@@ -14,6 +14,8 @@
 # Real hard stops: deleting the resources (terraform destroy of the cell), or an AWS Organizations SCP that denies
 # everything in the account. See infra/README.md "Budget alerts vs hard caps".
 
+data "aws_caller_identity" "current" {}
+
 data "aws_partition" "current" {}
 data "aws_region" "current" {}
 
@@ -66,6 +68,12 @@ data "aws_iam_policy_document" "budgets_assume" {
     principals {
       type        = "Service"
       identifiers = ["budgets.amazonaws.com"]
+    }
+    # Confused-deputy guard (review P3-4): only this account's use of the service may assume the role.
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceAccount"
+      values   = [data.aws_caller_identity.current.account_id]
     }
   }
 }
