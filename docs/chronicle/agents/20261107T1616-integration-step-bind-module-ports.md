@@ -1,7 +1,7 @@
 # Agent run: Integration step: bind module ports
 
-- Started: 2026-11-07T16:16:26.294Z · last activity: 2026-11-07T22:07:37.529Z
-- Turns: 882 · tool uses: 908 · output tokens: 766,438
+- Started: 2026-11-07T16:16:26.294Z · last activity: 2026-11-07T22:38:26.255Z
+- Turns: 886 · tool uses: 912 · output tokens: 767,481
 - Type: general-purpose
 
 ## Brief (2026-11-07T16:16:26.294Z)
@@ -475,6 +475,51 @@ Process:
 Gates:
 `pnpm lint && pnpm turbo run typecheck --force && pnpm turbo run test --force --concurrency=2`
 Use PORTICO_TEST_DB_PREFIX=w1_intstep_fix3, merge main first, and check the exit codes. Commit and don't push.
+
+Address this before completing your current task.
+````
+
+## Follow-up message (2026-11-07T22:38:09.781Z)
+
+````text
+The coordinator sent a message while you were working:
+Integration-step fix round 4: re-review #4 says "merge after fixes" (P0 0, P1 2, P2 2, P3 6). Every r3 attack is now refused. Thank you, the state-machine round worked.
+
+**Read first, all on main:**
+- `docs/orchestration/reviews/review-integration-step-4.md` — the report (being committed now)
+- `docs/orchestration/reviews/integration-step-poc/r4-fix-attacks.test.ts.txt` — 13 attacks
+- `docs/adr/0015-authorization-across-module-ports.md` — Amendment 3, new
+- `docs/OPEN_QUESTIONS.md` Q160
+- the "integration-step fix round 4" line in `docs/orchestration/pending-fixes.md`
+
+Merge main into your branch first.
+
+**Fix:**
+1. **R4-P1-1:** a card-on-file agreement covers only the bookings (and folios) it names, recorded with evidence when consent was given. No staff-editable relationship extends it: booker, occupant, payer, add-stay or profile merge. Anything else needs a payment link, the terminal or hosted entry. Q160 default: no future-stays mandate, but leave room in the data model for a named payer-account scope. Make both of the reviewer's attacks into regression tests: the new booking naming Vera, and add-stay onto Otto's booking.
+2. **R4-P1-2:** lock the saved card (or the agreement) before reading the running total, on charge, authorize, hold increase and capture. Open holds count against the limit, which also fixes the P3 where two holds both use the full limit. Turn the reviewer's 5×USD 100 parallel attack into a regression test.
+3. **R4-P2-1:**
+   - The refund exception states the over-collected amount (paid minus still owed), not the whole payment.
+   - An "already paid" answer from the provider stops the replacement link.
+   - The simulator can produce "already paid", so that path gets a test.
+   - Expired links are deactivated at the provider.
+4. **R4-P2-2:**
+   - A deactivation the provider never confirms raises an owned exception, aged and with an alarm.
+   - The late-charge item never says a link is open before one exists.
+5. **R4-P3-2:** deposit application at check-in takes the shared collection lock first. The order is shared lock → folio → payment request.
+6. **The other P3s:**
+   - A balance charge right after a paid deposit link requires the reason.
+   - The no-show purpose matches no-show fees.
+   - Fix the "per use" comment.
+   - Stripe link expiry ≤ 24 h, with a deactivation test.
+   - Consent check on the two guest-facing paths.
+7. **E-114 (quality round 3):** add a test where link creation or the link-payment webhook runs inside the lock window of a desk charge (barrier or held transaction). Show it fails with `assertCollectionOwnership`'s per-reference lock removed. That mutant must die.
+
+**Self-check v6** (`docs/quality/playbooks/module-builder-self-check.md`, on main) before you report done. Include the tables in your report:
+- § 5 with the v5 steps: the state machine for agreements and limits, external holders, pasted writer searches for every reader and writer of the running total and the agreement scope, and the concurrency column.
+- The § 5.4 mutation table for every P0/P1 fix and for E-114. Each guard removed in turn → its named test fails → guard restored.
+- § 6 claim ledger.
+
+Lint must also pass with `--error-on-warnings`, which is now the main gate. Commit after every meaningful step. Do not push, and never rewrite or amend existing commits, including checkpoint WIP.
 
 Address this before completing your current task.
 ````

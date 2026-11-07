@@ -379,3 +379,14 @@ Each agent's brief and report are in `agents/`.
   - Channex facts that could not be verified from its docs (blocked to automated fetches) are listed for the R4
     staging test, which needs the owner's staging key.
   - Next: steward review, subject to the usage rule.
+- **22:37 — Integration-step re-review #4: merge after fixes** <!-- t: agent-acec0dc12726b7ec8 @ 2026-11-07T22:37:10.903Z (Focused re-review #4: integration-step) --> (P0 0 · P1 2 · P2 2 · P3 6).
+  - Every r3 attack, re-run inverted, is now refused. The state-machine brief closed the payment-request exits.
+  - Two P1s remain:
+    - Staff could still put a guest's saved card within reach of another booking by editing who is on it. Review 3's
+      suggested "payer directory" fix had not asked who edits that directory.
+    - Parallel charges beat an agreement's spending limit: 5 × USD 100 against a USD 100 cap.
+  - The orchestrator decided ADR-0015 Amendment 3: an agreement covers only the bookings it names, and limits are
+    locked. Q160 asks whether to offer a future-stays mandate (default: no).
+- **22:38 — Usage 41% of 5 h, 88% of the week; fix round 4 sent** <!-- t: now @ 2026-11-07T22:38:28Z -->. The rule was narrowed: at seven-day ≥ 85%
+  only critical-path finishing work runs (fix rounds, merges). New modules and new reviews, including distribution's,
+  wait. The round includes self-check v6 and the E-114 collection-lock mutant.
