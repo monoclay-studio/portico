@@ -509,7 +509,9 @@ export async function sweepNight(s: StepContext): Promise<StepOutcome | null> {
       .where('night', '=', D)
       .execute();
     const done = new Set(posted.map((p) => p.stay_id));
-    return stays.filter((st) => !done.has(st.stayId));
+    // Stays the posting step already handled (posted, failed or overridden) are its business, not the sweep's.
+    const handled = await loadItems(tx, s.run.id, 'room_and_package_postings');
+    return stays.filter((st) => !done.has(st.stayId) && !handled.has(`night:${st.stayId}:${D}`));
   });
   if (!missing.length) return null;
   const items: WorkItem[] = missing.map((st) => ({
