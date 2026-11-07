@@ -30,6 +30,12 @@
   (reads findings + code + vision/design/experience docs + specs + parity + market digest) → per-module refinements →
   module agents decide/implement.
 
+- 2026-11-07 12:05 UTC: usage 81% → nothing new started. **Queued for after the reset (16:10 UTC), in order:**
+  (1) backoffice fix round from `reviews/review-backoffice.md` (P0-1 cache leak first; arrivals layout proposal in
+  `reviews/backoffice/`); (2) gap strategist (brief in this log, 12:30 entry) → `docs/strategy/`; (3) refining agent
+  for UX round 1 when the black-box tester finishes; (4) resume infra and parity-ops. Running at this time: fix rounds
+  for rates, payments, reservations, integration, finance, identity-plus; black-box UX tester.
+
 ## 1. Owner, product and how to work with the owner
 
 - Owner: founder of **Monoclay LLC** (Delaware, Stripe Atlas), based in the Maldives. Product: **Portico** (final name).
@@ -84,12 +90,12 @@ direction, experience architecture, parity framework, this orchestration folder.
 | `feat/payments-core` | wt/payments | payments (simulator, Stripe Connect, Route D) | steward review: 3 P0 → **fix round running** | merge after finance |
 | `feat/operations-core` | wt/operations | housekeeping, maintenance, tasks, offline sync | **MERGED** to main (9296305) — both P0 + most P1 fixed; P1-5/6/8 deferred with reasons (README) | — |
 | `feat/integration-core` | wt/integration | connector framework, setup, health, webhooks | steward review: P0 SSRF → **fix round running** | merge after rates |
-| `feat/backoffice-core` | wt/backoffice | packages/ui + apps/backoffice | **steward review running** | fix round → merge |
+| `feat/backoffice-core` | wt/backoffice | packages/ui + apps/backoffice | steward review: **merge after fixes** (P0 cached data leaks to next user on shared tab; 6 P1) — `reviews/review-backoffice.md` | **fix round queued for after usage reset** → verify → merge |
 | `feat/identity-platform-enterprise` | wt/identity-plus | MFA, SSO, SCIM, custom roles, break-glass, trials, activation | steward review: **do not merge** (2 P0 cross-org takeover, 8 P1) → ADR-0017 → **fix round running** (sent 11:55Z) | second steward review → merge |
 | `feat/infra-aws` | wt/infra | Terraform, Dockerfiles, runbooks | **paused** (usage) | resume when usage < 80%; set `TRUSTED_PROXY_CIDRS` (pending-fixes) |
 | `docs/parity-ops` | wt/parity-ops | parity: operations, guests, comms, resort, access, guest-experience, crm, identity, integration, ai | **paused** (usage) | resume when usage < 80% |
 | journey, back-of-house, parity-front, parity-finance, readiness, product, adoption docs | — | docs | **MERGED** to main | spec change requests folded in at integration step |
-| market deep dive | wt/market | owner's research prompt + one-button migration | **running** | digest → gap strategist → 10x briefs |
+| market deep dive | wt/market | owner's research prompt + one-button migration | **MERGED** to main (`docs/research/05-*`; Q140–Q145) | **gap strategist queued for after usage reset** |
 | UX loop round 1 | wt/uxlab (lab API :4300, UI :5380) | black-box tester (no build context) | **running** | findings → docs/ux/round-1 → refiner → module owners |
 
 Branch briefs: `docs/orchestration/module-agent-playbook.md` (shared module rules), `workstream-briefs.md`
