@@ -21,13 +21,19 @@ import {
 } from '@portico/guests';
 import type { Authenticator, HttpModule } from '@portico/http';
 import { type IdentityPorts, identityAuthenticator, identityHttp, identityManifest } from '@portico/identity';
-import { DomainError, fieldCryptoFromEnv, type ModuleManifest, randomToken, systemAuthorizer } from '@portico/kernel';
+import {
+  DomainError,
+  fieldCryptoFromEnv,
+  type ModuleManifest,
+  randomToken,
+  systemAuthorizer,
+} from '@portico/kernel';
 import {
   createPaymentsModule,
   envProviderSecrets,
   type LedgerPort,
-  type PaymentsService,
   type PlatformPort as PaymentsPlatformPort,
+  type PaymentsService,
   paymentsManifest,
   paymentsSearch,
   seedPaymentsDemo,
@@ -130,7 +136,11 @@ export function compose(database: PorticoDatabase): Composition {
   });
 
   // ── cross-module experience: global search, summaries, record history ──
-  const searchProviders: SearchProvider[] = [platformSearch, guestsSearchProvider(guestsService), paymentsSearch];
+  const searchProviders: SearchProvider[] = [
+    platformSearch,
+    guestsSearchProvider(guestsService),
+    paymentsSearch,
+  ];
   const recordsModule = recordsHttp({ database, manifests: MANIFESTS, searchProviders });
 
   return {

@@ -26,7 +26,6 @@ describe('scenario s05: payment succeeds at the provider but the response times 
       methodId,
       amount: { amountMinor: 84_000, currency: 'USD' },
       ref: { type: 'folio' as const, id: folioId },
-      initiator: 'customer' as const,
       businessKey: key,
     };
 
@@ -43,7 +42,7 @@ describe('scenario s05: payment succeeds at the provider but the response times 
 
     // 2. A colleague tries to charge again with a NEW attempt: blocked with an explanation.
     await expect(svc.chargeNow(org.ctx, { ...input, businessKey: `charge-${newId()}` })).rejects.toThrow(
-      /still being verified[\s\S]*charge the guest twice/,
+      /still being processed or verified[\s\S]*charge the guest twice/,
     );
 
     // 3. The guest-facing status for the folio says pending, not paid.
@@ -98,7 +97,6 @@ describe('scenario s05: payment succeeds at the provider but the response times 
       methodId,
       amount: { amountMinor: 12_000, currency: 'USD' },
       ref: { type: 'folio', id: folioId },
-      initiator: 'customer',
       businessKey: `k-${newId()}`,
     });
     expect(p.status.payment).toBe('pending_verification');
@@ -114,7 +112,6 @@ describe('scenario s05: payment succeeds at the provider but the response times 
       methodId: m2,
       amount: { amountMinor: 12_000, currency: 'USD' },
       ref: { type: 'folio', id: folioId },
-      initiator: 'customer',
       businessKey: `k-${newId()}`,
     });
     expect(ok.status.payment).toBe('succeeded');
@@ -134,7 +131,6 @@ describe('scenario s05: payment succeeds at the provider but the response times 
         amount: { amountMinor: 5_000, currency: 'USD' },
         ref: { type: 'folio', id: folioId },
         idempotencyKey: `checkout:${folioId}`,
-        initiator: 'customer',
       }),
     );
     expect(payment.status.payment).toBe('processing');
@@ -154,7 +150,6 @@ describe('scenario s05: payment succeeds at the provider but the response times 
       methodId,
       amount: { amountMinor: 9_900, currency: 'USD' },
       ref: { type: 'folio', id: newId() },
-      initiator: 'customer',
       businessKey: newId(),
     });
     expect(p.status.payment).toBe('pending_verification');
@@ -175,7 +170,6 @@ describe('scenario s05: payment succeeds at the provider but the response times 
       methodId,
       amount: { amountMinor: 4_200, currency: 'USD' },
       ref: { type: 'folio', id: newId() },
-      initiator: 'customer',
       businessKey: newId(),
     });
     expect(p.status).toMatchObject({ payment: 'succeeded', ledger: 'failed' });
@@ -183,6 +177,9 @@ describe('scenario s05: payment succeeds at the provider but the response times 
     const open = await org.tx((tx) => svc.tx.listExceptions(tx, { status: 'open' }));
     expect(open.find((e) => e.kind === 'ledger_posting_failed')).toMatchObject({ ownerRole: 'finance' });
     h.ledger.failWith = null;
+    await svc.runReconciliation(org.ctx, { propertyId: org.propertyId }); // not due yet: retries back off
+    expect((await svc.view.payment(org.ctx, p.id)).status.ledger).toBe('failed');
+    h.clock.advance(61_000);
     await svc.runReconciliation(org.ctx, { propertyId: org.propertyId });
     await svc.runReconciliation(org.ctx, { propertyId: org.propertyId });
     expect((await svc.view.payment(org.ctx, p.id)).status.ledger).toBe('posted');

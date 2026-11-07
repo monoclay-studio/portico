@@ -15,6 +15,10 @@ const noLongDigits = (field: string) =>
   z.string().refine((v) => !/\d(?:[ -]?\d){11,}/.test(v), {
     message: `${field} must never contain a card number. Use the provider's token instead.`,
   });
+/** Free text anywhere in payments (names, notes, reasons, references): never a card number (PAY-I05). */
+const text = (max: number, min = 0) => noLongDigits('This field').pipe(z.string().min(min).max(max));
+/** Staff state why a second collection for the same purpose is legitimate (audited). */
+const separateCollection = z.object({ reason: text(500, 3) }).strict();
 
 export const providerKind = z.enum(['simulator', 'stripe_connect', 'external_terminal']);
 export const accountStatus = z.enum(['pending', 'active', 'restricted', 'disabled']);
@@ -41,26 +45,28 @@ export const accountInput = z
   .object({
     legalEntityId: z.uuid(),
     provider: providerKind,
-    externalAccountId: z.string().min(1).max(100).optional(),
-    displayName: z.string().min(1).max(200),
+    /**
+     * Own-terminal accounts: the bank's merchant/terminal id (free text). Stripe connected accounts are NOT
+     * claimed by id: ownership is linked by Portico-initiated onboarding / a Monoclay operator (P0-2).
+     */
+    externalAccountId: text(100, 1).optional(),
+    displayName: text(200, 1),
     currencies: z.array(currency).min(1).max(20),
     countryCode: z
       .string()
       .regex(/^[A-Z]{2}$/)
       .optional(),
-    statementDescriptor: z.string().max(22).optional(),
-    applicationFeeBps: z.number().int().min(0).max(1000).optional(),
+    statementDescriptor: text(22).optional(),
   })
   .strict();
 export const accountUpdate = z
   .object({
-    displayName: z.string().min(1).max(200).optional(),
+    displayName: text(200, 1).optional(),
+    /** Stripe accounts: only `disabled` may be set by the hotel; activation comes from the provider. */
     status: accountStatus.optional(),
-    statusReason: z.string().max(500).optional(),
-    onboardingStatus: z.enum(['not_started', 'in_progress', 'complete', 'not_applicable']).optional(),
+    statusReason: text(500).optional(),
     currencies: z.array(currency).min(1).max(20).optional(),
-    statementDescriptor: z.string().max(22).optional(),
-    applicationFeeBps: z.number().int().min(0).max(1000).nullable().optional(),
+    statementDescriptor: text(22).optional(),
   })
   .strict();
 export const account = z.object({
@@ -118,10 +124,10 @@ export type AccountHealth = z.infer<typeof accountHealth>;
 
 export const mandateInput = z
   .object({
-    termsVersion: z.string().max(100),
+    termsVersion: text(100, 1),
     acceptedAt: z.iso.datetime(),
-    channel: z.string().max(60),
-    networkTransactionId: z.string().max(100).optional(),
+    channel: text(60, 1),
+    networkTransactionId: text(100).optional(),
     threeDsResult: z
       .enum(['authenticated', 'attempted', 'not_authenticated', 'exempt', 'unknown'])
       .optional(),
@@ -135,7 +141,7 @@ export const paymentMethodInput = z
     kind: z.enum(['card', 'virtual_card', 'wallet']),
     providerToken: noLongDigits('providerToken').pipe(z.string().min(3).max(200)),
     providerCustomerRef: noLongDigits('providerCustomerRef').pipe(z.string().max(200)).optional(),
-    brand: z.string().max(30).optional(),
+    brand: text(30).optional(),
     last4: z
       .string()
       .regex(/^\d{4}$/, 'last4 is exactly the last four digits')
@@ -146,12 +152,20 @@ export const paymentMethodInput = z
     owner: z
       .object({ type: z.enum(['guest_profile', 'company', 'agency', 'booking']), id: z.uuid() })
       .strict(),
+    /** How the card reached the provider; a guest-present entry makes the first charge customer-initiated. */
+    entryChannel: z.enum(['hosted_entry', 'terminal', 'vault', 'import']).default('hosted_entry'),
     mitAgreement: z.boolean().default(false),
+    /** Required when mitAgreement is true: the guest's recorded agreement to later charges (PAY-R11). */
     mandate: mandateInput.optional(),
     tokenPortability: z.enum(['provider_bound', 'network_token', 'vault_portable', 'unknown']).optional(),
-    portabilityNote: z.string().max(500).optional(),
+    portabilityNote: text(500).optional(),
   })
-  .strict();
+  .strict()
+  .refine((m) => !m.mitAgreement || m.mandate !== undefined, {
+    message:
+      'A saved card with an agreement to later charges needs the mandate (terms version and acceptance time).',
+    path: ['mandate'],
+  });
 export const paymentMethod = z.object({
   id: z.uuid(),
   accountId: z.uuid(),
@@ -228,13 +242,12 @@ export const authorizeInput = z
     methodId: z.uuid(),
     amount: money,
     ref: anyRef,
-    initiator: z.enum(['customer', 'merchant']).default('customer'),
-    description: z.string().max(200).optional(),
+    description: text(200).optional(),
   })
   .strict();
 export const incrementInput = z.object({ additionalAmount: money }).strict();
 export const captureInput = z.object({ amount: money.optional(), ledgerRef: ledgerRef.optional() }).strict();
-export const voidInput = z.object({ reason: z.string().min(1).max(500) }).strict();
+export const voidInput = z.object({ reason: text(500, 1) }).strict();
 export const recordAuthorizationInput = z
   .object({
     propertyId: z.uuid(),
@@ -242,7 +255,7 @@ export const recordAuthorizationInput = z
     amount: money,
     ref: anyRef,
     approvalCode: noLongDigits('approvalCode').pipe(z.string().min(1).max(60)),
-    cardBrand: z.string().max(30).optional(),
+    cardBrand: text(30).optional(),
     cardLast4: z
       .string()
       .regex(/^\d{4}$/)
@@ -277,8 +290,10 @@ export const chargeInput = z
     methodId: z.uuid(),
     amount: money,
     ref: ledgerRef,
-    initiator: z.enum(['customer', 'merchant']).default('customer'),
-    description: z.string().max(200).optional(),
+    /** Defaults: booking → deposit, folio → balance. A payment request owns its purpose on a reference. */
+    purpose: z.enum(['deposit', 'balance', 'incidentals', 'custom']).optional(),
+    separateCollection: separateCollection.optional(),
+    description: text(200).optional(),
   })
   .strict();
 
@@ -292,17 +307,25 @@ export const recordPaymentInput = z
     ref: ledgerRef,
     /** Terminal approval code, bank transfer reference or cash receipt number. */
     reference: noLongDigits('reference').pipe(z.string().min(1).max(100)),
-    terminalId: z.string().max(60).optional(),
-    cardBrand: z.string().max(30).optional(),
+    terminalId: text(60).optional(),
+    cardBrand: text(30).optional(),
     cardLast4: z
       .string()
       .regex(/^\d{4}$/)
       .optional(),
     receivedAt: z.iso.datetime(),
     authorizationId: z.uuid().optional(),
-    note: noLongDigits('note').pipe(z.string().max(500)).optional(),
+    purpose: z.enum(['deposit', 'balance', 'incidentals', 'custom']).optional(),
+    separateCollection: separateCollection.optional(),
+    /** The same approval code/receipt number really is a second payment: say why (audited). */
+    duplicateOverride: separateCollection.optional(),
+    note: text(500).optional(),
   })
   .strict();
+export const confirmBankTransferInput = z
+  .object({ bankReference: text(100, 1), receivedAt: z.iso.datetime().optional() })
+  .strict();
+export const cancelBankTransferInput = z.object({ reason: text(500, 1) }).strict();
 
 export const payment = z.object({
   id: z.uuid(),
@@ -313,8 +336,11 @@ export const payment = z.object({
   method: z.string(),
   ref: z.object({ type: z.string(), id: z.uuid() }),
   amount: z.object({ amountMinor: z.number().int(), currency: z.string() }),
+  /** Σ linked corrections (Route D); the original amount is never edited. */
+  adjustedMinor: z.number().int(),
   refundedMinor: z.number().int(),
   refundableMinor: z.number().int(),
+  purpose: z.string().nullable(),
   ...recordParts,
   mode: modeEnum,
   providerVerified: z.boolean(),
@@ -333,14 +359,12 @@ export const payment = z.object({
 });
 export type Payment = z.infer<typeof payment>;
 
-export const refundInput = z
-  .object({ paymentId: z.uuid(), amount: money, reason: z.string().min(1).max(500) })
-  .strict();
+export const refundInput = z.object({ paymentId: z.uuid(), amount: money, reason: text(500, 1) }).strict();
 export const recordRefundInput = z
   .object({
     paymentId: z.uuid(),
     amount: money,
-    reason: z.string().min(1).max(500),
+    reason: text(500, 1),
     reference: noLongDigits('reference').pipe(z.string().min(1).max(100)),
   })
   .strict();
@@ -367,7 +391,7 @@ export const adjustmentInput = z
   .object({
     paymentId: z.uuid(),
     amount: signedMoney.refine((m) => m.amountMinor !== 0, 'An adjustment cannot be zero.'),
-    reason: z.string().min(1).max(500),
+    reason: text(500, 1),
     exceptionId: z.uuid().optional(),
   })
   .strict();
@@ -388,15 +412,16 @@ export const paymentRequestInput = z
       .object({
         type: z.enum(['guest_profile', 'company', 'agency', 'other']),
         id: z.uuid().optional(),
-        name: z.string().min(1).max(200),
+        name: text(200, 1),
         email: z.email().optional(),
       })
       .strict(),
     amount: money,
     purpose: z.enum(['deposit', 'balance', 'incidentals_preauth', 'custom']),
-    description: z.string().max(200).optional(),
+    description: text(200).optional(),
     ref: ledgerRef,
     expiresAt: z.iso.datetime(),
+    separateCollection: separateCollection.optional(),
   })
   .strict();
 export const paymentRequest = z.object({
@@ -418,7 +443,7 @@ export const paymentRequest = z.object({
   version: z.number().int(),
 });
 export type PaymentRequest = z.infer<typeof paymentRequest>;
-export const cancelRequestInput = z.object({ reason: z.string().min(1).max(500) }).strict();
+export const cancelRequestInput = z.object({ reason: text(500, 1) }).strict();
 
 export const virtualCardInput = z
   .object({
@@ -426,7 +451,7 @@ export const virtualCardInput = z
     accountId: z.uuid(),
     /** Token/alias issued by the PCI vault or proxy that received the OTA card (never the card number). */
     vaultToken: noLongDigits('vaultToken').pipe(z.string().min(3).max(200)),
-    brand: z.string().max(30).optional(),
+    brand: text(30).optional(),
     last4: z
       .string()
       .regex(/^\d{4}$/)
@@ -435,8 +460,8 @@ export const virtualCardInput = z
     expYear: z.number().int().min(2000).max(2100).optional(),
     bookingId: z.uuid(),
     ledgerRef: ledgerRef.optional(),
-    channel: z.string().min(1).max(60),
-    channelReference: z.string().min(1).max(100),
+    channel: text(60, 1),
+    channelReference: text(100, 1),
     amount: money,
     activationDate: z.iso.date(),
     expiresOn: z.iso.date().optional(),
@@ -485,7 +510,7 @@ export type Dispute = z.infer<typeof dispute>;
 export const evidenceUpdate = z
   .object({
     items: z.array(
-      z.object({ key: z.string(), done: z.boolean(), note: z.string().max(1000).optional() }).strict(),
+      z.object({ key: z.string().max(60), done: z.boolean(), note: text(1000).optional() }).strict(),
     ),
   })
   .strict();
@@ -493,14 +518,14 @@ export const evidenceUpdate = z
 export const payoutInput = z
   .object({
     accountId: z.uuid(),
-    providerPayoutId: z.string().min(1).max(100),
+    providerPayoutId: text(100, 1),
     currency,
     grossMinor: z.number().int(),
     feesMinor: z.number().int().min(0),
     netMinor: z.number().int(),
     arrivalDate: z.iso.date(),
     status: z.enum(['in_transit', 'paid', 'failed']),
-    failureReason: z.string().max(500).optional(),
+    failureReason: text(500).optional(),
     paymentIds: z.array(z.uuid()).max(5000).default([]),
     refundIds: z.array(z.uuid()).max(5000).default([]),
   })
@@ -533,7 +558,7 @@ export const statementImportInput = z
     propertyId: z.uuid(),
     accountId: z.uuid().optional(),
     source: z.enum(['terminal_batch', 'acquirer_settlement', 'bank_statement', 'cash_deposit']),
-    fileName: z.string().min(1).max(200),
+    fileName: text(200, 1),
     periodFrom: z.iso.date(),
     periodTo: z.iso.date(),
     csv: z.string().min(1).max(5_000_000),
@@ -543,6 +568,7 @@ export const statementLine = z.object({
   lineNo: z.number().int(),
   day: z.string(),
   amount: z.object({ amountMinor: z.number().int(), currency: z.string() }),
+  feeMinor: z.number().int(),
   reference: z.string().nullable(),
   matchStatus: z.string(),
   matchBasis: z.string().nullable(),
@@ -560,6 +586,8 @@ export const statementResult = z.object({
   lineCount: z.number().int(),
   matchedCount: z.number().int(),
   exceptionCount: z.number().int(),
+  /** Acquirer fees found in the file, posted to finance as an expense (never deducted from guest payments). */
+  feesMinor: z.number().int(),
   lines: z.array(statementLine),
   exceptionIds: z.array(z.uuid()),
 });
@@ -582,7 +610,7 @@ export const paymentException = z.object({
   version: z.number().int(),
 });
 export type PaymentException = z.infer<typeof paymentException>;
-export const resolveExceptionInput = z.object({ resolution: z.string().min(1).max(1000) }).strict();
+export const resolveExceptionInput = z.object({ resolution: text(1000, 1) }).strict();
 
 export const paymentsStatus = z.object({
   propertyId: z.uuid(),

@@ -743,6 +743,56 @@ export class SimulatorProvider implements PaymentProvider {
     }));
   }
 
+  /** A delivery that failed on the receiving side is delivered again on the next drain (like a real PSP). */
+  async requeue(account: ProviderAccount, eventId: string): Promise<void> {
+    await this.tx(account, (tx) =>
+      this.db(tx)
+        .updateTable('payments.simulator_webhooks')
+        .set({ delivered: false })
+        .where('account_id', '=', account.id)
+        .where('event_id', '=', eventId)
+        .execute(),
+    );
+  }
+
+  /** Event backstop: every event the simulated provider produced after the cursor (delivered or not). */
+  async listEvents(
+    account: ProviderAccount,
+    opts: { after: string | null; since: Date },
+  ): Promise<{ events: VerifiedWebhook[]; cursor: string | null }> {
+    const rows = await this.tx(account, (tx) => {
+      let q = this.db(tx)
+        .selectFrom('payments.simulator_webhooks')
+        .select(['seq', 'payload'])
+        .where('account_id', '=', account.id)
+        .orderBy('seq')
+        .limit(500);
+      if (opts.after) q = q.where('seq', '>', Number(opts.after));
+      else q = q.where('created_at', '>=', opts.since);
+      return q.execute();
+    });
+    const events = rows.map((r) => {
+      const p = r.payload as {
+        id: string;
+        type: string;
+        account: string;
+        created: number;
+        data?: { object?: unknown };
+      };
+      return {
+        eventId: p.id,
+        type: p.type,
+        livemode: false,
+        externalAccountId: p.account,
+        createdAt: new Date(Number(p.created) * 1000),
+        object: reviveObject(p.data?.object),
+        payload: p,
+      };
+    });
+    const last = rows[rows.length - 1];
+    return { events, cursor: last ? String(last.seq) : opts.after };
+  }
+
   /** The guest pays a simulated payment link (demo / tests). Queues a signed completion event. */
   async simulateLinkPayment(
     account: ProviderAccount,

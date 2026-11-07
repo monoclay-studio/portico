@@ -16,6 +16,7 @@ import {
   newId,
   type RequestContext,
   systemAuthorizer,
+  systemContext,
   type TenantEnvironment,
 } from '@portico/kernel';
 import { platform, platformManifest } from '@portico/platform';
@@ -34,10 +35,34 @@ export const T0 = '2026-11-07T08:00:00.000Z';
 
 export interface LedgerControls {
   failWith: string | null;
+  /** Default owner (property + legal entity) of any folio/booking of a tenant (set by setupOrg). */
+  defaultOwner: Map<string, { propertyId: string; legalEntityId: string }>;
+  /** Explicit owners for specific folio/booking ids (cross-property tests). */
+  owners: Map<string, { propertyId: string; legalEntityId: string }>;
+  /** Folio ids finance does not know at all. */
+  unknown: Set<string>;
 }
 
-/** Fake finance: one row per idempotency key (unique), in the caller's transaction. */
+/**
+ * Fake finance: one row per idempotency key (unique), in the caller's transaction; refuses postings whose target
+ * belongs to another property/legal entity (the defence-in-depth finance is asked to implement).
+ */
 export function fakeLedger(controls: LedgerControls): LedgerPort {
+  const ownerOf = (tenantId: string, id: string) =>
+    controls.unknown.has(id)
+      ? null
+      : (controls.owners.get(id) ?? controls.defaultOwner.get(tenantId) ?? null);
+  const assertScope = (
+    tx: TxContext,
+    target: { type: string; id: string } | null,
+    scope: { propertyId: string; legalEntityId: string },
+  ) => {
+    if (!target) return;
+    const owner = ownerOf(tx.tenantId, target.id);
+    if (owner && (owner.propertyId !== scope.propertyId || owner.legalEntityId !== scope.legalEntityId)) {
+      throw new Error(`finance: ${target.type} ${target.id} belongs to another property/legal entity`);
+    }
+  };
   const post = async (
     tx: TxContext,
     kind: string,
@@ -59,7 +84,29 @@ export function fakeLedger(controls: LedgerControls): LedgerPort {
     return existing.rows[0]?.id as string;
   };
   return {
+    async describeTarget(tx, ref) {
+      return ownerOf(tx.tenantId, ref.id);
+    },
+    async markPaymentVerified(tx, i) {
+      await post(tx, 'verified', i.idempotencyKey, i.paymentRef, 0, 'XXX', { evidence: i.evidenceRef });
+    },
+    async recordSettlementFees(tx, i) {
+      return {
+        journalEntryId: await post(
+          tx,
+          'fees',
+          i.idempotencyKey,
+          i.statementRef,
+          i.amount.amountMinor,
+          i.amount.currency,
+          {
+            clearing: i.clearing,
+          },
+        ),
+      };
+    },
     async recordPayment(tx, i) {
+      assertScope(tx, { type: 'folio', id: i.folioId }, i);
       return {
         postingId: await post(
           tx,
@@ -72,11 +119,15 @@ export function fakeLedger(controls: LedgerControls): LedgerPort {
             method: i.method,
             verification: i.verification,
             paymentRef: i.paymentRef,
+            propertyId: i.propertyId,
+            legalEntityId: i.legalEntityId,
+            clearing: i.clearing,
           },
         ),
       };
     },
     async recordDeposit(tx, i) {
+      assertScope(tx, { type: 'booking', id: i.bookingId }, i);
       return {
         postingId: await post(
           tx,
@@ -89,6 +140,9 @@ export function fakeLedger(controls: LedgerControls): LedgerPort {
             method: i.method,
             verification: i.verification,
             paymentRef: i.paymentRef,
+            propertyId: i.propertyId,
+            legalEntityId: i.legalEntityId,
+            clearing: i.clearing,
           },
         ),
       };
@@ -97,6 +151,7 @@ export function fakeLedger(controls: LedgerControls): LedgerPort {
       const ref = i.folioId
         ? { type: 'folio', id: i.folioId }
         : { type: 'booking', id: i.bookingId as string };
+      assertScope(tx, ref, i);
       return {
         postingId: await post(tx, 'refund', i.idempotencyKey, ref, -i.amount.amountMinor, i.amount.currency, {
           originalPaymentRef: i.originalPaymentRef,
@@ -123,6 +178,7 @@ export function fakeLedger(controls: LedgerControls): LedgerPort {
       const ref = i.folioId
         ? { type: 'folio', id: i.folioId }
         : { type: 'booking', id: i.bookingId as string };
+      assertScope(tx, ref, i);
       return {
         postingId: await post(
           tx,
@@ -181,10 +237,6 @@ export interface Harness {
 export async function startHarness(): Promise<Harness> {
   const clock = fixedClock(T0);
   const t = await createTestDatabase(sourcesFromManifests([platformManifest, paymentsManifest]), { clock });
-  // Teardown race in @portico/testing drop() (FOUNDATION_REQUESTS.md §1): an idle client still closing can be
-  // terminated by `drop database … with (force)`. Swallow idle-client errors on the test pools only.
-  t.db.pool.on('error', () => {});
-  t.admin.pool.on('error', () => {});
   await sql`create schema test_ledger;
     create table test_ledger.postings (
       id uuid primary key, tenant_id uuid not null, kind text not null, idempotency_key text not null,
@@ -192,7 +244,12 @@ export async function startHarness(): Promise<Harness> {
       extra jsonb not null default '{}', unique (tenant_id, idempotency_key));
     select core.enable_tenant_isolation('test_ledger.postings');
     select core.apply_standard_grants('test_ledger');`.execute(t.admin.kysely);
-  const ledger: LedgerControls = { failWith: null };
+  const ledger: LedgerControls = {
+    failWith: null,
+    defaultOwner: new Map(),
+    owners: new Map(),
+    unknown: new Set(),
+  };
   const http = {
     calls: 0,
     client: {
@@ -279,6 +336,8 @@ export async function setupOrg(h: Harness, environment: TenantEnvironment = 'dem
     );
   const p1 = await mkProperty('AZR');
   const p2 = await mkProperty('AZH');
+  // Any folio/booking used by a test belongs to the main property unless a test says otherwise.
+  h.ledger.defaultOwner.set(ctx.tenantId, { propertyId: p1.id, legalEntityId: le.id });
   const svc = h.module.service;
   const sim =
     environment === 'live'
@@ -339,10 +398,49 @@ export async function addMethod(
       expYear: 2030,
       holderName: 'Aisha Ibrahim',
       owner: { type: 'guest_profile', id: newId() },
+      entryChannel: 'hosted_entry',
       mitAgreement,
+      ...(mitAgreement
+        ? {
+            mandate: {
+              termsVersion: 'T-2026-1',
+              acceptedAt: h.clock.now().toISOString(),
+              channel: 'booking_engine',
+            },
+          }
+        : {}),
     }),
   );
   return m.id;
+}
+
+/**
+ * A Stripe Connect account as it exists after Portico-initiated onboarding: linked by a (test) Monoclay operator
+ * and, optionally, activated as Stripe would report it (test setup only — tenants can never self-activate).
+ */
+export async function stripeAccount(
+  h: Harness,
+  org: Org,
+  externalAccountId: string,
+  activate = true,
+): Promise<string> {
+  const svc = h.module.service;
+  const a = await org.tx((tx) =>
+    svc.tx.createAccount(tx, {
+      legalEntityId: org.legalEntityId,
+      provider: 'stripe_connect',
+      displayName: 'Hotel Stripe',
+      currencies: ['USD'],
+    }),
+  );
+  await withTenantTx(h.db, systemContext(org.tenantId, 'operator:test', org.ctx.environment, newId()), (tx) =>
+    svc.operator.linkProviderAccount(tx, { accountId: a.id, externalAccountId, verifiedBy: 'test-operator' }),
+  );
+  if (activate) {
+    await sql`update payments.accounts set status = 'active', onboarding_status = 'complete', status_reason = null
+      where id = ${a.id}`.execute(h.t.admin.kysely);
+  }
+  return a.id;
 }
 
 export async function setControls(h: Harness, org: Org, controls: Record<string, unknown>): Promise<void> {

@@ -23,46 +23,68 @@ export type LedgerPaymentMethod =
   | 'cash'
   | 'bank_transfer';
 
+/** Where the money sits before payout: lets finance keep one clearing account per acquirer/provider account. */
+export interface ClearingRef {
+  provider: 'simulator' | 'stripe_connect' | 'external_terminal' | 'cash' | 'bank_transfer';
+  accountId: string | null;
+}
+
+/**
+ * Every posting carries the property and its operating legal entity. Finance MUST refuse a posting whose target
+ * (folio / booking deposit) belongs to another property or legal entity (defence in depth with `describeTarget`).
+ */
+export interface LedgerScope {
+  propertyId: string;
+  legalEntityId: string;
+}
+
 export interface LedgerPort {
-  /** Payment against a folio (domain map). */
+  /**
+   * Owner of a ledger target, BEFORE any money moves: payments refuses a collection whose folio/booking belongs to
+   * another property or legal entity. `null` = finance does not know the target (a folio must exist; a booking may
+   * receive its first deposit, which then binds it to `propertyId`).
+   */
+  describeTarget(tx: TxContext, ref: { type: 'folio' | 'booking'; id: string }): Promise<LedgerScope | null>;
+  /** Payment against a folio (domain map + scope, method, verification, clearing). */
   recordPayment(
     tx: TxContext,
-    input: {
+    input: LedgerScope & {
       folioId: string;
       amount: Money;
       paymentRef: EntityRef;
       method: LedgerPaymentMethod;
       idempotencyKey: string;
-      /** Proposed additive field: provider-confirmed vs recorded (unverified) — lets finance label it. */
-      verification: 'provider_confirmed' | 'recorded_unverified';
+      verification: 'provider_confirmed' | 'recorded_unverified' | 'recorded_verified';
+      clearing: ClearingRef;
     },
   ): Promise<{ postingId: string }>;
-  /** Deposit (liability, not revenue) against a booking (domain map). */
+  /** Deposit (liability, not revenue) against a booking; `propertyId` lets finance open the first deposit account. */
   recordDeposit(
     tx: TxContext,
-    input: {
+    input: LedgerScope & {
       bookingId: string;
       amount: Money;
       paymentRef: EntityRef;
       idempotencyKey: string;
       method: LedgerPaymentMethod;
-      verification: 'provider_confirmed' | 'recorded_unverified';
+      verification: 'provider_confirmed' | 'recorded_unverified' | 'recorded_verified';
+      clearing: ClearingRef;
     },
   ): Promise<{ postingId: string }>;
-  /** Refund as a new linked entry; the original payment posting is never altered (domain map + `bookingId`). */
+  /** Refund as a new linked entry; the original payment posting is never altered. */
   recordRefund(
     tx: TxContext,
-    input: {
+    input: LedgerScope & {
       folioId: string | null;
-      /** Proposed additive field: set when the original payment was a booking deposit. */
       bookingId: string | null;
       amount: Money;
       refundRef: EntityRef;
       originalPaymentRef: EntityRef;
       idempotencyKey: string;
+      clearing: ClearingRef;
     },
   ): Promise<{ postingId: string }>;
-  /** Payout: settlement transfer, never revenue (domain map). */
+  /** Payout: settlement transfer, never revenue. */
   recordPayout(
     tx: TxContext,
     input: {
@@ -72,16 +94,17 @@ export interface LedgerPort {
       fees: Money;
       net: Money;
       currency: string;
+      clearing: ClearingRef;
       idempotencyKey: string;
     },
   ): Promise<{ journalEntryId: string }>;
   /**
-   * PROPOSED (contract change): correction of a recorded payment found wrong by reconciliation — a new linked
-   * adjusting entry, never an edit. `amount` is signed (negative reduces the recorded payment).
+   * Correction of a recorded payment found wrong by reconciliation — a new linked adjusting entry, never an edit.
+   * `amount` is signed (negative reduces the recorded payment). Finance must count it in the refund ceiling.
    */
   recordPaymentAdjustment(
     tx: TxContext,
-    input: {
+    input: LedgerScope & {
       folioId: string | null;
       bookingId: string | null;
       amount: Money;
@@ -89,12 +112,10 @@ export interface LedgerPort {
       adjustmentRef: EntityRef;
       reason: string;
       idempotencyKey: string;
+      clearing: ClearingRef;
     },
   ): Promise<{ postingId: string }>;
-  /**
-   * PROPOSED (spec PAY-R18, finance contract change): dispute fund movements. `debit` when the provider withdraws
-   * the disputed amount; `reversal` when a won dispute returns it.
-   */
+  /** Dispute fund movements: `debit` when the provider withdraws; `reversal` when a won dispute returns it. */
   recordDisputeMovement(
     tx: TxContext,
     input: {
@@ -103,6 +124,30 @@ export interface LedgerPort {
       disputeRef: EntityRef;
       amount: Money;
       kind: 'debit' | 'reversal';
+      clearing: ClearingRef;
+      idempotencyKey: string;
+    },
+  ): Promise<{ journalEntryId: string }>;
+  /**
+   * Route D: a recorded payment/refund was matched to a settlement or bank statement (or staff confirmed a bank
+   * receipt). Verification is a separate fact — the posting stays immutable — so folios leave "awaiting
+   * verification". Idempotent by key.
+   */
+  markPaymentVerified(
+    tx: TxContext,
+    input: LedgerScope & {
+      paymentRef: EntityRef; // { type: 'payment' | 'refund', id }
+      evidenceRef: EntityRef; // { type: 'statement_line' | 'bank_confirmation', id }
+      idempotencyKey: string;
+    },
+  ): Promise<void>;
+  /** Acquirer fees (MDR) from a settlement statement: an expense of the hotel, never a guest-payment adjustment. */
+  recordSettlementFees(
+    tx: TxContext,
+    input: LedgerScope & {
+      statementRef: EntityRef;
+      amount: Money;
+      clearing: ClearingRef;
       idempotencyKey: string;
     },
   ): Promise<{ journalEntryId: string }>;

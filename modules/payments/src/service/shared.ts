@@ -4,11 +4,16 @@ import {
   type Authorizer,
   BusinessRuleError,
   ConflictError,
+  canonicalJson,
   DomainError,
   ForbiddenError,
+  formatMoney,
+  IdempotencyConflictError,
+  money,
   NotFoundError,
   newId,
   type RequestContext,
+  sha256Hex,
 } from '@portico/kernel';
 import type {
   Authorization,
@@ -129,6 +134,54 @@ export async function loadProperty(
   return d.platform.getProperty(tx, propertyId);
 }
 
+/**
+ * P0-1: the folio/booking a collection posts to must belong to the property the caller acts for AND to its
+ * operating legal entity (merchant of record). Checked BEFORE any money moves; finance re-checks on posting.
+ */
+export async function assertLedgerTarget(
+  d: PaymentsDeps,
+  tx: TxContext,
+  ref: { type: 'folio' | 'booking'; id: string },
+  property: PropertyInfo,
+): Promise<void> {
+  const owner = await d.ledger.describeTarget(tx, ref);
+  if (!owner) {
+    if (ref.type === 'booking') return; // first deposit: finance binds the booking to this property on posting
+    throw new BusinessRuleError(
+      'ledger_target_unknown',
+      'Finance does not know this folio, so a payment could not be shown on any bill. Open the folio first (or choose the right one), then collect.',
+      { ref },
+    );
+  }
+  if (owner.propertyId !== property.id) {
+    throw new BusinessRuleError(
+      'ledger_target_other_property',
+      `This ${ref.type} belongs to another property. Collect at the property that owns it, or choose this property's ${ref.type}.`,
+      { ref, propertyId: property.id },
+    );
+  }
+  if (owner.legalEntityId !== property.legalEntityId) {
+    throw new BusinessRuleError(
+      'wrong_merchant_of_record',
+      `This ${ref.type} belongs to a different legal entity than the one operating this property; the money would be booked in the wrong company's books.`,
+      { ref },
+    );
+  }
+}
+
+/** Fingerprint of a command's business content, stored with the record to detect a reused key (rule 7). */
+export function requestHash(input: unknown): string {
+  return sha256Hex(canonicalJson(input));
+}
+
+export function assertSameRequest(existing: string | null, hash: string, what: string): void {
+  if (existing && existing !== hash) {
+    throw new IdempotencyConflictError(
+      `This idempotency key was already used for a different ${what}. Use a new key for a new ${what}; reuse a key only to retry the same one.`,
+    );
+  }
+}
+
 export async function loadAccount(tx: TxContext, id: string, lock = false): Promise<AccountRow> {
   let q = db(tx).selectFrom('payments.accounts').selectAll().where('id', '=', id);
   if (lock) q = q.forUpdate();
@@ -218,7 +271,7 @@ export class PendingVerificationBlockError extends ConflictError {
   }) {
     super(
       `${input.kind}_pending_verification`,
-      `A ${input.kind} of ${input.currency} ${(input.amountMinor / 100).toFixed(2)} started at ${input.since.toISOString()} is still being verified with the provider. Check its status or wait — starting another one now could charge the guest twice.`,
+      `A ${input.kind} of ${formatMoney(money(input.amountMinor, input.currency))} started at ${input.since.toISOString()} is still being processed or verified with the provider. Check its status or wait — starting another one now could charge the guest twice.`,
       { ...input, since: input.since.toISOString() },
     );
   }
@@ -270,9 +323,44 @@ export async function raiseException(tx: TxContext, e: ExceptionInput): Promise<
   if (!inserted) {
     const existing = await db(tx)
       .selectFrom('payments.exceptions')
-      .select('id')
+      .select(['id', 'status', 'version', 'occurrences'])
       .where('dedupe_key', '=', e.dedupeKey)
+      .forUpdate()
       .executeTakeFirstOrThrow();
+    if (existing.status === 'open') return existing.id;
+    // The problem came back after someone resolved it: reopen it (a recurrence must never vanish).
+    await db(tx)
+      .updateTable('payments.exceptions')
+      .set({
+        status: 'open',
+        problem: e.problem,
+        next_step: e.nextStep,
+        resolution: null,
+        resolved_by: null,
+        resolved_at: null,
+        occurrences: existing.occurrences + 1,
+        version: existing.version + 1,
+      })
+      .where('id', '=', existing.id)
+      .execute();
+    await tx.audit({
+      action: 'payments.exception.reopen',
+      target: { type: 'payment_exception', id: existing.id },
+      propertyId: e.propertyId,
+      after: e,
+    });
+    await tx.emit({
+      type: PaymentsEvents.exceptionRaised,
+      propertyId: e.propertyId,
+      aggregate: { type: 'payment_exception', id: existing.id },
+      payload: {
+        exceptionId: existing.id,
+        kind: e.kind,
+        severity: e.severity,
+        ownerRole: e.ownerRole,
+        reopened: true,
+      },
+    });
     return existing.id;
   }
   await tx.audit({
@@ -434,15 +522,18 @@ export function toPaymentView(p: PaymentRow, rc: RecordContext): Payment {
     method: p.method,
     ref: { type: p.ref_type, id: p.ref_id },
     amount: { amountMinor: p.amount_minor, currency: p.currency },
+    adjustedMinor: p.adjusted_minor,
     refundedMinor: p.refunded_minor,
     refundableMinor:
       p.status === 'succeeded' || p.status === 'recorded_unverified' || p.status === 'recorded_verified'
         ? refundableMinor({
             amountMinor: p.amount_minor,
+            adjustedMinor: p.adjusted_minor,
             refundedMinor: p.refunded_minor,
             refundReservedMinor: p.refund_reserved_minor,
           })
         : 0,
+    purpose: p.purpose,
     ...paymentRecord(p, rc),
     mode: p.mode,
     providerVerified: p.status === 'succeeded' && p.mode !== 'recorded',

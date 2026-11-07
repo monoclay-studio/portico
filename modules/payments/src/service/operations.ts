@@ -16,6 +16,7 @@
 import { type Selectable, type TxContext, withTenantTx } from '@portico/db';
 import {
   DomainError,
+  formatMoney,
   localDateIn,
   type Money,
   money,
@@ -68,6 +69,9 @@ import {
   toProviderAccount,
 } from './shared';
 
+/** A second "not found" at least this long after the first makes the absence conclusive (P2-4). */
+export const NOT_FOUND_CONFIRM_MS = 3_600_000;
+
 /** An intent never sent within this window is expired instead of sent late (queued actions are re-validated). */
 export const MAX_PENDING_AGE_MS = 15 * 60_000;
 
@@ -75,12 +79,10 @@ type OpRow = Selectable<ProviderOperationsTable>;
 
 // ───────────────────────── circuit breaker persistence ─────────────────────────
 
-async function loadBreaker(tx: TxContext, accountId: string): Promise<BreakerState> {
-  const row = await db(tx)
-    .selectFrom('payments.account_health')
-    .selectAll()
-    .where('account_id', '=', accountId)
-    .executeTakeFirst();
+async function loadBreaker(tx: TxContext, accountId: string, lock = false): Promise<BreakerState> {
+  let q = db(tx).selectFrom('payments.account_health').selectAll().where('account_id', '=', accountId);
+  if (lock) q = q.forUpdate();
+  const row = await q.executeTakeFirst();
   if (!row) return INITIAL_BREAKER;
   return {
     state: row.state,
@@ -127,7 +129,7 @@ export async function assertBreakerAllows(
 async function updateBreaker(tx: TxContext, account: AccountRow, outcome: ProviderOutcome): Promise<void> {
   // Failures decided before anything reached the provider say nothing about the provider's health.
   if (outcome.kind === 'failed' && LOCAL_FAILURE_CODES.has(outcome.code)) return;
-  const before = await loadBreaker(tx, account.id);
+  const before = await loadBreaker(tx, account.id, true);
   const failure = outcome.kind === 'unavailable' || outcome.kind === 'unknown';
   const after = failure ? recordFailure(before, tx.now, outcome.reason) : recordSuccess(before, tx.now);
   await saveBreaker(tx, account, after);
@@ -345,6 +347,20 @@ async function claim(d: PaymentsDeps, tx: TxContext, operationId: string): Promi
   }
   if (account.status === 'restricted' || account.status === 'disabled') {
     return fail('account_restricted', `The payment account is ${account.status}; nothing was sent.`);
+  }
+  // P1-11: the environment decides the effect mode at EXECUTION too. An intent recorded as simulated (e.g. in
+  // trial) must never be sent live after the organization changed environment — nothing is sent.
+  let modeNow: string;
+  try {
+    modeNow = d.registry.modeFor(tx, account);
+  } catch {
+    modeNow = 'blocked';
+  }
+  if (modeNow !== op.mode) {
+    return fail(
+      'environment_changed',
+      `This request was recorded in ${op.mode} mode but the environment now uses ${modeNow}; it was not sent. Start the payment again.`,
+    );
   }
   const breaker = await loadBreaker(tx, account.id);
   const decision = decideAttempt(breaker, tx.now, d.breaker);
@@ -842,9 +858,29 @@ async function applyPayment(
     );
   }
   const failure = failureOf(outcome);
+  // P2-5: record what the provider actually collected — never the requested amount when it collected less.
+  const collected =
+    outcome.kind === 'succeeded' && outcome.amountMinor > 0 && outcome.amountMinor < p.amount_minor
+      ? outcome.amountMinor
+      : p.amount_minor;
+  if (collected !== p.amount_minor) {
+    await raiseException(tx, {
+      propertyId: p.property_id,
+      kind: 'partial_collection',
+      severity: 'urgent',
+      problem: `The provider collected ${formatMoney(money(collected, p.currency))} instead of the requested ${formatMoney(money(p.amount_minor, p.currency))}.`,
+      businessImpact: 'The guest still owes the difference.',
+      nextStep: 'Collect the remaining amount with another payment.',
+      ownerRole: 'front_office_manager',
+      responsibleParty: 'hotel',
+      ref: { type: 'payment', id: p.id },
+      dedupeKey: `partial-collection:${p.id}`,
+    });
+  }
   await db(tx)
     .updateTable('payments.payments')
     .set({
+      amount_minor: collected,
       status: to,
       provider_ref:
         outcome.kind === 'succeeded'
@@ -1176,7 +1212,20 @@ export async function verifyOperation(
 
   let result: LookupResult;
   try {
-    const resolved = d.registry.forAccount(ctx, toProviderAccount(account));
+    // P1-11: look up where the operation was SENT. A simulated operation is only ever looked up in the
+    // simulator; if the environment changed since, nothing is asked of a real provider.
+    let modeNow: string;
+    try {
+      modeNow = d.registry.modeFor(ctx, account);
+    } catch {
+      modeNow = 'blocked';
+    }
+    const resolved =
+      op.mode === 'simulate'
+        ? { ok: true as const, provider: d.registry.simulator, mode: 'simulate' as const }
+        : modeNow === op.mode
+          ? d.registry.forAccount(ctx, toProviderAccount(account))
+          : { ok: false as const, code: 'provider_not_configured' as const, mode: op.mode };
     result = resolved.ok
       ? await resolved.provider.lookup(toProviderAccount(account), {
           operationId: op.id,
@@ -1194,15 +1243,41 @@ export async function verifyOperation(
   return withTenantTx(d.database, ctx, async (tx) => {
     const current = await db(tx)
       .selectFrom('payments.provider_operations')
-      .select(['status', 'attempts', 'sent_at', 'created_at'])
+      .select(['status', 'attempts', 'sent_at', 'created_at', 'not_found_at'])
       .where('id', '=', op.id)
+      .forUpdate()
       .executeTakeFirstOrThrow();
+    const breakerClosed = (await loadBreaker(tx, op.account_id)).state === 'closed';
     await journal(tx, { id: op.id, attempts: current.attempts }, 'lookup', String(result.found), { result });
     let changed = false;
     const sentAt = new Date(current.sent_at ?? current.created_at).getTime();
     if (result.found === true) {
       changed = await applyOutcome(d, tx, op.id, result.outcome, 'lookup');
-    } else if (result.found === false && tx.now.getTime() - sentAt >= NOT_FOUND_GRACE_MS) {
+    } else if (
+      result.found === false &&
+      tx.now.getTime() - sentAt >= NOT_FOUND_GRACE_MS &&
+      breakerClosed &&
+      current.not_found_at === null
+    ) {
+      // P2-4: provider search can lag; one "not found" is not conclusive. Remember it and confirm ≥ 1 h later.
+      await db(tx)
+        .updateTable('payments.provider_operations')
+        .set({ not_found_at: tx.now })
+        .where('id', '=', op.id)
+        .execute();
+      changed = await applyOutcome(
+        d,
+        tx,
+        op.id,
+        { kind: 'unknown', reason: 'not found (to be confirmed)' },
+        'lookup',
+      );
+    } else if (
+      result.found === false &&
+      breakerClosed &&
+      current.not_found_at !== null &&
+      tx.now.getTime() - new Date(current.not_found_at).getTime() >= NOT_FOUND_CONFIRM_MS
+    ) {
       changed = await applyOutcome(
         d,
         tx,

@@ -20,7 +20,6 @@ function charge(org: Org, methodId: string, folioId: string, amountMinor = 10_00
     methodId,
     amount: { amountMinor, currency: 'USD' },
     ref: { type: 'folio', id: folioId },
-    initiator: 'customer',
     businessKey: newId(),
   });
 }
@@ -144,8 +143,12 @@ describe('scenario s20: card payments go down during a busy shift', () => {
     await setControls(h, org, {});
     await svc.checkNow(org.ctx, { type: 'payment', id: p.id });
     expect((await svc.view.payment(org.ctx, p.id)).status.payment).toBe('pending_verification');
-    // …after it, "not received" is a provider-confirmed failure: nothing was charged; the request is NOT re-sent.
+    // …after it, one "not found" is still not conclusive (provider search can lag): it must be confirmed ≥ 1 h later.
     h.clock.advance(16 * 60_000);
+    await svc.checkNow(org.ctx, { type: 'payment', id: p.id });
+    expect((await svc.view.payment(org.ctx, p.id)).status.payment).toBe('pending_verification');
+    // Confirmed absence is a provider-confirmed failure: nothing was charged; the request is NOT re-sent.
+    h.clock.advance(61 * 60_000);
     await svc.checkNow(org.ctx, { type: 'payment', id: p.id });
     const final = await svc.view.payment(org.ctx, p.id);
     expect(final.status.payment).toBe('failed');
@@ -167,7 +170,6 @@ describe('scenario s20: card payments go down during a busy shift', () => {
         methodId,
         amount: { amountMinor: 7_000, currency: 'USD' },
         ref: { type: 'folio', id: newId() },
-        initiator: 'customer',
         businessKey: newId(),
       }),
     );

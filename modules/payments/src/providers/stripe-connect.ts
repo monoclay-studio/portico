@@ -243,7 +243,13 @@ export class StripeConnectProvider implements PaymentProvider {
       statement_descriptor_suffix: account.statementDescriptor ?? undefined,
       application_fee_amount: fee ?? undefined,
       payment_method_options: manual
-        ? { card: { request_extended_authorization: 'if_available' } }
+        ? {
+            card: {
+              request_extended_authorization: 'if_available',
+              // Without this Stripe refuses later increments (P2-5); eligibility is per account/card.
+              request_incremental_authorization: 'if_available',
+            },
+          }
         : undefined,
       metadata: { portico_operation_id: call.operationId },
       expand: ['latest_charge'],
@@ -421,6 +427,54 @@ export class StripeConnectProvider implements PaymentProvider {
     }
     if (!r.body.url) return { kind: 'failed', code: 'no_url', message: 'Stripe returned no hosted URL.' };
     return { kind: 'created', linkRef: r.body.id, url: r.body.url };
+  }
+
+  /** Event backstop over the authenticated API (events of the connected account, oldest first). */
+  async listEvents(
+    account: ProviderAccount,
+    opts: { after: string | null; since: Date },
+  ): Promise<{ events: VerifiedWebhook[]; cursor: string | null }> {
+    const r = await this.request<{
+      data: Array<{
+        id: string;
+        type: string;
+        livemode: boolean;
+        created: number;
+        data?: { object?: Record<string, unknown> };
+      }>;
+    }>(account, 'GET', '/v1/events', {
+      limit: 100,
+      types: [
+        'charge.dispute.*',
+        'payout.*',
+        'account.updated',
+        'payment_intent.*',
+        'refund.*',
+        'charge.refund.updated',
+      ],
+      ...(opts.after
+        ? { ending_before: opts.after }
+        : { created: { gte: Math.floor(opts.since.getTime() / 1000) } }),
+    });
+    if (!r.ok) {
+      throw new Error(
+        `Stripe event listing failed: ${r.outcome.kind === 'failed' ? r.outcome.message : r.outcome.kind}`,
+      );
+    }
+    const ordered = [...r.body.data].reverse(); // Stripe lists newest first
+    const events: VerifiedWebhook[] = ordered
+      .filter((e) => e.livemode === (this.mode === 'live'))
+      .map((e) => ({
+        eventId: e.id,
+        type: e.type,
+        livemode: e.livemode,
+        externalAccountId: account.externalAccountId ?? '',
+        createdAt: new Date(e.created * 1000),
+        object: normalizeStripeObject(e.type, e.data?.object ?? {}),
+        payload: { id: e.id, type: e.type },
+      }));
+    const newest = r.body.data[0];
+    return { events, cursor: newest ? newest.id : opts.after };
   }
 
   parseWebhook(rawBody: string, headers: Record<string, string | undefined>, now: Date): VerifiedWebhook {

@@ -8,7 +8,7 @@
 import { type TxContext, type TxEventSubscription, withTenantTx } from '@portico/db';
 import { DomainError, type RequestContext } from '@portico/kernel';
 import type { z } from 'zod';
-import type { Authorization, chargeInput, Payment, PaymentRequest, Refund } from '../contracts';
+import type { Authorization, Payment, PaymentRequest, Refund } from '../contracts';
 import { type BreakerConfig, DEFAULT_BREAKER } from '../domain/circuit-breaker';
 import { PaymentsEvents } from '../events';
 import type { LedgerPort, PlatformPort } from '../ports';
@@ -124,15 +124,14 @@ export function createPaymentsService(input: PaymentsServiceDeps) {
           amount: { amountMinor: number; currency: string };
           ref: { type: string; id: string };
           idempotencyKey: string;
-          initiator?: 'customer' | 'merchant';
         },
       ): Promise<Authorization> {
+        // Who initiates is derived from the consent record (P1-8), never declared by the caller.
         const s = await collect.authorize(d, tx, {
           propertyId: i.propertyId,
           methodId: i.methodId,
           amount: i.amount,
           ref: i.ref,
-          initiator: i.initiator ?? 'customer',
           businessKey: i.idempotencyKey,
         });
         scheduleAfterCommit(tx, s.operationId);
@@ -159,10 +158,17 @@ export function createPaymentsService(input: PaymentsServiceDeps) {
           amount: { amountMinor: number; currency: string };
           ref: { type: 'folio' | 'booking'; id: string };
           idempotencyKey: string;
-          initiator: 'customer' | 'merchant';
+          purpose?: 'deposit' | 'balance' | 'incidentals' | 'custom';
         },
       ): Promise<Payment> {
-        const s = await collect.charge(d, tx, { ...i, businessKey: i.idempotencyKey });
+        const s = await collect.charge(d, tx, {
+          propertyId: i.propertyId,
+          methodId: i.methodId,
+          amount: i.amount,
+          ref: i.ref,
+          ...(i.purpose ? { purpose: i.purpose } : {}),
+          businessKey: i.idempotencyKey,
+        });
         scheduleAfterCommit(tx, s.operationId);
         return queries.getPayment(tx, s.id);
       },
@@ -185,10 +191,7 @@ export function createPaymentsService(input: PaymentsServiceDeps) {
     },
 
     // ── drivers: command + execute (+ verify on retry) ──
-    async chargeNow(
-      ctx: RequestContext,
-      i: z.infer<typeof chargeInput> & { businessKey: string },
-    ): Promise<Payment> {
+    async chargeNow(ctx: RequestContext, i: collect.ChargeCommand): Promise<Payment> {
       const s = await withTenantTx(d.database, ctx, (tx) => collect.charge(d, tx, i));
       await settle(ctx, { type: 'payment', id: s.id }, { verifyPending: s.replayed });
       return view.payment(ctx, s.id);
@@ -230,6 +233,14 @@ export function createPaymentsService(input: PaymentsServiceDeps) {
       requests.simulateRequestPayment(d, ctx, requestId, amountMinor),
     deliverSimulatorWebhooks: (ctx: RequestContext, accountId: string) =>
       webhooks.deliverSimulatorWebhooks(d, ctx, accountId),
+    runEventBackstop: (ctx: RequestContext) => webhooks.runEventBackstop(d, ctx),
+    /** Monoclay operator tooling only (never exposed on tenant routes). */
+    operator: {
+      linkProviderAccount: (tx: TxContext, i: Parameters<typeof accounts.operatorLinkProviderAccount>[1]) =>
+        accounts.operatorLinkProviderAccount(tx, i),
+      setApplicationFee: (tx: TxContext, i: Parameters<typeof accounts.operatorSetApplicationFee>[1]) =>
+        accounts.operatorSetApplicationFee(tx, i),
+    },
     receiveStripeWebhook: (rawBody: string, headers: Record<string, string | undefined>) =>
       webhooks.receiveStripeWebhook(d, rawBody, headers),
 
@@ -270,6 +281,10 @@ export function createPaymentsService(input: PaymentsServiceDeps) {
         collect.recordAuthorization(d, tx, i),
       recordRefund: (tx: TxContext, i: Parameters<typeof collect.recordRefund>[2]) =>
         collect.recordRefund(d, tx, i),
+      confirmBankTransfer: (tx: TxContext, i: Parameters<typeof collect.confirmBankTransfer>[2]) =>
+        collect.confirmBankTransfer(d, tx, i),
+      cancelBankTransfer: (tx: TxContext, paymentId: string, reason: string) =>
+        collect.cancelBankTransfer(d, tx, paymentId, reason),
       adjustRecordedPayment: (tx: TxContext, i: Parameters<typeof collect.adjustRecordedPayment>[2]) =>
         collect.adjustRecordedPayment(d, tx, i),
       createPaymentRequest: (tx: TxContext, i: Parameters<typeof requests.createPaymentRequest>[2]) =>
@@ -308,7 +323,9 @@ export function createPaymentsService(input: PaymentsServiceDeps) {
           types: [PaymentsEvents.operationRequested],
           async handle(tx, event) {
             const operationId = String((event.payload as { operationId?: unknown }).operationId ?? '');
-            if (operationId) await executeOperation(d, requestContextOf(tx), operationId);
+            // P2-7: never hold the delivery transaction across the provider call — run it after commit.
+            const ctx = requestContextOf(tx);
+            if (operationId) tx.afterCommit(() => executeOperation(d, ctx, operationId));
           },
         },
         {

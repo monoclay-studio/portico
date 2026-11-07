@@ -10,6 +10,7 @@ import {
   BusinessRuleError,
   ConflictError,
   ForbiddenError,
+  formatMoney,
   localDateIn,
   money,
   NotFoundError,
@@ -31,7 +32,8 @@ import type {
 import { parseStatementCsv } from '../domain/csv';
 import { matchSettlement, type RecordedItem, type SettlementIssue } from '../domain/settlement';
 import { PaymentsEvents } from '../events';
-import { ledgerKey, postPaymentLedger, postRefundLedger, tryLedger } from './ledger';
+import { markBankTransferReceived } from './collect';
+import { ledgerKey, postPaymentLedger, postRefundLedger, postVerification, tryLedger } from './ledger';
 import { executeOperation, verifyOperation } from './operations';
 import { ensurePaymentLink } from './requests';
 import {
@@ -71,18 +73,43 @@ export async function runReconciliation(
       .limit(limit);
     if (opts.propertyId) due = due.where('property_id', '=', opts.propertyId);
     const ops = await due.execute();
+    // P2-8: ledger retries follow a backoff (ledger_next_attempt_at), never every minute forever.
     let lp = db(tx)
       .selectFrom('payments.payments')
       .select('id')
       .where('ledger_status', 'in', ['pending', 'failed'])
+      .where((eb) =>
+        eb.or([eb('ledger_next_attempt_at', 'is', null), eb('ledger_next_attempt_at', '<=', tx.now)]),
+      )
       .limit(limit);
     if (opts.propertyId) lp = lp.where('property_id', '=', opts.propertyId);
     let lr = db(tx)
       .selectFrom('payments.refunds')
       .select('id')
       .where('ledger_status', 'in', ['pending', 'failed'])
+      .where((eb) =>
+        eb.or([eb('ledger_next_attempt_at', 'is', null), eb('ledger_next_attempt_at', '<=', tx.now)]),
+      )
       .limit(limit);
     if (opts.propertyId) lr = lr.where('property_id', '=', opts.propertyId);
+    let vp = db(tx)
+      .selectFrom('payments.payments')
+      .select('id')
+      .where('verification_ledger_status', 'in', ['pending', 'failed'])
+      .limit(limit);
+    if (opts.propertyId) vp = vp.where('property_id', '=', opts.propertyId);
+    let vr = db(tx)
+      .selectFrom('payments.refunds')
+      .select('id')
+      .where('verification_ledger_status', 'in', ['pending', 'failed'])
+      .limit(limit);
+    if (opts.propertyId) vr = vr.where('property_id', '=', opts.propertyId);
+    const payouts = await db(tx)
+      .selectFrom('payments.payouts')
+      .select('id')
+      .where('ledger_status', '=', 'failed')
+      .limit(limit)
+      .execute();
     let links = db(tx)
       .selectFrom('payments.payment_requests')
       .select('id')
@@ -94,6 +121,9 @@ export async function runReconciliation(
       ops,
       ledgerPayments: await lp.execute(),
       ledgerRefunds: await lr.execute(),
+      verifyPayments: await vp.execute(),
+      verifyRefunds: await vr.execute(),
+      payouts,
       links: await links.execute(),
     };
   });
@@ -116,6 +146,20 @@ export async function runReconciliation(
   }
   for (const r of work.ledgerRefunds) {
     await withTenantTx(d.database, ctx, (tx) => postRefundLedger(d, tx, r.id));
+    result.ledgerRetried++;
+  }
+  for (const v of work.verifyPayments) {
+    await withTenantTx(d.database, ctx, (tx) =>
+      postVerification(d, tx, { type: 'payment', id: v.id }, { type: 'statement', id: v.id }),
+    );
+  }
+  for (const v of work.verifyRefunds) {
+    await withTenantTx(d.database, ctx, (tx) =>
+      postVerification(d, tx, { type: 'refund', id: v.id }, { type: 'statement', id: v.id }),
+    );
+  }
+  for (const po of work.payouts) {
+    await withTenantTx(d.database, ctx, (tx) => postPayoutLedger(d, tx, po.id));
     result.ledgerRetried++;
   }
   for (const l of work.links) await ensurePaymentLink(d, ctx, l.id);
@@ -252,7 +296,10 @@ const SOURCE_METHODS: Record<string, ReadonlyArray<'external_terminal' | 'cash' 
   cash_deposit: ['cash'],
 };
 
+const CASH_DAY = 'cashday:';
+
 function issueException(statementId: string, propertyId: string, i: SettlementIssue, fileName: string) {
+  const synthetic = i.itemId?.startsWith(CASH_DAY) ?? false;
   const base = {
     propertyId,
     severity: (i.kind === 'missing_in_statement' || i.kind === 'ambiguous_match' ? 'routine' : 'urgent') as
@@ -260,7 +307,7 @@ function issueException(statementId: string, propertyId: string, i: SettlementIs
       | 'routine',
     ownerRole: 'finance',
     responsibleParty: 'hotel' as const,
-    ...(i.itemId ? { ref: { type: i.itemKind ?? 'payment', id: i.itemId } } : {}),
+    ...(i.itemId && !synthetic ? { ref: { type: i.itemKind ?? 'payment', id: i.itemId } } : {}),
   };
   const texts: Record<
     SettlementIssue['kind'],
@@ -268,15 +315,19 @@ function issueException(statementId: string, propertyId: string, i: SettlementIs
   > = {
     amount_mismatch: {
       problem: `Statement ${fileName}: ${i.detail}`,
-      impact: 'The bill and the bank disagree about how much was paid.',
-      next: 'Check the terminal receipt. If the statement is right, record a correction (adjustment) on the payment; never edit the original.',
-      key: `settlement-amount:${i.itemId}`,
+      impact: 'The bill and the statement disagree about how much the guest paid.',
+      next: synthetic
+        ? 'Count the cash of that day again and compare with the deposit slip; record a correction only for a payment that was recorded wrongly.'
+        : 'Compare with the terminal receipt. Acquirer fees are NOT a reason to correct the guest’s payment (fees are imported separately). Only if the receipt shows a different amount, record a correction (adjustment) on the payment — never edit the original.',
+      key: synthetic ? `settlement-amount:${propertyId}:${i.itemId}` : `settlement-amount:${i.itemId}`,
     },
     missing_in_statement: {
       problem: `Statement ${fileName}: ${i.detail}`,
-      impact: 'This payment may never have reached the hotel’s account.',
-      next: 'Check the terminal batch for that day; if the payment did not happen, record a correction and collect again.',
-      key: `settlement-missing:${i.itemId}`,
+      impact: 'This money may never have reached the hotel’s account.',
+      next: synthetic
+        ? 'Check whether the cash of that day was deposited; deposit it or investigate the difference.'
+        : 'Check the terminal batch for that day; if the payment did not happen, record a correction and collect again.',
+      key: synthetic ? `settlement-missing:${propertyId}:${i.itemId}` : `settlement-missing:${i.itemId}`,
     },
     unrecorded_in_portico: {
       problem: `Statement ${fileName}: ${i.detail}`,
@@ -324,8 +375,9 @@ export async function importStatement(
     throw new ValidationError('invalid_period', 'The statement period ends before it starts.');
   }
   const property = await loadProperty(d, tx, input.propertyId);
+  let account: Awaited<ReturnType<typeof loadAccount>> | null = null;
   if (input.accountId) {
-    const account = await loadAccount(tx, input.accountId);
+    account = await loadAccount(tx, input.accountId);
     if (account.legal_entity_id !== property.legalEntityId) {
       throw new BusinessRuleError(
         'wrong_merchant_of_record',
@@ -352,10 +404,21 @@ export async function importStatement(
   const windowTo = new Date(`${addDays(input.periodTo, 4)}T00:00:00Z`);
   let pq = db(tx)
     .selectFrom('payments.payments')
-    .select(['id', 'currency', 'amount_minor', 'external_reference', 'card_last4', 'received_at', 'status'])
+    .select([
+      'id',
+      'currency',
+      'amount_minor',
+      'adjusted_minor',
+      'external_reference',
+      'card_last4',
+      'received_at',
+      'status',
+      'method',
+    ])
     .where('property_id', '=', input.propertyId)
     .where('mode', '=', 'recorded')
     .where('method', 'in', [...methods])
+    .where('status', '!=', 'cancelled')
     .where('received_at', '>=', windowFrom)
     .where('received_at', '<', windowTo);
   if (input.accountId) pq = pq.where('account_id', '=', input.accountId);
@@ -377,34 +440,62 @@ export async function importStatement(
     .where('payments.refunds.created_at', '>=', windowFrom)
     .where('payments.refunds.created_at', '<', windowTo)
     .execute();
-  const items: RecordedItem[] = [
-    ...payments.map((p) => ({
-      id: p.id,
+  const dayOf = (at: Date | null) => localDateIn(new Date(at ?? tx.now), property.timezone);
+  let items: RecordedItem[];
+  const cashByDay = new Map<string, typeof payments>();
+  if (input.source === 'cash_deposit') {
+    // P2-12: cash is deposited per day, not per guest: match the day's total of unverified cash payments.
+    for (const p of payments) {
+      if (p.status === 'recorded_verified') continue;
+      const day = dayOf(p.received_at);
+      cashByDay.set(day, [...(cashByDay.get(day) ?? []), p]);
+    }
+    items = [...cashByDay.entries()].map(([day, list]) => ({
+      id: `${CASH_DAY}${day}`,
       kind: 'payment' as const,
-      currency: p.currency,
-      amountMinor: p.amount_minor,
-      reference: p.external_reference,
-      cardLast4: p.card_last4,
-      day: localDateIn(new Date(p.received_at ?? tx.now), property.timezone),
-      alreadyVerified: p.status === 'recorded_verified',
-    })),
-    ...refunds.map((r) => ({
-      id: r.id,
-      kind: 'refund' as const,
-      currency: r.currency,
-      amountMinor: -r.amount_minor,
-      reference: r.reference,
+      currency: list[0]?.currency ?? property.baseCurrency,
+      amountMinor: list.reduce((sum, p) => sum + p.amount_minor + p.adjusted_minor, 0),
+      reference: null,
       cardLast4: null,
-      day: localDateIn(new Date(r.created_at), property.timezone),
-      alreadyVerified: r.status === 'recorded_verified',
-    })),
-  ];
+      day,
+      alreadyVerified: false,
+    }));
+  } else {
+    items = [
+      ...payments.map((p) => ({
+        id: p.id,
+        kind: 'payment' as const,
+        currency: p.currency,
+        // P1-9: match the guest's gross payment as corrected by linked adjustments.
+        amountMinor: p.amount_minor + p.adjusted_minor,
+        reference: p.external_reference,
+        cardLast4: p.card_last4,
+        day: dayOf(p.received_at),
+        alreadyVerified: p.status === 'recorded_verified',
+        // An expected bank transfer that has not arrived is not "missing" — it is still expected.
+        optional: p.status === 'awaiting_receipt',
+      })),
+      ...refunds.map((r) => ({
+        id: r.id,
+        kind: 'refund' as const,
+        currency: r.currency,
+        amountMinor: -r.amount_minor,
+        reference: r.reference,
+        cardLast4: null,
+        day: dayOf(r.created_at),
+        alreadyVerified: r.status === 'recorded_verified',
+      })),
+    ];
+  }
   const match = matchSettlement({ items, lines, period: { from: input.periodFrom, to: input.periodTo } });
   const statementId = newId(tx.now.getTime());
   const exceptionIds: string[] = [];
   const issueInputs = match.issues.map((i) =>
     issueException(statementId, input.propertyId, i, input.fileName),
   );
+  const feesByCurrency = new Map<string, number>();
+  for (const l of lines) feesByCurrency.set(l.currency, (feesByCurrency.get(l.currency) ?? 0) + l.feeMinor);
+  const totalFees = [...feesByCurrency.values()].reduce((a, b) => a + b, 0);
   await db(tx)
     .insertInto('payments.statements')
     .values({
@@ -420,12 +511,14 @@ export async function importStatement(
       line_count: lines.length,
       matched_count: match.verifiedItemIds.length,
       exception_count: issueInputs.length,
+      fees_minor: totalFees,
       imported_by: actorKey(tx),
       imported_at: tx.now,
     })
     .execute();
   const lineRows = lines.map((l) => {
     const m = match.lines.find((x) => x.lineNo === l.lineNo);
+    const synthetic = m?.itemId?.startsWith(CASH_DAY) ?? false;
     return {
       id: newId(tx.now.getTime()),
       tenant_id: tx.tenantId,
@@ -434,41 +527,128 @@ export async function importStatement(
       occurred_on: l.day,
       currency: l.currency,
       amount_minor: l.amountMinor,
+      fee_minor: l.feeMinor,
+      net_minor: l.netMinor,
       reference: l.reference,
       approval_code: l.approvalCode,
       card_last4: l.cardLast4,
       description: l.description,
       match_status: m?.status ?? 'unmatched',
-      match_basis: m?.basis ?? null,
-      matched_payment_id: m?.itemKind === 'payment' ? m.itemId : null,
+      match_basis: synthetic ? 'cash_day_total' : (m?.basis ?? null),
+      matched_payment_id: m?.itemKind === 'payment' && !synthetic ? m.itemId : null,
       matched_refund_id: m?.itemKind === 'refund' ? m.itemId : null,
     };
   });
   if (lineRows.length) await db(tx).insertInto('payments.statement_lines').values(lineRows).execute();
+  const lineFor = (itemId: string) =>
+    lineRows.find((l) => match.lines.find((m) => m.lineNo === l.line_no)?.itemId === itemId);
+  let verifiedCount = 0;
   for (const id of match.verifiedItemIds) {
-    const isPayment = payments.some((p) => p.id === id);
-    if (isPayment) {
-      await db(tx)
-        .updateTable('payments.payments')
-        .set({ status: 'recorded_verified', version: (eb) => eb('version', '+', 1) })
-        .where('id', '=', id)
-        .where('status', '=', 'recorded_unverified')
-        .execute();
-      await tx.emit({
-        type: PaymentsEvents.paymentVerified,
-        propertyId: input.propertyId,
-        aggregate: { type: 'payment', id },
-        payload: { paymentId: id, statementId },
-      });
-    } else {
-      await db(tx)
-        .updateTable('payments.refunds')
-        .set({ status: 'recorded_verified', version: (eb) => eb('version', '+', 1) })
-        .where('id', '=', id)
-        .where('status', '=', 'recorded_unverified')
-        .execute();
+    const evidence = { type: 'statement_line', id: lineFor(id)?.id ?? statementId };
+    const targets = id.startsWith(CASH_DAY)
+      ? (cashByDay.get(id.slice(CASH_DAY.length)) ?? []).map((p) => p.id)
+      : [id];
+    for (const target of targets) {
+      const p = payments.find((x) => x.id === target);
+      if (p) {
+        if (p.status === 'awaiting_receipt') {
+          // P1-7: the bank statement confirms receipt → verified and posted now (never before).
+          const row = await db(tx)
+            .selectFrom('payments.payments')
+            .selectAll()
+            .where('id', '=', p.id)
+            .executeTakeFirstOrThrow();
+          await markBankTransferReceived(d, tx, row, evidence, {});
+        } else {
+          const updated = await db(tx)
+            .updateTable('payments.payments')
+            .set({
+              status: 'recorded_verified',
+              verification_ledger_status: 'pending',
+              version: (eb) => eb('version', '+', 1),
+            })
+            .where('id', '=', p.id)
+            .where('status', '=', 'recorded_unverified')
+            .returning('id')
+            .executeTakeFirst();
+          if (updated) {
+            // P1-6: tell finance, so the bill no longer shows the payment as awaiting verification.
+            await postVerification(d, tx, { type: 'payment', id: p.id }, evidence);
+            await tx.emit({
+              type: PaymentsEvents.paymentVerified,
+              propertyId: input.propertyId,
+              aggregate: { type: 'payment', id: p.id },
+              payload: { paymentId: p.id, statementId },
+            });
+          }
+        }
+      } else {
+        const updated = await db(tx)
+          .updateTable('payments.refunds')
+          .set({
+            status: 'recorded_verified',
+            verification_ledger_status: 'pending',
+            version: (eb) => eb('version', '+', 1),
+          })
+          .where('id', '=', target)
+          .where('status', '=', 'recorded_unverified')
+          .returning('id')
+          .executeTakeFirst();
+        if (updated) await postVerification(d, tx, { type: 'refund', id: target }, evidence);
+      }
+      verifiedCount++;
+      await resolveExceptionsByKey(
+        tx,
+        `settlement-missing:${target}`,
+        `Matched in statement ${input.fileName}.`,
+      );
     }
-    await resolveExceptionsByKey(tx, `settlement-missing:${id}`, `Matched in statement ${input.fileName}.`);
+    if (id.startsWith(CASH_DAY)) {
+      await resolveExceptionsByKey(
+        tx,
+        `settlement-missing:${input.propertyId}:${id}`,
+        `Matched in statement ${input.fileName}.`,
+      );
+    }
+  }
+  // P1-9: acquirer fees are an expense of the hotel (finance), never a correction of the guest's payment.
+  if (totalFees > 0) {
+    for (const [currency, fee] of feesByCurrency) {
+      if (fee <= 0) continue;
+      const posted = await tryLedger(tx, () =>
+        d.ledger.recordSettlementFees(tx, {
+          propertyId: input.propertyId,
+          legalEntityId: property.legalEntityId,
+          statementRef: { type: 'statement', id: statementId },
+          amount: money(fee, currency),
+          clearing: {
+            provider: account?.provider ?? 'external_terminal',
+            accountId: input.accountId ?? null,
+          },
+          idempotencyKey: `${ledgerKey.fees(statementId)}:${currency}`,
+        }),
+      );
+      await db(tx)
+        .updateTable('payments.statements')
+        .set({ fees_ledger_status: posted.ok ? 'posted' : 'failed' })
+        .where('id', '=', statementId)
+        .execute();
+      if (!posted.ok) {
+        exceptionIds.push(
+          await raiseException(tx, {
+            propertyId: input.propertyId,
+            kind: 'ledger_posting_failed',
+            severity: 'routine',
+            problem: `Acquirer fees of ${formatMoney(money(fee, currency))} from statement ${input.fileName} could not be posted: ${posted.error}`,
+            businessImpact: 'The books do not show the card processing cost.',
+            nextStep: 'Finance posts the fees as an expense manually.',
+            ownerRole: 'finance',
+            responsibleParty: 'hotel',
+            dedupeKey: `settlement-fees:${statementId}:${currency}`,
+          }),
+        );
+      }
+    }
   }
   for (const e of issueInputs) exceptionIds.push(await raiseException(tx, e));
   await tx.audit({
@@ -481,13 +661,14 @@ export async function importStatement(
       lines: lines.length,
       matched: match.verifiedItemIds.length,
       exceptions: issueInputs.length,
+      feesMinor: totalFees,
     },
   });
   await tx.emit({
     type: PaymentsEvents.statementImported,
     propertyId: input.propertyId,
     aggregate: { type: 'statement', id: statementId },
-    payload: { statementId, matched: match.verifiedItemIds.length, exceptions: issueInputs.length },
+    payload: { statementId, matched: verifiedCount, exceptions: issueInputs.length },
   });
   return {
     id: statementId,
@@ -497,12 +678,14 @@ export async function importStatement(
     periodFrom: input.periodFrom,
     periodTo: input.periodTo,
     lineCount: lines.length,
-    matchedCount: match.verifiedItemIds.length,
+    matchedCount: verifiedCount,
     exceptionCount: issueInputs.length,
+    feesMinor: totalFees,
     lines: lineRows.map((l) => ({
       lineNo: l.line_no,
       day: l.occurred_on,
       amount: { amountMinor: l.amount_minor, currency: l.currency },
+      feeMinor: l.fee_minor,
       reference: l.reference ?? l.approval_code,
       matchStatus: l.match_status,
       matchBasis: l.match_basis,
@@ -554,6 +737,64 @@ function toPayoutView(
   };
 }
 
+/** Post a paid payout with a known breakdown to finance (idempotent by key); used by record and retries. */
+export async function postPayoutLedger(d: PaymentsDeps, tx: TxContext, payoutId: string): Promise<boolean> {
+  const row = await db(tx)
+    .selectFrom('payments.payouts')
+    .selectAll()
+    .where('id', '=', payoutId)
+    .forUpdate()
+    .executeTakeFirstOrThrow();
+  if (
+    row.status !== 'paid' ||
+    row.gross_minor === null ||
+    row.fees_minor === null ||
+    row.ledger_status === 'posted'
+  ) {
+    return row.ledger_status === 'posted';
+  }
+  const account = await loadAccount(tx, row.account_id);
+  const posted = await tryLedger(tx, () =>
+    d.ledger.recordPayout(tx, {
+      legalEntityId: row.legal_entity_id,
+      payoutRef: { type: 'payout', id: row.id },
+      gross: money(row.gross_minor as number, row.currency),
+      fees: money(row.fees_minor as number, row.currency),
+      net: money(row.net_minor, row.currency),
+      currency: row.currency,
+      clearing: { provider: account.provider, accountId: account.id },
+      idempotencyKey: ledgerKey.payout(row.id),
+    }),
+  );
+  await db(tx)
+    .updateTable('payments.payouts')
+    .set(
+      posted.ok
+        ? { ledger_status: 'posted', ledger_ref: posted.value.journalEntryId, ledger_error: null }
+        : { ledger_status: 'failed', ledger_error: posted.error },
+    )
+    .where('id', '=', row.id)
+    .execute();
+  if (posted.ok) {
+    await resolveExceptionsByKey(tx, `payout-breakdown:${row.id}`, 'Payout breakdown recorded and posted.');
+    await resolveExceptionsByKey(tx, `ledger:payout:${row.id}`, 'Posted on retry.');
+  } else {
+    await raiseException(tx, {
+      propertyId: null,
+      kind: 'ledger_posting_failed',
+      severity: 'urgent',
+      problem: `Payout ${row.provider_payout_id} could not be posted to the ledger: ${posted.error}`,
+      businessImpact: 'The bank balance in the books does not include this payout.',
+      nextStep: 'Portico retries automatically; finance checks the clearing accounts.',
+      ownerRole: 'finance',
+      responsibleParty: 'hotel',
+      ref: { type: 'payout', id: row.id },
+      dedupeKey: `ledger:payout:${row.id}`,
+    });
+  }
+  return posted.ok;
+}
+
 /** Record (or complete) a payout with gross / fees / net and the payments it includes. Payout ≠ revenue. */
 export async function recordPayout(
   d: PaymentsDeps,
@@ -569,19 +810,50 @@ export async function recordPayout(
     .where('provider_payout_id', '=', input.providerPayoutId)
     .forUpdate()
     .executeTakeFirst();
-  if (existing && existing.ledger_status === 'posted') {
-    const n = await db(tx)
-      .selectFrom('payments.payout_items')
-      .select((eb) => eb.fn.countAll<number>().as('n'))
-      .where('payout_id', '=', existing.id)
-      .executeTakeFirstOrThrow();
-    return toPayoutView(existing, Number(n.n));
-  }
+  const countItems = async (payoutId: string) =>
+    Number(
+      (
+        await db(tx)
+          .selectFrom('payments.payout_items')
+          .select((eb) => eb.fn.countAll<number>().as('n'))
+          .where('payout_id', '=', payoutId)
+          .executeTakeFirstOrThrow()
+      ).n,
+    );
+  if (existing && existing.ledger_status === 'posted')
+    return toPayoutView(existing, await countItems(existing.id));
   if (existing && existing.net_minor !== input.netMinor) {
     throw new ConflictError(
       'payout_amount_mismatch',
-      `The provider reported a net payout of ${existing.net_minor} (minor units) but this record says ${input.netMinor}. Check the payout report.`,
+      `The provider reported a net payout of ${formatMoney(money(existing.net_minor, existing.currency))} but this record says ${formatMoney(money(input.netMinor, input.currency))}. Check the payout report.`,
     );
+  }
+  // P2-11: the included payments and refunds must add up to the gross amount.
+  if (input.paymentIds.length || input.refundIds.length) {
+    const pays = input.paymentIds.length
+      ? await db(tx)
+          .selectFrom('payments.payments')
+          .select(['id', 'amount_minor', 'adjusted_minor'])
+          .where('id', 'in', input.paymentIds)
+          .execute()
+      : [];
+    const refs = input.refundIds.length
+      ? await db(tx)
+          .selectFrom('payments.refunds')
+          .select(['id', 'amount_minor'])
+          .where('id', 'in', input.refundIds)
+          .execute()
+      : [];
+    const total =
+      pays.reduce((s, p) => s + p.amount_minor + p.adjusted_minor, 0) -
+      refs.reduce((s, r) => s + r.amount_minor, 0);
+    if (total !== input.grossMinor) {
+      throw new BusinessRuleError(
+        'payout_items_do_not_add_up',
+        `The included payments minus refunds add up to ${formatMoney(money(total, input.currency))}, but the payout gross is ${formatMoney(money(input.grossMinor, input.currency))}. Check the payout report for missing or extra items.`,
+        { itemsTotalMinor: total, grossMinor: input.grossMinor },
+      );
+    }
   }
   const id = existing?.id ?? newId(tx.now.getTime());
   if (existing) {
@@ -622,7 +894,7 @@ export async function recordPayout(
   for (const pid of input.paymentIds) {
     const p = await db(tx)
       .selectFrom('payments.payments')
-      .select(['id', 'account_id', 'status', 'amount_minor', 'payout_id'])
+      .select(['id', 'account_id', 'status', 'amount_minor', 'adjusted_minor', 'payout_id'])
       .where('id', '=', pid)
       .executeTakeFirst();
     if (!p || p.account_id !== account.id) throw new NotFoundError('payment', pid);
@@ -644,7 +916,7 @@ export async function recordPayout(
         kind: 'payment',
         payment_id: pid,
         refund_id: null,
-        amount_minor: p.amount_minor,
+        amount_minor: p.amount_minor + p.adjusted_minor,
       })
       .onConflict((oc) => oc.columns(['payout_id', 'payment_id']).doNothing())
       .execute();
@@ -657,6 +929,14 @@ export async function recordPayout(
       .where('id', '=', rid)
       .executeTakeFirst();
     if (!r || r.account_id !== account.id) throw new NotFoundError('refund', rid);
+    const elsewhere = await db(tx)
+      .selectFrom('payments.payout_items')
+      .select('payout_id')
+      .where('refund_id', '=', rid)
+      .where('payout_id', '!=', id)
+      .executeTakeFirst();
+    if (elsewhere)
+      throw new ConflictError('refund_in_other_payout', `Refund ${rid} is already part of another payout.`);
     await db(tx)
       .insertInto('payments.payout_items')
       .values({
@@ -676,44 +956,7 @@ export async function recordPayout(
     .selectAll()
     .where('id', '=', id)
     .executeTakeFirstOrThrow();
-  if (row.status === 'paid') {
-    const posted = await tryLedger(tx, () =>
-      d.ledger.recordPayout(tx, {
-        legalEntityId: row.legal_entity_id,
-        payoutRef: { type: 'payout', id },
-        gross: money(input.grossMinor, row.currency),
-        fees: money(input.feesMinor, row.currency),
-        net: money(input.netMinor, row.currency),
-        currency: row.currency,
-        idempotencyKey: ledgerKey.payout(id),
-      }),
-    );
-    await db(tx)
-      .updateTable('payments.payouts')
-      .set(
-        posted.ok
-          ? { ledger_status: 'posted', ledger_ref: posted.value.journalEntryId, ledger_error: null }
-          : { ledger_status: 'failed', ledger_error: posted.error },
-      )
-      .where('id', '=', id)
-      .execute();
-    if (posted.ok)
-      await resolveExceptionsByKey(tx, `payout-breakdown:${id}`, 'Payout breakdown recorded and posted.');
-    else {
-      await raiseException(tx, {
-        propertyId: null,
-        kind: 'ledger_posting_failed',
-        severity: 'urgent',
-        problem: `Payout ${input.providerPayoutId} could not be posted to the ledger: ${posted.error}`,
-        businessImpact: 'The bank balance in the books does not include this payout.',
-        nextStep: 'Finance checks the clearing accounts and records the payout again.',
-        ownerRole: 'finance',
-        responsibleParty: 'hotel',
-        ref: { type: 'payout', id },
-        dedupeKey: `ledger:payout:${id}`,
-      });
-    }
-  }
+  if (row.status === 'paid') await postPayoutLedger(d, tx, id);
   if (!existing || existing.status !== row.status) {
     await payoutFollowUp(tx, id, row.legal_entity_id, row.status, row.failure_reason, false);
   }
@@ -727,12 +970,7 @@ export async function recordPayout(
     .selectAll()
     .where('id', '=', id)
     .executeTakeFirstOrThrow();
-  const n = await db(tx)
-    .selectFrom('payments.payout_items')
-    .select((eb) => eb.fn.countAll<number>().as('n'))
-    .where('payout_id', '=', id)
-    .executeTakeFirstOrThrow();
-  return toPayoutView(final, Number(n.n));
+  return toPayoutView(final, await countItems(id));
 }
 
 export async function listPayouts(tx: TxContext, accountId?: string): Promise<Payout[]> {

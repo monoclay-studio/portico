@@ -258,7 +258,7 @@ describe('statement CSV parsing', () => {
     expect(() => parseStatementCsv('date,amount,currency\n07/11/2026,1.00,USD\n')).toThrow(/YYYY-MM-DD/);
     expect(() =>
       parseStatementCsv('date,amount,currency,last4\n2026-11-07,1.00,USD,4242424242424242\n'),
-    ).toThrow(/Never put full card numbers/);
+    ).toThrow(/card number/);
     expect(() => parseStatementCsv('date,amount,currency\n')).toThrow(/no lines/);
   });
 });

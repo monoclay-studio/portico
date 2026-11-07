@@ -39,6 +39,12 @@ export function paymentsJobs(
       run: forEachTenant('payments.reconcile', (ctx) => service.runReconciliation(ctx)),
     },
     {
+      // P0-3 backstop: provider events that never arrived (or failed) are fetched and processed.
+      name: 'payments.eventBackstop',
+      intervalSeconds: 3600,
+      run: forEachTenant('payments.eventBackstop', (ctx) => service.runEventBackstop(ctx)),
+    },
+    {
       name: 'payments.chargeDueVirtualCards',
       intervalSeconds: 900,
       run: forEachTenant('payments.chargeDueVirtualCards', (ctx) => service.runDueVirtualCards(ctx)),

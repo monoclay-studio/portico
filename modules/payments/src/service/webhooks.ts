@@ -19,7 +19,7 @@ import { scrubCardData } from '../domain/pci';
 import { type AuthorizationStatus, authorizationTransition, disputeTransition } from '../domain/states';
 import { PaymentsEvents } from '../events';
 import { type VerifiedWebhook, type WebhookObject, WebhookSignatureError } from '../providers/provider';
-import { ledgerKey, postPaymentLedger, tryLedger } from './ledger';
+import { clearingOf, ledgerKey, postPaymentLedger, tryLedger } from './ledger';
 import { creditPaymentRequest, verifyOperation } from './operations';
 import {
   db,
@@ -34,7 +34,7 @@ import {
 type WebhookOutcome = 'applied' | 'no_change' | 'stale' | 'unknown_type' | 'no_match';
 
 export interface WebhookReceipt {
-  status: 'processed' | 'duplicate' | 'ignored';
+  status: 'processed' | 'duplicate' | 'ignored' | 'failed';
   outcome?: WebhookOutcome;
   detail?: string;
 }
@@ -80,6 +80,18 @@ export async function receiveStripeWebhook(
       from payments.route_webhook(${'stripe_connect'}, ${event.externalAccountId}, ${event.livemode})`.execute(
     d.database.kysely,
   );
+  if (rows.length > 1) {
+    // Cannot happen with the global uniqueness of provider accounts; refuse rather than guess (P0-2).
+    console.error(
+      JSON.stringify({
+        level: 'error',
+        msg: 'ambiguous webhook route',
+        provider: 'stripe_connect',
+        event: event.eventId,
+      }),
+    );
+    return { status: 'ignored', detail: 'Ambiguous payment account; event not routed.' };
+  }
   const route = rows[0];
   if (!route) return { status: 'ignored', detail: 'No payment account matches this event.' };
   const ctx = systemContext(
@@ -115,7 +127,13 @@ export async function deliverSimulatorWebhooks(
       receipts.push({ status: 'ignored', detail: 'account mismatch' });
       continue;
     }
-    receipts.push(await processVerifiedWebhook(d, system, account.id, 'simulator', verified));
+    try {
+      receipts.push(await processVerifiedWebhook(d, system, account.id, 'simulator', verified));
+    } catch (err) {
+      // Like a real provider: a failed delivery is delivered again later.
+      await sim.requeue(toProviderAccount(account), verified.eventId);
+      receipts.push({ status: 'failed', detail: err instanceof Error ? err.message : String(err) });
+    }
   }
   return { delivered: events.length, receipts };
 }
@@ -124,6 +142,12 @@ function objectRef(o: WebhookObject): string | null {
   return 'providerRef' in o ? o.providerRef : null;
 }
 
+/**
+ * Process a verified provider event at most once — but never LOSE it (P0-3): the event row is a receipt, and
+ * only `processed_at` (written in the same transaction as the effect, or after all lookups succeeded) makes a
+ * redelivery a duplicate. A failure leaves the event unprocessed, the caller answers non-2xx, and the provider's
+ * redelivery or the event backstop job processes it again.
+ */
 export async function processVerifiedWebhook(
   d: PaymentsDeps,
   ctx: RequestContext,
@@ -131,7 +155,7 @@ export async function processVerifiedWebhook(
   provider: string,
   event: VerifiedWebhook,
 ): Promise<WebhookReceipt> {
-  const storedId = await withTenantTx(d.database, ctx, async (tx) => {
+  const claimed = await withTenantTx(d.database, ctx, async (tx) => {
     const row = await db(tx)
       .insertInto('payments.webhook_events')
       .values({
@@ -144,46 +168,196 @@ export async function processVerifiedWebhook(
         object_kind: event.object.kind,
         object_ref: objectRef(event.object),
         livemode: event.livemode,
-        payload: JSON.stringify(scrubCardData(event.payload)),
+        // Data minimisation: only the normalized object (ids, states, amounts) — no billing details (P3-8).
+        payload: JSON.stringify(
+          scrubCardData({
+            id: event.eventId,
+            type: event.type,
+            account: event.externalAccountId,
+            created: event.createdAt.toISOString(),
+            object: event.object,
+          }),
+        ),
         received_at: tx.now,
-        outcome: 'no_change',
+        outcome: 'received',
         outcome_detail: null,
       })
       .onConflict((oc) => oc.columns(['tenant_id', 'provider', 'provider_event_id']).doNothing())
       .returning('id')
       .executeTakeFirst();
-    return row?.id ?? null;
+    if (row) return row.id;
+    const existing = await db(tx)
+      .selectFrom('payments.webhook_events')
+      .select(['id', 'processed_at', 'attempts'])
+      .where('provider', '=', provider)
+      .where('provider_event_id', '=', event.eventId)
+      .forUpdate()
+      .executeTakeFirstOrThrow();
+    if (existing.processed_at) return null;
+    await db(tx)
+      .updateTable('payments.webhook_events')
+      .set({ attempts: existing.attempts + 1 })
+      .where('id', '=', existing.id)
+      .execute();
+    return existing.id;
   });
-  if (!storedId) return { status: 'duplicate', detail: `Event ${event.eventId} was already processed.` };
+  if (!claimed) return { status: 'duplicate', detail: `Event ${event.eventId} was already processed.` };
+  const markProcessed = (tx: TxContext, outcome: WebhookOutcome) =>
+    db(tx)
+      .updateTable('payments.webhook_events')
+      .set({ outcome, processed_at: tx.now, outcome_detail: null })
+      .where('id', '=', claimed)
+      .execute();
+  const inOneTx = (fn: (tx: TxContext) => Promise<WebhookOutcome>) =>
+    withTenantTx(d.database, ctx, async (tx) => {
+      const outcome = await fn(tx);
+      await markProcessed(tx, outcome);
+      return outcome;
+    });
 
   let outcome: WebhookOutcome;
   const o = event.object;
-  switch (o.kind) {
-    case 'payment':
-      outcome = await handlePaymentObject(d, ctx, accountId, o);
-      break;
-    case 'refund':
-      outcome = await handleRefundObject(d, ctx, accountId, o);
-      break;
-    case 'dispute':
-      outcome = await withTenantTx(d.database, ctx, (tx) => applyDispute(d, tx, accountId, o));
-      break;
-    case 'payout':
-      outcome = await withTenantTx(d.database, ctx, (tx) => applyPayoutEvent(d, tx, accountId, o));
-      break;
-    case 'payment_link':
-      outcome = await withTenantTx(d.database, ctx, (tx) => applyLinkEvent(d, tx, accountId, o));
-      break;
-    case 'account':
-      outcome = await withTenantTx(d.database, ctx, (tx) => applyAccountEvent(tx, accountId, o));
-      break;
-    default:
-      outcome = 'unknown_type';
+  try {
+    switch (o.kind) {
+      case 'payment':
+        outcome = await handlePaymentObject(d, ctx, accountId, o);
+        await withTenantTx(d.database, ctx, (tx) => markProcessed(tx, outcome));
+        break;
+      case 'refund':
+        outcome = await handleRefundObject(d, ctx, accountId, o);
+        await withTenantTx(d.database, ctx, (tx) => markProcessed(tx, outcome));
+        break;
+      case 'dispute':
+        outcome = await inOneTx((tx) => applyDispute(d, tx, accountId, o));
+        break;
+      case 'payout':
+        outcome = await inOneTx((tx) => applyPayoutEvent(d, tx, accountId, o));
+        break;
+      case 'payment_link':
+        outcome = await inOneTx((tx) => applyLinkEvent(d, tx, accountId, o));
+        break;
+      case 'account':
+        outcome = await inOneTx((tx) => applyAccountEvent(tx, accountId, o, event.createdAt));
+        break;
+      default:
+        outcome = await inOneTx(async () => 'unknown_type');
+    }
+  } catch (err) {
+    await withTenantTx(d.database, ctx, (tx) =>
+      db(tx)
+        .updateTable('payments.webhook_events')
+        .set({
+          outcome: 'failed',
+          outcome_detail: (err instanceof Error ? err.message : String(err)).slice(0, 1000),
+        })
+        .where('id', '=', claimed)
+        .execute(),
+    );
+    throw err;
   }
-  await withTenantTx(d.database, ctx, (tx) =>
-    db(tx).updateTable('payments.webhook_events').set({ outcome }).where('id', '=', storedId).execute(),
-  );
   return { status: 'processed', outcome };
+}
+
+/**
+ * Event backstop (PAY-R16 partial, P0-3): list the provider's events since the last cursor for every account
+ * and process the ones never (successfully) received — disputes, payouts, account restrictions and payment
+ * outcomes cannot be lost because one webhook delivery failed.
+ */
+export async function runEventBackstop(
+  d: PaymentsDeps,
+  ctx: RequestContext,
+): Promise<{ accounts: number; applied: number }> {
+  const accounts = await withTenantTx(d.database, ctx, (tx) =>
+    db(tx)
+      .selectFrom('payments.accounts')
+      .selectAll()
+      .where('provider', '!=', 'external_terminal')
+      .where('external_account_id', 'is not', null)
+      .execute(),
+  );
+  let applied = 0;
+  const system = systemContext(ctx.tenantId, 'payments-event-backstop', ctx.environment, newId());
+  for (const a of accounts) {
+    let modeNow: string;
+    try {
+      modeNow = d.registry.modeFor(ctx, a);
+    } catch {
+      continue;
+    }
+    const pa = toProviderAccount(a);
+    const resolved =
+      modeNow === 'simulate'
+        ? { ok: true as const, provider: d.registry.simulator }
+        : d.registry.forAccount(ctx, pa);
+    if (!resolved.ok || !resolved.provider.listEvents) continue;
+    const cursorRow = await withTenantTx(d.database, ctx, (tx) =>
+      db(tx)
+        .selectFrom('payments.event_cursors')
+        .selectAll()
+        .where('account_id', '=', a.id)
+        .executeTakeFirst(),
+    );
+    try {
+      const page = await resolved.provider.listEvents(pa, {
+        after: cursorRow?.cursor ?? null,
+        since: new Date(d.database.clock.now().getTime() - 3 * 86_400_000),
+      });
+      for (const ev of page.events) {
+        if (ev.externalAccountId && ev.externalAccountId !== a.external_account_id) continue;
+        const r = await processVerifiedWebhook(
+          d,
+          system,
+          a.id,
+          a.provider === 'simulator' || modeNow === 'simulate' ? 'simulator' : a.provider,
+          ev,
+        );
+        if (r.status === 'processed') applied++;
+      }
+      await withTenantTx(d.database, ctx, (tx) =>
+        db(tx)
+          .insertInto('payments.event_cursors')
+          .values({
+            account_id: a.id,
+            tenant_id: tx.tenantId,
+            cursor: page.cursor,
+            last_run_at: tx.now,
+            last_error: null,
+          })
+          .onConflict((oc) =>
+            oc
+              .column('account_id')
+              .doUpdateSet({
+                cursor: page.cursor ?? cursorRow?.cursor ?? null,
+                last_run_at: tx.now,
+                last_error: null,
+              }),
+          )
+          .execute(),
+      );
+    } catch (err) {
+      await withTenantTx(d.database, ctx, (tx) =>
+        db(tx)
+          .insertInto('payments.event_cursors')
+          .values({
+            account_id: a.id,
+            tenant_id: tx.tenantId,
+            cursor: cursorRow?.cursor ?? null,
+            last_run_at: tx.now,
+            last_error: err instanceof Error ? err.message : String(err),
+          })
+          .onConflict((oc) =>
+            oc
+              .column('account_id')
+              .doUpdateSet({
+                last_run_at: tx.now,
+                last_error: err instanceof Error ? err.message : String(err),
+              }),
+          )
+          .execute(),
+      );
+    }
+  }
+  return { accounts: accounts.length, applied };
 }
 
 // ───────────────────────── payments / authorizations ─────────────────────────
@@ -483,6 +657,7 @@ async function applyDispute(
     ...(wantDebit ? ['debit' as const] : []),
     ...(wantReversal ? ['reversal' as const] : []),
   ]) {
+    const clearing = await clearingOf(tx, payment);
     const r = await tryLedger(tx, () =>
       d.ledger.recordDisputeMovement(tx, {
         legalEntityId: payment.legal_entity_id,
@@ -490,6 +665,7 @@ async function applyDispute(
         disputeRef: { type: 'dispute', id: disputeId },
         amount: { amountMinor: o.amountMinor, currency: o.currency },
         kind,
+        clearing,
         idempotencyKey: ledgerKey.dispute(disputeId, kind),
       }),
     );
@@ -764,8 +940,11 @@ async function applyAccountEvent(
   tx: TxContext,
   accountId: string,
   o: Extract<WebhookObject, { kind: 'account' }>,
+  createdAt: Date,
 ): Promise<WebhookOutcome> {
   const a = await loadAccount(tx, accountId, true);
+  // P2-10: an older account snapshot never overrides a newer one.
+  if (a.provider_status_at && createdAt.getTime() < new Date(a.provider_status_at).getTime()) return 'stale';
   const status = o.chargesEnabled ? 'active' : a.onboarding_status === 'complete' ? 'restricted' : 'pending';
   const reason = o.chargesEnabled
     ? null
@@ -776,6 +955,7 @@ async function applyAccountEvent(
     .set({
       status,
       status_reason: reason,
+      provider_status_at: createdAt,
       onboarding_status: o.chargesEnabled ? 'complete' : a.onboarding_status,
       version: a.version + 1,
     })

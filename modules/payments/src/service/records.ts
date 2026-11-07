@@ -111,6 +111,7 @@ export function paymentRecord(p: PaymentRow, rc: RecordContext): RecordParts {
   const can = (perm: string) => rc.authz.can(perm, { propertyId: p.property_id });
   const refundable = refundableMinor({
     amountMinor: p.amount_minor,
+    adjustedMinor: p.adjusted_minor,
     refundedMinor: p.refunded_minor,
     refundReservedMinor: p.refund_reserved_minor,
   });
@@ -135,7 +136,26 @@ export function paymentRecord(p: PaymentRow, rc: RecordContext): RecordParts {
       pending ? undefined : 'The outcome is already final; there is nothing to verify.',
     ),
   ];
-  if (recorded) {
+  if (p.status === 'awaiting_receipt') {
+    const confirmReason = can('payments.bankTransfer.confirm')
+      ? undefined
+      : noPermission('payments.bankTransfer.confirm');
+    actions.push(
+      action(
+        'confirmReceipt',
+        'Confirm receipt (seen on the bank statement)',
+        !confirmReason,
+        confirmReason,
+        true,
+      ),
+      action(
+        'cancelExpected',
+        'Cancel — the transfer will not come',
+        can('payments.externalRecord.create'),
+        noPermission('payments.externalRecord.create'),
+      ),
+    );
+  } else if (recorded) {
     actions.push(
       action('recordRefund', 'Record a refund made on the terminal', !refundReason, refundReason, true),
       action(
@@ -156,6 +176,13 @@ export function paymentRecord(p: PaymentRow, rc: RecordContext): RecordParts {
       severity: 'warning',
       message: 'Outcome unknown — being verified with the payment provider. Do not charge again.',
       since: new Date(p.updated_at).toISOString(),
+    });
+  }
+  if (p.status === 'awaiting_receipt') {
+    issues.push({
+      code: 'awaiting_receipt',
+      severity: 'info',
+      message: 'Bank transfer expected — not on the bill until receipt is confirmed.',
     });
   }
   if (p.status === 'recorded_unverified') {

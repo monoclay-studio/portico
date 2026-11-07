@@ -32,17 +32,79 @@ import { recordContext } from './records';
 import {
   actorKey,
   assertAccountUsable,
+  assertLedgerTarget,
   assertPaymentsWritable,
+  assertSameRequest,
   db,
   effectiveModeFor,
   loadAccount,
   loadProperty,
   type PaymentsDeps,
   type RequestRow,
+  requestHash,
   requireRead,
   toProviderAccount,
   toRequestView,
 } from './shared';
+
+const REQUEST_TO_PAYMENT_PURPOSE: Record<string, string> = {
+  deposit: 'deposit',
+  balance: 'balance',
+  incidentals_preauth: 'incidentals',
+};
+
+/** P1-2: a new link must not ask again for money already collected (or being collected) for the same purpose. */
+async function assertNoCompetingCollection(
+  tx: TxContext,
+  ref: { type: 'folio' | 'booking'; id: string },
+  purpose: string,
+  override: { reason: string } | undefined,
+): Promise<void> {
+  const paymentPurpose = REQUEST_TO_PAYMENT_PURPOSE[purpose];
+  if (!paymentPurpose) return;
+  const competing = await db(tx)
+    .selectFrom('payments.payments')
+    .select(['id', 'status', 'amount_minor', 'currency'])
+    .where('ref_type', '=', ref.type)
+    .where('ref_id', '=', ref.id)
+    .where('purpose', '=', paymentPurpose as 'deposit')
+    .where('status', 'in', [
+      'processing',
+      'pending_verification',
+      'succeeded',
+      'recorded_unverified',
+      'recorded_verified',
+    ])
+    .executeTakeFirst();
+  const openRequest = await db(tx)
+    .selectFrom('payments.payment_requests')
+    .select(['id', 'status'])
+    .where('ref_type', '=', ref.type)
+    .where('ref_id', '=', ref.id)
+    .where('purpose', '=', purpose as 'deposit')
+    .where('status', 'in', ['open', 'partially_paid'])
+    .executeTakeFirst();
+  if (!competing && !openRequest) return;
+  if (override?.reason) {
+    await tx.audit({
+      action: 'payments.collection.ownershipOverride',
+      target: {
+        type: competing ? 'payment' : 'payment_request',
+        id: (competing?.id ?? openRequest?.id) as string,
+      },
+      reason: override.reason,
+      after: { ref, purpose },
+    });
+    return;
+  }
+  throw new BusinessRuleError(
+    'collection_already_in_progress',
+    competing
+      ? `The ${paymentPurpose} of this ${ref.type} has already been collected or is being collected (payment ${competing.status.replace('_', ' ')}). A link would ask the guest to pay twice. If this is a separate amount, give a reason.`
+      : `An open payment link for the ${paymentPurpose} of this ${ref.type} already exists. Cancel it first, or give a reason if this is a separate amount.`,
+    { paymentId: competing?.id ?? null, paymentRequestId: openRequest?.id ?? null },
+  );
+}
 
 export async function createPaymentRequest(
   d: PaymentsDeps,
@@ -51,14 +113,20 @@ export async function createPaymentRequest(
 ): Promise<{ id: string; replayed: boolean }> {
   requirePermission(tx, 'payments.paymentRequest.create', { propertyId: input.propertyId });
   const businessKey = `request:${input.businessKey}`;
+  const hash = requestHash({ p: input.propertyId, a: input.amount, r: input.ref, u: input.purpose });
   const existing = await db(tx)
     .selectFrom('payments.payment_requests')
-    .select('id')
+    .select(['id', 'request_hash'])
     .where('business_key', '=', businessKey)
     .executeTakeFirst();
-  if (existing) return { id: existing.id, replayed: true };
+  if (existing) {
+    assertSameRequest(existing.request_hash, hash, 'payment request');
+    return { id: existing.id, replayed: true };
+  }
   await assertPaymentsWritable(d, tx, input.propertyId);
   const property = await loadProperty(d, tx, input.propertyId);
+  await assertLedgerTarget(d, tx, input.ref, property);
+  await assertNoCompetingCollection(tx, input.ref, input.purpose, input.separateCollection);
   const expiresAt = new Date(input.expiresAt);
   if (expiresAt.getTime() <= tx.now.getTime() + 15 * 60_000) {
     throw new ValidationError('expiry_too_soon', 'A payment request must stay open for at least 15 minutes.');
@@ -105,6 +173,7 @@ export async function createPaymentRequest(
       legal_entity_id: property.legalEntityId,
       account_id: account.id,
       business_key: businessKey,
+      request_hash: hash,
       payer: JSON.stringify(input.payer),
       currency: input.amount.currency,
       amount_minor: input.amount.amountMinor,
@@ -157,6 +226,21 @@ export async function ensurePaymentLink(
       .executeTakeFirst();
     if (r?.status !== 'open' || r.link_status === 'created' || r.link_status === 'failed') return null;
     const account = await loadAccount(tx, r.account_id);
+    // P1-11: a link recorded for one effect mode is never created in another (e.g. simulated → live).
+    let modeNow: string;
+    try {
+      modeNow = d.registry.modeFor(tx, account);
+    } catch {
+      modeNow = 'blocked';
+    }
+    if (modeNow !== r.mode) {
+      await db(tx)
+        .updateTable('payments.payment_requests')
+        .set({ link_status: 'failed', version: r.version + 1 })
+        .where('id', '=', r.id)
+        .execute();
+      return null;
+    }
     const breaker = decideAttempt(await loadBreaker(tx, account.id), tx.now, d.breaker);
     if (!breaker.allowed) return null; // provider down: the link is created when it is back
     return { r, account };
@@ -362,6 +446,7 @@ export async function registerVirtualCard(
   if (existing) return toVccView(existing);
   await assertPaymentsWritable(d, tx, input.propertyId);
   const property = await loadProperty(d, tx, input.propertyId);
+  await assertLedgerTarget(d, tx, input.ledgerRef ?? { type: 'booking', id: input.bookingId }, property);
   const account = await loadAccount(tx, input.accountId);
   assertAccountUsable(account, property, input.amount.currency);
   if (effectiveModeFor(d, tx, account) === 'simulate' && !isSimulatorTestToken(input.vaultToken)) {
@@ -389,8 +474,17 @@ export async function registerVirtualCard(
       owner_type: 'booking',
       owner_id: input.bookingId,
       // A virtual card is issued by the channel to pay this stay: charging it is agreed by the channel contract.
+      // A virtual card is issued by the channel to pay this stay: charging it is agreed by the channel contract.
       mit_agreement: true,
-      mandate: JSON.stringify({ channel: input.channel, channelReference: input.channelReference }),
+      mandate: JSON.stringify({
+        kind: 'ota_virtual_card',
+        channel: input.channel,
+        channelReference: input.channelReference,
+        termsVersion: `channel-contract:${input.channel}`,
+        acceptedAt: tx.now.toISOString(),
+      }),
+      entry_channel: 'vault',
+      created_at: tx.now,
       token_portability: 'vault_portable',
       portability_note:
         'Virtual card held via a PCI vault/proxy (vendor not yet selected — unresolved dependency).',
@@ -505,10 +599,10 @@ export async function runDueVirtualCards(
             methodId: card.method_id,
             amount: { amountMinor: card.amount_minor, currency: card.currency },
             ref: { type: card.ref_type, id: card.ref_id },
-            initiator: 'merchant',
+            purpose: 'custom', // the channel's card pays the channel's booking: not owned by a guest link
             businessKey: `vcc:${card.id}:attempt:${attempt}`,
           },
-          { virtualCardId: card.id, method: 'virtual_card', skipPendingGuard: true },
+          { virtualCardId: card.id, method: 'virtual_card' },
         );
         await db(tx)
           .updateTable('payments.virtual_cards')

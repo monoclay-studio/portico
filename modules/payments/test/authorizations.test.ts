@@ -26,7 +26,6 @@ async function authorize(
       methodId,
       amount: { amountMinor, currency: 'USD' },
       ref,
-      initiator: 'customer',
       businessKey: newId(),
     }),
   );
@@ -140,7 +139,6 @@ describe('authorizations', () => {
       methodId: m2,
       amount: { amountMinor: 1_000, currency: 'USD' },
       ref: { type: 'folio', id: newId() },
-      initiator: 'customer',
       businessKey: newId(),
     });
     expect(p.status.payment).toBe('failed');
@@ -148,19 +146,39 @@ describe('authorizations', () => {
     expect(p.presentation).toMatchObject({ tone: 'failure', label: expect.stringMatching(/Not paid/) });
   });
 
-  it('merchant-initiated charges require the guest’s agreement on the saved card', async () => {
+  it('merchant- vs customer-initiated is derived from the consent record, never declared (P1-8)', async () => {
     const org = await setupOrg(h);
-    const methodId = await addMethod(h, org, 'pm_card_visa', false);
-    await expect(
+    const charge = (methodId: string) =>
       h.module.service.chargeNow(org.ctx, {
         propertyId: org.propertyId,
         methodId,
         amount: { amountMinor: 1_000, currency: 'USD' },
         ref: { type: 'folio', id: newId() },
-        initiator: 'merchant',
         businessKey: newId(),
-      }),
-    ).rejects.toThrow(/Send a payment link instead/);
+      });
+    // Card just entered by the guest (hosted entry), no agreement for later charges: the guest is present → OK.
+    const fresh = await addMethod(h, org, 'pm_card_visa', false);
+    expect((await charge(fresh)).status.payment).toBe('succeeded');
+    // Later the guest is gone: charging the same stored card is merchant-initiated and needs an agreement.
+    h.clock.advance(31 * 60_000);
+    await expect(charge(fresh)).rejects.toThrow(/Send a payment link/);
+    // A card saved WITH a recorded agreement (terms version + acceptance) may be charged later.
+    const agreed = await addMethod(h, org, 'pm_card_mastercard', true);
+    h.clock.advance(31 * 60_000);
+    expect((await charge(agreed)).status.payment).toBe('succeeded');
+    // An "agreement" without the mandate evidence is refused when saving.
+    await expect(
+      org.tx((tx) =>
+        h.module.service.tx.createMethod(tx, {
+          accountId: org.simAccountId,
+          propertyId: org.propertyId,
+          kind: 'card',
+          providerToken: 'pm_card_amex',
+          owner: { type: 'guest_profile', id: newId() },
+          mitAgreement: true,
+        }),
+      ),
+    ).rejects.toThrow(/recorded agreement/);
   });
 
   it('refuses a payment account of another legal entity (merchant of record)', async () => {

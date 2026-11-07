@@ -21,6 +21,8 @@ export interface RecordedItem {
   cardLast4: string | null;
   day: LocalDate; // property-local date the money moved
   alreadyVerified: boolean;
+  /** Expected but not yet due (e.g. a bank transfer awaiting receipt): never reported as missing. */
+  optional?: boolean;
 }
 
 export interface StatementLineInput {
@@ -236,7 +238,7 @@ export function matchSettlement(input: {
 
   // Recorded items in the statement period that the statement does not contain.
   for (const it of input.items) {
-    if (it.alreadyVerified || usedItems.has(it.id)) continue;
+    if (it.alreadyVerified || it.optional || usedItems.has(it.id)) continue;
     if (!withinPeriod(it.day, input.period.from, input.period.to)) continue;
     issues.push({
       kind: 'missing_in_statement',

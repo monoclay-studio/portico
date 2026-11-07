@@ -28,6 +28,8 @@ export interface AccountsTable {
   status_reason: string | null;
   application_fee_bps: number | null;
   simulator_controls: unknown;
+  provider_status_at: Generated<Ts | null>;
+  linked_by: Generated<string | null>;
   created_at: Generated<Ts>;
   updated_at: Generated<Ts>;
   version: Generated<number>;
@@ -63,6 +65,7 @@ export interface PaymentMethodsTable {
   owner_id: string;
   mit_agreement: boolean;
   mandate: unknown;
+  entry_channel: Generated<'hosted_entry' | 'terminal' | 'vault' | 'import'>;
   token_portability: 'provider_bound' | 'network_token' | 'vault_portable' | 'unknown';
   portability_note: string | null;
   status: 'active' | 'detached' | 'expired';
@@ -81,6 +84,7 @@ export interface AuthorizationsTable {
   ref_type: string;
   ref_id: string;
   business_key: string;
+  request_hash: Generated<string | null>;
   currency: string;
   amount_minor: number;
   captured_minor: Generated<number>;
@@ -109,13 +113,16 @@ export interface PaymentsTable {
   payment_request_id: string | null;
   virtual_card_id: string | null;
   kind: 'charge' | 'capture' | 'link' | 'recorded';
+  purpose: Generated<'deposit' | 'balance' | 'incidentals' | 'custom' | null>;
   method: 'card' | 'virtual_card' | 'payment_link' | 'external_terminal' | 'cash' | 'bank_transfer';
   initiator: 'customer' | 'merchant' | null;
   ref_type: 'folio' | 'booking';
   ref_id: string;
   business_key: string;
+  request_hash: Generated<string | null>;
   currency: string;
   amount_minor: number;
+  adjusted_minor: Generated<number>;
   refunded_minor: Generated<number>;
   refund_reserved_minor: Generated<number>;
   status: PaymentStatus;
@@ -126,10 +133,15 @@ export interface PaymentsTable {
   card_brand: string | null;
   card_last4: string | null;
   received_at: Ts | null;
+  received_on: Generated<string | null>;
+  duplicate_override: Generated<string | null>;
   decline: unknown;
   ledger_status: LedgerStatus;
   ledger_posting_id: string | null;
   ledger_error: string | null;
+  ledger_attempts: Generated<number>;
+  ledger_next_attempt_at: Generated<Ts | null>;
+  verification_ledger_status: Generated<LedgerStatus>;
   payout_id: string | null;
   note: string | null;
   created_by: string;
@@ -145,6 +157,7 @@ export interface RefundsTable {
   payment_id: string;
   account_id: string | null;
   business_key: string;
+  request_hash: Generated<string | null>;
   currency: string;
   amount_minor: number;
   reason: string;
@@ -156,6 +169,9 @@ export interface RefundsTable {
   ledger_status: LedgerStatus;
   ledger_posting_id: string | null;
   ledger_error: string | null;
+  ledger_attempts: Generated<number>;
+  ledger_next_attempt_at: Generated<Ts | null>;
+  verification_ledger_status: Generated<LedgerStatus>;
   created_by: string;
   created_at: Generated<Ts>;
   updated_at: Generated<Ts>;
@@ -200,6 +216,7 @@ export interface ProviderOperationsTable {
   completed_at: Ts | null;
   next_check_at: Ts | null;
   check_count: Generated<number>;
+  not_found_at: Generated<Ts | null>;
   created_at: Generated<Ts>;
   updated_at: Generated<Ts>;
   version: Generated<number>;
@@ -228,7 +245,9 @@ export interface WebhookEventsTable {
   livemode: boolean;
   payload: unknown;
   received_at: Ts;
-  outcome: 'applied' | 'no_change' | 'stale' | 'unknown_type' | 'no_match';
+  processed_at: Generated<Ts | null>;
+  attempts: Generated<number>;
+  outcome: 'received' | 'failed' | 'applied' | 'no_change' | 'stale' | 'unknown_type' | 'no_match';
   outcome_detail: string | null;
 }
 
@@ -239,6 +258,7 @@ export interface PaymentRequestsTable {
   legal_entity_id: string;
   account_id: string;
   business_key: string;
+  request_hash: Generated<string | null>;
   payer: unknown;
   currency: string;
   amount_minor: number;
@@ -352,6 +372,8 @@ export interface StatementsTable {
   line_count: number;
   matched_count: number;
   exception_count: number;
+  fees_minor: Generated<number>;
+  fees_ledger_status: Generated<'not_required' | 'posted' | 'failed'>;
   imported_by: string;
   imported_at: Ts;
 }
@@ -364,6 +386,8 @@ export interface StatementLinesTable {
   occurred_on: string;
   currency: string;
   amount_minor: number;
+  fee_minor: Generated<number>;
+  net_minor: Generated<number | null>;
   reference: string | null;
   approval_code: string | null;
   card_last4: string | null;
@@ -389,6 +413,7 @@ export interface ExceptionsTable {
   ref_type: string | null;
   ref_id: string | null;
   dedupe_key: string;
+  occurrences: Generated<number>;
   status: 'open' | 'resolved';
   resolution: string | null;
   resolved_by: string | null;
@@ -396,6 +421,14 @@ export interface ExceptionsTable {
   created_at: Generated<Ts>;
   updated_at: Generated<Ts>;
   version: Generated<number>;
+}
+
+export interface EventCursorsTable {
+  account_id: string;
+  tenant_id: string;
+  cursor: string | null;
+  last_run_at: Ts | null;
+  last_error: string | null;
 }
 
 export interface SimulatorObjectsTable {
@@ -442,6 +475,7 @@ export interface PaymentsDB {
   'payments.statements': StatementsTable;
   'payments.statement_lines': StatementLinesTable;
   'payments.exceptions': ExceptionsTable;
+  'payments.event_cursors': EventCursorsTable;
   'payments.simulator_objects': SimulatorObjectsTable;
   'payments.simulator_webhooks': SimulatorWebhooksTable;
 }

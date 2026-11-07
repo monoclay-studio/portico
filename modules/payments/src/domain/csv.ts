@@ -11,12 +11,17 @@ import {
   type LocalDate,
   ValidationError,
 } from '@portico/kernel';
+import { containsPossiblePan } from './pci';
 
 export interface ParsedStatementLine {
   lineNo: number;
   day: LocalDate;
   currency: string;
+  /** GROSS amount (what the guest paid); negative for refunds. */
   amountMinor: number;
+  /** Acquirer fee (MDR) on this line — an expense of the hotel, never part of the guest payment. */
+  feeMinor: number;
+  netMinor: number | null;
   reference: string | null;
   approvalCode: string | null;
   cardLast4: string | null;
@@ -80,7 +85,7 @@ export function majorToMinor(value: string, currency: string): number {
   return m[1] ? -n : n;
 }
 
-const REQUIRED = ['date', 'amount', 'currency'] as const;
+const REQUIRED = ['date', 'currency'] as const;
 
 export function parseStatementCsv(text: string, opts: { maxLines?: number } = {}): ParsedStatementLine[] {
   const records = parseCsvRecords(text);
@@ -91,6 +96,13 @@ export function parseStatementCsv(text: string, opts: { maxLines?: number } = {}
       .replace(/[\s-]+/g, '_'),
   );
   if (!header) throw new ValidationError('csv_empty', 'The statement file is empty.');
+  if (!header.includes('amount') && !header.includes('gross')) {
+    throw new ValidationError(
+      'csv_missing_column',
+      'The statement file has no "amount" (or "gross") column. Expected columns: date, amount or gross, currency, reference (and optionally fee, net, approval_code, last4, type, description).',
+      { column: 'amount' },
+    );
+  }
   for (const r of REQUIRED) {
     if (!header.includes(r)) {
       throw new ValidationError(
@@ -138,13 +150,35 @@ export function parseStatementCsv(text: string, opts: { maxLines?: number } = {}
         },
       );
     }
+    for (const v of r) {
+      if (containsPossiblePan(v)) {
+        throw new ValidationError(
+          'csv_card_number',
+          `Line ${lineNo} contains what looks like a full card number. Remove it from the file — Portico never accepts card numbers.`,
+          { lineNo },
+        );
+      }
+    }
     let amountMinor: number;
+    let feeMinor = 0;
+    let netMinor: number | null = null;
     try {
-      amountMinor = majorToMinor(get('amount') ?? '', currency);
+      amountMinor = majorToMinor(get('gross') ?? get('amount') ?? '', currency);
+      const fee = get('fee') ?? get('fees') ?? get('mdr');
+      if (fee) feeMinor = Math.abs(majorToMinor(fee, currency));
+      const net = get('net');
+      if (net) netMinor = majorToMinor(net, currency);
     } catch (err) {
       throw new ValidationError('csv_invalid_amount', `Line ${lineNo}: ${(err as Error).message}`, {
         lineNo,
       });
+    }
+    if (netMinor !== null && Math.abs(amountMinor) - feeMinor !== Math.abs(netMinor)) {
+      throw new ValidationError(
+        'csv_gross_fee_net_mismatch',
+        `Line ${lineNo}: gross minus fee does not equal net. Check the columns (the amount must be the GROSS the guest paid).`,
+        { lineNo },
+      );
     }
     const type = (get('type') ?? '').toLowerCase();
     if ((type === 'refund' || type === 'reversal') && amountMinor > 0) amountMinor = -amountMinor;
@@ -164,6 +198,8 @@ export function parseStatementCsv(text: string, opts: { maxLines?: number } = {}
       day,
       currency,
       amountMinor,
+      feeMinor,
+      netMinor,
       reference: get('reference'),
       approvalCode: get('approval_code'),
       cardLast4: last4,

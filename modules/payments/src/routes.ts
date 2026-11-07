@@ -18,9 +18,11 @@ import {
   adjustmentInput,
   authorization,
   authorizeInput,
+  cancelBankTransferInput,
   cancelRequestInput,
   captureInput,
   chargeInput,
+  confirmBankTransferInput,
   dispute,
   evidenceUpdate,
   incrementInput,
@@ -65,9 +67,8 @@ function replyPayment(reply: FastifyReply, p: Payment): FastifyReply {
     );
   }
   setVersion(reply, p.version);
-  return reply
-    .status(p.status.payment === 'processing' || p.status.payment === 'pending_verification' ? 202 : 201)
-    .send(p);
+  const pending = ['processing', 'pending_verification', 'awaiting_receipt'].includes(p.status.payment ?? '');
+  return reply.status(pending ? 202 : 201).send(p);
 }
 
 function replyAuthorization(reply: FastifyReply, a: AuthorizationView, created = true): FastifyReply {
@@ -186,7 +187,22 @@ export function paymentsHttp(deps: { database: PorticoDatabase; service: Payment
             response: { 200: account },
           },
         },
-        async (req) => tx(req, (t) => svc.tx.setSimulatorControls(t, req.params.id, req.body)),
+        async (req, reply) => {
+          const expected = requireIfMatch(req);
+          const a = await tx(req, async (t) => {
+            const current = await svc.tx.getAccount(t, req.params.id);
+            if (current.version !== expected) {
+              throw new DomainError(
+                'version_conflict',
+                'This account was changed by someone else. Reload it and apply your change again.',
+                { status: 409, details: { expectedVersion: expected, currentVersion: current.version } },
+              );
+            }
+            return svc.tx.setSimulatorControls(t, req.params.id, req.body);
+          });
+          setVersion(reply, a.version);
+          return a;
+        },
       );
       app.post(
         '/payments/accounts/:id/simulator/deliver-webhooks',
@@ -363,7 +379,7 @@ export function paymentsHttp(deps: { database: PorticoDatabase; service: Payment
       );
       app.post(
         '/payments/recorded',
-        { schema: { tags, body: recordPaymentInput, response: { 201: payment } } },
+        { schema: { tags, body: recordPaymentInput, response: { 201: payment, 202: payment } } },
         async (req, reply) => {
           const r = await idem(req, 'POST /payments/recorded', (t, key) =>
             svc.tx.recordPayment(t, { ...req.body, businessKey: key }),
@@ -387,6 +403,30 @@ export function paymentsHttp(deps: { database: PorticoDatabase; service: Payment
             items: await svc.tx.operationHistory(t, { type: 'payment', id: p.id, propertyId: p.propertyId }),
           };
         }),
+      );
+      app.post(
+        '/payments/transactions/:id/confirm-receipt',
+        { schema: { tags, params: idParams, body: confirmBankTransferInput, response: { 200: payment } } },
+        async (req, reply) => {
+          await idem(req, 'POST /payments/transactions/:id/confirm-receipt', (t) =>
+            svc.tx.confirmBankTransfer(t, { ...req.body, paymentId: req.params.id }),
+          );
+          const p = await svc.view.payment(req.ctx, req.params.id);
+          setVersion(reply, p.version);
+          return p;
+        },
+      );
+      app.post(
+        '/payments/transactions/:id/cancel-expected',
+        { schema: { tags, params: idParams, body: cancelBankTransferInput, response: { 200: payment } } },
+        async (req, reply) => {
+          await idem(req, 'POST /payments/transactions/:id/cancel-expected', (t) =>
+            svc.tx.cancelBankTransfer(t, req.params.id, req.body.reason),
+          );
+          const p = await svc.view.payment(req.ctx, req.params.id);
+          setVersion(reply, p.version);
+          return p;
+        },
       );
       app.post(
         '/payments/transactions/:id/check',
@@ -526,6 +566,7 @@ export function paymentsHttp(deps: { database: PorticoDatabase; service: Payment
           },
         },
         async (req) => {
+          requireIdempotencyKey(req);
           const r = await tx(req, (t) => svc.tx.getPaymentRequest(t, req.params.id));
           await svc.simulateRequestPayment(req.ctx, req.params.id, req.body.amountMinor);
           await svc.deliverSimulatorWebhooks(req.ctx, r.accountId);

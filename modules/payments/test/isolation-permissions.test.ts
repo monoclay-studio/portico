@@ -27,7 +27,6 @@ describe('tenant isolation', () => {
       methodId,
       amount: { amountMinor: 10_000, currency: 'USD' },
       ref: { type: 'folio', id: newId() },
-      initiator: 'customer',
       businessKey: newId(),
     });
     await expect(svc.view.payment(attacker.ctx, p.id)).rejects.toMatchObject({ status: 404 });
@@ -49,7 +48,6 @@ describe('tenant isolation', () => {
         methodId,
         amount: { amountMinor: 1, currency: 'USD' },
         ref: { type: 'folio', id: newId() },
-        initiator: 'customer',
         businessKey: newId(),
       }),
     ).rejects.toMatchObject({ status: 404 });
@@ -75,7 +73,6 @@ describe('permissions and property scope', () => {
       methodId,
       amount: { amountMinor: 5_000, currency: 'USD' },
       ref: { type: 'folio' as const, id: newId() },
-      initiator: 'customer' as const,
     };
     // Front desk: collect, but not refund.
     const desk = org.as([

@@ -20,8 +20,10 @@ export type PaymentStatus =
   | 'pending_verification'
   | 'succeeded'
   | 'failed'
+  | 'awaiting_receipt'
   | 'recorded_unverified'
-  | 'recorded_verified';
+  | 'recorded_verified'
+  | 'cancelled';
 
 export type RefundStatus = PaymentStatus;
 
@@ -84,8 +86,10 @@ const PAYMENT_EDGES: Edges<PaymentStatus> = {
   // A provider-confirmed success after we recorded failure means money WAS collected. It is applied (money must
   // never be hidden) but always flagged as a mismatch by the caller. See `paymentTransition`.
   failed: [],
+  awaiting_receipt: ['recorded_verified', 'cancelled'],
   recorded_unverified: ['recorded_verified'],
   recorded_verified: [],
+  cancelled: [],
 };
 
 const PAYMENT_RANK: Record<PaymentStatus, number> = {
@@ -93,8 +97,10 @@ const PAYMENT_RANK: Record<PaymentStatus, number> = {
   pending_verification: 1,
   succeeded: 2,
   failed: 2,
+  awaiting_receipt: 0,
   recorded_unverified: 0,
   recorded_verified: 1,
+  cancelled: 2,
 };
 
 function verdict<S extends string>(
@@ -152,7 +158,7 @@ export function refundTransition(
 }
 
 export function isFinalPaymentStatus(s: PaymentStatus): boolean {
-  return s === 'succeeded' || s === 'failed' || s === 'recorded_verified';
+  return s === 'succeeded' || s === 'failed' || s === 'recorded_verified' || s === 'cancelled';
 }
 
 export function isFinalAuthorizationStatus(s: AuthorizationStatus): boolean {
@@ -200,10 +206,12 @@ export function paymentRequestStatusFor(
 /** What remains refundable on a payment (PAY-I03): captured − refunded − in-flight refunds. */
 export function refundableMinor(p: {
   amountMinor: number;
+  /** Σ linked adjustments (negative when the statement showed less than recorded). */
+  adjustedMinor?: number;
   refundedMinor: number;
   refundReservedMinor: number;
 }): number {
-  return Math.max(0, p.amountMinor - p.refundedMinor - p.refundReservedMinor);
+  return Math.max(0, p.amountMinor + (p.adjustedMinor ?? 0) - p.refundedMinor - p.refundReservedMinor);
 }
 
 /** What remains capturable on an authorization: authorized − captured − in-flight captures. */

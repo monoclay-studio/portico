@@ -67,9 +67,27 @@ export function presentPayment(status: PaymentStatus, mode: RecordMode, method: 
       };
     case 'recorded_verified':
       return {
-        label: 'Recorded — verified against statement',
+        label: method === 'bank_transfer' ? 'Received — confirmed' : 'Recorded — verified against statement',
         tone: 'success',
-        explanation: 'Matched to a settlement or bank statement line.',
+        explanation:
+          method === 'bank_transfer'
+            ? 'Receipt confirmed against the bank statement or by an authorized staff member.'
+            : 'Matched to a settlement or bank statement line.',
+        confirmed: true,
+      };
+    case 'awaiting_receipt':
+      return {
+        label: 'Bank transfer expected — not received yet',
+        tone: 'pending',
+        explanation:
+          'Announced by the payer or expected; NOT on the bill until receipt is confirmed from the bank statement.',
+        confirmed: false,
+      };
+    case 'cancelled':
+      return {
+        label: 'Cancelled — never received',
+        tone: 'neutral',
+        explanation: 'The expected transfer was cancelled; nothing was posted.',
         confirmed: true,
       };
   }

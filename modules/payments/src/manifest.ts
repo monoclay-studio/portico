@@ -16,8 +16,7 @@ export const paymentsManifest: ModuleManifest = {
     },
     {
       key: 'payments.payment.collect',
-      description:
-        'Take card authorizations, captures and charges; record terminal, cash and bank-transfer payments',
+      description: 'Take card authorizations, captures and charges through the payment provider',
       scope: 'property',
     },
     {
@@ -37,6 +36,18 @@ export const paymentsManifest: ModuleManifest = {
       scope: 'property',
     },
     { key: 'payments.vcc.manage', description: 'Register and charge OTA virtual cards', scope: 'property' },
+    {
+      key: 'payments.externalRecord.create',
+      description:
+        "Record payments taken outside Portico: the hotel's own terminal, cash, expected bank transfers",
+      scope: 'property',
+    },
+    {
+      key: 'payments.bankTransfer.confirm',
+      description: 'Confirm that an expected bank transfer was received (it is then posted to the bill)',
+      scope: 'property',
+      sensitive: true,
+    },
     {
       key: 'payments.reconciliation.manage',
       description: 'Import settlement statements, resolve payment exceptions, record corrections',

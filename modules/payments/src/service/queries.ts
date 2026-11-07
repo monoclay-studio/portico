@@ -119,6 +119,15 @@ export async function operationHistory(
 
 export interface PaymentStatusSummary {
   ref: { type: string; id: string };
+  /**
+   * One-word summary for other modules (reservations' guarantee step reads this FIRST — never charge again while
+   * it says `pending_verification`): none | pending_verification | authorized | partially_paid | paid | refunded.
+   */
+  status: 'none' | 'pending_verification' | 'authorized' | 'partially_paid' | 'paid' | 'refunded';
+  pendingVerification: boolean;
+  /** Primary currency figures (first currency seen), minor units. */
+  authorizedMinor: number;
+  capturedMinor: number;
   /** Per currency, in minor units. "confirmed" counts provider-confirmed and statement-verified money only. */
   totals: Array<{
     currency: string;
@@ -205,16 +214,35 @@ export async function getPaymentStatus(
     ...refundRows.map((r) => ({ type: 'refund', id: r.id })),
   ]);
   const caps = await capabilitiesByAccount(tx, [...new Set(authRows.map((a) => a.account_id))]);
+  const pendingVerification =
+    paymentRows.some((p) => p.status === 'pending_verification' || p.status === 'processing') ||
+    authRows.some((a) => a.status === 'pending_verification' || a.status === 'processing') ||
+    refundRows.some((r) => r.status === 'pending_verification' || r.status === 'processing');
+  const primary = [...totals.values()][0];
+  const confirmed = (primary?.confirmedMinor ?? 0) + (primary?.recordedUnverifiedMinor ?? 0);
+  const net = confirmed - (primary?.refundedMinor ?? 0);
+  const summary: PaymentStatusSummary['status'] = pendingVerification
+    ? 'pending_verification'
+    : confirmed > 0 && net <= 0
+      ? 'refunded'
+      : confirmed > 0
+        ? (primary?.heldMinor ?? 0) > 0
+          ? 'partially_paid'
+          : 'paid'
+        : (primary?.heldMinor ?? 0) > 0
+          ? 'authorized'
+          : 'none';
   return {
     ref,
+    status: summary,
+    pendingVerification,
+    authorizedMinor: primary?.heldMinor ?? 0,
+    capturedMinor: confirmed,
     totals: [...totals.values()],
     payments: paymentRows.map((p) => toPaymentView(p, rc)),
     authorizations: authRows.map((a) => toAuthorizationView(a, rc, caps.get(a.account_id) ?? [])),
     refunds: refundRows.map((r) => toRefundView(r, rc)),
-    hasPendingVerification:
-      paymentRows.some((p) => p.status === 'pending_verification' || p.status === 'processing') ||
-      authRows.some((a) => a.status === 'pending_verification' || a.status === 'processing') ||
-      refundRows.some((r) => r.status === 'pending_verification' || r.status === 'processing'),
+    hasPendingVerification: pendingVerification,
   };
 }
 

@@ -1,8 +1,9 @@
 /** Payment accounts (per legal entity = merchant of record), provider health, payment methods (tokens only). */
-import { explainVersionMiss, type TxContext } from '@portico/db';
+import { explainVersionMiss, type TxContext, withSavepoint } from '@portico/db';
 import {
   BusinessRuleError,
   ConflictError,
+  ForbiddenError,
   NotFoundError,
   newId,
   requirePermission,
@@ -84,15 +85,21 @@ export async function createAccount(
       'Simulated payment accounts are only available in demo, trial, training and sandbox organizations. In live, connect the hotel’s real provider account or add its own terminal as a recorded account.',
     );
   }
-  if (input.provider === 'stripe_connect' && !/^acct_[A-Za-z0-9]+$/.test(input.externalAccountId ?? '')) {
+  if (input.provider === 'stripe_connect' && input.externalAccountId) {
+    // P0-2: a connected account id proves nothing about ownership. It is linked only by Portico-initiated
+    // onboarding (Stripe Account Links / OAuth — R1) or by a Monoclay operator who verified it.
     throw new ValidationError(
-      'stripe_account_id_required',
-      'A Stripe Connect account needs the connected account id (acct_…) of the hotel’s legal entity.',
+      'stripe_account_link_required',
+      'A Stripe connected account cannot be claimed by typing its id. Create the account here and complete Stripe onboarding (or ask Monoclay support to link your existing account after verifying ownership).',
     );
   }
   const id = newId(tx.now.getTime());
   const externalAccountId =
-    input.provider === 'simulator' ? `sim_acct_${id.replace(/-/g, '')}` : (input.externalAccountId ?? null);
+    input.provider === 'simulator'
+      ? `sim_acct_${id.replace(/-/g, '')}`
+      : input.provider === 'external_terminal'
+        ? (input.externalAccountId ?? null)
+        : null;
   try {
     const row = await db(tx)
       .insertInto('payments.accounts')
@@ -106,19 +113,21 @@ export async function createAccount(
         capabilities: JSON.stringify(PROVIDER_CAPABILITIES[input.provider]),
         onboarding_status:
           input.provider === 'stripe_connect'
-            ? 'in_progress'
+            ? 'not_started'
             : input.provider === 'external_terminal'
               ? 'not_applicable'
               : 'complete',
         country_code: input.countryCode ?? le.countryCode,
         currencies: input.currencies,
         statement_descriptor: input.statementDescriptor ?? null,
-        // Stripe accounts start pending until onboarding is confirmed by the provider (account.updated webhook or
-        // an administrator who verified it); simulator and own-terminal accounts are usable immediately.
+        // Stripe accounts stay pending until the PROVIDER reports charges enabled (account.updated); simulator and
+        // own-terminal accounts are usable immediately. Platform fees are operator-only and off until Q3.
         status: input.provider === 'stripe_connect' ? 'pending' : 'active',
         status_reason:
-          input.provider === 'stripe_connect' ? 'Waiting for provider onboarding to complete.' : null,
-        application_fee_bps: input.provider === 'stripe_connect' ? (input.applicationFeeBps ?? null) : null,
+          input.provider === 'stripe_connect'
+            ? 'Waiting for Stripe onboarding of the hotel’s account.'
+            : null,
+        application_fee_bps: null,
         simulator_controls: JSON.stringify({}),
       })
       .returningAll()
@@ -136,13 +145,83 @@ export async function createAccount(
     return toAccountView(d, tx, row);
   } catch (err) {
     if (uniqueViolation(err)) {
+      throw new ConflictError('payment_account_exists', 'This provider account is already connected.');
+    }
+    throw err;
+  }
+}
+
+/**
+ * Monoclay-operator only (not exposed on tenant routes): link a provider account whose ownership by this
+ * organization's legal entity was verified (Stripe onboarding / support check). The id is globally unique — an
+ * account already linked to any organization is refused, so webhook routing is never ambiguous (P0-2).
+ */
+export async function operatorLinkProviderAccount(
+  tx: TxContext,
+  input: { accountId: string; externalAccountId: string; verifiedBy: string },
+): Promise<void> {
+  if (tx.actor.kind !== 'system' || !tx.actor.process.startsWith('operator:')) {
+    throw new ForbiddenError('payments.operator.linkProviderAccount');
+  }
+  if (!/^acct_[A-Za-z0-9]+$/.test(input.externalAccountId)) {
+    throw new ValidationError(
+      'stripe_account_id_invalid',
+      'A Stripe connected account id looks like acct_….',
+    );
+  }
+  const a = await loadAccount(tx, input.accountId, true);
+  if (a.provider !== 'stripe_connect') {
+    throw new BusinessRuleError('not_a_stripe_account', 'Only Stripe Connect accounts are linked this way.');
+  }
+  try {
+    await withSavepoint(tx, 'payments_link', () =>
+      db(tx)
+        .updateTable('payments.accounts')
+        .set({
+          external_account_id: input.externalAccountId,
+          linked_by: input.verifiedBy,
+          onboarding_status: 'in_progress',
+          version: a.version + 1,
+        })
+        .where('id', '=', a.id)
+        .execute(),
+    );
+  } catch (err) {
+    if (uniqueViolation(err)) {
       throw new ConflictError(
-        'payment_account_exists',
-        'This provider account is already connected in this organization.',
+        'provider_account_claimed',
+        'This provider account is already linked to an organization. Ownership must be resolved by Monoclay support before it can be linked again.',
       );
     }
     throw err;
   }
+  await tx.audit({
+    action: 'payments.account.linkProvider',
+    target: { type: 'payment_account', id: a.id },
+    after: { externalAccountId: input.externalAccountId, verifiedBy: input.verifiedBy },
+  });
+}
+
+/** Operator only: the platform application fee (Route A) — disabled until owner question Q3 is answered. */
+export async function operatorSetApplicationFee(
+  tx: TxContext,
+  input: { accountId: string; applicationFeeBps: number | null; approvedBy: string },
+): Promise<void> {
+  if (tx.actor.kind !== 'system' || !tx.actor.process.startsWith('operator:')) {
+    throw new ForbiddenError('payments.operator.applicationFee');
+  }
+  const a = await loadAccount(tx, input.accountId, true);
+  await db(tx)
+    .updateTable('payments.accounts')
+    .set({ application_fee_bps: input.applicationFeeBps, version: a.version + 1 })
+    .where('id', '=', a.id)
+    .execute();
+  await tx.audit({
+    action: 'payments.account.applicationFee',
+    target: { type: 'payment_account', id: a.id },
+    before: { applicationFeeBps: a.application_fee_bps },
+    after: { applicationFeeBps: input.applicationFeeBps, approvedBy: input.approvedBy },
+  });
 }
 
 export async function listAccounts(
@@ -170,16 +249,21 @@ export async function updateAccount(
 ): Promise<PaymentAccount> {
   requirePermission(tx, 'payments.account.manage');
   const before = await loadAccount(tx, id);
+  if (before.provider === 'stripe_connect' && patch.status !== undefined && patch.status !== 'disabled') {
+    // P0-2: activation/restriction of a Stripe account comes only from the provider (account.updated).
+    throw new BusinessRuleError(
+      'provider_controlled_status',
+      'The status of a Stripe account is set by Stripe (onboarding and verification). You can only disable it here.',
+    );
+  }
   const row = await db(tx)
     .updateTable('payments.accounts')
     .set({
       ...(patch.displayName !== undefined ? { display_name: patch.displayName } : {}),
       ...(patch.status !== undefined ? { status: patch.status } : {}),
       ...(patch.statusReason !== undefined ? { status_reason: patch.statusReason } : {}),
-      ...(patch.onboardingStatus !== undefined ? { onboarding_status: patch.onboardingStatus } : {}),
       ...(patch.currencies !== undefined ? { currencies: patch.currencies } : {}),
       ...(patch.statementDescriptor !== undefined ? { statement_descriptor: patch.statementDescriptor } : {}),
-      ...(patch.applicationFeeBps !== undefined ? { application_fee_bps: patch.applicationFeeBps } : {}),
       version: before.version + 1,
     })
     .where('id', '=', id)
@@ -287,7 +371,7 @@ export async function accountHealth(_d: PaymentsDeps, tx: TxContext, id: string)
 export async function createMethod(
   d: PaymentsDeps,
   tx: TxContext,
-  input: z.infer<typeof paymentMethodInput>,
+  input: z.input<typeof paymentMethodInput>,
 ): Promise<PaymentMethod> {
   requirePermission(tx, 'payments.method.manage', { propertyId: input.propertyId });
   await assertPaymentsWritable(d, tx, input.propertyId);
@@ -325,54 +409,60 @@ export async function createMethod(
       'In this environment payments are simulated: use one of the simulator test tokens (see GET /v1/payments/simulator/test-tokens). Real card tokens are never used here.',
     );
   }
-  const id = newId(tx.now.getTime());
-  try {
-    const row = await db(tx)
-      .insertInto('payments.payment_methods')
-      .values({
-        id,
-        tenant_id: tx.tenantId,
-        account_id: account.id,
-        property_id: input.propertyId,
-        kind: input.kind,
-        provider_token: input.providerToken,
-        provider_customer_ref: input.providerCustomerRef ?? null,
-        brand: input.brand ?? null,
-        last4: input.last4 ?? null,
-        exp_month: input.expMonth ?? null,
-        exp_year: input.expYear ?? null,
-        holder_name: input.holderName ?? null,
-        owner_type: input.owner.type,
-        owner_id: input.owner.id,
-        mit_agreement: input.mitAgreement,
-        mandate: JSON.stringify(input.mandate ?? {}),
-        token_portability:
-          input.tokenPortability ?? (input.kind === 'virtual_card' ? 'vault_portable' : 'provider_bound'),
-        portability_note: input.portabilityNote ?? null,
-        status: 'active',
-      })
-      .returningAll()
-      .executeTakeFirstOrThrow();
-    // Audit without the token itself (tokens are not card data, but they are credentials to charge).
-    await tx.audit({
-      action: 'payments.method.create',
-      target: { type: 'payment_method', id },
-      propertyId: input.propertyId,
-      after: { ...toMethodView(row) },
-    });
-    return toMethodView(row);
-  } catch (err) {
-    if (uniqueViolation(err)) {
-      const existing = await db(tx)
-        .selectFrom('payments.payment_methods')
-        .selectAll()
-        .where('account_id', '=', account.id)
-        .where('provider_token', '=', input.providerToken)
-        .executeTakeFirstOrThrow();
-      return toMethodView(existing);
-    }
-    throw err;
+  if (input.mitAgreement && (!input.mandate?.termsVersion || !input.mandate?.acceptedAt)) {
+    throw new ValidationError(
+      'mandate_required',
+      'A card saved for later charges needs the guest’s recorded agreement: the terms version and when they accepted.',
+    );
   }
+  const id = newId(tx.now.getTime());
+  // P2-2: saving a token that is already saved returns the existing method (no aborted transaction).
+  const row = await db(tx)
+    .insertInto('payments.payment_methods')
+    .values({
+      id,
+      tenant_id: tx.tenantId,
+      account_id: account.id,
+      property_id: input.propertyId,
+      kind: input.kind,
+      provider_token: input.providerToken,
+      provider_customer_ref: input.providerCustomerRef ?? null,
+      brand: input.brand ?? null,
+      last4: input.last4 ?? null,
+      exp_month: input.expMonth ?? null,
+      exp_year: input.expYear ?? null,
+      holder_name: input.holderName ?? null,
+      owner_type: input.owner.type,
+      owner_id: input.owner.id,
+      mit_agreement: input.mitAgreement ?? false,
+      mandate: JSON.stringify(input.mandate ?? {}),
+      entry_channel: input.entryChannel ?? 'hosted_entry',
+      token_portability:
+        input.tokenPortability ?? (input.kind === 'virtual_card' ? 'vault_portable' : 'provider_bound'),
+      portability_note: input.portabilityNote ?? null,
+      status: 'active',
+      created_at: tx.now,
+    })
+    .onConflict((oc) => oc.columns(['tenant_id', 'account_id', 'provider_token']).doNothing())
+    .returningAll()
+    .executeTakeFirst();
+  if (!row) {
+    const existing = await db(tx)
+      .selectFrom('payments.payment_methods')
+      .selectAll()
+      .where('account_id', '=', account.id)
+      .where('provider_token', '=', input.providerToken)
+      .executeTakeFirstOrThrow();
+    return toMethodView(existing);
+  }
+  // Audit without the token itself (tokens are not card data, but they are credentials to charge).
+  await tx.audit({
+    action: 'payments.method.create',
+    target: { type: 'payment_method', id },
+    propertyId: input.propertyId,
+    after: { ...toMethodView(row) },
+  });
+  return toMethodView(row);
 }
 
 export async function getMethod(tx: TxContext, id: string): Promise<PaymentMethod> {

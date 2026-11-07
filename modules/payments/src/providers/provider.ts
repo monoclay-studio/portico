@@ -218,6 +218,14 @@ export interface PaymentProvider {
   createPaymentLink(account: ProviderAccount, call: PaymentLinkCall): Promise<PaymentLinkOutcome>;
   /** Verify the signature and normalize. Throws WebhookSignatureError on any doubt. */
   parseWebhook(rawBody: string, headers: Record<string, string | undefined>, now: Date): VerifiedWebhook;
+  /**
+   * Event backstop: provider events after `after` (or since `since` on the first run), oldest first, fetched over
+   * the authenticated API (so no signature is involved). Returns the new cursor.
+   */
+  listEvents?(
+    account: ProviderAccount,
+    opts: { after: string | null; since: Date },
+  ): Promise<{ events: VerifiedWebhook[]; cursor: string | null }>;
 }
 
 /** Platform application fee (Route A only, optional — Q3). Integer basis points, rounded down. */

@@ -3,14 +3,23 @@
  * + the provider operation). The provider call happens after commit (`executeOperation`), so a rolled-back
  * command can never have moved money, and a committed one always has a journal entry.
  *
- * Recorded payments (Route D — the hotel's own terminal or gateway, cash, bank transfer) have no provider call:
- * they are recorded as `recorded_unverified`, posted to the ledger at record time, and verified later by
- * statement matching. They are never presented as provider-verified.
+ * Safety rules enforced here (steward review fixes):
+ *  - the folio/booking must belong to the caller's property and its legal entity (P0-1);
+ *  - one collection in flight per folio/booking, enforced by a unique index (P1-1);
+ *  - a payment request owns its purpose on a reference: no second collection of the same deposit (P1-2);
+ *  - customer- vs merchant-initiated is DERIVED from the consent record, never declared by the caller (P1-8);
+ *  - business keys carry a request fingerprint; reuse with different content is refused (P2-3).
+ *
+ * Recorded payments (Route D — the hotel's own terminal or gateway, cash) are recorded as `recorded_unverified`,
+ * posted at record time and verified by statement matching; bank transfers wait in `awaiting_receipt` and are
+ * posted only once receipt is confirmed (P1-7). None of them is ever presented as provider-verified.
  */
-import type { TxContext } from '@portico/db';
+import { pgCode, pgConstraint, type TxContext, withSavepoint } from '@portico/db';
 import {
   BusinessRuleError,
   ConflictError,
+  formatMoney,
+  localDateIn,
   money,
   NotFoundError,
   newId,
@@ -22,6 +31,7 @@ import type {
   adjustmentInput,
   authorizeInput,
   chargeInput,
+  confirmBankTransferInput,
   recordAuthorizationInput,
   recordPaymentInput,
   recordRefundInput,
@@ -29,14 +39,24 @@ import type {
 } from '../contracts';
 import { capturableMinor, refundableMinor } from '../domain/states';
 import { PaymentsEvents } from '../events';
-import { ledgerKey, postPaymentLedger, postRefundLedger, tryLedger } from './ledger';
+import type { PropertyInfo } from '../ports';
+import {
+  clearingOf,
+  ledgerKey,
+  postPaymentLedger,
+  postRefundLedger,
+  postVerification,
+  tryLedger,
+} from './ledger';
 import { assertBreakerAllows, createOperation } from './operations';
 import {
   type AccountRow,
   type AuthorizationRow,
   actorKey,
   assertAccountUsable,
+  assertLedgerTarget,
   assertPaymentsWritable,
+  assertSameRequest,
   db,
   loadAccount,
   loadProperty,
@@ -44,6 +64,7 @@ import {
   type PaymentRow,
   type PaymentsDeps,
   PendingVerificationBlockError,
+  requestHash,
   resolveExceptionsByKey,
 } from './shared';
 
@@ -52,6 +73,11 @@ export interface Started {
   operationId: string | null;
   replayed: boolean;
 }
+
+export type CollectionPurpose = 'deposit' | 'balance' | 'incidentals' | 'custom';
+
+/** A card entered by the guest within this window counts as "guest present" (customer-initiated). */
+export const CUSTOMER_PRESENT_WINDOW_MS = 30 * 60_000;
 
 function capability(account: AccountRow, cap: string): boolean {
   return ((account.capabilities as string[]) ?? []).includes(cap);
@@ -83,18 +109,85 @@ async function loadActiveMethod(tx: TxContext, methodId: string): Promise<Method
   return m;
 }
 
+/**
+ * P1-8: who initiates is a fact, not a claim. The guest is present when the guest acts (booking engine / portal)
+ * or the card was entered by the guest (hosted entry / terminal) moments ago; otherwise a charge of a stored card
+ * is merchant-initiated and needs the guest's recorded agreement (mandate with terms version and acceptance).
+ */
+export function deriveInitiator(tx: TxContext, method: MethodRow): 'customer' | 'merchant' {
+  if (tx.actor.kind === 'guest') return 'customer';
+  const fresh =
+    tx.now.getTime() - new Date(method.created_at).getTime() <= CUSTOMER_PRESENT_WINDOW_MS &&
+    (method.entry_channel === 'hosted_entry' || method.entry_channel === 'terminal');
+  return fresh ? 'customer' : 'merchant';
+}
+
 function assertMitAllowed(method: MethodRow, initiator: 'customer' | 'merchant'): void {
-  if (initiator === 'merchant' && !method.mit_agreement) {
+  if (initiator !== 'merchant') return;
+  const mandate = (method.mandate ?? {}) as { termsVersion?: string; acceptedAt?: string };
+  if (!method.mit_agreement || !mandate.termsVersion || !mandate.acceptedAt) {
     throw new BusinessRuleError(
       'mit_not_agreed',
-      'This card was not saved with the guest’s agreement to later charges by the hotel, so it cannot be charged without the guest present. Send a payment link instead.',
+      'The guest is not present and this card was not saved with a recorded agreement (terms and acceptance) to later charges by the hotel, so it cannot be charged now. Send a payment link, or take the card with the guest present.',
       { methodId: method.id },
     );
   }
 }
 
-/** PAY-R14: block a new collection on the same reference while another one is still being verified. */
-async function assertNothingPendingFor(tx: TxContext, ref: { type: string; id: string }): Promise<void> {
+function defaultPurpose(ref: { type: 'folio' | 'booking' }): CollectionPurpose {
+  return ref.type === 'booking' ? 'deposit' : 'balance';
+}
+
+const REQUEST_PURPOSE: Record<string, CollectionPurpose> = {
+  deposit: 'deposit',
+  balance: 'balance',
+  incidentals_preauth: 'incidentals',
+  custom: 'custom',
+};
+
+/**
+ * P1-2 (until collection plans exist): a payment request owns its purpose on a reference. A desk charge,
+ * recorded payment or virtual-card charge for the same purpose while that request is open or paid would collect
+ * the same money twice — refused unless staff state why this is a separate collection (audited).
+ */
+async function assertCollectionOwnership(
+  tx: TxContext,
+  ref: { type: 'folio' | 'booking'; id: string },
+  purpose: CollectionPurpose,
+  override: { reason: string } | undefined,
+): Promise<void> {
+  if (purpose === 'custom') return;
+  const owners = await db(tx)
+    .selectFrom('payments.payment_requests')
+    .select(['id', 'purpose', 'status', 'amount_minor', 'paid_minor', 'currency'])
+    .where('ref_type', '=', ref.type)
+    .where('ref_id', '=', ref.id)
+    .where('status', 'in', ['open', 'partially_paid', 'paid'])
+    .execute();
+  const owner = owners.find((r) => REQUEST_PURPOSE[r.purpose] === purpose);
+  if (!owner) return;
+  if (override?.reason) {
+    await tx.audit({
+      action: 'payments.collection.ownershipOverride',
+      target: { type: 'payment_request', id: owner.id },
+      reason: override.reason,
+      after: { ref, purpose },
+    });
+    return;
+  }
+  throw new BusinessRuleError(
+    'collection_owned_by_payment_request',
+    `A payment link for the ${purpose} of this ${ref.type} is ${owner.status.replace('_', ' ')} (${formatMoney(money(owner.paid_minor, owner.currency))} paid of ${formatMoney(money(owner.amount_minor, owner.currency))}). Collecting the ${purpose} again could charge the guest twice. Cancel the link first, or confirm this is a separate collection by giving a reason.`,
+    { paymentRequestId: owner.id, purpose },
+  );
+}
+
+/** Map unique-index races to the explanations staff need (and re-read a concurrent same-key winner). */
+function constraintOf(err: unknown): string | undefined {
+  return pgCode(err) === '23505' ? pgConstraint(err) : undefined;
+}
+
+async function pendingPaymentError(tx: TxContext, ref: { type: string; id: string }): Promise<Error> {
   const p = await db(tx)
     .selectFrom('payments.payments')
     .select(['id', 'amount_minor', 'currency', 'created_at'])
@@ -103,14 +196,55 @@ async function assertNothingPendingFor(tx: TxContext, ref: { type: string; id: s
     .where('status', 'in', ['processing', 'pending_verification'])
     .orderBy('created_at')
     .executeTakeFirst();
-  if (p) {
-    throw new PendingVerificationBlockError({
-      kind: 'payment',
-      id: p.id,
-      amountMinor: p.amount_minor,
-      currency: p.currency,
-      since: new Date(p.created_at),
-    });
+  if (!p) {
+    return new ConflictError(
+      'payment_pending_verification',
+      'Another collection for this reference started at the same moment. Check its status before trying again — charging now could charge the guest twice.',
+    );
+  }
+  return new PendingVerificationBlockError({
+    kind: 'payment',
+    id: p.id,
+    amountMinor: p.amount_minor,
+    currency: p.currency,
+    since: new Date(p.created_at),
+  });
+}
+
+async function insertPayment(
+  tx: TxContext,
+  values: Record<string, unknown>,
+  ref: { type: string; id: string },
+  businessKey: string,
+  hash: string,
+): Promise<{ inserted: true } | { inserted: false; existingId: string }> {
+  try {
+    await withSavepoint(tx, 'payments_insert', () =>
+      db(tx)
+        .insertInto('payments.payments')
+        .values(values as never)
+        .execute(),
+    );
+    return { inserted: true };
+  } catch (err) {
+    const c = constraintOf(err);
+    if (c === 'payments_tenant_id_business_key_key') {
+      const existing = await db(tx)
+        .selectFrom('payments.payments')
+        .select(['id', 'request_hash'])
+        .where('business_key', '=', businessKey)
+        .executeTakeFirstOrThrow();
+      assertSameRequest(existing.request_hash, hash, 'payment');
+      return { inserted: false, existingId: existing.id };
+    }
+    if (c === 'payments_one_inflight_per_ref') throw await pendingPaymentError(tx, ref);
+    if (c === 'payments_terminal_reference_once' || c === 'payments_cash_bank_reference_once') {
+      throw new ConflictError(
+        'duplicate_reference',
+        'A payment with this reference was already recorded (same terminal and day, or same receipt/bank reference). Check it before recording again — recording twice would double the guest’s payment. If it really is a second payment, record it with an override reason.',
+      );
+    }
+    throw err;
   }
 }
 
@@ -119,67 +253,89 @@ async function assertNothingPendingFor(tx: TxContext, ref: { type: string; id: s
 export async function authorize(
   d: PaymentsDeps,
   tx: TxContext,
-  input: z.infer<typeof authorizeInput> & { businessKey: string },
+  input: Omit<z.infer<typeof authorizeInput>, 'initiator'> & { businessKey: string },
 ): Promise<Started> {
   requirePermission(tx, 'payments.payment.collect', { propertyId: input.propertyId });
   const businessKey = `authorize:${input.businessKey}`;
+  const hash = requestHash({ p: input.propertyId, m: input.methodId, a: input.amount, r: input.ref });
   const existing = await db(tx)
     .selectFrom('payments.authorizations')
-    .select(['id'])
+    .select(['id', 'request_hash'])
     .where('business_key', '=', businessKey)
     .executeTakeFirst();
-  if (existing) return { id: existing.id, operationId: null, replayed: true };
+  if (existing) {
+    assertSameRequest(existing.request_hash, hash, 'authorization');
+    return { id: existing.id, operationId: null, replayed: true };
+  }
   await assertPaymentsWritable(d, tx, input.propertyId);
   const property = await loadProperty(d, tx, input.propertyId);
   const method = await loadActiveMethod(tx, input.methodId);
   const account = await loadAccount(tx, method.account_id);
   assertAccountUsable(account, property, input.amount.currency);
   requireCapability(account, 'authorize', 'Pre-authorization');
-  assertMitAllowed(method, input.initiator);
-  const pending = await db(tx)
-    .selectFrom('payments.authorizations')
-    .select(['id', 'amount_minor', 'currency', 'created_at'])
-    .where('ref_type', '=', input.ref.type)
-    .where('ref_id', '=', input.ref.id)
-    .where('status', 'in', ['processing', 'pending_verification'])
-    .executeTakeFirst();
-  if (pending) {
-    throw new PendingVerificationBlockError({
-      kind: 'authorization',
-      id: pending.id,
-      amountMinor: pending.amount_minor,
-      currency: pending.currency,
-      since: new Date(pending.created_at),
-    });
-  }
+  const initiator = deriveInitiator(tx, method);
+  assertMitAllowed(method, initiator);
   const mode = d.registry.modeFor(tx, account);
   await assertBreakerAllows(d, tx, account);
   const id = newId(tx.now.getTime());
-  await db(tx)
-    .insertInto('payments.authorizations')
-    .values({
-      id,
-      tenant_id: tx.tenantId,
-      property_id: input.propertyId,
-      legal_entity_id: property.legalEntityId,
-      account_id: account.id,
-      method_id: method.id,
-      ref_type: input.ref.type,
-      ref_id: input.ref.id,
-      business_key: businessKey,
-      currency: input.amount.currency,
-      amount_minor: input.amount.amountMinor,
-      status: 'processing',
-      mode,
-      initiator: input.initiator,
-      provider_ref: null,
-      external_reference: null,
-      expires_at: null,
-      decline: null,
-      created_by: actorKey(tx),
-      created_at: tx.now,
-    })
-    .execute();
+  try {
+    await withSavepoint(tx, 'payments_insert', () =>
+      db(tx)
+        .insertInto('payments.authorizations')
+        .values({
+          id,
+          tenant_id: tx.tenantId,
+          property_id: input.propertyId,
+          legal_entity_id: property.legalEntityId,
+          account_id: account.id,
+          method_id: method.id,
+          ref_type: input.ref.type,
+          ref_id: input.ref.id,
+          business_key: businessKey,
+          request_hash: hash,
+          currency: input.amount.currency,
+          amount_minor: input.amount.amountMinor,
+          status: 'processing',
+          mode,
+          initiator,
+          provider_ref: null,
+          external_reference: null,
+          expires_at: null,
+          decline: null,
+          created_by: actorKey(tx),
+          created_at: tx.now,
+        })
+        .execute(),
+    );
+  } catch (err) {
+    const c = constraintOf(err);
+    if (c === 'authorizations_tenant_id_business_key_key') {
+      const winner = await db(tx)
+        .selectFrom('payments.authorizations')
+        .select(['id', 'request_hash'])
+        .where('business_key', '=', businessKey)
+        .executeTakeFirstOrThrow();
+      assertSameRequest(winner.request_hash, hash, 'authorization');
+      return { id: winner.id, operationId: null, replayed: true };
+    }
+    if (c === 'authorizations_one_inflight_per_ref') {
+      const pending = await db(tx)
+        .selectFrom('payments.authorizations')
+        .select(['id', 'amount_minor', 'currency', 'created_at'])
+        .where('ref_type', '=', input.ref.type)
+        .where('ref_id', '=', input.ref.id)
+        .where('status', 'in', ['processing', 'pending_verification'])
+        .executeTakeFirst();
+      throw new PendingVerificationBlockError({
+        kind: 'authorization',
+        id: pending?.id ?? 'unknown',
+        amountMinor: pending?.amount_minor ?? input.amount.amountMinor,
+        currency: pending?.currency ?? input.amount.currency,
+        since: pending ? new Date(pending.created_at) : tx.now,
+      });
+    }
+    throw err;
+  }
   const operationId = await createOperation(tx, {
     propertyId: input.propertyId,
     account,
@@ -194,7 +350,7 @@ export async function authorize(
     action: 'payments.authorization.request',
     target: { type: 'authorization', id },
     propertyId: input.propertyId,
-    after: { amount: input.amount, ref: input.ref, methodId: method.id, mode, operationId },
+    after: { amount: input.amount, ref: input.ref, methodId: method.id, initiator, mode, operationId },
   });
   return { id, operationId, replayed: false };
 }
@@ -293,12 +449,16 @@ export async function capture(
   },
 ): Promise<Started> {
   const businessKey = `capture:${input.businessKey}`;
+  const hash = requestHash({ a: input.authorizationId, m: input.amount ?? null, r: input.ledgerRef ?? null });
   const existing = await db(tx)
     .selectFrom('payments.payments')
-    .select(['id'])
+    .select(['id', 'request_hash'])
     .where('business_key', '=', businessKey)
     .executeTakeFirst();
-  if (existing) return { id: existing.id, operationId: null, replayed: true };
+  if (existing) {
+    assertSameRequest(existing.request_hash, hash, 'capture');
+    return { id: existing.id, operationId: null, replayed: true };
+  }
   const a = await loadAuthorization(tx, input.authorizationId);
   requirePermission(tx, 'payments.payment.collect', { propertyId: a.property_id });
   await assertPaymentsWritable(d, tx, a.property_id);
@@ -324,7 +484,7 @@ export async function capture(
   if (amountMinor <= 0 || amountMinor > capturable) {
     throw new BusinessRuleError(
       'capture_exceeds_hold',
-      `Only ${a.currency} ${(capturable / 100).toFixed(2)} can still be collected from this hold. Collect that amount and take the rest as a separate payment.`,
+      `Only ${formatMoney(money(capturable, a.currency))} can still be collected from this hold. Collect that amount and take the rest as a separate payment.`,
       { capturableMinor: capturable, requestedMinor: amountMinor },
     );
   }
@@ -341,16 +501,13 @@ export async function capture(
       'Say which folio (or booking deposit) this collection pays, so the bill shows it.',
     );
   }
+  const property = await loadProperty(d, tx, a.property_id);
+  await assertLedgerTarget(d, tx, ref, property);
   await assertBreakerAllows(d, tx, account);
-  await db(tx)
-    .updateTable('payments.authorizations')
-    .set({ capture_reserved_minor: a.capture_reserved_minor + amountMinor, version: a.version + 1 })
-    .where('id', '=', a.id)
-    .execute();
   const id = newId(tx.now.getTime());
-  await db(tx)
-    .insertInto('payments.payments')
-    .values({
+  const inserted = await insertPayment(
+    tx,
+    {
       id,
       tenant_id: tx.tenantId,
       property_id: a.property_id,
@@ -361,30 +518,30 @@ export async function capture(
       payment_request_id: null,
       virtual_card_id: null,
       kind: 'capture',
+      purpose: defaultPurpose(ref),
       method: 'card',
       initiator: a.initiator,
       ref_type: ref.type,
       ref_id: ref.id,
       business_key: businessKey,
+      request_hash: hash,
       currency: a.currency,
       amount_minor: amountMinor,
       status: 'processing',
       mode: a.mode,
-      provider_ref: null,
-      external_reference: null,
-      terminal_id: null,
-      card_brand: null,
-      card_last4: null,
-      received_at: null,
-      decline: null,
       ledger_status: 'not_required',
-      ledger_posting_id: null,
-      ledger_error: null,
-      payout_id: null,
-      note: null,
       created_by: actorKey(tx),
       created_at: tx.now,
-    })
+    },
+    ref,
+    businessKey,
+    hash,
+  );
+  if (!inserted.inserted) return { id: inserted.existingId, operationId: null, replayed: true };
+  await db(tx)
+    .updateTable('payments.authorizations')
+    .set({ capture_reserved_minor: a.capture_reserved_minor + amountMinor, version: a.version + 1 })
+    .where('id', '=', a.id)
     .execute();
   const operationId = await createOperation(tx, {
     propertyId: a.property_id,
@@ -477,37 +634,51 @@ export interface ChargeExtras {
   paymentRequestId?: string;
   virtualCardId?: string;
   method?: 'card' | 'virtual_card';
-  skipPendingGuard?: boolean;
 }
+
+export type ChargeCommand = Omit<z.infer<typeof chargeInput>, 'initiator'> & { businessKey: string };
 
 export async function charge(
   d: PaymentsDeps,
   tx: TxContext,
-  input: z.infer<typeof chargeInput> & { businessKey: string },
+  input: ChargeCommand,
   extras: ChargeExtras = {},
 ): Promise<Started> {
   requirePermission(tx, 'payments.payment.collect', { propertyId: input.propertyId });
   const businessKey = `charge:${input.businessKey}`;
+  const purpose: CollectionPurpose = input.purpose ?? defaultPurpose(input.ref);
+  const hash = requestHash({
+    p: input.propertyId,
+    m: input.methodId,
+    a: input.amount,
+    r: input.ref,
+    u: purpose,
+  });
   const existing = await db(tx)
     .selectFrom('payments.payments')
-    .select(['id'])
+    .select(['id', 'request_hash'])
     .where('business_key', '=', businessKey)
     .executeTakeFirst();
-  if (existing) return { id: existing.id, operationId: null, replayed: true };
+  if (existing) {
+    assertSameRequest(existing.request_hash, hash, 'payment');
+    return { id: existing.id, operationId: null, replayed: true };
+  }
   await assertPaymentsWritable(d, tx, input.propertyId);
   const property = await loadProperty(d, tx, input.propertyId);
+  await assertLedgerTarget(d, tx, input.ref, property);
   const method = await loadActiveMethod(tx, input.methodId);
   const account = await loadAccount(tx, method.account_id);
   assertAccountUsable(account, property, input.amount.currency);
   requireCapability(account, 'charge', 'Charging a card');
-  assertMitAllowed(method, input.initiator);
-  if (!extras.skipPendingGuard) await assertNothingPendingFor(tx, input.ref);
+  const initiator = deriveInitiator(tx, method);
+  assertMitAllowed(method, initiator);
+  await assertCollectionOwnership(tx, input.ref, purpose, input.separateCollection);
   const mode = d.registry.modeFor(tx, account);
   await assertBreakerAllows(d, tx, account);
   const id = newId(tx.now.getTime());
-  await db(tx)
-    .insertInto('payments.payments')
-    .values({
+  const inserted = await insertPayment(
+    tx,
+    {
       id,
       tenant_id: tx.tenantId,
       property_id: input.propertyId,
@@ -518,31 +689,29 @@ export async function charge(
       payment_request_id: extras.paymentRequestId ?? null,
       virtual_card_id: extras.virtualCardId ?? null,
       kind: 'charge',
+      purpose,
       method: extras.method ?? (method.kind === 'virtual_card' ? 'virtual_card' : 'card'),
-      initiator: input.initiator,
+      initiator,
       ref_type: input.ref.type,
       ref_id: input.ref.id,
       business_key: businessKey,
+      request_hash: hash,
       currency: input.amount.currency,
       amount_minor: input.amount.amountMinor,
       status: 'processing',
       mode,
-      provider_ref: null,
-      external_reference: null,
-      terminal_id: null,
       card_brand: method.brand,
       card_last4: method.last4,
-      received_at: null,
-      decline: null,
       ledger_status: 'not_required',
-      ledger_posting_id: null,
-      ledger_error: null,
-      payout_id: null,
       note: input.description ?? null,
       created_by: actorKey(tx),
       created_at: tx.now,
-    })
-    .execute();
+    },
+    input.ref,
+    businessKey,
+    hash,
+  );
+  if (!inserted.inserted) return { id: inserted.existingId, operationId: null, replayed: true };
   const operationId = await createOperation(tx, {
     propertyId: input.propertyId,
     account,
@@ -559,8 +728,9 @@ export async function charge(
     after: {
       amount: input.amount,
       ref: input.ref,
+      purpose,
       methodId: method.id,
-      initiator: input.initiator,
+      initiator,
       mode,
       operationId,
     },
@@ -590,14 +760,34 @@ function assertRefundAmount(p: PaymentRow, amount: { amountMinor: number; curren
   }
   const refundable = refundableMinor({
     amountMinor: p.amount_minor,
+    adjustedMinor: p.adjusted_minor,
     refundedMinor: p.refunded_minor,
     refundReservedMinor: p.refund_reserved_minor,
   });
   if (amount.amountMinor > refundable) {
+    const m = (n: number) => formatMoney(money(n, p.currency));
     throw new BusinessRuleError(
       'refund_exceeds_refundable',
-      `Only ${p.currency} ${(refundable / 100).toFixed(2)} of this payment can still be refunded (collected ${(p.amount_minor / 100).toFixed(2)}, already refunded or in progress ${((p.refunded_minor + p.refund_reserved_minor) / 100).toFixed(2)}).`,
+      `Only ${m(refundable)} of this payment can still be refunded (collected ${m(p.amount_minor + p.adjusted_minor)}${p.adjusted_minor ? ' after corrections' : ''}, already refunded or in progress ${m(p.refunded_minor + p.refund_reserved_minor)}).`,
       { refundableMinor: refundable, requestedMinor: amount.amountMinor },
+    );
+  }
+}
+
+async function assertNotDisputed(tx: TxContext, paymentId: string): Promise<void> {
+  const d = await db(tx)
+    .selectFrom('payments.disputes')
+    .select(['id', 'status'])
+    .where('payment_id', '=', paymentId)
+    .where('status', 'not in', ['won', 'accepted'])
+    .executeTakeFirst();
+  if (d) {
+    throw new BusinessRuleError(
+      'payment_disputed',
+      d.status === 'lost'
+        ? 'The guest’s bank already took this money back in a dispute; refunding it as well would pay the guest twice.'
+        : 'This payment is under dispute with the guest’s bank. Do not refund it now — the bank may return the money to the guest as well. Work the dispute instead.',
+      { disputeId: d.id, status: d.status },
     );
   }
 }
@@ -608,13 +798,27 @@ export async function refund(
   input: z.infer<typeof refundInput> & { businessKey: string },
 ): Promise<Started> {
   const businessKey = `refund:${input.businessKey}`;
+  const hash = requestHash({ p: input.paymentId, a: input.amount });
   const existing = await db(tx)
     .selectFrom('payments.refunds')
-    .select(['id'])
+    .select(['id', 'request_hash'])
     .where('business_key', '=', businessKey)
     .executeTakeFirst();
-  if (existing) return { id: existing.id, operationId: null, replayed: true };
+  if (existing) {
+    assertSameRequest(existing.request_hash, hash, 'refund');
+    return { id: existing.id, operationId: null, replayed: true };
+  }
   const p = await loadPaymentForUpdate(tx, input.paymentId);
+  // A concurrent same-key request may have committed while we waited for the payment lock.
+  const winner = await db(tx)
+    .selectFrom('payments.refunds')
+    .select(['id', 'request_hash'])
+    .where('business_key', '=', businessKey)
+    .executeTakeFirst();
+  if (winner) {
+    assertSameRequest(winner.request_hash, hash, 'refund');
+    return { id: winner.id, operationId: null, replayed: true };
+  }
   requirePermission(tx, 'payments.payment.refund', { propertyId: p.property_id });
   await assertPaymentsWritable(d, tx, p.property_id);
   if (p.mode === 'recorded') {
@@ -632,6 +836,7 @@ export async function refund(
       { status: p.status },
     );
   }
+  await assertNotDisputed(tx, p.id);
   assertRefundAmount(p, input.amount);
   const account = await loadAccount(tx, p.account_id as string);
   if (input.amount.amountMinor < p.amount_minor)
@@ -655,6 +860,7 @@ export async function refund(
       payment_id: p.id,
       account_id: p.account_id,
       business_key: businessKey,
+      request_hash: hash,
       currency: p.currency,
       amount_minor: input.amount.amountMinor,
       reason: input.reason,
@@ -696,16 +902,30 @@ export async function recordPayment(
   tx: TxContext,
   input: z.infer<typeof recordPaymentInput> & { businessKey: string },
 ): Promise<Started> {
-  requirePermission(tx, 'payments.payment.collect', { propertyId: input.propertyId });
+  requirePermission(tx, 'payments.externalRecord.create', { propertyId: input.propertyId });
   const businessKey = `record:${input.businessKey}`;
+  const purpose: CollectionPurpose = input.purpose ?? defaultPurpose(input.ref);
+  const hash = requestHash({
+    p: input.propertyId,
+    m: input.method,
+    a: input.amount,
+    r: input.ref,
+    x: input.reference,
+    t: input.terminalId ?? null,
+    at: input.receivedAt,
+  });
   const existing = await db(tx)
     .selectFrom('payments.payments')
-    .select(['id'])
+    .select(['id', 'request_hash'])
     .where('business_key', '=', businessKey)
     .executeTakeFirst();
-  if (existing) return { id: existing.id, operationId: null, replayed: true };
+  if (existing) {
+    assertSameRequest(existing.request_hash, hash, 'payment record');
+    return { id: existing.id, operationId: null, replayed: true };
+  }
   await assertPaymentsWritable(d, tx, input.propertyId);
   const property = await loadProperty(d, tx, input.propertyId);
+  await assertLedgerTarget(d, tx, input.ref, property);
   let account: AccountRow | null = null;
   if (input.method === 'external_terminal') {
     if (!input.accountId) {
@@ -728,23 +948,11 @@ export async function recordPayment(
       `${input.method} payments are not linked to a provider account.`,
     );
   }
-  if (new Date(input.receivedAt).getTime() > tx.now.getTime() + 5 * 60_000) {
+  const receivedAt = new Date(input.receivedAt);
+  if (receivedAt.getTime() > tx.now.getTime() + 5 * 60_000) {
     throw new ValidationError('received_in_future', 'The payment time cannot be in the future.');
   }
-  const duplicate = await db(tx)
-    .selectFrom('payments.payments')
-    .select(['id', 'created_at'])
-    .where('property_id', '=', input.propertyId)
-    .where('method', '=', input.method)
-    .where('external_reference', '=', input.reference)
-    .executeTakeFirst();
-  if (duplicate) {
-    throw new ConflictError(
-      'duplicate_reference',
-      `A ${input.method.replace('_', ' ')} payment with reference "${input.reference}" was already recorded at ${new Date(duplicate.created_at).toISOString()}. Check it before recording again — recording twice would double the guest's payment.`,
-      { paymentId: duplicate.id },
-    );
-  }
+  await assertCollectionOwnership(tx, input.ref, purpose, input.separateCollection);
   let authorization: AuthorizationRow | null = null;
   if (input.authorizationId) {
     authorization = await loadAuthorization(tx, input.authorizationId);
@@ -759,10 +967,12 @@ export async function recordPayment(
       throw new ValidationError('currency_mismatch', 'The payment currency differs from the hold.');
     }
   }
+  // P1-7: a bank transfer is only EXPECTED until receipt is confirmed (statement match or authorized staff).
+  const awaiting = input.method === 'bank_transfer';
   const id = newId(tx.now.getTime());
-  await db(tx)
-    .insertInto('payments.payments')
-    .values({
+  const inserted = await insertPayment(
+    tx,
+    {
       id,
       tenant_id: tx.tenantId,
       property_id: input.propertyId,
@@ -773,31 +983,34 @@ export async function recordPayment(
       payment_request_id: null,
       virtual_card_id: null,
       kind: 'recorded',
+      purpose,
       method: input.method,
       initiator: null,
       ref_type: input.ref.type,
       ref_id: input.ref.id,
       business_key: businessKey,
+      request_hash: hash,
       currency: input.amount.currency,
       amount_minor: input.amount.amountMinor,
-      status: 'recorded_unverified',
+      status: awaiting ? 'awaiting_receipt' : 'recorded_unverified',
       mode: 'recorded',
-      provider_ref: null,
       external_reference: input.reference,
       terminal_id: input.terminalId ?? null,
       card_brand: input.cardBrand ?? null,
       card_last4: input.cardLast4 ?? null,
-      received_at: new Date(input.receivedAt),
-      decline: null,
-      ledger_status: 'pending',
-      ledger_posting_id: null,
-      ledger_error: null,
-      payout_id: null,
+      received_at: receivedAt,
+      received_on: localDateIn(receivedAt, property.timezone),
+      duplicate_override: input.duplicateOverride?.reason ?? null,
+      ledger_status: awaiting ? 'not_required' : 'pending',
       note: input.note ?? null,
       created_by: actorKey(tx),
       created_at: tx.now,
-    })
-    .execute();
+    },
+    input.ref,
+    businessKey,
+    hash,
+  );
+  if (!inserted.inserted) return { id: inserted.existingId, operationId: null, replayed: true };
   if (authorization) {
     const captured = authorization.captured_minor + input.amount.amountMinor;
     await db(tx)
@@ -810,19 +1023,22 @@ export async function recordPayment(
       .where('id', '=', authorization.id)
       .execute();
   }
-  // Coordinator decision (Route D): the ledger is posted at record time, labeled as recorded/unverified.
-  await postPaymentLedger(d, tx, id);
+  // Route D (coordinator decision): terminal/cash payments post at record time, labeled recorded/unverified.
+  if (!awaiting) await postPaymentLedger(d, tx, id);
   await tx.audit({
     action: 'payments.payment.record',
     target: { type: 'payment', id },
     propertyId: input.propertyId,
+    ...(input.duplicateOverride ? { reason: `Repeated reference: ${input.duplicateOverride.reason}` } : {}),
     after: {
       method: input.method,
       amount: input.amount,
       ref: input.ref,
+      purpose,
       reference: input.reference,
       terminalId: input.terminalId ?? null,
       receivedAt: input.receivedAt,
+      status: awaiting ? 'awaiting_receipt' : 'recorded_unverified',
     },
   });
   await tx.emit({
@@ -835,10 +1051,93 @@ export async function recordPayment(
       ref: input.ref,
       amountMinor: input.amount.amountMinor,
       currency: input.amount.currency,
-      verification: 'recorded_unverified',
+      verification: awaiting ? 'awaiting_receipt' : 'recorded_unverified',
     },
   });
   return { id, operationId: null, replayed: false };
+}
+
+/** P1-7: receipt of an expected bank transfer confirmed by an authorized person (sensitive permission). */
+export async function confirmBankTransfer(
+  d: PaymentsDeps,
+  tx: TxContext,
+  input: z.infer<typeof confirmBankTransferInput> & { paymentId: string },
+): Promise<void> {
+  const p = await loadPaymentForUpdate(tx, input.paymentId);
+  requirePermission(tx, 'payments.bankTransfer.confirm', { propertyId: p.property_id });
+  await assertPaymentsWritable(d, tx, p.property_id);
+  if (p.method !== 'bank_transfer') {
+    throw new BusinessRuleError(
+      'not_a_bank_transfer',
+      'Only expected bank transfers need a receipt confirmation.',
+    );
+  }
+  if (p.status !== 'awaiting_receipt') {
+    if (p.status === 'recorded_verified') return; // already confirmed (idempotent)
+    throw new BusinessRuleError(
+      'bank_transfer_not_expected',
+      `This bank transfer is ${p.status.replace('_', ' ')}.`,
+    );
+  }
+  await markBankTransferReceived(d, tx, p, { type: 'bank_confirmation', id: newId(tx.now.getTime()) }, input);
+}
+
+/** Shared by staff confirmation and bank-statement matching: received → verified and posted (once). */
+export async function markBankTransferReceived(
+  d: PaymentsDeps,
+  tx: TxContext,
+  p: PaymentRow,
+  evidence: { type: string; id: string },
+  detail: { bankReference?: string; receivedAt?: string },
+): Promise<void> {
+  await db(tx)
+    .updateTable('payments.payments')
+    .set({
+      status: 'recorded_verified',
+      ledger_status: 'pending',
+      verification_ledger_status: 'posted', // the posting itself carries verification = recorded_verified
+      ...(detail.receivedAt ? { received_at: new Date(detail.receivedAt) } : {}),
+      version: p.version + 1,
+    })
+    .where('id', '=', p.id)
+    .execute();
+  await postPaymentLedger(d, tx, p.id);
+  await tx.audit({
+    action: 'payments.bankTransfer.received',
+    target: { type: 'payment', id: p.id },
+    propertyId: p.property_id,
+    before: { status: p.status },
+    after: { status: 'recorded_verified', evidence, bankReference: detail.bankReference ?? null },
+  });
+  await tx.emit({
+    type: PaymentsEvents.paymentVerified,
+    propertyId: p.property_id,
+    aggregate: { type: 'payment', id: p.id },
+    payload: { paymentId: p.id, evidence },
+  });
+}
+
+export async function cancelBankTransfer(d: PaymentsDeps, tx: TxContext, paymentId: string, reason: string) {
+  const p = await loadPaymentForUpdate(tx, paymentId);
+  requirePermission(tx, 'payments.externalRecord.create', { propertyId: p.property_id });
+  await assertPaymentsWritable(d, tx, p.property_id);
+  if (p.status !== 'awaiting_receipt') {
+    throw new BusinessRuleError(
+      'bank_transfer_not_expected',
+      'Only an expected (not yet received) transfer can be cancelled.',
+    );
+  }
+  await db(tx)
+    .updateTable('payments.payments')
+    .set({ status: 'cancelled', version: p.version + 1 })
+    .where('id', '=', p.id)
+    .execute();
+  await tx.audit({
+    action: 'payments.bankTransfer.cancel',
+    target: { type: 'payment', id: p.id },
+    propertyId: p.property_id,
+    reason,
+  });
 }
 
 export async function recordAuthorization(
@@ -846,14 +1145,18 @@ export async function recordAuthorization(
   tx: TxContext,
   input: z.infer<typeof recordAuthorizationInput> & { businessKey: string },
 ): Promise<Started> {
-  requirePermission(tx, 'payments.payment.collect', { propertyId: input.propertyId });
+  requirePermission(tx, 'payments.externalRecord.create', { propertyId: input.propertyId });
   const businessKey = `record-authorization:${input.businessKey}`;
+  const hash = requestHash({ p: input.propertyId, a: input.amount, r: input.ref, x: input.approvalCode });
   const existing = await db(tx)
     .selectFrom('payments.authorizations')
-    .select(['id'])
+    .select(['id', 'request_hash'])
     .where('business_key', '=', businessKey)
     .executeTakeFirst();
-  if (existing) return { id: existing.id, operationId: null, replayed: true };
+  if (existing) {
+    assertSameRequest(existing.request_hash, hash, 'authorization record');
+    return { id: existing.id, operationId: null, replayed: true };
+  }
   await assertPaymentsWritable(d, tx, input.propertyId);
   const property = await loadProperty(d, tx, input.propertyId);
   const account = await loadAccount(tx, input.accountId);
@@ -883,6 +1186,7 @@ export async function recordAuthorization(
       ref_type: input.ref.type,
       ref_id: input.ref.id,
       business_key: businessKey,
+      request_hash: hash,
       currency: input.amount.currency,
       amount_minor: input.amount.amountMinor,
       status: 'authorized',
@@ -930,12 +1234,16 @@ export async function recordRefund(
   input: z.infer<typeof recordRefundInput> & { businessKey: string },
 ): Promise<Started> {
   const businessKey = `record-refund:${input.businessKey}`;
+  const hash = requestHash({ p: input.paymentId, a: input.amount, x: input.reference });
   const existing = await db(tx)
     .selectFrom('payments.refunds')
-    .select(['id'])
+    .select(['id', 'request_hash'])
     .where('business_key', '=', businessKey)
     .executeTakeFirst();
-  if (existing) return { id: existing.id, operationId: null, replayed: true };
+  if (existing) {
+    assertSameRequest(existing.request_hash, hash, 'refund record');
+    return { id: existing.id, operationId: null, replayed: true };
+  }
   const p = await loadPaymentForUpdate(tx, input.paymentId);
   requirePermission(tx, 'payments.payment.refund', { propertyId: p.property_id });
   await assertPaymentsWritable(d, tx, p.property_id);
@@ -943,6 +1251,12 @@ export async function recordRefund(
     throw new BusinessRuleError(
       'provider_payment_refund',
       'This payment went through the integrated provider; refund it through Portico so the provider returns the money.',
+    );
+  }
+  if (p.status === 'awaiting_receipt' || p.status === 'cancelled') {
+    throw new BusinessRuleError(
+      'payment_not_refundable',
+      'This bank transfer has not been received, so there is nothing to refund.',
     );
   }
   assertRefundAmount(p, input.amount);
@@ -956,6 +1270,7 @@ export async function recordRefund(
       payment_id: p.id,
       account_id: p.account_id,
       business_key: businessKey,
+      request_hash: hash,
       currency: p.currency,
       amount_minor: input.amount.amountMinor,
       reason: input.reason,
@@ -995,7 +1310,7 @@ export async function recordRefund(
 
 /**
  * Correct a recorded payment found wrong by reconciliation: a new linked adjustment (and ledger entry), never an
- * edit of the original record.
+ * edit of the original record. `adjusted_minor` keeps the refund ceiling honest (P1-4).
  */
 export async function adjustRecordedPayment(
   d: PaymentsDeps,
@@ -1018,24 +1333,28 @@ export async function adjustRecordedPayment(
       'Only payments recorded from the hotel’s own terminal, cash or bank transfer are corrected this way. Provider payments are corrected by refunds.',
     );
   }
+  if (p.status === 'awaiting_receipt' || p.status === 'cancelled') {
+    throw new BusinessRuleError(
+      'payment_not_received',
+      'This bank transfer has not been received; there is nothing to correct.',
+    );
+  }
   if (input.amount.currency !== p.currency) {
     throw new ValidationError('currency_mismatch', `The payment was in ${p.currency}.`);
   }
-  const prior = await db(tx)
-    .selectFrom('payments.payment_adjustments')
-    .select((eb) => eb.fn.coalesce(eb.fn.sum<number>('amount_minor'), eb.lit(0)).as('total'))
-    .where('payment_id', '=', p.id)
-    .executeTakeFirstOrThrow();
-  const effective = p.amount_minor + Number(prior.total) + input.amount.amountMinor;
-  if (effective < p.refunded_minor) {
+  const effective = p.amount_minor + p.adjusted_minor + input.amount.amountMinor;
+  if (effective < p.refunded_minor + p.refund_reserved_minor || effective < 0) {
     throw new BusinessRuleError(
       'adjustment_below_refunded',
       'After this correction the payment would be smaller than what was already refunded. Review the refunds first.',
     );
   }
   const id = newId(tx.now.getTime());
+  const clearing = await clearingOf(tx, p);
   const ledger = await tryLedger(tx, () =>
     d.ledger.recordPaymentAdjustment(tx, {
+      propertyId: p.property_id,
+      legalEntityId: p.legal_entity_id,
       folioId: p.ref_type === 'folio' ? p.ref_id : null,
       bookingId: p.ref_type === 'booking' ? p.ref_id : null,
       amount: money(input.amount.amountMinor, p.currency),
@@ -1043,6 +1362,7 @@ export async function adjustRecordedPayment(
       adjustmentRef: { type: 'payment_adjustment', id },
       reason: input.reason,
       idempotencyKey: ledgerKey.adjustment(id),
+      clearing,
     }),
   );
   if (!ledger.ok) {
@@ -1069,6 +1389,11 @@ export async function adjustRecordedPayment(
     })
     .returningAll()
     .executeTakeFirstOrThrow();
+  await db(tx)
+    .updateTable('payments.payments')
+    .set({ adjusted_minor: p.adjusted_minor + input.amount.amountMinor, version: p.version + 1 })
+    .where('id', '=', p.id)
+    .execute();
   if (input.exceptionId) {
     const ex = await db(tx)
       .selectFrom('payments.exceptions')
@@ -1094,16 +1419,17 @@ export async function adjustRecordedPayment(
       .execute();
     await db(tx)
       .updateTable('payments.payments')
-      .set({ status: 'recorded_verified', version: p.version + 1 })
+      .set({ status: 'recorded_verified', verification_ledger_status: 'pending' })
       .where('id', '=', p.id)
       .execute();
+    await postVerification(d, tx, { type: 'payment', id: p.id }, { type: 'statement_line', id: line.id });
   }
   await tx.audit({
     action: 'payments.payment.adjust',
     target: { type: 'payment', id: p.id },
     propertyId: p.property_id,
     reason: input.reason,
-    before: { amountMinor: p.amount_minor + Number(prior.total) },
+    before: { amountMinor: p.amount_minor + p.adjusted_minor },
     after: { amountMinor: effective, adjustmentId: id },
   });
   await tx.emit({
@@ -1119,3 +1445,5 @@ export async function adjustRecordedPayment(
   });
   return row;
 }
+
+export type { PropertyInfo };

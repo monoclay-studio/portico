@@ -30,7 +30,6 @@ async function paidCharge(org: Org, amountMinor = 100_000) {
     methodId,
     amount: { amountMinor, currency: 'USD' },
     ref: { type: 'folio', id: newId() },
-    initiator: 'customer',
     businessKey: `pay-${newId()}`,
   });
   expect(p.status.payment).toBe('succeeded');
@@ -152,7 +151,6 @@ describe('scenario s06: a refund request is retried after an interruption', () =
       methodId,
       amount: { amountMinor: 1_000, currency: 'USD' },
       ref: { type: 'folio', id: newId() },
-      initiator: 'customer',
       businessKey: newId(),
     });
     await expect(refundNow(org, p.id, 1_000, newId())).rejects.toThrow(/still being verified/);

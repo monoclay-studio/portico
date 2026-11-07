@@ -18,6 +18,7 @@ import {
   setControls,
   setupOrg,
   startHarness,
+  stripeAccount,
 } from './harness';
 
 let h: Harness;
@@ -45,7 +46,6 @@ describe('simulator webhooks: duplicates and out-of-order delivery', () => {
         methodId,
         amount: { amountMinor: 30_000, currency: 'USD' },
         ref: folio,
-        initiator: 'customer',
         businessKey: newId(),
       }),
     );
@@ -94,7 +94,6 @@ describe('simulator webhooks: duplicates and out-of-order delivery', () => {
       methodId,
       amount: { amountMinor: 60_000, currency: 'USD' },
       ref: { type: 'folio', id: newId() },
-      initiator: 'customer',
       businessKey: newId(),
     });
     await deliverWebhooks(h, org);
@@ -167,7 +166,6 @@ describe('simulator webhooks: duplicates and out-of-order delivery', () => {
       methodId,
       amount: { amountMinor: 10_000, currency: 'USD' },
       ref: { type: 'folio', id: newId() },
-      initiator: 'customer',
       businessKey: newId(),
     });
     const account = await org.tx((tx) => svc.tx.getAccount(tx, org.simAccountId));
@@ -264,15 +262,8 @@ describe('Stripe Connect webhook intake (signature + routing), recorded fixtures
     h.secrets.sandbox = 'sk_test_harnessOnly';
     const org = await setupOrg(h, 'sandbox');
     const svc = h.module.service;
-    const acct = await org.tx((tx) =>
-      svc.tx.createAccount(tx, {
-        legalEntityId: org.legalEntityId,
-        provider: 'stripe_connect',
-        externalAccountId: 'acct_1TestHotelMv',
-        displayName: 'Stripe (hotel connected account)',
-        currencies: ['USD'],
-      }),
-    );
+    const acctId = await stripeAccount(h, org, 'acct_1TestHotelMv', false);
+    const acct = await org.tx((tx) => svc.tx.getAccount(tx, acctId));
     expect(acct).toMatchObject({ status: 'pending', effectiveMode: 'sandbox' });
 
     const body = stripeEvent('acct_1TestHotelMv', 'account.updated', {

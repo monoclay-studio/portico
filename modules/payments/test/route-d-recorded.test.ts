@@ -232,9 +232,13 @@ describe('Route D: payments taken on the hotel’s own terminal, recorded in Por
         businessKey: newId(),
       }),
     );
-    expect(await postings(h, org, 'deposit')).toEqual([
-      expect.objectContaining({ amount_minor: 250_000, ref_id: bookingId }),
-    ]);
+    // P1-7: an announced transfer is NOT money yet — nothing on the bill until receipt is confirmed.
+    const expected = await svc.view.payment(org.ctx, bt.id);
+    expect(expected).toMatchObject({
+      status: { payment: 'awaiting_receipt' },
+      presentation: { confirmed: false },
+    });
+    expect(await postings(h, org, 'deposit')).toEqual([]);
     const res = await importCsv(
       org,
       'date,amount,currency,reference\n2026-11-07,2500.00,USD,TT-REF-883\n',
@@ -242,6 +246,14 @@ describe('Route D: payments taken on the hotel’s own terminal, recorded in Por
     );
     expect(res.matchedCount).toBe(1);
     expect((await svc.view.payment(org.ctx, bt.id)).status.payment).toBe('recorded_verified');
+    // Posted once, as verified, and only now.
+    expect(await postings(h, org, 'deposit')).toEqual([
+      expect.objectContaining({
+        amount_minor: 250_000,
+        ref_id: bookingId,
+        extra: expect.objectContaining({ verification: 'recorded_verified', propertyId: org.propertyId }),
+      }),
+    ]);
     // A terminal account is required for card payments taken on a terminal.
     await expect(
       org.tx((tx) =>

@@ -1,7 +1,7 @@
 -- Payments (ADR-0007): the hotel's legal entity is merchant of record; Monoclay never holds guest funds; the
 -- domain is provider-agnostic; every provider call is journaled; unknown outcomes are pending_verification.
 -- Portico NEVER stores card numbers or verification codes: no column here can hold them (see checks below and
--- the schema test in test/pci-schema.test.ts).
+-- the schema test in test/isolation-permissions.test.ts).
 create schema payments;
 
 ---------------------------------------------------------------------------------------------------------
@@ -22,13 +22,17 @@ create table payments.accounts (
   statement_descriptor text,
   status               text not null default 'pending' check (status in ('pending', 'active', 'restricted', 'disabled')),
   status_reason        text,
+  -- Platform fee (Route A only) is operator-controlled and disabled until owner question Q3 is answered.
   application_fee_bps  int check (application_fee_bps is null or application_fee_bps between 0 and 1000),
   simulator_controls   jsonb not null default '{}',
+  -- Provider-reported account state (Stripe account.updated): event time, so older events never win.
+  provider_status_at   timestamptz,
+  linked_by            text,           -- who verified ownership of the provider account (operator / onboarding)
   created_at           timestamptz not null default now(),
   updated_at           timestamptz not null default now(),
   version              int not null default 1,
   unique (tenant_id, provider, external_account_id),
-  check (provider <> 'stripe_connect' or external_account_id ~ '^acct_[A-Za-z0-9]+$'),
+  check (provider <> 'stripe_connect' or external_account_id is null or external_account_id ~ '^acct_[A-Za-z0-9]+$'),
   check (cardinality(currencies) > 0)
 );
 select core.enable_tenant_isolation('payments.accounts');
@@ -69,6 +73,9 @@ create table payments.payment_methods (
   owner_id              uuid not null,
   mit_agreement         boolean not null default false,
   mandate               jsonb not null default '{}',
+  -- How the card reached the provider: a guest-present entry makes the first charge customer-initiated.
+  entry_channel         text not null default 'hosted_entry'
+                          check (entry_channel in ('hosted_entry', 'terminal', 'vault', 'import')),
   token_portability     text not null default 'provider_bound'
                           check (token_portability in ('provider_bound', 'network_token', 'vault_portable', 'unknown')),
   portability_note      text,
@@ -96,6 +103,7 @@ create table payments.authorizations (
   ref_type           text not null,
   ref_id             uuid not null,
   business_key       text not null,
+  request_hash       text,
   currency           char(3) not null,
   amount_minor       bigint not null check (amount_minor > 0),
   captured_minor     bigint not null default 0 check (captured_minor >= 0),
@@ -113,9 +121,13 @@ create table payments.authorizations (
   updated_at         timestamptz not null default now(),
   version            int not null default 1,
   unique (tenant_id, business_key),
-  check (captured_minor + capture_reserved_minor <= amount_minor)
+  check (captured_minor + capture_reserved_minor <= amount_minor),
+  check (external_reference is null or external_reference !~ '[0-9]([ -]?[0-9]){11,}')
 );
 select core.enable_tenant_isolation('payments.authorizations');
+-- PAY-R14: at most one hold being requested/verified per reference (a database fact, not a read-then-insert).
+create unique index authorizations_one_inflight_per_ref on payments.authorizations (tenant_id, ref_type, ref_id)
+  where status in ('processing', 'pending_verification');
 create index authorizations_ref_idx on payments.authorizations (tenant_id, ref_type, ref_id);
 create index authorizations_status_idx on payments.authorizations (tenant_id, property_id, status);
 
@@ -129,6 +141,7 @@ create table payments.payment_requests (
   legal_entity_id   uuid not null,
   account_id        uuid not null references payments.accounts(id),
   business_key      text not null,
+  request_hash      text,
   payer             jsonb not null,
   currency          char(3) not null,
   amount_minor      bigint not null check (amount_minor > 0),
@@ -197,18 +210,23 @@ create table payments.payments (
   payment_request_id     uuid references payments.payment_requests(id),
   virtual_card_id        uuid references payments.virtual_cards(id),
   kind                   text not null check (kind in ('charge', 'capture', 'link', 'recorded')),
+  -- What this collection is for; a payment request owns its purpose on a reference (no double collection).
+  purpose                text check (purpose in ('deposit', 'balance', 'incidentals', 'custom')),
   method                 text not null check (method in ('card', 'virtual_card', 'payment_link', 'external_terminal',
                            'cash', 'bank_transfer')),
   initiator              text check (initiator in ('customer', 'merchant')),
   ref_type               text not null check (ref_type in ('folio', 'booking')),
   ref_id                 uuid not null,
   business_key           text not null,
+  request_hash           text,
   currency               char(3) not null,
   amount_minor           bigint not null check (amount_minor > 0),
+  -- Σ linked adjustments (negative reduces what was collected); the original amount is never edited.
+  adjusted_minor         bigint not null default 0,
   refunded_minor         bigint not null default 0 check (refunded_minor >= 0),
   refund_reserved_minor  bigint not null default 0 check (refund_reserved_minor >= 0),
   status                 text not null check (status in ('processing', 'pending_verification', 'succeeded', 'failed',
-                           'recorded_unverified', 'recorded_verified')),
+                           'awaiting_receipt', 'recorded_unverified', 'recorded_verified', 'cancelled')),
   mode                   text not null check (mode in ('live', 'sandbox', 'simulate', 'recorded')),
   provider_ref           text,
   external_reference     text,                      -- terminal approval code / bank reference / receipt number
@@ -216,11 +234,18 @@ create table payments.payments (
   card_brand             text,
   card_last4             char(4) check (card_last4 is null or card_last4 ~ '^[0-9]{4}$'),
   received_at            timestamptz,               -- when the money was taken (recorded payments)
+  received_on            date,                      -- property-local date of received_at (duplicate scope)
+  duplicate_override     text,                      -- audited reason when staff record a repeated reference
   decline                jsonb,
   ledger_status          text not null default 'not_required'
                            check (ledger_status in ('not_required', 'pending', 'posted', 'failed')),
   ledger_posting_id      text,
   ledger_error           text,
+  ledger_attempts        int not null default 0,
+  ledger_next_attempt_at timestamptz,
+  -- Route D: statement verification reported to finance (markPaymentVerified).
+  verification_ledger_status text not null default 'not_required'
+                           check (verification_ledger_status in ('not_required', 'pending', 'posted', 'failed')),
   payout_id              uuid,
   note                   text,
   created_by             text not null,
@@ -229,13 +254,27 @@ create table payments.payments (
   version                int not null default 1,
   unique (tenant_id, business_key),
   -- Σ refunds (succeeded + in flight) can never exceed what was collected (PAY-I03).
-  check (refunded_minor + refund_reserved_minor <= amount_minor),
-  check ((kind = 'recorded') = (mode = 'recorded'))
+  check (refunded_minor + refund_reserved_minor <= amount_minor + adjusted_minor),
+  check (amount_minor + adjusted_minor >= 0),
+  check ((kind = 'recorded') = (mode = 'recorded')),
+  check (external_reference is null or external_reference !~ '[0-9]([ -]?[0-9]){11,}'),
+  check (note is null or note !~ '[0-9]([ -]?[0-9]){11,}')
 );
 select core.enable_tenant_isolation('payments.payments');
 create index payments_ref_idx on payments.payments (tenant_id, ref_type, ref_id);
 create index payments_status_idx on payments.payments (tenant_id, property_id, status);
 create index payments_ledger_idx on payments.payments (tenant_id, ledger_status) where ledger_status in ('pending', 'failed');
+-- PAY-R14: at most one collection in flight per folio/booking — two desks charging at once cannot both proceed.
+create unique index payments_one_inflight_per_ref on payments.payments (tenant_id, ref_type, ref_id)
+  where status in ('processing', 'pending_verification');
+-- Route D duplicates are database facts (rule 7): a terminal approval code once per terminal and business day;
+-- a cash receipt / bank reference once per property. Repeats need an explicit, audited override.
+create unique index payments_terminal_reference_once on payments.payments
+  (tenant_id, account_id, coalesce(terminal_id, ''), upper(external_reference), received_on)
+  where method = 'external_terminal' and duplicate_override is null and status <> 'cancelled';
+create unique index payments_cash_bank_reference_once on payments.payments
+  (tenant_id, property_id, method, upper(external_reference))
+  where method in ('cash', 'bank_transfer') and duplicate_override is null and status <> 'cancelled';
 
 create table payments.refunds (
   id                 uuid primary key,
@@ -244,9 +283,10 @@ create table payments.refunds (
   payment_id         uuid not null references payments.payments(id),
   account_id         uuid references payments.accounts(id),
   business_key       text not null,
+  request_hash       text,
   currency           char(3) not null,
   amount_minor       bigint not null check (amount_minor > 0),
-  reason             text not null,
+  reason             text not null check (reason !~ '[0-9]([ -]?[0-9]){11,}'),
   status             text not null check (status in ('processing', 'pending_verification', 'succeeded', 'failed',
                        'recorded_unverified', 'recorded_verified')),
   mode               text not null check (mode in ('live', 'sandbox', 'simulate', 'recorded')),
@@ -257,11 +297,16 @@ create table payments.refunds (
                        check (ledger_status in ('not_required', 'pending', 'posted', 'failed')),
   ledger_posting_id  text,
   ledger_error       text,
+  ledger_attempts    int not null default 0,
+  ledger_next_attempt_at timestamptz,
+  verification_ledger_status text not null default 'not_required'
+                       check (verification_ledger_status in ('not_required', 'pending', 'posted', 'failed')),
   created_by         text not null,
   created_at         timestamptz not null default now(),
   updated_at         timestamptz not null default now(),
   version            int not null default 1,
-  unique (tenant_id, business_key)
+  unique (tenant_id, business_key),
+  check (external_reference is null or external_reference !~ '[0-9]([ -]?[0-9]){11,}')
 );
 select core.enable_tenant_isolation('payments.refunds');
 create index refunds_payment_idx on payments.refunds (tenant_id, payment_id);
@@ -275,7 +320,7 @@ create table payments.payment_adjustments (
   business_key      text not null,
   currency          char(3) not null,
   amount_minor      bigint not null check (amount_minor <> 0),   -- signed: negative reduces the recorded amount
-  reason            text not null,
+  reason            text not null check (reason !~ '[0-9]([ -]?[0-9]){11,}'),
   exception_id      uuid,
   ledger_posting_id text not null,
   created_by        text not null,
@@ -311,6 +356,7 @@ create table payments.provider_operations (
   completed_at     timestamptz,
   next_check_at    timestamptz,
   check_count      int not null default 0,
+  not_found_at     timestamptz,                   -- first conclusive-looking "not found" (needs confirmation)
   created_at       timestamptz not null default now(),
   updated_at       timestamptz not null default now(),
   version          int not null default 1,
@@ -350,7 +396,12 @@ create table payments.webhook_events (
   livemode          boolean not null,
   payload           jsonb not null,
   received_at       timestamptz not null,
-  outcome           text not null check (outcome in ('applied', 'no_change', 'stale', 'unknown_type', 'no_match')),
+  -- Dedupe marker and processing are separate facts: an event is a duplicate only once processed_at is set, so a
+  -- delivery whose processing failed is processed again on redelivery (or by the event backstop job).
+  processed_at      timestamptz,
+  attempts          int not null default 1,
+  outcome           text not null check (outcome in ('received', 'failed', 'applied', 'no_change', 'stale',
+                      'unknown_type', 'no_match')),
   outcome_detail    text,
   unique (tenant_id, provider, provider_event_id)
 );
@@ -423,6 +474,9 @@ create table payments.payout_items (
   unique (payout_id, refund_id)
 );
 select core.enable_tenant_isolation('payments.payout_items');
+-- A payment or refund settles in exactly one payout.
+create unique index payout_items_payment_once on payments.payout_items (tenant_id, payment_id) where payment_id is not null;
+create unique index payout_items_refund_once on payments.payout_items (tenant_id, refund_id) where refund_id is not null;
 
 create table payments.statements (
   id               uuid primary key,
@@ -438,6 +492,9 @@ create table payments.statements (
   line_count       int not null,
   matched_count    int not null,
   exception_count  int not null,
+  fees_minor       bigint not null default 0,
+  fees_ledger_status text not null default 'not_required'
+                     check (fees_ledger_status in ('not_required', 'posted', 'failed')),
   imported_by      text not null,
   imported_at      timestamptz not null,
   unique (tenant_id, file_sha256)
@@ -451,13 +508,17 @@ create table payments.statement_lines (
   line_no            int not null,
   occurred_on        date not null,
   currency           char(3) not null,
-  amount_minor       bigint not null,               -- negative for refunds/reversals
+  amount_minor       bigint not null,               -- GROSS; negative for refunds/reversals
+  fee_minor          bigint not null default 0,     -- acquirer fee (MDR) on this line: an expense, never the guest's
+  net_minor          bigint,
   reference          text,
   approval_code      text,
   card_last4         char(4) check (card_last4 is null or card_last4 ~ '^[0-9]{4}$'),
   description        text,
   match_status       text not null check (match_status in ('matched', 'unmatched', 'amount_mismatch', 'duplicate',
                        'ambiguous')),
+  check (coalesce(reference, '') || ' ' || coalesce(approval_code, '') || ' ' || coalesce(description, '')
+         !~ '[0-9]([ -]?[0-9]){11,}'),
   match_basis        text,
   matched_payment_id uuid references payments.payments(id),
   matched_refund_id  uuid references payments.refunds(id),
@@ -483,6 +544,7 @@ create table payments.exceptions (
   ref_type          text,
   ref_id            uuid,
   dedupe_key        text not null,
+  occurrences       int not null default 1,         -- a recurrence after resolution reopens the exception
   status            text not null default 'open' check (status in ('open', 'resolved')),
   resolution        text,
   resolved_by       text,
@@ -494,6 +556,17 @@ create table payments.exceptions (
 );
 select core.enable_tenant_isolation('payments.exceptions');
 create index exceptions_open_idx on payments.exceptions (tenant_id, property_id, status);
+
+-- Event backstop (PAY-R16 / P0-3): last provider event seen per account by the periodic event sweep, so a webhook
+-- that never arrived (or failed) is still applied.
+create table payments.event_cursors (
+  account_id   uuid primary key references payments.accounts(id),
+  tenant_id    uuid not null,
+  cursor       text,
+  last_run_at  timestamptz,
+  last_error   text
+);
+select core.enable_tenant_isolation('payments.event_cursors');
 
 ---------------------------------------------------------------------------------------------------------
 -- Simulator state ("the provider's side" for demo/trial/training and tests). Never used in live mode.
@@ -556,7 +629,10 @@ create table payments.account_directory (
   provider            text not null,
   external_account_id text
 );
-create index account_directory_route_idx on payments.account_directory (provider, external_account_id);
+-- A provider account (e.g. a Stripe connected account) can belong to exactly ONE organization: routing is
+-- unambiguous and nobody can claim another hotel's account.
+create unique index account_directory_route_idx on payments.account_directory (provider, external_account_id)
+  where external_account_id is not null and provider <> 'external_terminal';
 revoke all on payments.account_directory from portico_app;
 
 create or replace function payments.sync_account_directory() returns trigger

@@ -170,6 +170,13 @@ const TABLE: Record<string, Omit<DeclineExplanation, 'code'>> = {
     recovery: 'Start the payment again if the guest still owes this amount.',
     retryable: true,
   },
+  environment_changed: {
+    category: 'configuration',
+    message:
+      'The organization’s environment changed after this request was recorded, so it was not sent. Nothing was charged.',
+    recovery: 'Start the payment again; it will use the current environment.',
+    retryable: false,
+  },
   invalid_state: {
     category: 'configuration',
     message: 'The provider says this transaction can no longer be changed this way. Nothing was charged.',

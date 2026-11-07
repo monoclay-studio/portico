@@ -7,7 +7,7 @@ import { sql } from '@portico/db';
 import { newId } from '@portico/kernel';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { seedPaymentsDemo } from '../src';
-import { type Harness, setupOrg, startHarness } from './harness';
+import { type Harness, setupOrg, startHarness, stripeAccount } from './harness';
 
 let h: Harness;
 beforeAll(async () => {
@@ -23,17 +23,9 @@ describe('environment safety', () => {
       h.secrets.sandbox = 'sk_test_mustNeverBeUsed';
       const org = await setupOrg(h, env);
       const svc = h.module.service;
-      const stripe = await org.tx((tx) =>
-        svc.tx.createAccount(tx, {
-          legalEntityId: org.legalEntityId,
-          provider: 'stripe_connect',
-          externalAccountId: `acct_${newId().replace(/-/g, '').slice(0, 16)}`,
-          displayName: 'Hotel Stripe',
-          currencies: ['USD'],
-        }),
-      );
+      const stripeId = await stripeAccount(h, org, `acct_${newId().replace(/-/g, '').slice(0, 16)}`);
+      const stripe = await org.tx((tx) => svc.tx.getAccount(tx, stripeId));
       expect(stripe.effectiveMode).toBe('simulate');
-      await org.tx((tx) => svc.tx.updateAccount(tx, stripe.id, stripe.version, { status: 'active' }));
       // Real-looking tokens are refused where payments are simulated.
       await expect(
         org.tx((tx) =>
@@ -62,7 +54,6 @@ describe('environment safety', () => {
         methodId: m.id,
         amount: { amountMinor: 1_000, currency: 'USD' },
         ref: { type: 'folio', id: newId() },
-        initiator: 'customer',
         businessKey: newId(),
       });
       expect(p).toMatchObject({
@@ -80,17 +71,9 @@ describe('environment safety', () => {
   it('sandbox: Stripe without TEST keys sends nothing and says why', async () => {
     const org = await setupOrg(h, 'sandbox');
     const svc = h.module.service;
-    const stripe = await org.tx((tx) =>
-      svc.tx.createAccount(tx, {
-        legalEntityId: org.legalEntityId,
-        provider: 'stripe_connect',
-        externalAccountId: 'acct_1SandboxHotel',
-        displayName: 'Hotel Stripe (test mode)',
-        currencies: ['USD'],
-      }),
-    );
+    const stripeId = await stripeAccount(h, org, 'acct_1SandboxHotel');
+    const stripe = await org.tx((tx) => svc.tx.getAccount(tx, stripeId));
     expect(stripe.effectiveMode).toBe('sandbox');
-    await org.tx((tx) => svc.tx.updateAccount(tx, stripe.id, stripe.version, { status: 'active' }));
     const m = await org.tx((tx) =>
       svc.tx.createMethod(tx, {
         accountId: stripe.id,
@@ -107,7 +90,6 @@ describe('environment safety', () => {
         methodId: m.id,
         amount: { amountMinor: 1_000, currency: 'USD' },
         ref: { type: 'folio', id: newId() },
-        initiator: 'customer',
         businessKey: newId(),
       });
     // No keys at all → provider_not_configured; nothing sent.
@@ -166,7 +148,6 @@ describe('environment safety', () => {
         methodId: methods.rows[0]?.id as string,
         amount: { amountMinor: 1_000, currency: 'USD' },
         ref: { type: 'folio', id: newId() },
-        initiator: 'customer',
         businessKey: newId(),
       }),
     ).rejects.toThrow(/cannot be used in the live environment/);
