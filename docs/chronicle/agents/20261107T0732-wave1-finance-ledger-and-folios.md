@@ -1,7 +1,7 @@
 # Agent run: Wave1: finance ledger and folios
 
 - Started: 2026-11-07T07:32:35.571Z · last activity: 2026-11-07T12:21:52.466Z
-- Turns: 710 · tool uses: 447 · output tokens: 1,391,832
+- Turns: 413 · tool uses: 447 · output tokens: 662,149
 - Type: general-purpose
 
 ## Brief (2026-11-07T07:32:35.571Z)

@@ -1023,3 +1023,43 @@ resume. also short, what plan usage are you running on? ultra or pro?
 only check 5hour window on checks
 ````
 
+## 2026-11-07 18:59 UTC — Owner
+
+````text
+rough estimates are fine. how much of the app is done? at the current speed how long would it be to get done considering usage limits.. don't force yourself to stick to these limits, i don't mind you going way way beyond them if you have to
+````
+
+## 2026-11-07 19:04 UTC — Owner
+
+````text
+if i get 10 small guesthouses to use the system to test for free how much cost would i incur per month roughly? and what are these costs
+````
+
+## 2026-11-07 19:07 UTC — Owner
+
+````text
+is it in your system to make the product channex ready at the end of this run? meaning to name just a few "ARI Engine: Your PMS must actively track and batch availability, rate, and restriction (ARI) changes (no heavy database polling loops).
+
+* Outbox & Queue: A stable queue system that batches updates into Channex API calls while respecting their 20 ARI/minute rate limits.
+* Webhook Endpoint: A live endpoint in your PMS configured to receive, parse, and durably save booking delivery revisions.
+* Acknowledge Flow: A functioning mechanism that sends back booking confirmations/acknowledgments to Channex once received."
+````
+
+## 2026-11-07 19:21 UTC — Owner
+
+````text
+mews offer over 1000+ api integrations. how long would it take to build something equal?
+````
+
+## 2026-11-07 19:30 UTC — Owner
+
+````text
+short answer. in your honest review, can this product once it hit the market compete against the likes of mews, cloudbeds, opera?
+````
+
+## 2026-11-07 19:34 UTC — Owner
+
+````text
+and for your question. should I add the partner platform after Channex. yes and anything else that you think is going to be helpful and make the product better. open api. i don't care how long the whole project takes, as long as the final product is in it's most powerful form to compete with opera, cloudbeds, mews etc.. keep adding on if it's not overkill for where we are going and where our vision is
+````
+

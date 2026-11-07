@@ -3,7 +3,8 @@
 Questions that materially affect scope, spending, commercial commitments, legal responsibility or live
 operations. **Work never stops on these**: each has a default that engineering proceeds with until answered.
 Agents: add new questions at the bottom using the template; never delete answered ones (mark them answered
-and move the answer into `docs/product/decisions.md`).
+and move the answer into `docs/product/decisions.md`). The **Implemented by** line (quality round 3, O4-1) is required
+for every new question, and for each open question whose default is a code or infrastructure setting.
 
 Template:
 
@@ -12,6 +13,7 @@ Template:
 **Context:** why this matters, in plain English.
 **Question:** the precise decision needed.
 **Default we are proceeding with:** …
+**Implemented by:** the file:line that does the default today, or the pending-fixes line that will make it so.
 **If the answer differs:** what changes / rework size.
 **Blocks:** what cannot proceed (and what can).
 **Raised by / date:** …
@@ -128,6 +130,7 @@ Template:
 **Context:** Agreed prices are snapshotted at booking and never silently rewritten. Tax rules are effective-dated data. The Maldives raised TGST from 16% to 17% on 1 Jul 2025, so bookings made before that date for stays after it existed. Whether the applicable rate follows the service date, invoice date or booking/payment date is a legal question.
 **Question:** For the Maldives (and as the product default), which date determines the applicable tax rule for agreed bookings?
 **Default we are proceeding with:** the rule in force on the **service date** applies. Agreed *prices* stay unchanged; for tax-exclusive agreed prices the tax line changes (the guest pays the difference); for tax-inclusive agreed prices the net changes. Before a new tax rule version is activated, admins see a change report listing affected future stays and the per-stay difference. The tax engine stores a `taxPointPolicy` per rule (`service_date` | `booking_date` | `invoice_date`) so the answer is configuration.
+**Implemented by:** `modules/rates/src/domain/tax-engine.ts:223` (the rule version pinned for each line's service date, via `pinnedVersionOn` at :112). The admin change report before activation is not built yet: rates' next round.
 **If the answer differs:** configuration change only.
 **Blocks:** nothing.
 **Raised by / date:** product strategy, 2026-11-07
@@ -160,6 +163,7 @@ Template:
 **Context:** Brief §7 allows cross-property sharing only within permissions and consent rules. Properties of one organization may belong to different legal entities, and the lawful basis can differ by jurisdiction (readiness §12). OPERA's chain-level sharing switch is irreversible (research 01) — we will not copy that.
 **Question:** Is the default below acceptable as the product default until market-specific legal advice is obtained?
 **Default we are proceeding with:** within one organization, a profile's core identity, contact data, preferences and stay history are visible to staff at other properties who hold `guests.profile.readShared`; property-private notes, alerts marked private, identity documents and payment tokens are never shared; marketing consent is recorded per legal entity; sharing can be switched off and on again per organization (reversible); nothing is ever shared across organizations.
+**Implemented by:** `modules/guests/src/service/profiles.ts:240` (cross-property visibility needs entitlement, policy, `guests.profile.readShared` and no guest objection) and `modules/guests/src/manifest.ts:38`.
 **If the answer differs:** policy defaults change; possibly per-legal-entity partitions (medium).
 **Blocks:** nothing in development; privacy documentation for multi-property pilots.
 **Raised by / date:** product strategy, 2026-11-07
@@ -485,6 +489,7 @@ billing is not activated for live customers until this is answered.
 **Context:** ADR-0017 §8 fixed the rule that sensitive (⚑) permissions never work without MFA. What remains a policy choice is how long a new member may keep working on everyday (non-sensitive) tasks before enrolling when an organization requires MFA for everyone (the "grace", capped at 72 hours), and how long a verification stays fresh for sensitive actions (the "step-up window"). A desk agent who posts corrections or refunds several times a shift will be asked for a code each time the window lapses.
 **Question:** Keep the defaults — grace 72 hours (maximum 72) and step-up window 15 minutes — or choose others (e.g. 24-hour grace; 30–60 minutes for desk roles)?
 **Default we are proceeding with:** grace 72 h (policy may lower it, never above 72), step-up window 15 min, both per-organization policy.
+**Implemented by:** `modules/identity/src/services/policy.ts:23-24` (`mfaStepUpWindowMinutes: 15`, `mfaGracePeriodHours: 72`), checked in `modules/identity/src/domain/step-up.ts:35`.
 **If the answer differs:** configuration defaults only; no rework.
 **Blocks:** nothing in development; affects pilot staff experience.
 **Raised by / date:** identity module agent (steward review P1-2, P3-11), 2026-11-07
@@ -501,6 +506,7 @@ billing is not activated for live customers until this is answered.
 **Context:** Sensitive permissions now always need MFA, so seeded demo and training administrators must enrol an authenticator before they can, for example, manage roles or legal entities. Separately, a trial the operator creates for a prospect is a non-live organization, so its invitation and reset emails are simulated (they appear only in the operator mailbox) and the prospect receives nothing.
 **Question:** (a) Should demo/training seeds stay subject to MFA like every organization (secure, slightly more friction in demos), or may demo organizations relax it? (b) May staff onboarding emails from trial organizations be delivered for real (an exception to "non-live never sends"), or should operators onboard prospects another way?
 **Default we are proceeding with:** (a) no exemption: demo and training follow the same MFA rule; (b) no real delivery from non-live organizations; operators onboard prospects manually.
+**Implemented by:** (a) demo and training organizations follow the same MFA rule; under ADR-0017 Amendment 2 rule 16 a demo member with a `*.portico.invalid` address uses a seeded demo authenticator (`modules/identity/src/services/mfa.ts:370`, `seedDemoTotp`); (b) non-live organizations send nothing real (`assertExternalEffectAllowed`, rule 12).
 **If the answer differs:** (a) a demo policy flag in identity; (b) an environment-safety exception for `message.staff` in trials (kernel policy) — small changes.
 **Blocks:** smooth self-guided demos and prospect trials; nothing in development.
 **Raised by / date:** identity module agent (steward review P3-12), 2026-11-07
@@ -509,6 +515,7 @@ billing is not activated for live customers until this is answered.
 **Context:** Any live customer with `platform.trial.manage` can create trial organizations. Unlimited trials cost hosting and widen the surface for abuse (review P3-10).
 **Question:** How many open trials may a live organization hold, and should the number depend on the plan?
 **Default we are proceeding with:** at most 3 open trials per live organization, all plans; closing a trial frees a slot.
+**Implemented by:** `apps/api/src/provisioning.ts:114` (`MAX_OPEN_TRIALS_PER_ORGANIZATION = 3`), enforced at :224 with the `trial_limit_reached` error.
 **If the answer differs:** a constant or a plan limit (`limits.environments.trial`).
 **Blocks:** nothing.
 **Raised by / date:** platform module agent (steward review P3-10), 2026-11-07
@@ -565,6 +572,7 @@ billing is not activated for live customers until this is answered.
 **Context:** When duplicate guest profiles are merged, their marketing and data-processing consents can disagree. For example, one profile opted out of marketing last year and the other opted in yesterday. The guests module currently keeps the **most recent** statement. The parity research (EC-GUE-006) flags this as a privacy risk: a merge could silently restore marketing consent that someone withdrew.
 **Question:** With a privacy adviser: on merge, should the most restrictive consent win per purpose, should the most recent statement win, or should staff ask the guest?
 **Default we are proceeding with:** **the most restrictive consent wins per purpose** (withdrawals and opt-outs always survive), and the merge preview shows the consent outcome. The guests module is changed to this default.
+**Implemented by:** **not yet**: `modules/guests/src/service/merge.ts:289` still applies `newerConsentWins`. The pending-fixes line "guests (parity EC-GUE-006, Q157 default)" makes it so (owner: guests).
 **If the answer differs:** a policy switch in the guests module's merge rules; no data loss either way, because every original statement is kept in the consent history.
 **Blocks:** nothing in development; live guest marketing.
 **Raised by / date:** parity research (operations cluster), 2026-11-07
@@ -594,6 +602,7 @@ Channex (Q23).
 - IAM Identity Center required before production.
 
 Nothing is deployed until you authorize spend.
+**Implemented by:** **pending**: the infra fix round (sent 2026-11-07, running) makes the NAT gateway the code default in `infra/terraform/envs/production`; this line gets the file:line at merge. Lean tier, ap-south-2, monthly drills and staging on demand are variables on `feat/infra-aws`.
 **If the answer differs:** a variable change in `infra/terraform/envs/*`; no rework.
 **Blocks:** the hosted pilot only.
 **Raised by / date:** infrastructure workstream, 2026-11-07

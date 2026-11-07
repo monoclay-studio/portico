@@ -1,7 +1,7 @@
 # Agent run: Guest journey gap audit and specs
 
 - Started: 2026-11-07T08:02:08.303Z · last activity: 2026-11-07T11:16:04.819Z
-- Turns: 142 · tool uses: 92 · output tokens: 418,299
+- Turns: 79 · tool uses: 92 · output tokens: 196,395
 - Type: general-purpose
 
 ## Brief (2026-11-07T08:02:08.303Z)

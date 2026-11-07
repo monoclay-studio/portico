@@ -1,7 +1,7 @@
 # Agent run: Integration step: bind module ports
 
-- Started: 2026-11-07T16:16:26.294Z · last activity: 2026-11-07T18:43:51.516Z
-- Turns: 934 · tool uses: 581 · output tokens: 867,948
+- Started: 2026-11-07T16:16:26.294Z · last activity: 2026-11-07T22:07:37.529Z
+- Turns: 882 · tool uses: 908 · output tokens: 766,438
 - Type: general-purpose
 
 ## Brief (2026-11-07T16:16:26.294Z)
@@ -443,6 +443,42 @@ If you need specific details from before compaction (like exact code snippets, e
 Continue the conversation from where it left off without asking the user any further questions. Resume directly — do not acknowledge the summary, do not recap what was happening, do not preface with "I'll continue" or similar. Pick up the last task as if the break never happened.
 ````
 
+## Follow-up message (2026-11-07T21:38:32.901Z)
+
+````text
+The coordinator sent a message while you were working:
+Re-review #3 of feat/integration-step: **merge after fixes** (P0 0 · P1 2 · P2 4 · P3 4). Every earlier PoC is now refused; the details are in docs/orchestration/reviews/review-integration-step-3.md.
+- PoCs: integration-step-poc/r3-fix-attacks.test.ts.txt. Each test passes today by asserting a defect; flip each into a regression test.
+- ADR-0015 **Amendment 2** is on main. Staff permission never exceeds cardholder consent, and payment links have external writers.
+
+Fix:
+- **R3-P1-1 (invariant (b)): the departed folio's balance request.** The reviewer found three writers you didn't close:
+  - settling or transferring the folio to a company/AR account must amend or cancel the request;
+  - the "defer while a payment is in flight" state must RESUME when that payment fails or is reversed, with an open item until it does;
+  - re-issue, amend or cancel must DEACTIVATE the old link at the provider first, through the simulator's deactivate call. Until the provider confirms, the link counts as possibly payable, and any over-collection becomes an URGENT refund exception, never routine.
+  - Model the request as a state machine with the provider as an external writer, and test every transition including provider-side payment of a superseded link.
+- **R3-P1-2: enforce the mandate's scope on EVERY money movement.** That covers purposes, amount cap, bookings or folios covered and validity, across charge, authorize, hold increase, capture beyond the authorization, and payment requests drawn on the card. Staff `payments.payment.collect` only decides who may initiate WITHIN the consent. Make the payments README true.
+- **R3-P2s:**
+  - **R3-P2-1:** the double-collection guard treats a booking and its folios as one family, and is not bypassable by the purpose label. `incidentals` and `custom` need a reason and an audit when another collection for the same family is open or paid.
+  - **R3-P2-2:** no money-derived issue text on stay records or issue lists for roles without money permissions.
+  - **R3-P2-3:** concurrent opening-deposit imports must serialize. Take an advisory lock or unique key on the booking before the "held elsewhere" check.
+  - **Invariant (e) on payments' own routes:** now that consent is enforced, check card ownership against the payer, or document precisely why the mandate check covers it.
+- **P3s:** fix the lint warning (accounts.ts:630) and use one lock order between finance and payments.
+
+Process:
+- Self-check v4 § 5 table, with external writers included.
+- A test per sibling.
+- Run each test against your pre-fix commit and show it fails.
+- Re-attack each fix "one step beyond".
+- Never rewrite pushed commits.
+
+Gates:
+`pnpm lint && pnpm turbo run typecheck --force && pnpm turbo run test --force --concurrency=2`
+Use PORTICO_TEST_DB_PREFIX=w1_intstep_fix3, merge main first, and check the exit codes. Commit and don't push.
+
+Address this before completing your current task.
+````
+
 ## Report (2026-11-07T17:04:17.381Z)
 
 ````text
@@ -613,5 +649,208 @@ What changed:
 - **P3-7:** `booking.depositRequirement` should come from the agreed payment schedule, not client input.
 - **Saved-card ownership:** payments returns an already-saved token's method with its original owner. With the new owner check, a second guest saving the same token gets a card they cannot use; payments needs to decide refuse vs owner link.
 - **Q156** (owner): automatic charging of a departed guest's card for late charges. Default: always a payment request.
+````
+
+## Report (2026-11-07T19:28:21.798Z)
+
+````text
+## Integration step, fix round 2: report
+
+All gates pass on the final tree (HEAD `db6ae8c`). Nothing was pushed, and no pushed commit was rewritten. I merged main twice:
+- the round-2 review, ADR-0015 Amendment 1 and the fix sweep (`9bbb6a4`);
+- identity-plus, platform enterprise and self-check v4 (`00c7639`).
+
+**Two things to tell the reviewer first:**
+- **Inverted P3-9 PoC (`payments` variant) will now fail as written.** R2-P2-4 requires an external guarantee step to stay pending until someone records `checkIn.guarantee.externalReference`. The PoC needs that one input added.
+- **A stranger's card is still refused, even for a user with `payments.payment.collect`.** "Designated" cards must belong to someone linked to the booking, so the original inverted P1-2 PoC still holds.
+
+### Commits
+| Commit | Content |
+|---|---|
+| `60b3238` | payments: SW-PAY-1..4, R2-P2-1, R2-P2-3, the Amendment 1 card check (`assessGuaranteeCard`), `syncBalanceRequest`, migration `0002_method_integrity.sql` |
+| `73c9931` | finance + payments: R2-P1-2 (the balance request follows the folio) and R2-P1-3 (one target predicate; the import asks reservations) |
+| `8fda978` | reservations: R2-P1-1 on every guarantee path, R2-P2-2, R2-P2-4, R2-P3-1/2/3/5 |
+| `8605368` | api: round-2 regressions, composition binding, scenario harness cards carry a card-on-file agreement |
+| `00c7639` | merge of main. Both sides added `apps/api/test/review-regressions.test.ts`: main's keeps the name, mine moved unchanged to `review-regressions-intstep.test.ts` |
+| `c3855a1` | merged-tree fixes. Scenario harness: demo admin on a `*.portico.invalid` address, `signIn` enrols MFA, `makeExternal` uses the real plan/approve/freeze/effective flow. Platform: removed my duplicate `GET /data-authority` route; main's route now returns 404 for a property the organization does not have |
+| `db6ae8c` | docs: domain-map contract changes, pending fixes, payments README |
+
+### Finding → commit → test
+
+Test locations:
+- **api** = `apps/api/test/review-regressions-r2.test.ts`
+- **pay** = `modules/payments/test/review-sweep-regressions.test.ts`
+- **res** = `modules/reservations/test/guarantee-amendment1.test.ts`
+- **fin-od** = `modules/finance/test/opening-deposits-ownership.test.ts`
+- **S10** = the R2-P1-2 block in `modules/finance/test/scenario-s10-late-restaurant-charge.test.ts`
+
+| Finding | Commit | Regression tests |
+|---|---|---|
+| R2-P1-1 card guarantee (Amendment 1) | `60b3238`, `8fda978` | api: R2-A booker and sharing occupant (create refused with nothing kept, patch refused, check-in input 403, nothing held), "one step beyond", "mandate naming THIS booking". res: 5 tests (create/patch, check-in, stranger, channel create/modify, card id hidden). pay: "what makes a card the agreed guarantee" ×4 |
+| R2-P1-2 late-charge request | `60b3238`, `73c9931` | api: R2-D concurrent and sequential, R2-E reversal, transfer. S10: ×3 charges, reversal, adjustment and transfer, payment. pay: create/re-issue/cancel, amend (never below what was paid), defer while a payment is in flight |
+| R2-P1-3 opening deposits, one predicate | `73c9931` | api: R2-F (import rejected; Kandu's deposit charged and posted), deposit held elsewhere refused before charging. fin-od ×3. S18 updated (bookings migrated first) |
+| R2-P2-1 card ownership | `60b3238` | api: R2-C. pay: simulator per cardholder and property; a real token for another owner is refused; merge and unmerge |
+| R2-P2-2 money redaction | `8fda978`, `8605368` | api: R2-G (run, stay issue, `performWorkflow` response) |
+| R2-P2-3 reference allow-list | `60b3238` | api: R2-H (`folio`, `Folio`, `invoice`). pay: hold and recorded-authorization siblings |
+| R2-P2-4 connected mode | `8fda978` | api: `review-regressions-intstep` P3-9/R2-P2-4 (deposits skipped; guarantee pending, then attested with provenance `external`) |
+| R2-P3-1 / R2-P3-2 / R2-P3-3 / R2-P3-5 | `8fda978` | api: R2-B (bad cap value falls back to the default), revenue manager keeps totals. res: channel test. Typecheck: `verify` is now required |
+| SW-PAY-1 one collection per reference and purpose | `60b3238` | pay: PoC; hold taken before the link then captured (on the booking and moved to a folio); recorded payment; 10 concurrent links → exactly 1 |
+| SW-PAY-2 `custom` purpose | `60b3238` | pay: PoC (reason plus 1 audit); VCC run skipped over a guest link |
+| SW-PAY-3 card's property | `60b3238` | pay: PoC; authorize sibling; audited cross-property use; mandate for another property |
+| SW-PAY-4 customer present | `60b3238` | pay: PoC; a declared `hosted_entry`/`terminal` changes nothing; `authorizations.test` P1-8 rewritten for the guest-actor rule |
+| R2-P3-4 payments `aggregateVersion` | — | Deferred: no consumer yet (pending-fixes) |
+
+### Re-attack table (§ 3) per P1, including "one step beyond"
+| Finding | (a) Reverse order | (b) Siblings checked | (c) Failure path | (d) Griefing | (e) Atomic | One step beyond my fix |
+|---|---|---|---|---|---|---|
+| R2-P1-1 | Card attached by a payment user first, check-in by someone without payment rights later: the hold is re-checked with the holder's rights, step fails, nothing held | create, patch, channel create, channel modify, check-in input, VCC registration (only for a booking of that channel connection), payments routes (card's property and legal entity) | A refused create keeps 0 booking rows (row-count test) | A channel booking is never refused for its card: card left off, issue raised; the guest can always supply a card through a link | n/a (no counter) | (1) The agent registers a VCC for a direct booking: refused. (2) The agent re-saves the victim's token: refused (real) or a separate card (simulator). (3) A standing mandate does not cover a booking staff linked; only one naming the booking does, within its amount |
+| R2-P1-2 | Correction after the request: reversal cancels it, adjustment amends it down | late charge ×3, reversal, adjustment, transfer in/out, payment, refund, deposit application | Payments refusal → `not_possible`, `amountRequested: 0`, posting kept, urgent | A link paid during an amendment: the request is credited before finance posts | Folio lock serializes; 3 concurrent charges give the same result as sequential | Partly paid link amended to 0 closes at what was paid (never below); a payment in flight defers the change (shown as deferred, never as requested) |
+| R2-P1-3 | Import before the booking exists: rejected unless `legacyNotMigrated`; such a balance takes no new money but can be refunded | `recordDeposit`, `importOpeningDeposits`, payments pre-check (same predicate), ledger port inflow/outflow | A refused charge records 0 payments rows | An import elsewhere can no longer bind another property's booking; an existing conflict blocks with `deposit_account_conflict` (finance must move it) | n/a | A deposit account created at another property (repair or migration) blocks the card before it is charged, never charged-then-not-posted |
+
+### § 5 invariant closure (self-check v4)
+Each row is held to the rule. "Fails without the fix" means verified by running the new test file in a temporary worktree at pre-fix `9bbb6a4`.
+
+| Invariant | Input | Writer / repeat / inverse | Test (fails without fix?) |
+|---|---|---|---|
+| (a) A card held or charged without collect was supplied by its cardholder for this booking, or is mandated | `bookings.guarantee` | create, patch, channel create, channel modify, check-in input | api R2-A ×2, res ×4 (yes) |
+| | method owner and entry (payments) | `createMethod` (entry channel is a server fact), `registerVirtualCard` (that channel only), profile merge | pay "agreed guarantee" ×4 (yes) |
+| | own record: stored `basis` | re-checked at every hold with the holder's rights | api "one step beyond" (yes) |
+| (b) A departed folio has at most one open balance request, equal to its debt | folio balance | late charge ×3, reversal, adjustment, transfer, payment, refund, deposit application | api R2-D ×2, R2-E, transfer; S10 ×4 (yes) |
+| | own records: request amount, exception severity and `amountRequested` | recomputed every time; inverse cancels or closes | pay ×3, S10 failure test (yes) |
+| (c) A deposit account's booking belongs to its property and legal entity | `deposit_accounts` | `recordDeposit`, import, migration (legacy flag), payments pre-check (same predicate) | api R2-F and conflict test; fin-od ×3 (yes) |
+| (d) At most one collection per reference and purpose | requests and payments | charge, authorize → capture, recorded payment, VCC, link creation, link webhook (one lock), guarantee capture, `custom` | pay SW-PAY-1 ×4, SW-PAY-2 ×2 (yes). Exceptions: "recorded payment" and "10 concurrent desk charges" already passed before the fix |
+| (e) A card used at a property is readable there and owned by the payer | method property and owner | charge, authorize (readable); guarantee path (owned by the booking's people) | pay SW-PAY-3 ×3 (yes), api R2-H (yes) |
+| (f) "Customer present" comes only from evidence the server verified | `entry_channel`, actor | `createMethod` (server-derived), charge, authorize | pay SW-PAY-4 ×2 (yes) |
+
+Invariant (e) is **not yet closed** on payments' own routes. A user with `payments.payment.collect` charging a stored card through payments' own routes is checked for property and legal entity, but not for "owned by the folio or booking payer". That needs a payer directory and an audited third-party-payer reason; it is filed in pending-fixes. Amendment 1 treats the collect permission as the explicit capability here.
+
+Pre-fix run results:
+- api 15/15 fail.
+- pay 22/24 fail. The 2 that passed are the recorded-payment and concurrent-desk-charge sibling guards, which already existed.
+- fin-od 3/3 fail.
+- res 4/5 fail. The one that passed is the stranger-card refusal, which already existed.
+
+### Exemptions (BS4-2), each with the attack run against it
+- **A user with collect designates a card.** Allowed only for a card of someone linked to the booking. Attacked by: stranger's card (refused); holder without payment rights (refused).
+- **Cross-property card use.** Needs collect at the card's property, the same legal entity, and is audited. Attacked by: a user scoped to A only (not found).
+- **Separate-collection reason.** Audited on every path, including `custom`.
+- **Balance request created from the ledger skips the "already collected" check.** It still refuses while any payment on the folio is in flight. Attacked by: a payment in flight (deferred).
+- **Outflow on a legacy deposit.** Refunds and adjustments only; new money is refused.
+- **Simulator token suffix.** Simulate mode only; a real token for another owner is refused.
+- **Workflow loop now continues over `skipped`.** Only external-charges deposits produce it.
+
+### Contract integrity (§ 4)
+- **BS3-3:** none of the new port functions accepts an omitted scope. Payments `capture` and `getPaymentStatus` now require it. Older optional parameters remain in `createPaymentRequest` (`legalEntityId?`), `listAccounts` and the job options.
+- **BS3-1 drift added this round:** reservations' guarantee `basis` enum copies payments' values plus `designated`, and `bookingPeople` copies the `profile` → `guest_profile` payer mapping. Both are for the RC-2 / `payerRef` codec item.
+
+### Gates (merged tree, `PORTICO_TEST_DB_PREFIX=w1_intstep_fix2`, exit codes read directly)
+| Command | Exit | Detail |
+|---|---|---|
+| `pnpm install --frozen-lockfile` | 0 | |
+| `pnpm lint` | 0 | 843 files; "Module boundaries OK (10 modules checked)" |
+| `pnpm turbo run typecheck --force` | 0 | 18/18 |
+| `pnpm turbo run test --force --concurrency=2` | 0 | 16/16 |
+| `pnpm turbo run test --force` (default concurrency) | 0 | 16/16 |
+
+- Test counts: api 117 passed, 29 todo; payments 137; finance 92; reservations 154; guests 192; identity 153; integration 173; rates 130; operations 120; inventory 98; platform 62; ui 87; backoffice 53.
+- No `w1_intstep_fix2*` databases remain. I also dropped leftovers from an earlier interrupted run.
+
+### Decisions recorded (no new owner question)
+- **Customer present:** only a guest acting for themselves is customer-initiated (strictest default). Staff-saved cards need a recorded agreement from the cardholder; harness and test cards now carry one.
+- **R2-P2-1:** a real token already saved for another owner or property is refused, not linked. The guest re-enters the card to get a new token.
+- **Hosted entry and terminal sessions** verified with the provider are a pending-fixes item. Until they exist, only a guest saving their own card counts as cardholder-supplied.
+- **Self-check v4 §8 "Exact edits"** (chronicle, `STATUS`, RC-2 entries) are orchestrator edits; I did not make them.
+
+````
+
+## Report (2026-11-07T22:07:37.353Z)
+
+````text
+## Integration step, fix round 3: report
+
+All three gates exit 0 on the merged tree. HEAD is `1424662`; nothing was pushed, and no pushed commit was rewritten. I merged main twice (`d161ceb` and `5e6605c`, both docs-only), each time resolving `pending-fixes.md` as a union.
+
+**For the reviewer first:**
+- **Hotel staff can no longer take money from a stored card beyond what the cardholder agreed to.** A stored agreement without a recorded scope is now refused, and every new mandate must record one.
+- **Agreement amounts are now running totals, and staff never set the purpose.** `maxAmount` caps everything taken on the card under the agreement, so splitting a charge does not get past it. `custom` is never a covered purpose.
+- **The guest no longer receives a new payment link until the old one is confirmed dead at the provider.** When a balance request is replaced, the old link is deactivated at the provider first. While the provider is down, the old link stays marked "possibly payable" and the replacement waits.
+
+### Commits
+| Commit | Content |
+|---|---|
+| `7026624` | payments + finance: consent on every money movement (`service/consent.ts`); the balance request rebuilt as a state machine (cancel, deactivate at the provider, then replace; migration `0003_request_lifecycle.sql`); urgent refund item for over-collection; finance syncs after receivables and payment adjustments, and re-syncs when a deferring payment ends; the booking family in the double-collection guard; one lock order; deposit lock per booking; lint warning fixed |
+| `915d82b` | reservations + api: consent required for cards a payment user picks; money issues redacted; test fixtures carry the consent they use |
+| `7b0c59c` | tests: round-3 regressions, request-lifecycle tests; `makeExternal` uses real `org_admin` roles and the composition's platform ports (R3-P3-4); docs and payments README |
+| `5e6605c`, `1424662` | merge of main; lint fix |
+
+### Finding → commit → test
+
+Test locations:
+- **r3** = `apps/api/test/review-regressions-r3.test.ts`
+- **life** = `modules/payments/test/request-lifecycle.test.ts`
+
+| Finding | Commit | Regression tests |
+|---|---|---|
+| R3-P1-1(i) direct bill / receivables | `7026624` | r3 "R3-B1 flipped": no open guest link; link `deactivated`; the guest's payment is refused at the provider; nothing collected |
+| R3-P1-1(ii) deferral never resumed | `7026624` | r3 "R3-B2 flipped": urgent open item "Deferred … still asks for" (never "resolved"); a failed payment re-syncs |
+| R3-P1-1(iii) replaced request still payable | `7026624` | r3 "R3-B3 flipped": the old link is refused, the debt is collected once. "One step beyond": provider down → link `deactivating`, replacement `pending`, guest pays the old link → **urgent** refund item. life ×5 (every transition, provider as an external writer) |
+| R3-P1-2 mandate scope | `7026624`, `915d82b` | r3 "R3-F1 flipped": USD 5,000 charge → `mandate_purpose_not_covered`; USD 9,000 hold → `mandate_reference_not_covered`. r3 siblings: hold over the limit, hold increase, purpose, capture onto an uncovered bill, designation. "Five charges against a USD 100 limit": the limit is a total. Payments sweep SW-PAY-2 rewritten: `custom` is never covered |
+| R3-P2-1 booking family / labels | `7026624` | r3 R3-D1 ×2: `incidentals` and `deposit` need a reason; booking → its folio is one family; the normal balance-after-deposit flow is allowed |
+| R3-P2-2 stored money issues | `915d82b` | r3 "R3-G1 flipped": record and `listIssues` show no amounts, `details` are `{}`; the finance role still sees them. Handover items also redacted (code) |
+| R3-P2-3 concurrent imports | `7026624` | r3 "R3-C1 flipped": one import accepted, one rejected; one account holding 10,000 |
+| R3-P2-4 invariant (e) on payments' own routes | `7026624` | **Option (a), closed through consent**: a standing agreement covers only the cardholder's own bookings and bills; otherwise the agreement must name the booking. Covered by the R3-F1 tests |
+| R3-P3-1 guest uses someone else's card | `7026624` | Code: a customer-initiated use must be the acting guest's own card |
+| R3-P3-2 lint warning | `7026624` | Lint is clean |
+| R3-P3-3 lock order across modules | `7026624` | r3 R3-B4 probe: 6 concurrent rounds, no deadlock. Order everywhere: collection lock (per booking family) → folio row → request row |
+| R3-P3-4 `makeExternal` | `7b0c59c` | ux-wiring and P3-9 tests pass through the real flow |
+
+**Run against the pre-fix commit `d161ceb`** (a temporary worktree with only the new test files copied in):
+- r3: **11 of 12 fail**, each at its assertion. The R3-B4 lock probe passed before the fix too; it was never reproducible and stays as a clean probe.
+- life: **5 of 5 fail.**
+
+### Re-attack per P1 (§ 3), including "one step beyond"
+| Finding | (a) Reverse order | (b) Siblings | (c) Failure path | (d) Griefing | (e) Atomic | One step beyond my fix |
+|---|---|---|---|---|---|---|
+| R3-P1-1 | Guest pays the old link before the provider confirms: credited to the cancelled request, **urgent** refund item, replacement withheld | late charge, reversal, adjustment, transfer, receivables, payment, refund, payment adjustment, deposit application, end of a deferral (payment succeeded or failed), staff cancel, link creation racing a close | Payments refusal → `not_possible`, 0 requested, posting kept | Provider outage cannot strand the guest: reconciliation retries the deactivation, then sends the replacement | Family collection lock + folio lock; life "applied three times, then inverted" | Simulator models deactivation (a deactivated link refuses payment), so the test cannot pass trivially. `ensurePaymentLink` creating a link for a request closed meanwhile marks it `deactivating` and deactivates it (code; no deterministic test) |
+| R3-P1-2 | A user with payment rights picks the card first → hold refused at payments anyway | charge, authorize, hold increase, capture (bill covered; amount counts toward the total), VCC charges (now covered purposes), guarantee designation, card supplied for a booking | Refusal records nothing (charge asserts 0 payments) | A cardholder's narrow agreement cannot be widened by a colleague; the recovery is new consent (link or terminal) | Total = sum of merchant-initiated charges and captures under the collection lock | Split charges stop at the limit; a mandate without scope → `mandate_scope_missing`; `custom` never covered; capture onto another booking's bill refused |
+
+### § 5 invariant closure (self-check v4), external writers included
+"Pre-fix fails" means the test fails on `d161ceb`.
+
+| Invariant | Input | Writer / repeat / inverse | Held? | Test (pre-fix fails?) |
+|---|---|---|---|---|
+| (a) A card held or charged without collect was supplied for this booking or is mandated | guarantee link, method | create, patch, channel, check-in input, VCC; payments-side consent | yes | r2 tests (round 2), r3 designation (yes) |
+| (b) One open balance request per departed folio, equal to its debt | folio balance | ×3 late charges, reversal, adjustment, transfer, **receivables**, payment, refund, **payment adjustment**, deposit application | yes | r3 B1; S10 ×4; life "×3 + inverse" (yes) |
+| | own records: deferral item, urgency | deferral → open item, re-sync on end | yes | r3 B2 (yes) |
+| | **external writer: provider pays a link** | replace, close, staff cancel → deactivate first; webhook on a closed request → urgent refund | yes | life ×4, r3 B3 ×2 (yes) |
+| (c) A deposit account's booking belongs to its property and legal entity | `deposit_accounts` | `recordDeposit`, import (sequential and **concurrent**), migration flag; re-checked under the row lock | yes | r3 C1 (yes), fin-od ×3 |
+| (d) At most one collection per booking family | requests, payments | charge, hold → capture, recorded payment, VCC, link, guarantee capture, every label | yes | r3 D1 ×2 (yes) |
+| (e) A card used at a property is readable there and owned by the payer | method, consent | payments' own routes through consent coverage; guarantee path through the booking's people + consent | yes | r3 F1 (yes) |
+| (f) "Customer present" comes only from verified evidence | actor, method owner | guest actor uses own card only; staff use is always merchant-initiated | yes | sweep SW-PAY-4 (round 2) |
+
+### Exemptions I added this round, and the attack run on each
+- **Card the guest entered for a booking** counts as consent for that booking only (guarantee, deposit, balance, no-show). Attack: a staff-saved "booking card" is `staff_entry`, so it gets no implicit consent.
+- **Balance on a folio after a paid deposit link** on its booking is allowed without a reason (normal flow). Attack: relabelling as deposit, custom or incidentals is refused; an unpaid link anywhere in the family needs a reason.
+- **`already_completed` deactivation is treated as deactivated.** The payment still arrives by webhook and becomes an urgent refund item.
+- **Holds on a stay take the lock but are not collections.** Captures are guarded.
+- **No-family references (house folios) lock per reference.**
+
+### Gates (`PORTICO_TEST_DB_PREFIX=w1_intstep_fix3`, main merged first, exit codes read directly)
+| Command | Exit | Detail |
+|---|---|---|
+| `pnpm install --frozen-lockfile` | 0 | |
+| `pnpm lint` | 0 | 847 files, no warnings; "Module boundaries OK (10 modules checked)" |
+| `pnpm turbo run typecheck --force` | 0 | 18/18 |
+| `pnpm turbo run test --force --concurrency=2` | 0 | 16/16 |
+
+- Test counts: api 129 passed and 29 todo; payments 142; finance 92; reservations 154; guests 192; identity 153; integration 173; rates 130; operations 120; inventory 98; platform 62; ui 87; backoffice 53; db 17; kernel 26; http 3.
+- No `w1_intstep_fix3*` databases remain.
+
+### Residuals and notes
+- **Stripe link expiry** (Checkout Session `expire`) is implemented but not tested against the Stripe sandbox: R3 only, in pending-fixes.
+- **A backstop consumer** that re-syncs on finance's own balance-change events is proposed in pending-fixes, for any future balance writer that forgets the sync.
+- **Payer-type mapping drift grows.** Payments' `ownerKeyOfPayer` adds a fourth copy of the mapping, and reservations still copies the `basis` enum. Both belong to the RC-2 / `payerRef` codec item.
+- **ADR text:** ADR-0015 Amendment 2 is on main (the orchestrator's). The domain map's "Integration-step fix round 3" section lists every contract change, including the lock order.
+
 ````
 
