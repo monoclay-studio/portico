@@ -17,7 +17,7 @@ import { BookingVersionConflictError } from '../errors';
 import { RESERVATIONS_PERMISSIONS as P } from '../manifest';
 import type { TermsSnapshot } from '../ports';
 import type { BookingsTable, OccupantsTable, StaysTable } from '../tables';
-import { actorKey, actorName, db, json, parseNights } from './context';
+import { actorKey, actorName, db, json, parseNights, seesPaymentMethods } from './context';
 
 export type BookingRow = Selectable<BookingsTable>;
 export type StayRow = Selectable<StaysTable>;
@@ -448,7 +448,24 @@ export async function toBookingView(
     b.currency,
     counted.map((s) => s.totals ?? zeroTotals(b.currency)),
   );
-  const guarantee = (b.guarantee ?? { kind: 'none' }) as Booking['guarantee'];
+  // Review R2-P1-1: which saved card secures the booking is shown to payment roles only (others see that a card is
+  // on file); server fields (basis, recorder) are never echoed raw.
+  const stored = (b.guarantee ?? { kind: 'none' }) as {
+    kind: Booking['guarantee']['kind'];
+    paymentMethodId?: string;
+    note?: string;
+    basis?: Booking['guarantee']['basis'];
+  };
+  const guarantee: Booking['guarantee'] = {
+    kind: stored.kind,
+    ...(stored.paymentMethodId
+      ? seesPaymentMethods(tx, b.property_id)
+        ? { paymentMethodId: stored.paymentMethodId }
+        : { cardOnFile: true }
+      : {}),
+    ...(stored.note ? { note: stored.note } : {}),
+    ...(stored.basis ? { basis: stored.basis } : {}),
+  };
   return {
     id: b.id,
     propertyId: b.property_id,

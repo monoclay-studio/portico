@@ -342,7 +342,8 @@ export function termsView(doc: RatesTermsDocument): TermsSnapshot {
 }
 
 /** The rates document stored inside a view, passed back to rates exactly as stored (seal intact). */
-export function ratesDocumentOf(view: TermsSnapshot, verify?: (doc: unknown) => boolean): RatesTermsDocument {
+/** Review R2-P3-3: the seal check is required — every caller states how the stored document is verified. */
+export function ratesDocumentOf(view: TermsSnapshot, verify: (doc: unknown) => boolean): RatesTermsDocument {
   const doc = view.providerDocument;
   if (
     typeof doc !== 'object' ||
@@ -358,7 +359,7 @@ export function ratesDocumentOf(view: TermsSnapshot, verify?: (doc: unknown) => 
   }
   // Review P2-3: penalties and deposits are evaluated by rates' pure functions, which do not check the seal — so the
   // adapter verifies it before any stored document is used (as priceChange does inside rates).
-  if (verify && !verify(doc)) {
+  if (!verify(doc)) {
     throw new DomainError(
       'terms_seal_invalid',
       'These agreed terms were altered after rates sealed them, so Portico will not evaluate them. Restore them from the audit trail or re-quote the stay.',

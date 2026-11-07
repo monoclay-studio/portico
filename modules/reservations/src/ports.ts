@@ -593,6 +593,15 @@ export interface PaymentStatusView {
  */
 export type PaymentStatusValue = PaymentSummaryStatus | 'failed';
 
+export interface GuaranteeCardAssessment {
+  usable: boolean;
+  basis: 'cardholder_supplied' | 'channel_card' | 'mandate' | null;
+  card: { brand: string | null; last4: string | null } | null;
+  /** Who the card belongs to (payments' owner type and id). */
+  owner: { type: string; id: string } | null;
+  reason: string;
+}
+
 export interface PaymentsPort {
   /** `scope` (ADR-0015): every record on the reference must belong to the property reservations authorized. */
   getPaymentStatus(
@@ -619,14 +628,15 @@ export interface PaymentsPort {
     },
   ): Promise<{ id: string; status: Record<string, string> }>;
   /**
-   * Who a saved payment method (card token) belongs to, or null when it is unknown, detached or of another property.
-   * Review P1-2: reservations checks that a card used for a stay belongs to its guest, booker or payer.
+   * ADR-0015 Amendment 1 (review R2-P1-1): whether a saved card is this booking's AGREED guarantee — supplied by its
+   * cardholder for THIS booking, the booking's own channel virtual card, or covered by a recorded mandate that names
+   * the booking (within its amount) — and whether it is usable here at all (this property, its hotel company).
+   * Staff linking a person to a booking never makes that person's card the agreed guarantee.
    */
-  describeMethod(
+  assessGuaranteeCard(
     tx: TxContext,
-    methodId: string,
-    scope: { propertyId: string },
-  ): Promise<{ id: string; owner: { type: string; id: string } } | null>;
+    input: { propertyId: string; methodId: string; bookingId: string; amount?: Money },
+  ): Promise<GuaranteeCardAssessment>;
   /** Records the intent and returns `processing`; the provider call happens after commit. */
   authorize(
     tx: TxContext,

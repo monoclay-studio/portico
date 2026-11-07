@@ -13,6 +13,7 @@ import { platform } from '@portico/platform';
 import type {
   AccessPort,
   AuthorizationView,
+  GuaranteeCardAssessment,
   GuestProfileInput,
   GuestsPort,
   KeyOperationResult,
@@ -142,13 +143,46 @@ export class FakePayments implements PaymentsPort {
     return id;
   }
 
-  async describeMethod(
+  /** Cards their cardholder supplied for a specific booking (hosted entry / self-service), method → booking. */
+  suppliedFor = new Map<string, string>();
+
+  /** The cardholder enters this card for this booking (ADR-0015 Amendment 1 (a)). */
+  supplyFor(methodId: string, bookingId: string): void {
+    this.suppliedFor.set(methodId, bookingId);
+  }
+
+  async assessGuaranteeCard(
     _tx: TxContext,
-    methodId: string,
-    scope: { propertyId: string },
-  ): Promise<{ id: string; owner: { type: string; id: string } } | null> {
-    const owner = this.methodOwners.get(methodId);
-    return owner && this.methods.get(methodId) === scope.propertyId ? { id: methodId, owner } : null;
+    input: { propertyId: string; methodId: string; bookingId: string; amount?: Money },
+  ): Promise<GuaranteeCardAssessment> {
+    const owner = this.methodOwners.get(input.methodId);
+    if (!owner || this.methods.get(input.methodId) !== input.propertyId) {
+      return {
+        usable: false,
+        basis: null,
+        card: null,
+        owner: null,
+        reason: 'This payment method is not a saved card of this property.',
+      };
+    }
+    const card = { brand: 'visa', last4: '4242' };
+    if (this.suppliedFor.get(input.methodId) === input.bookingId) {
+      return {
+        usable: true,
+        basis: 'cardholder_supplied',
+        card,
+        owner,
+        reason: 'Supplied for this booking.',
+      };
+    }
+    return {
+      usable: true,
+      basis: null,
+      card,
+      owner,
+      reason:
+        "This card was not supplied by its cardholder for this booking. Linking a person to a booking does not let staff use that person's saved card.",
+    };
   }
 
   private view(a: FakeAuthorization): AuthorizationView {

@@ -106,4 +106,21 @@ export const MONEY_READ = [
 export function seesMoney(tx: TxContext, propertyId: string): boolean {
   return MONEY_READ.some((p) => tx.authz.can(p, { propertyId }));
 }
+
+/**
+ * Review R2-P3-5: a booking's commercial value (agreed totals, the deposit it requires) is the revenue manager's core
+ * data, not payment state. Roles that handle money see it, and so do roles that set prices. Payment state, balances
+ * and folio links stay with `seesMoney`.
+ */
+export const COMMERCIAL_READ = [...MONEY_READ, 'rates.price.manage'] as const;
+export function seesCommercialValue(tx: TxContext, propertyId: string): boolean {
+  return COMMERCIAL_READ.some((p) => tx.authz.can(p, { propertyId }));
+}
+
+/** Who may see which saved card secures a booking (review R2-P1-1): payment roles only. */
+export function seesPaymentMethods(tx: TxContext, propertyId: string): boolean {
+  return ['payments.payment.read', 'payments.payment.collect', 'payments.method.manage'].some((p) =>
+    tx.authz.can(p, { propertyId }),
+  );
+}
 export const MONEY_NOT_SHOWN = 'Payment detail is not shown for your role.';

@@ -296,8 +296,16 @@ export const booking = z.object({
   commission: z.object({ kind: z.string(), percent: z.number().optional() }).nullable(),
   guarantee: z.object({
     kind: guaranteeKind,
+    /** The saved card securing the booking — returned to payment roles only (review R2-P1-1). */
     paymentMethodId: z.string().optional(),
+    /** For other roles: a card is on file (which one is not shown). */
+    cardOnFile: z.boolean().optional(),
     note: z.string().optional(),
+    /**
+     * Why the card may secure the booking (ADR-0015 Amendment 1): supplied by its cardholder for this booking, the
+     * booking's channel card, a mandate naming the booking, or designated by a user with payment rights.
+     */
+    basis: z.enum(['cardholder_supplied', 'channel_card', 'mandate', 'designated']).optional(),
   }),
   depositRequirement: z.object({ amount: money, dueDate: localDate }).nullable(),
   optionDate: localDate.nullable(),
@@ -587,7 +595,15 @@ export const checkInInputs = z
       documentReference: z.string().max(100).optional(),
     }),
     unit: z.object({ unitId: uuid.optional(), overrideConditionReason: z.string().min(3).optional() }),
-    guarantee: z.object({ paymentMethodId: z.string().max(200).optional(), amount: money.optional() }),
+    guarantee: z.object({
+      paymentMethodId: z.string().max(200).optional(),
+      amount: money.optional(),
+      /**
+       * Connected mode (review R2-P2-4): the reference of the guarantee taken in the external system of record. The
+       * person recording it attests it (who and when are kept); Portico does not verify it.
+       */
+      externalReference: z.string().min(1).max(100).optional(),
+    }),
     access: keyStepInput,
   })
   .partial();

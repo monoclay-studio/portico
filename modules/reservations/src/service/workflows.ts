@@ -52,10 +52,12 @@ import {
   db,
   isModuleUnavailable,
   json,
+  MONEY_NOT_SHOWN,
   policy,
+  seesMoney,
 } from './context';
 import { emitReservationEvent } from './event-payload';
-import { checkGuaranteeMethod, guaranteeCap, PAYMENT_COLLECT } from './guarantee';
+import { checkGuaranteeCard, guaranteeCap, PAYMENT_COLLECT } from './guarantee';
 import { resolveGuest } from './guests';
 import { raiseIssue } from './issues';
 import { agreedPenalty } from './penalties';
@@ -85,7 +87,16 @@ interface RunRow {
   version: number;
 }
 
-function toView(row: RunRow): WorkflowRun {
+/** Steps whose result and message carry payment state or money (review R2-P2-2, FD-15). */
+const MONEY_STEPS: ReadonlySet<string> = new Set(['guarantee', 'deposits', 'charges', 'settle']);
+
+/**
+ * Review R2-P2-2: a run seen by a role that does not handle money keeps every step's status (the desk sees what is
+ * left) but not the payment state, amounts or messages of the money steps.
+ */
+function toView(tx: TxContext, row: RunRow): WorkflowRun {
+  const money = seesMoney(tx, row.property_id);
+  const hide = (s: StepState) => !money && MONEY_STEPS.has(s.key);
   const steps = row.steps as StepState[];
   return {
     id: row.id,
@@ -99,8 +110,8 @@ function toView(row: RunRow): WorkflowRun {
       mandatory: s.mandatory,
       external: s.external,
       attempts: s.attempts,
-      message: s.message,
-      result: s.result,
+      message: hide(s) && s.message ? MONEY_NOT_SHOWN : s.message,
+      result: hide(s) ? null : s.result,
       updatedAt: s.updatedAt,
     })),
     summary: summarize(steps),
@@ -150,7 +161,7 @@ export async function startWorkflow(
   });
   if (forwarded) return forwarded;
   const existing = await activeRun(tx, stay.row.id, input.kind);
-  if (existing) return toView(existing);
+  if (existing) return toView(tx, existing);
   const booking = await loadBooking(tx, stay.row.booking_id);
   const businessDate = await deps.ports.platform.getBusinessDate(tx, stay.row.property_id);
   if (input.kind === 'check_in') {
@@ -216,7 +227,7 @@ export async function getWorkflow(
     .orderBy('started_at', 'desc')
     .executeTakeFirst();
   if (!row) throw new NotFoundError(input.kind === 'check_in' ? 'check_in' : 'check_out', input.stayId);
-  return toView(row as RunRow);
+  return toView(tx, row as RunRow);
 }
 
 async function saveSteps(
@@ -240,7 +251,8 @@ async function saveSteps(
 }
 
 type Outcome = {
-  status: 'done' | 'failed' | 'pending';
+  /** `skipped`: nothing for Portico to do here (e.g. handled in an external system of record) — never "done". */
+  status: 'done' | 'failed' | 'pending' | 'skipped';
   message: string;
   result?: Record<string, unknown>;
   idempotencyKey?: string;
@@ -406,7 +418,7 @@ async function stepGuarantee(
       result: { guarantee: guarantee.kind },
     };
   }
-  const external = await externalAttestation(deps, tx, stay, 'payments', 'The guarantee is taken');
+  const external = await externalAttestation(deps, tx, stay, 'payments', 'The guarantee is taken', input);
   if (external) return external;
   const payments = deps.ports.payments;
   const stayRef: EntityRef = { type: 'stay', id: stay.row.id };
@@ -533,13 +545,6 @@ async function stepGuarantee(
       result: guaranteeResult(status, last, declined.length),
     };
   }
-  // The card must belong to the booking's guest, booker or payer (also for the booking's own recorded card).
-  const notAllowed = await checkGuaranteeMethod(deps, tx, {
-    bookingId: booking.row.id,
-    propertyId: stay.row.property_id,
-    methodId,
-  });
-  if (notAllowed) return { status: 'failed', message: notAllowed };
   const agreed = stayTotals(
     stay,
     await loadSnapshots(
@@ -560,6 +565,16 @@ async function stepGuarantee(
       message: `The amount to hold must be in ${agreed.currency}, positive and at most ${cap.amountMinor} minor units (the agreed stay total with the property's guarantee cap). Adjust the amount.`,
     };
   }
+  // ADR-0015 Amendment 1 (review R2-P1-1): checked at the moment of the hold, with the rights of the person holding
+  // it — also for the booking's own recorded card. Without payments.payment.collect only a card its cardholder
+  // supplied for THIS booking (or a mandate naming it, within its amount) is held; a card staff attached is not.
+  const card = await checkGuaranteeCard(deps, tx, {
+    bookingId: booking.row.id,
+    propertyId: stay.row.property_id,
+    methodId,
+    amount,
+  });
+  if (!card.basis) return { status: 'failed', message: card.reason };
   const idempotencyKey = keyFor(declined.length);
   const auth = await payments.authorize(tx, {
     propertyId: stay.row.property_id,
@@ -569,7 +584,11 @@ async function stepGuarantee(
     idempotencyKey,
   });
   const state = authorizationState(auth);
-  const result = { ...guaranteeResult(status, auth, declined.length), amount: auth.amount };
+  const result = {
+    ...guaranteeResult(status, auth, declined.length),
+    amount: auth.amount,
+    basis: card.basis,
+  };
   if (HELD.includes(state)) {
     return { status: 'done', message: `Card authorized${modeLabel(auth)}.`, result, idempotencyKey };
   }
@@ -640,9 +659,11 @@ async function stayFolio(deps: Deps, tx: TxContext, stay: StayRecord): Promise<s
 }
 
 /**
- * Connected mode (ADR-0014, review P3-9): when another system is the system of record for a money domain, the step is
- * attested as handled there (named) instead of failing — check-in is not a dead end for a hotel that keeps its PMS
- * for billing or payments.
+ * Connected mode (ADR-0014, review P3-9, R2-P2-4): when another system is the system of record for a money domain,
+ * check-in is not a dead end — but an external domain changes WHO confirms, not WHETHER it is confirmed. The step
+ * stays pending until a person records that it was done there (who, when, the external reference); it is then done
+ * with provenance `external` ("attested, not verified by Portico"). Forwarding a guarantee to the external system
+ * is not available (payments cannot forward), so `forward` mode is attested the same way.
  */
 async function externalAttestation(
   deps: Deps,
@@ -650,20 +671,54 @@ async function externalAttestation(
   stay: StayRecord,
   domain: 'payments' | 'charges',
   what: string,
+  attestation: { externalReference?: string | undefined } | undefined,
 ): Promise<Outcome | null> {
   const a = await deps.ports.platform.getDataAuthority(tx, stay.row.property_id, domain);
   if (a.authority !== 'external') return null;
   const system = a.systemName ?? 'the external system of record';
+  const base = {
+    external: true,
+    provenance: 'external',
+    domain,
+    systemName: a.systemName,
+    connectionId: a.connectionId,
+  };
+  if (attestation?.externalReference) {
+    return {
+      status: 'done',
+      message: `${what} in ${system} — recorded by ${actorName(tx)} with reference ${attestation.externalReference}. Portico did not verify it.`,
+      result: {
+        ...base,
+        attestedBy: actorKey(tx),
+        attestedAt: tx.now.toISOString(),
+        externalReference: attestation.externalReference,
+      },
+    };
+  }
   return {
-    status: 'done',
-    message: `${what} in ${system}, the system of record for ${domain} at this property — confirm it there.`,
-    result: { external: true, domain, systemName: a.systemName, connectionId: a.connectionId },
+    status: 'pending',
+    message: `${what} in ${system}, the system of record for ${domain} at this property. Do it there, then record its reference here; this step is not done until someone confirms it.`,
+    result: { ...base, awaiting: 'attestation' },
   };
 }
 
 async function stepDeposits(deps: Deps, tx: TxContext, stay: StayRecord): Promise<Outcome> {
-  const external = await externalAttestation(deps, tx, stay, 'charges', 'Deposits are applied');
-  if (external) return external;
+  // Review R2-P2-4: deposits held in an external system of record are applied there; Portico applies none and does not
+  // claim it did (`skipped`, never `done`).
+  const authority = await deps.ports.platform.getDataAuthority(tx, stay.row.property_id, 'charges');
+  if (authority.authority === 'external') {
+    return {
+      status: 'skipped',
+      message: `Deposits are kept in ${authority.systemName ?? 'the external system of record'} (system of record for charges); Portico applies none. Apply them there.`,
+      result: {
+        external: true,
+        provenance: 'external',
+        domain: 'charges',
+        systemName: authority.systemName,
+        connectionId: authority.connectionId,
+      },
+    };
+  }
   const folioId = await stayFolio(deps, tx, stay);
   const applied = await deps.ports.finance.applyDeposits(tx, {
     propertyId: stay.row.property_id,
@@ -1119,7 +1174,7 @@ export async function runStep(
   }
   const steps = run.steps as StepState[];
   const step = getStep(steps, input.step);
-  if (step.status === 'done' || step.status === 'skipped') return toView(run);
+  if (step.status === 'done' || step.status === 'skipped') return toView(tx, run);
   const businessDate = await deps.ports.platform.getBusinessDate(tx, stay.row.property_id);
   let outcome: Outcome;
   switch (input.step) {
@@ -1183,7 +1238,7 @@ export async function runStep(
       },
     });
   }
-  return toView(saved);
+  return toView(tx, saved);
 }
 
 /** Skip a step with a reason: optional steps freely; mandatory steps need `reservations.stay.skipCheckInStep`. */
@@ -1215,7 +1270,7 @@ export async function skipStep(
     reason: input.reason,
     after: { step: input.step, mandatory: step.mandatory },
   });
-  return toView(await saveSteps(tx, run, next));
+  return toView(tx, await saveSteps(tx, run, next));
 }
 
 /**
@@ -1268,7 +1323,7 @@ export async function performWorkflow(
               }
             : s,
         );
-        return toView(await saveSteps(tx, row, steps));
+        return toView(tx, await saveSteps(tx, row, steps));
       });
       return { run, interrupted: { step: key, error }, forwarded: null };
     }

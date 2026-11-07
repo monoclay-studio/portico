@@ -3,6 +3,7 @@ import {
   addDays,
   BusinessRuleError,
   type DateRange,
+  DomainError,
   dateRange,
   type EntityRef,
   eachNight,
@@ -47,10 +48,11 @@ import {
   json,
   policy,
   propertyInfo,
+  seesCommercialValue,
   seesMoney,
 } from './context';
 import { emitReservationEvent } from './event-payload';
-import { assertGuaranteeMethod } from './guarantee';
+import { guaranteeToStore } from './guarantee';
 import { resolveGuest } from './guests';
 import { raiseIssue } from './issues';
 import { keyOperation } from './keys';
@@ -327,13 +329,16 @@ export async function createBookingInternal(
       conflicts.push({ stayId: inserted.stayId, conflictIds: inserted.conflictIds });
   }
 
-  // Review P1-2: a guarantee card recorded on the booking must belong to its guest, booker or payer (so nobody can
-  // attach a stranger's saved card for the desk to authorize later). Refused inside the transaction: nothing is kept.
+  // Review P1-2 / R2-P1-1 (ADR-0015 Amendment 1): a guarantee card is recorded only if its cardholder supplied it
+  // for this booking, a mandate names the booking, or a user with payments.payment.collect chooses it. A direct
+  // booking is refused inside the transaction (nothing is kept); a channel booking that was already sold is never
+  // refused for its card: the card is left off and an issue asks for the channel's virtual card.
   if (input.guarantee?.paymentMethodId) {
-    await assertGuaranteeMethod(deps, tx, {
+    await recordGuaranteeAtCreate(deps, tx, {
       bookingId,
       propertyId: input.propertyId,
-      methodId: input.guarantee.paymentMethodId,
+      guarantee: input.guarantee,
+      channel: opts.acceptedVia === 'channel',
     });
   }
   let rec = await loadBooking(tx, bookingId);
@@ -896,6 +901,43 @@ export async function expireBookings(
   return { expired, optionsDue };
 }
 
+/**
+ * Stores the guarantee of a booking just created (its id now exists, so a card supplied for it can be recognised).
+ * Channel bookings were already sold: a card that is not the booking's agreed guarantee is left off with an issue.
+ */
+async function recordGuaranteeAtCreate(
+  deps: Deps,
+  tx: TxContext,
+  input: {
+    bookingId: string;
+    propertyId: string;
+    guarantee: { kind: string; paymentMethodId?: string | undefined; note?: string | undefined };
+    channel: boolean;
+  },
+): Promise<void> {
+  let stored: Awaited<ReturnType<typeof guaranteeToStore>>;
+  try {
+    stored = await guaranteeToStore(deps, tx, input);
+  } catch (err) {
+    if (!input.channel || !(err instanceof DomainError) || err.code !== 'guarantee_method_not_allowed')
+      throw err;
+    stored = { kind: input.guarantee.kind, ...(input.guarantee.note ? { note: input.guarantee.note } : {}) };
+    await raiseIssue(tx, {
+      propertyId: input.propertyId,
+      kind: 'guarantee_card_not_attached',
+      severity: 'urgent',
+      bookingId: input.bookingId,
+      dedupeKey: `guarantee_card:${input.bookingId}`,
+      message: `The channel sent a card that is not this booking's own (${err.message}) It was not attached: register the channel's virtual card for this booking, or ask the guest for a card through a payment link.`,
+    });
+  }
+  await db(tx)
+    .updateTable('reservations.bookings')
+    .set({ guarantee: json(stored) })
+    .where('id', '=', input.bookingId)
+    .execute();
+}
+
 // ───────────────────────────── edits without inventory/price effects ─────────────────────────────
 
 /** Audit history is visible to anyone who can read the booking: never store payment tokens in it. */
@@ -927,13 +969,15 @@ export async function patchBooking(
   });
   if (forwarded) return forwarded;
   const p = input.patch;
-  if (p.guarantee?.paymentMethodId) {
-    await assertGuaranteeMethod(deps, tx, {
-      bookingId: row.id,
-      propertyId: row.property_id,
-      methodId: p.guarantee.paymentMethodId,
-    });
-  }
+  // Review R2-P1-1 (Amendment 1): the guarantee to store, with its basis; server fields never come from the client.
+  const guarantee =
+    p.guarantee !== undefined
+      ? await guaranteeToStore(deps, tx, {
+          bookingId: row.id,
+          propertyId: row.property_id,
+          guarantee: p.guarantee,
+        })
+      : undefined;
   await db(tx)
     .updateTable('reservations.bookings')
     .set({
@@ -943,7 +987,7 @@ export async function patchBooking(
       ...(p.tags !== undefined ? { tags: p.tags } : {}),
       ...(p.ownerId !== undefined ? { owner_id: p.ownerId } : {}),
       ...(p.optionDate !== undefined ? { option_date: p.optionDate } : {}),
-      ...(p.guarantee !== undefined ? { guarantee: json(p.guarantee) } : {}),
+      ...(guarantee !== undefined ? { guarantee: json(guarantee) } : {}),
       ...(p.externalRefs !== undefined ? { external_refs: json(p.externalRefs) } : {}),
     })
     .where('id', '=', row.id)
@@ -1357,9 +1401,12 @@ export async function listBookings(
       ...rest
     } = view;
     // UX FD-15 (review P2-1, sibling of the booking record): no money in lists for roles that do not handle it.
+    // Review R2-P3-5: commercial value (totals, deposit required) also for roles that set prices.
     const money = seesMoney(tx, rec.row.property_id)
       ? {}
-      : { totals: null, depositRequirement: null, moneyRedacted: true };
+      : seesCommercialValue(tx, rec.row.property_id)
+        ? { moneyRedacted: true }
+        : { totals: null, depositRequirement: null, moneyRedacted: true };
     items.push({
       ...rest,
       ...money,

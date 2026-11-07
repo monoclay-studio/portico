@@ -6,7 +6,15 @@ import { conditionMeets } from '../domain/readiness';
 import type { BookingStatus, StayStatus } from '../domain/status';
 import { RESERVATIONS_PERMISSIONS as P } from '../manifest';
 import { paymentReadiness, type UnitCondition } from '../ports';
-import { type Deps, db, isModuleUnavailable, policy, seesMoney } from './context';
+import {
+  type Deps,
+  db,
+  isModuleUnavailable,
+  MONEY_NOT_SHOWN,
+  policy,
+  seesCommercialValue,
+  seesMoney,
+} from './context';
 import { type BookingRecord, currentUnit, type StayRecord, toBookingView } from './repo';
 
 async function safely<T>(fn: () => Promise<T>, fallback: T): Promise<T> {
@@ -109,10 +117,13 @@ async function stayExtras(
     const steps = run.steps as Array<{ key: string; status: string; message: string | null }>;
     const failed = steps.find((s) => s.status === 'failed');
     const pending = steps.filter((s) => s.status === 'pending' || s.status === 'failed').map((s) => s.key);
+    // Review R2-P2-2: a money step's message (amounts, card state) only for roles that handle money.
+    const detail =
+      failed?.message && !money && MONEY_STEPS.has(failed.key) ? MONEY_NOT_SHOWN : failed?.message;
     issues.push({
       code: run.kind === 'check_in' ? 'check_in_incomplete' : 'check_out_incomplete',
       severity: failed ? 'blocking' : 'info',
-      message: `${run.kind === 'check_in' ? 'Check-in' : 'Check-out'} in progress; remaining: ${pending.join(', ')}${failed?.message ? ` — ${failed.message}` : ''}`,
+      message: `${run.kind === 'check_in' ? 'Check-in' : 'Check-out'} in progress; remaining: ${pending.join(', ')}${detail ? ` — ${detail}` : ''}`,
     });
   }
   const relocations = await db(tx)
@@ -194,7 +205,8 @@ async function stayExtras(
   });
   return {
     ...view,
-    ...(money ? {} : { totals: null, moneyRedacted: true }),
+    ...(money || seesCommercialValue(tx, propertyId) ? {} : { totals: null }),
+    ...(money ? {} : { moneyRedacted: true }),
     status: {
       ...view.status,
       ...(payment ? { payment } : {}),
@@ -209,6 +221,9 @@ async function stayExtras(
 }
 
 /** Booking as a universal record: status families, allowed actions with reasons, issues, owner, links. */
+/** Workflow steps whose messages carry payment state or money (review R2-P2-2). */
+const MONEY_STEPS: ReadonlySet<string> = new Set(['guarantee', 'deposits', 'charges', 'settle']);
+
 export async function bookingRecord(deps: Deps, tx: TxContext, rec: BookingRecord): Promise<Booking> {
   const propertyId = rec.row.property_id;
   const businessDate = await deps.ports.platform.getBusinessDate(tx, propertyId);
@@ -303,7 +318,8 @@ export async function bookingRecord(deps: Deps, tx: TxContext, rec: BookingRecor
   const statuses = rec.stays.map((s) => s.row.status);
   return {
     ...view,
-    ...(money ? {} : { totals: null, depositRequirement: null, moneyRedacted: true }),
+    ...(money || seesCommercialValue(tx, propertyId) ? {} : { totals: null, depositRequirement: null }),
+    ...(money ? {} : { moneyRedacted: true }),
     status: { ...view.status, ...(payment ? { payment } : {}) },
     stays,
     allowedActions: bookingActions({

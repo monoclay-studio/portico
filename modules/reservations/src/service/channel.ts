@@ -25,6 +25,7 @@ import { createBookingInternal, insertStayWithInventory, type PricedStay, priceS
 import { applyChangeDirect } from './changes';
 import { type Deps, db, json, propertyInfo } from './context';
 import { emitReservationEvent } from './event-payload';
+import { guaranteeToStore, type StoredGuarantee } from './guarantee';
 import { resolveGuest } from './guests';
 import { openRelocationCase, raiseIssue } from './issues';
 import { syncPlanSales } from './plan-sales';
@@ -757,12 +758,7 @@ export async function ingestChannelBooking(
         special_requests: json(payload.specialRequests),
         notes: payload.notes ?? null,
         market_segment: payload.marketSegment,
-        guarantee: json({
-          kind: payload.guarantee.kind,
-          ...(payload.guarantee.paymentMethodId
-            ? { paymentMethodId: payload.guarantee.paymentMethodId }
-            : {}),
-        }),
+        guarantee: json(await channelGuarantee(deps, tx, rec.row, payload.guarantee)),
       })
       .where('id', '=', rec.row.id)
       .execute();
@@ -831,5 +827,40 @@ export async function ingestChannelBooking(
       return needsReview(`${err.message} (not applied)`, existing?.id ?? null);
     }
     throw err;
+  }
+}
+
+/**
+ * Review R2-P3-2 / R2-P1-1: a channel modification records its card under the same rule as every other path (ADR-0015
+ * Amendment 1) — but a sold channel booking is never refused for its card: a card that is not this booking's own (for
+ * example a virtual card of another booking or channel) is left off, the booking keeps its previous card, and an issue
+ * asks for the channel's virtual card.
+ */
+async function channelGuarantee(
+  deps: Deps,
+  tx: TxContext,
+  booking: { id: string; property_id: string; guarantee: unknown },
+  g: { kind: string; paymentMethodId?: string | undefined },
+): Promise<StoredGuarantee> {
+  const previous = (booking.guarantee ?? { kind: 'none' }) as StoredGuarantee;
+  if (!g.paymentMethodId) return { kind: g.kind };
+  if (g.paymentMethodId === previous.paymentMethodId) return { ...previous, kind: g.kind };
+  try {
+    return await guaranteeToStore(deps, tx, {
+      bookingId: booking.id,
+      propertyId: booking.property_id,
+      guarantee: { kind: g.kind, paymentMethodId: g.paymentMethodId },
+    });
+  } catch (err) {
+    if (!(err instanceof DomainError) || err.code !== 'guarantee_method_not_allowed') throw err;
+    await raiseIssue(tx, {
+      propertyId: booking.property_id,
+      kind: 'guarantee_card_not_attached',
+      severity: 'urgent',
+      bookingId: booking.id,
+      dedupeKey: `guarantee_card:${booking.id}`,
+      message: `The channel sent a card that is not this booking's own (${err.message}) It was not attached: register the channel's virtual card for this booking, or ask the guest for a card through a payment link.`,
+    });
+    return { ...previous, kind: g.kind };
   }
 }

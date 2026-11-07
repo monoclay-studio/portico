@@ -588,6 +588,8 @@ export interface GuaranteeCardAssessment {
    */
   basis: 'cardholder_supplied' | 'channel_card' | 'mandate' | null;
   card: { brand: string | null; last4: string | null } | null;
+  /** Who the card belongs to (the calling module checks a payment user's choice against the booking's people). */
+  owner: { type: string; id: string } | null;
   /** Plain-language explanation (shown when the card cannot be used). */
   reason: string;
 }
@@ -615,6 +617,7 @@ export async function assessGuaranteeCard(
     usable: false,
     basis: null,
     card: null,
+    owner: null,
     reason:
       "This payment method is not a saved card of this property (unknown, removed, or saved at another property or hotel company). Save the guest's card here first.",
   };
@@ -629,6 +632,7 @@ export async function assessGuaranteeCard(
   const account = await loadAccount(tx, m.account_id);
   if (account.legal_entity_id !== property.legalEntityId) return notHere;
   const card = { brand: m.brand, last4: m.last4 };
+  const owner = { type: m.owner_type, id: m.owner_id };
   const mandate = (m.mandate ?? {}) as {
     kind?: string;
     termsVersion?: string;
@@ -652,6 +656,7 @@ export async function assessGuaranteeCard(
     usable: true,
     basis: null,
     card,
+    owner,
     reason: `The cardholder agreed to holds of at most ${formatMoney(money(scope?.maxAmount?.amountMinor ?? 0, scope?.maxAmount?.currency ?? 'USD'))} on this card. Hold that amount, or ask a colleague with payment rights.`,
   });
   const forThisBooking = m.owner_type === 'booking' && m.owner_id === input.bookingId;
@@ -660,6 +665,7 @@ export async function assessGuaranteeCard(
       usable: true,
       basis: 'cardholder_supplied',
       card,
+      owner,
       reason: 'The cardholder entered this card for this booking.',
     };
   }
@@ -675,6 +681,7 @@ export async function assessGuaranteeCard(
         usable: true,
         basis: 'channel_card',
         card,
+        owner,
         reason: "The booking's channel issued this virtual card for it.",
       };
     }
@@ -695,6 +702,7 @@ export async function assessGuaranteeCard(
       usable: true,
       basis: 'mandate',
       card,
+      owner,
       reason: "The cardholder's recorded agreement names this booking.",
     };
   }
@@ -702,6 +710,7 @@ export async function assessGuaranteeCard(
     usable: true,
     basis: null,
     card,
+    owner,
     reason:
       "This card was not supplied by its cardholder for this booking, and no recorded agreement of the cardholder names this booking. Linking a person to a booking does not let staff use that person's saved card: send the guest a card link for this booking, or ask a colleague with payment rights to choose the card.",
   };
