@@ -3,7 +3,14 @@
  * Day Close and channel sync). Safe to run several replicas: claims use SKIP LOCKED leases.
  */
 import { compose, loadConfig } from '@portico/api';
-import { createDatabase, type DispatcherOptions, fanOut, processDeliveries, runDueJobs, sql } from '@portico/db';
+import {
+  createDatabase,
+  type DispatcherOptions,
+  fanOut,
+  processDeliveries,
+  runDueJobs,
+  sql,
+} from '@portico/db';
 import type { TenantEnvironment } from '@portico/kernel';
 
 const config = loadConfig();
