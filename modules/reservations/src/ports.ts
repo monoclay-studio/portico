@@ -168,7 +168,7 @@ export interface InventoryPort {
       overbooking?: { authorizedBy: string; reason: string };
       onShortfall?: 'reject' | 'record_conflict';
     },
-  ): Promise<{ conflictIds?: string[] } | undefined>;
+  ): Promise<{ conflictIds?: string[]; assignedUnitId?: string | null } | undefined>;
   release(tx: TxContext, input: { ref: EntityRef; nights?: DateRange }): Promise<void>;
   /** Atomically replace the ref's consumption of `from` with `to` (type and/or nights). */
   changeConsumption(
@@ -197,9 +197,10 @@ export interface InventoryPort {
     input: { unitId: string; ref: EntityRef; nights: DateRange; locked?: boolean },
   ): Promise<void>;
   unassignUnit(tx: TxContext, input: { ref: EntityRef; nights?: DateRange }): Promise<void>;
+  /** `ref`: the stay being placed — its own assignments are not conflicts. */
   findAssignableUnits(
     tx: TxContext,
-    input: { propertyId: string; unitTypeId: string; nights: DateRange },
+    input: { propertyId: string; unitTypeId: string; nights: DateRange; ref?: EntityRef },
   ): Promise<UnitCandidate[]>;
   getAvailability(
     tx: TxContext,

@@ -7,22 +7,20 @@ import { created, setupOrg, startDb } from './helpers';
 /**
  * S01 — two reservation agents attempt to sell the final available unit.
  *
- * Proven here with the Postgres-backed fake inventory, which uses the same concurrency pattern the real inventory
- * module is specified to use (row locks in (type, night) order + guarded counters). INTEGRATION NOTE for the
- * orchestrator: re-run this file with InventoryPort bound to the real `@portico/inventory` provider (replace
- * `fakes.inventory` in test/helpers.ts) — the assertions are provider-agnostic: exactly one commit succeeds, the
- * other gets 409 `preview_stale` with a fresh preview, an explanation naming who sold it and the booking code,
- * and alternatives; no oversell in the ledger.
+ * Runs twice: against the Postgres-backed fake inventory AND against the REAL `@portico/inventory` module bound
+ * through reservations' adapter (review R-13). The assertions are provider-agnostic: exactly one commit succeeds,
+ * the other gets 409 `preview_stale` with a fresh preview, an explanation naming who sold it and the booking code
+ * (from reservations' own booking history — inventory's `sold[]` names the stay), and alternatives; no oversell.
  */
 let t: TestDatabase;
 beforeAll(async () => {
-  t = await startDb();
+  t = await startDb({ realInventory: true });
 });
 afterAll(async () => t?.drop());
 
-describe('S01: two agents, last villa', () => {
+describe.each(['fake', 'real'] as const)('S01: two agents, last villa (%s inventory)', (inventory) => {
   it('both previews show the villa available; exactly one commit succeeds; the other gets a fresh preview with who sold it', async () => {
-    const org = await setupOrg(t, { units: { family: ['F301'] } });
+    const org = await setupOrg(t, { inventory, units: { family: ['F301'] } });
     const aishath = org.user('Aishath');
     const ibrahim = org.user('Ibrahim');
     const request = (name: string) => ({
@@ -67,7 +65,7 @@ describe('S01: two agents, last villa', () => {
     expect(fresh.alternatives.every((a) => a.preview.feasible)).toBe(true);
     // Ledger consistent: exactly one sold, no oversell.
     const cells = await org.run((tx) =>
-      org.fakes.inventory.getAvailability(tx, {
+      org.inventory.getAvailability(tx, {
         propertyId: org.propertyId,
         unitTypeIds: [org.types.family],
         range: { from: '2026-12-10', to: '2026-12-13' },
@@ -87,7 +85,7 @@ describe('S01: two agents, last villa', () => {
   });
 
   it('a sequential second commit is refused before any write (stale fingerprint)', async () => {
-    const org = await setupOrg(t, { units: { family: ['F301'] } });
+    const org = await setupOrg(t, { inventory, units: { family: ['F301'] } });
     const req = { kind: 'new_booking' as const, booking: org.booking({}, { unitTypeId: org.types.family }) };
     const p1 = await org.run((tx) => org.svc.previewChange(tx, req));
     const p2 = await org.run((tx) => org.svc.previewChange(tx, req));
@@ -102,7 +100,7 @@ describe('S01: two agents, last villa', () => {
   });
 
   it('under load: N agents race for K units — exactly K bookings succeed', async () => {
-    const org = await setupOrg(t, { units: { overwater: ['W201', 'W202', 'W203'] } });
+    const org = await setupOrg(t, { inventory, units: { overwater: ['W201', 'W202', 'W203'] } });
     const attempts = Array.from({ length: 10 }, (_, i) =>
       org.run(
         (tx) =>
@@ -122,7 +120,7 @@ describe('S01: two agents, last villa', () => {
       expect((r.reason as { code?: string }).code).toBe('inventory_unavailable');
     }
     const cells = await org.run((tx) =>
-      org.fakes.inventory.getAvailability(tx, {
+      org.inventory.getAvailability(tx, {
         propertyId: org.propertyId,
         unitTypeIds: [org.types.overwater],
         range: { from: '2026-12-20', to: '2026-12-23' },

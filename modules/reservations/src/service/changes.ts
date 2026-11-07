@@ -641,6 +641,7 @@ async function planTimeRequest(
       : { from: stay.row.departure, to: addDays(stay.row.departure, 1) };
     const candidates = await deps.ports.inventory.findAssignableUnits(tx, {
       propertyId: c.propertyId,
+      ref: { type: 'stay', id: stay.row.id },
       unitTypeId: seg.unitTypeId,
       nights: probe,
     });
@@ -786,6 +787,7 @@ async function stayEffect(
       if (!seg) continue;
       const candidates = await deps.ports.inventory.findAssignableUnits(tx, {
         propertyId: c.propertyId,
+        ref: { type: 'stay', id: stay.row.id },
         unitTypeId: seg.unitTypeId,
         nights: w.nights,
       });
@@ -1227,6 +1229,7 @@ async function extensionAlternatives(
   const currentUnit = last.unitId;
   const sameType = await inventory.findAssignableUnits(c.tx, {
     propertyId: c.propertyId,
+    ref: { type: 'stay', id: stay.row.id },
     unitTypeId: last.unitTypeId,
     nights: extra,
   });
@@ -1243,6 +1246,7 @@ async function extensionAlternatives(
   const moveFrom = inHouse && c.businessDate > stay.row.arrival ? c.businessDate : request.arrival;
   const whole = await inventory.findAssignableUnits(c.tx, {
     propertyId: c.propertyId,
+    ref: { type: 'stay', id: stay.row.id },
     unitTypeId: last.unitTypeId,
     nights: { from: moveFrom, to: request.departure },
   });
@@ -1264,6 +1268,7 @@ async function extensionAlternatives(
   for (const t of others) {
     const units = await inventory.findAssignableUnits(c.tx, {
       propertyId: c.propertyId,
+      ref: { type: 'stay', id: stay.row.id },
       unitTypeId: t.id,
       nights: extra,
     });

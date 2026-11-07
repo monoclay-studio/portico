@@ -305,16 +305,18 @@ export class FakeInventory implements InventoryPort {
 
   async findAssignableUnits(
     tx: TxContext,
-    input: { propertyId: string; unitTypeId: string; nights: DateRange },
+    input: { propertyId: string; unitTypeId: string; nights: DateRange; ref?: EntityRef },
   ): Promise<UnitCandidate[]> {
     const units = await sql<{ id: string; name: string; unit_type_id: string }>`
       select id, name, unit_type_id from fake_inventory.units where property_id = ${input.propertyId}
        and unit_type_id = ${input.unitTypeId} order by name`.execute(tx.db);
     const out: UnitCandidate[] = [];
     for (const u of units.rows) {
+      // Like inventory: the ref being placed does not conflict with its own assignments.
       const { rows } = await sql<{ ref_type: string; ref_id: string }>`
         select ref_type, ref_id from fake_inventory.assignments where unit_id = ${u.id}
-         and nights && daterange(${input.nights.from}::date, ${input.nights.to}::date, '[)')`.execute(tx.db);
+         and nights && daterange(${input.nights.from}::date, ${input.nights.to}::date, '[)')
+         and not (ref_type = ${input.ref?.type ?? ''} and ref_id = ${input.ref?.id ?? ''})`.execute(tx.db);
       out.push({
         unitId: u.id,
         name: u.name,

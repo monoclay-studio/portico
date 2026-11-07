@@ -19,6 +19,7 @@
     "zod": "catalog:"
   },
   "devDependencies": {
+    "@portico/inventory": "workspace:*",
     "@portico/platform": "workspace:*",
     "@portico/testing": "workspace:*",
     "@types/node": "catalog:",

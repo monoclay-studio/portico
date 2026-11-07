@@ -267,6 +267,7 @@ async function replaceStayFromChannel(
         propertyId,
         unitTypeId: s.unitTypeId,
         nights: { from: s.arrival, to: s.departure },
+        ref,
       });
       if (candidates.find((u) => u.unitId === oldUnit)?.assignable) {
         await inventory.assignUnit(tx, {

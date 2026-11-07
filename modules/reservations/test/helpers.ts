@@ -1,6 +1,7 @@
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sourcesFromManifests, type TxContext, withTenantTx } from '@portico/db';
+import { createInventoryService, type InventoryService, inventoryManifest } from '@portico/inventory';
 import {
   type Clock,
   newId,
@@ -11,9 +12,10 @@ import {
 } from '@portico/kernel';
 import { platform, platformManifest } from '@portico/platform';
 import { createTestDatabase, type TestDatabase, testContext } from '@portico/testing';
+import { inventoryPortFrom } from '../src/adapters/inventory';
 import type { NewBookingInput, StayInput } from '../src/contracts';
 import { reservationsManifest } from '../src/manifest';
-import type { ReservationsPorts } from '../src/ports';
+import type { InventoryPort, ReservationsPorts } from '../src/ports';
 import { type ForwardedResult, type ReservationsService, reservationsService } from '../src/service';
 import { FakeFinance } from './fakes/finance';
 import { FakeInventory } from './fakes/inventory';
@@ -22,11 +24,18 @@ import { type FakeRatePlan, FakeRates } from './fakes/rates';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
-/** Real Postgres with platform + reservations migrations and the test-only fake schemas. */
-export async function startDb(opts: { clock?: Clock } = {}): Promise<TestDatabase> {
+/**
+ * Real Postgres with platform + reservations migrations and the test-only fake schemas. `realInventory` also
+ * migrates the REAL inventory module, so a test can bind InventoryPort to it (setupOrg `inventory: 'real'`).
+ */
+export async function startDb(opts: { clock?: Clock; realInventory?: boolean } = {}): Promise<TestDatabase> {
   const t = await createTestDatabase(
     [
-      ...sourcesFromManifests([platformManifest, reservationsManifest]),
+      ...sourcesFromManifests([
+        platformManifest,
+        ...(opts.realInventory ? [inventoryManifest] : []),
+        reservationsManifest,
+      ]),
       { module: 'zz_test_fakes', dir: join(here, 'fakes', 'sql') },
     ],
     opts.clock ? { clock: opts.clock } : {},
@@ -56,6 +65,8 @@ export interface Org {
   types: { beach: string; overwater: string; family: string };
   units: Record<string, string>;
   plans: { bar: string; nonRef: string };
+  /** The InventoryPort reservations is bound to (the fake, or the real inventory module through the adapter). */
+  inventory: InventoryPort;
   /** A tokenized card registered with the fake payments module for this property. */
   cardMethodId: string;
   /** A staff member of this organization (all permissions unless grants are given). */
@@ -71,6 +82,8 @@ export async function setupOrg(
     environment?: TenantEnvironment;
     businessDate?: string;
     units?: Partial<Record<'beach' | 'overwater' | 'family', string[]>>;
+    /** 'real': bind InventoryPort to the inventory module (startDb({ realInventory: true }) required). */
+    inventory?: 'fake' | 'real';
   } = {},
 ): Promise<Org> {
   const tenantId = newId();
@@ -118,36 +131,45 @@ export async function setupOrg(
     operations: new FakeOperations(),
     access: new FakeAccess(),
   };
-  const seeded = await withTenantTx(t.db, sys, (tx) =>
-    fakes.inventory.seed(tx, {
-      propertyId: property.id,
-      from: '2026-12-01',
-      to: '2027-02-01',
-      types: [
-        {
-          code: 'beach',
-          name: 'Beach Villa',
-          rank: 1,
-          maxOccupancy: 3,
-          units: opts.units?.beach ?? ['V101', 'V102', 'V103'],
-        },
-        {
-          code: 'overwater',
-          name: 'Overwater Villa',
-          rank: 2,
-          maxOccupancy: 3,
-          units: opts.units?.overwater ?? ['W201', 'W202'],
-        },
-        {
-          code: 'family',
-          name: 'Family Villa',
-          rank: 3,
-          maxOccupancy: 6,
-          units: opts.units?.family ?? ['F301'],
-        },
-      ],
-    }),
-  );
+  const typeSpecs = [
+    {
+      code: 'beach',
+      name: 'Beach Villa',
+      rank: 1,
+      maxOccupancy: 3,
+      units: opts.units?.beach ?? ['V101', 'V102', 'V103'],
+    },
+    {
+      code: 'overwater',
+      name: 'Overwater Villa',
+      rank: 2,
+      maxOccupancy: 3,
+      units: opts.units?.overwater ?? ['W201', 'W202'],
+    },
+    {
+      code: 'family',
+      name: 'Family Villa',
+      rank: 3,
+      maxOccupancy: 6,
+      units: opts.units?.family ?? ['F301'],
+    },
+  ];
+  let inventory: InventoryPort = fakes.inventory;
+  let seeded: { types: Record<string, string>; units: Record<string, string> };
+  if (opts.inventory === 'real') {
+    const real = realInventoryService();
+    inventory = inventoryPortFrom(real);
+    seeded = await withTenantTx(t.db, sys, (tx) => seedRealInventory(real, tx, property.id, typeSpecs));
+  } else {
+    seeded = await withTenantTx(t.db, sys, (tx) =>
+      fakes.inventory.seed(tx, {
+        propertyId: property.id,
+        from: '2026-12-01',
+        to: '2027-02-01',
+        types: typeSpecs,
+      }),
+    );
+  }
   const types = {
     beach: seeded.types.beach as string,
     overwater: seeded.types.overwater as string,
@@ -192,7 +214,7 @@ export async function setupOrg(
     ],
     { taxBp: 1700, levyPerPersonNight: 1_200, levyMinAge: 2 },
   );
-  const ports: ReservationsPorts = { ...fakes, platform: realPlatformPort() };
+  const ports: ReservationsPorts = { ...fakes, inventory, platform: realPlatformPort() };
   const svc = reservationsService(ports);
   const propertyId = property.id;
   const cardMethodId = fakes.payments.addMethod(propertyId);
@@ -206,6 +228,7 @@ export async function setupOrg(
     types,
     units: seeded.units,
     plans,
+    inventory,
     cardMethodId,
     user(name, grants) {
       return {
@@ -260,4 +283,50 @@ export async function setupOrg(
 export function created<T extends object>(v: T | ForwardedResult): T {
   if ('forwarded' in v && v.forwarded === true) throw new Error('unexpected forwarded result');
   return v as T;
+}
+
+/** The REAL inventory module, wired the way the composition root wires it. */
+export function realInventoryService(): InventoryService {
+  return createInventoryService({
+    platform: {
+      getBusinessDate: platform.getBusinessDate,
+      getDataAuthority: platform.getDataAuthority,
+      assertWritable: platform.assertWritable,
+      getLimit: platform.getLimit,
+      resolvePolicy: platform.resolvePolicy,
+    },
+  });
+}
+
+async function seedRealInventory(
+  inventory: InventoryService,
+  tx: TxContext,
+  propertyId: string,
+  specs: Array<{ code: string; name: string; rank: number; maxOccupancy: number; units: string[] }>,
+): Promise<{ types: Record<string, string>; units: Record<string, string> }> {
+  const types: Record<string, string> = {};
+  const units: Record<string, string> = {};
+  for (const [i, spec] of specs.entries()) {
+    const type = await inventory.createUnitType(tx, propertyId, {
+      code: spec.code.toUpperCase(),
+      name: spec.name,
+      kind: 'villa',
+      baseOccupancy: 2,
+      maxAdults: spec.maxOccupancy,
+      maxChildren: spec.maxOccupancy - 1,
+      maxOccupancy: spec.maxOccupancy,
+      rank: spec.rank,
+      sortOrder: (i + 1) * 10,
+    });
+    types[spec.code] = type.id;
+    for (const number of spec.units) {
+      const unit = await inventory.createUnit(tx, propertyId, {
+        unitTypeId: type.id,
+        number,
+        inInventoryFrom: '2026-12-01',
+      });
+      units[number] = unit.id;
+    }
+  }
+  return { types, units };
 }

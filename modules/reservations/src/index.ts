@@ -1,3 +1,4 @@
+export { type InventoryProvider, inventoryPortFrom } from './adapters/inventory';
 export * from './contracts';
 export * from './errors';
 export * from './events';

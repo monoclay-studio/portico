@@ -37,7 +37,7 @@ import {
   environmentAccessAdapter,
   type FinancePort,
   type GuestsPort,
-  type InventoryPort,
+  inventoryPortFrom,
   type OperationsPort,
   type PaymentsPort,
   type PlatformPort,
@@ -151,7 +151,9 @@ export function compose(database: PorticoDatabase): Composition {
   };
   const reservations = reservationsService({
     platform: reservationsPlatform,
-    inventory: unavailablePort<InventoryPort>('inventory'),
+    // R-13: the real inventory module through reservations' structural adapter (unit number → name, exclusions →
+    // reasons/conflicting refs, sold[] for the who-sold-it explanation). Drift in inventory's contract fails tsc here.
+    inventory: inventoryPortFrom(inventoryService),
     rates: unavailablePort<RatesPort>('rates'),
     guests: unavailablePort<GuestsPort>('guests'),
     finance: unavailablePort<FinancePort>('finance'),
