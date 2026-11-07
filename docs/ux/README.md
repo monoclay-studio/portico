@@ -4,7 +4,23 @@ Goal: the user experience is **as easy as humanly possible — the best on the m
 everything competitors do **and more**: better, faster, more streamlined, with easier visuals and flow, **without
 missing anything and without weakening any module's power**.
 
-## The loop (repeats every UX round, and for every module as its UI lands)
+## It never stops (owner direction): continuous loop
+
+The loop runs **continuously** — refined over and over until the application is in its best form, with the best
+experience for a **completely new user** adapting with the least friction.
+
+- **Triggers:** (a) any merge to `main` that touches UI or a module with UI → a round focused on what changed;
+  (b) a scheduled heartbeat every 3 hours starts the next round if none is running (owner-visible scheduled task);
+  (c) every 3rd round is a full sweep of all personas and modules.
+- **One round at a time:** tester → refiner → module owners → re-measure. The lab is rebuilt from the latest code
+  each round (`tools/ux-lab.sh refresh` then `tools/ux-lab.sh start`).
+- **Scorecard:** `docs/ux/scorecard.md` — trends per round; new-user metrics first.
+- **Convergence:** full-speed until two consecutive rounds find no blocker/major friction AND every new-user target is
+  met; then **maintenance mode** (a round after each release and a monthly full sweep) — never fully off.
+- **Guardrails:** one tester at a time; usage-limit aware (pause and resume, never pile up); changes go through the
+  normal review/merge gates; nothing in the loop may weaken power, permissions or reconciliation.
+
+## The loop (each round)
 
 1. **Black-box tester ("mystery user").** Uses the running product only through the browser, as different hotels and
    roles (12-room guesthouse owner on a phone, 120-villa resort front desk at the morning rush, reservations,
