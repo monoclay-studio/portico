@@ -17,6 +17,7 @@
     "@portico/http": "workspace:*",
     "@portico/kernel": "workspace:*",
     "fastify": "catalog:",
+    "jose": "6.2.15",
     "zod": "catalog:"
   },
   "devDependencies": {

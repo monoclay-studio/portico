@@ -172,6 +172,9 @@ importers:
       fastify:
         specifier: 'catalog:'
         version: 5.12.8
+      jose:
+        specifier: 6.2.15
+        version: 6.2.15
       zod:
         specifier: 'catalog:'
         version: 4.6.7
@@ -1300,6 +1303,9 @@ packages:
   ipaddr.js@2.5.0:
     resolution: {integrity: sha512-aq+t5NAc+cS6rZQQVWC2x98CPqGtKKTMDd4Gaodv0wShnItdKg/51djkGJ1hqH+Oy0ivDftCbSLCQob8zso01w==}
     engines: {node: '>= 10'}
+
+  jose@6.2.15:
+    resolution: {integrity: sha512-qdF6ewcZARtef63fJ9AKKZPgxw+t7USH6HLXYcD4CrdmSvDp79rpJSPFEKc90QBeGS63u1KQtN2MZQHC0yDIzA==}
 
   json-schema-ref-resolver@3.0.1:
     resolution: {integrity: sha512-w+HwgljXpVwZ3IidoUR1qPZxSOQ+NRQWuVe6a5pe8XbHsNZE4UAwVPUvzZagn7yBKbJtt6UJnRFYbNTRPZI45Q==}
@@ -2431,6 +2437,8 @@ snapshots:
   ip-address@10.7.6: {}
 
   ipaddr.js@2.5.0: {}
+
+  jose@6.2.15: {}
 
   json-schema-ref-resolver@3.0.1:
     dependencies:

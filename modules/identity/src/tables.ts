@@ -1,5 +1,8 @@
 import type { Generated } from '@portico/db';
 
+export type AssignmentSource = 'manual' | 'sso' | 'scim' | 'transfer';
+export type ScopeTypeColumn = 'organization' | 'brand' | 'region' | 'property';
+
 export interface IdentityDB {
   'identity.users': {
     id: string;
@@ -23,6 +26,11 @@ export interface IdentityDB {
     created_at: Generated<Date>;
     updated_at: Generated<Date>;
     version: Generated<number>;
+    activated_at: Date | null;
+    external_id: string | null;
+    provisioned_by: Generated<'manual' | 'invitation' | 'sso' | 'scim'>;
+    status_reason: string | null;
+    removed_at: Date | null;
   };
   'identity.roles': {
     id: string;
@@ -34,6 +42,9 @@ export interface IdentityDB {
     is_system: Generated<boolean>;
     created_at: Generated<Date>;
     version: Generated<number>;
+    template_key: string | null;
+    archived_at: Date | null;
+    updated_at: Generated<Date>;
   };
   'identity.role_assignments': {
     id: string;
@@ -48,6 +59,10 @@ export interface IdentityDB {
     reason: string | null;
     created_at: Generated<Date>;
     revoked_at: Date | null;
+    source: Generated<AssignmentSource>;
+    source_ref: string | null;
+    revoked_by: string | null;
+    revoke_reason: string | null;
   };
   'identity.sessions': {
     id: string;
@@ -63,6 +78,10 @@ export interface IdentityDB {
     mfa_verified: Generated<boolean>;
     ip: string | null;
     user_agent: string | null;
+    mfa_verified_at: Date | null;
+    auth_method: Generated<'password' | 'sso'>;
+    idp_mfa: Generated<boolean>;
+    revoked_by: string | null;
   };
   'identity.api_clients': {
     id: string;
@@ -76,5 +95,207 @@ export interface IdentityDB {
     created_at: Generated<Date>;
     expires_at: Date | null;
     last_used_at: Date | null;
+  };
+  'identity.mfa_factors': {
+    id: string;
+    user_id: string;
+    kind: 'totp';
+    status: 'pending' | 'active' | 'disabled';
+    secret_enc: string;
+    last_used_step: number | null;
+    created_at: Generated<Date>;
+    confirmed_at: Date | null;
+    disabled_at: Date | null;
+    version: Generated<number>;
+  };
+  'identity.mfa_recovery_codes': {
+    id: string;
+    user_id: string;
+    code_hash: string;
+    created_at: Generated<Date>;
+    used_at: Date | null;
+  };
+  'identity.mfa_challenges': {
+    id: string;
+    tenant_id: string;
+    user_id: string;
+    token_hash: string;
+    expires_at: Date;
+    attempts: Generated<number>;
+    consumed_at: Date | null;
+    ip: string | null;
+    user_agent: string | null;
+    created_at: Generated<Date>;
+  };
+  'identity.organization_security': {
+    tenant_id: string;
+    mfa_step_up_window_minutes: Generated<number>;
+    mfa_grace_period_hours: Generated<number>;
+    require_mfa_for_all: Generated<boolean>;
+    support_access_approval: Generated<'always_required' | 'auto_approve_read_only'>;
+    support_max_minutes: Generated<number>;
+    break_glass_user_ids: Generated<string[]>;
+    break_glass_role_key: Generated<string>;
+    break_glass_max_minutes: Generated<number>;
+    updated_at: Generated<Date>;
+    updated_by: string;
+    version: Generated<number>;
+  };
+  'identity.credential_tokens': {
+    id: string;
+    tenant_id: string;
+    user_id: string;
+    kind: 'invitation' | 'password_reset';
+    token_hash: string;
+    expires_at: Date;
+    used_at: Date | null;
+    revoked_at: Date | null;
+    created_by: string;
+    created_at: Generated<Date>;
+  };
+  'identity.sso_connections': {
+    id: string;
+    tenant_id: string;
+    protocol: Generated<'oidc'>;
+    display_name: string;
+    issuer: string;
+    client_id: string;
+    client_secret_ref: string;
+    token_endpoint_auth_method: Generated<'client_secret_basic' | 'client_secret_post'>;
+    authorization_endpoint: string;
+    token_endpoint: string;
+    jwks_uri: string;
+    scopes: Generated<string[]>;
+    allowed_email_domains: string[];
+    groups_claim: Generated<string>;
+    jit_provisioning: Generated<boolean>;
+    trust_idp_mfa: Generated<boolean>;
+    sso_required: Generated<boolean>;
+    sso_exempt_user_ids: Generated<string[]>;
+    status: Generated<'active' | 'disabled'>;
+    created_at: Generated<Date>;
+    updated_at: Generated<Date>;
+    updated_by: string;
+    version: Generated<number>;
+  };
+  'identity.group_role_mappings': {
+    id: string;
+    tenant_id: string;
+    group_name: string;
+    role_id: string;
+    scope_type: ScopeTypeColumn;
+    scope_id: string | null;
+    created_at: Generated<Date>;
+    created_by: string;
+  };
+  'identity.sso_login_states': {
+    id: string;
+    tenant_id: string;
+    state_hash: string;
+    nonce: string;
+    code_verifier_enc: string;
+    redirect_uri: string;
+    created_at: Generated<Date>;
+    expires_at: Date;
+    consumed_at: Date | null;
+  };
+  'identity.secret_values': {
+    tenant_id: string;
+    ref: string;
+    ciphertext: string;
+    created_at: Generated<Date>;
+    updated_at: Generated<Date>;
+  };
+  'identity.scim_groups': {
+    id: string;
+    tenant_id: string;
+    display_name: string;
+    external_id: string | null;
+    created_at: Generated<Date>;
+    updated_at: Generated<Date>;
+    version: Generated<number>;
+  };
+  'identity.scim_group_members': {
+    tenant_id: string;
+    group_id: string;
+    user_id: string;
+    added_at: Generated<Date>;
+  };
+  'identity.support_sessions': {
+    id: string;
+    tenant_id: string;
+    operator_id: string;
+    operator_name: string;
+    reason: string;
+    ticket_ref: string;
+    access_scope: 'read_only' | 'read_write';
+    property_ids: string[] | null;
+    duration_minutes: number;
+    status: 'pending_approval' | 'active' | 'declined' | 'ended' | 'revoked';
+    token_hash: string;
+    requested_at: Date;
+    approved_by: string | null;
+    approved_at: Date | null;
+    approval_mode: 'customer' | 'policy_auto_read_only' | null;
+    starts_at: Date | null;
+    ends_at: Date | null;
+    ended_at: Date | null;
+    ended_by: string | null;
+    end_reason: string | null;
+    version: Generated<number>;
+  };
+  'identity.support_access_log': {
+    id: string;
+    tenant_id: string;
+    support_session_id: string;
+    occurred_at: Date;
+    method: string;
+    path: string;
+  };
+  'identity.elevations': {
+    id: string;
+    tenant_id: string;
+    user_id: string;
+    session_id: string;
+    role_id: string;
+    reason: string;
+    started_at: Date;
+    ends_at: Date;
+    ended_at: Date | null;
+    ended_reason: string | null;
+    review_status: Generated<'pending' | 'reviewed'>;
+    reviewed_by: string | null;
+    reviewed_at: Date | null;
+    review_notes: string | null;
+    version: Generated<number>;
+  };
+  'identity.security_alerts': {
+    id: string;
+    tenant_id: string;
+    rule: string;
+    severity: 'low' | 'medium' | 'high';
+    subject_user_id: string | null;
+    summary: string;
+    details: unknown;
+    occurred_at: Date;
+    dedupe_key: string;
+    acknowledged_by: string | null;
+    acknowledged_at: Date | null;
+  };
+  'identity.sign_in_locations': {
+    tenant_id: string;
+    user_id: string;
+    country_code: string;
+    first_seen_at: Date;
+    last_seen_at: Date;
+  };
+  'identity.export_activity': {
+    id: string;
+    tenant_id: string;
+    actor_key: string;
+    resource: string;
+    record_count: number;
+    property_id: string | null;
+    occurred_at: Date;
   };
 }
