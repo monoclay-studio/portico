@@ -3,7 +3,7 @@
 Changes outside this module that would improve it. Nothing here blocks the module: each item has a local
 workaround already in place.
 
-## FR-1 — Register `platform.dataAuthority.manage` in the platform manifest
+## FR-1 — Register `platform.dataAuthority.manage` in the platform manifest — **resolved on main**
 
 **Problem.** `platform.setDataAuthority` checks `platform.dataAuthority.manage`, but the permission is not in
 `platformManifest.permissions`, so role editors cannot grant it and no role template except `org_admin` (`*`)
@@ -21,14 +21,30 @@ and add it to the `general_manager` role template if the owner agrees that GMs m
 
 ## FR-2 — Data-authority transitions and activation scope (G-02, G-04)
 
-The platform agent is adding authority transitions (`planned → frozen → effective`) and activation scope
-(`assertEffectInScope`). Integration declares both as ports (`AuthorityTransitionPort`, `ActivationScopePort` in
-`src/ports.ts`). Bind them in `apps/api/src/composition.ts` when platform ships them:
+Platform (identity-plus branch) ships authority transitions and activation scope. Integration declares both as
+ports (`AuthorityTransitionPort`, `ActivationScopePort` in `src/ports.ts`). Bind them in
+`apps/api/src/composition.ts` when identity-plus is on main:
 
 ```ts
-activationScope: { assertEffectInScope: (tx, input) => platform.assertEffectInScope(tx, input) },
-transitions: { activeTransition: (tx, input) => platform.activeTransition(tx, input) },
+activationScope: {
+  assertEffectInScope: (tx, i) =>
+    platform
+      .assertEffectInScope(tx, i.propertyId, i.effect, { connectionId: i.connectionId, workflow: i.workflow })
+      .then(() => undefined),
+},
+transitions: {
+  async activeTransition(tx, i) {
+    const t = await platform.openTransitionFor(tx, i.propertyId, i.domain);
+    return t ? { id: t.id, state: t.status } : null;
+  },
+  plan: (tx, i) =>
+    platform.planAuthorityTransition(tx, i.propertyId, { changes: i.changes, reason: i.reason, freezeMinutes: 30 }),
+},
+// and platform's ports: transitionGuard: { pendingOperations: integrationProvider.pendingOperations }
 ```
+
+Until `plan` is bound, activation changes authority directly; identity-plus's `setDataAuthority` then refuses the
+second-approval domains and integration explains it (`second_approval_required`) without activating anything.
 
 **Current binding:** `unavailableActivationScope` (refuses every LIVE external effect of a real connector —
 conservative) and `noAuthorityTransitions` (true on main today: no transitions exist). Simulators and file
@@ -48,11 +64,13 @@ null)`) plus a consistency job in integration that reports authority rows pointi
 `portico/<tenant>/<id>`, per-environment KMS key, short in-memory cache, scheduled deletion on destroy). Needs the
 AWS SDK dependency and IAM in `infra/terraform`; the interface does not change.
 
-## FR-5 — Webhook delivery: DNS-rebinding protection
+## FR-5 — Shared outbound address policy (`safeFetch`) — **done in module; extraction proposed**
 
-`checkEndpointUrl` rejects private/reserved literal hosts at subscription time. A production transport should also
-resolve the host at delivery time and refuse private addresses (custom `lookup` on the HTTP agent), or deliver
-through an egress proxy with an allow-list. `fetchWebhookTransport` is the place to add it.
+DNS-rebinding and SSRF protection are built (`src/net/address-policy.ts`, `src/net/safe-fetch.ts`: resolve once,
+vet every address, pin the socket, no redirects, bounded time). Both files depend only on Node built-ins so they
+can move unchanged to a shared package (e.g. `@portico/http/outbound`) for comms, payments callbacks and future
+connectors. An egress proxy with an allow-list remains a defence-in-depth option for production
+(`infra/terraform`).
 
 ## FR-6 — Cross-module "My work" inbox contract
 
