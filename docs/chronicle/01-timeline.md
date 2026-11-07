@@ -311,4 +311,10 @@ Each agent's brief and report are in `agents/`.
 - Note (21:38): money paths have needed 3 re-reviews. Each round closes the reported invariant and the next finds a
   writer outside it (the provider, settlement, payment failure). This is evidence for the quality steward that
   external systems must be listed as writers in invariant closure. <!-- t: now @ 2026-11-07T21:38:41Z -->
+- **21:42 — Parity evidence re-run merged** <!-- t: commit:81b97ad @ 2026-11-07T21:42:31Z -->.
+  - Inventory: 1% → 42% of capabilities tested, open P0 53 → 22. Reservations: 1% → 9%; P0 rows stay at 100,
+    because many outcomes are decided by stubs until integration-step merges.
+  - 49 edge cases were added by the failure-class sweep, and the inventory README's 13 over-claimed rows were
+    corrected.
+  - EC-INV-017 decided: lowering an allowance below sales is refused, with the affected cells listed.
 
