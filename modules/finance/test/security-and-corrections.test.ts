@@ -324,7 +324,7 @@ describe('transfers and corrections', () => {
         allowanceRef: 'auto',
       }),
     );
-    expect(res.allowanceUsage).toEqual(usd(5000));
+    expect(res.allowanceUsage).toEqual(usd(6435)); // 50.00 covered + its SC and TGST (taxed with the package)
     const rev = await org.run((tx) =>
       h.finance.reverseEntry(tx, {
         entryId: res.entryId,
