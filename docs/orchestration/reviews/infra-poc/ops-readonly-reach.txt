@@ -1,0 +1,47 @@
+# PoC P-OPS: portico_ops_readonly (resilient tier, IAM auth on RDS; password here only to simulate the IAM token)
+# Claim in bootstrap-roles.mjs:27/286: 'read-only ... RLS still applies to it'
+## 1. no tenant context: RLS hides tenant rows
+ERROR:  permission denied for function current_tenant_id
+## 2. the role sets the tenant GUC itself and reads tenant A, then tenant B
+ set_config 
+------------
+ 
+(1 row)
+
+ERROR:  permission denied for function current_tenant_id
+ set_config 
+------------
+ 
+(1 row)
+
+ERROR:  permission denied for function current_tenant_id
+## 3. non-RLS cross-tenant tables readable directly
+ user_tenants_all 
+------------------
+               13
+(1 row)
+
+ login_attempts_all 
+--------------------
+                  0
+(1 row)
+
+ payments_directory 
+--------------------
+                  4
+(1 row)
+
+## 4. sessions / MFA factors / secret values for tenant A
+ set_config 
+------------
+ 
+(1 row)
+
+ERROR:  permission denied for function current_tenant_id
+## 5. default_transaction_read_only is a session default the role can turn off
+SET
+ default_transaction_read_only 
+-------------------------------
+ off
+(1 row)
+
