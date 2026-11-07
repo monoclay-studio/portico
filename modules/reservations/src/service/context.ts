@@ -49,9 +49,40 @@ export async function policy<T>(
   return (await deps.ports.platform.resolvePolicy<T>(tx, propertyId, key, def)).value;
 }
 
-/** True when the error is a port stub for a module not wired in this installation. */
+/**
+ * True when a cross-module FACT could not be read: the provider is not installed, or (ADR-0015 transition, review
+ * R-14/R-29) it refused the read (403) or does not know the record yet (404). Read-only facts degrade to
+ * "unknown"; they never fail the whole record or step.
+ */
 export function isModuleUnavailable(err: unknown): boolean {
-  return err instanceof DomainError && err.code === 'module_not_available';
+  return (
+    err instanceof DomainError &&
+    (err.code === 'module_not_available' || err.status === 403 || err.status === 404)
+  );
+}
+
+export interface ChargeCodes {
+  cancellation: string;
+  noShow: string;
+  earlyDeparture: string;
+  earlyCheckIn: string;
+  lateCheckOut: string;
+}
+
+/**
+ * Finance charge codes for reservations' penalties and fees (review R-10). Data, not code: property policy
+ * `reservations.chargeCodes`, defaulting to codes in finance's default catalogue (CXL, MISC).
+ */
+export async function chargeCodes(deps: Deps, tx: TxContext, propertyId: string): Promise<ChargeCodes> {
+  const defaults: ChargeCodes = {
+    cancellation: 'CXL',
+    noShow: 'CXL',
+    earlyDeparture: 'CXL',
+    earlyCheckIn: 'MISC',
+    lateCheckOut: 'MISC',
+  };
+  const configured = await policy<Partial<ChargeCodes>>(deps, tx, propertyId, 'reservations.chargeCodes', {});
+  return { ...defaults, ...configured };
 }
 
 /** Parse a Postgres daterange text '[2026-11-10,2026-11-13)'. */

@@ -136,7 +136,7 @@ describe('S02: channel booking delivered twice, modified, reordered and cancelle
     const penalty = (await org.run((tx) => org.fakes.finance.postings(tx))).filter(
       (p) => p.key === `penalty:cancellation:${stayId}`,
     );
-    expect(penalty.map((p) => [p.chargeCode, p.amountMinor])).toEqual([['CANCEL_FEE', 4 * 30_000]]);
+    expect(penalty.map((p) => [p.chargeCode, p.amountMinor])).toEqual([['CXL', 4 * 30_000]]);
     expect(cancelled.issues.length + cancelled.stays.length).toBeGreaterThan(0);
     // Re-delivery of the cancellation: one effect only.
     expect((await ingest(4, payload(org, { status: 'cancelled' }))).outcome).toBe('duplicate');

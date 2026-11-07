@@ -1,17 +1,22 @@
 import { sql, type TxContext } from '@portico/db';
-import { type EntityRef, type Money, money, NotFoundError, newId } from '@portico/kernel';
+import { DomainError, type EntityRef, type Money, money, NotFoundError, newId } from '@portico/kernel';
 import type { BillingRuleInput, FinancePort, FolioSummary, PayerRef } from '../../src/ports';
 
+/** Finance's default charge-code catalogue (finance review) with each code's group. Unknown codes are refused. */
 const GROUP: Record<string, string> = {
   ROOM: 'room',
   PKG: 'package',
-  CANCEL_FEE: 'penalty',
-  NO_SHOW: 'penalty',
-  EARLY_DEPARTURE: 'penalty',
-  EARLY_CHECK_IN: 'fee',
-  LATE_CHECK_OUT: 'fee',
+  BRKF: 'food',
+  FOOD: 'food',
+  BEV: 'beverage',
   MINIBAR: 'minibar',
   SPA: 'spa',
+  DIVE: 'activity',
+  TRANSFER: 'transfer',
+  RETAIL: 'retail',
+  CXL: 'penalty',
+  MISC: 'misc',
+  ALLOW: 'allowance',
 };
 
 /**
@@ -35,6 +40,30 @@ export class FakeFinance implements FinancePort {
   }
 
   async postCharge(tx: TxContext, input: Parameters<FinancePort['postCharge']>[1]) {
+    // Strict like real finance (review R-10): known codes only, no future service date, a reason for back-dating.
+    if (!GROUP[input.chargeCode]) {
+      throw new DomainError('unknown_charge_code', `Charge code ${input.chargeCode} does not exist.`, {
+        status: 422,
+      });
+    }
+    const bd = await sql<{
+      business_date: string;
+    }>`select business_date::text from platform.properties where id = ${input.propertyId}`.execute(tx.db);
+    const businessDate = bd.rows[0]?.business_date ?? input.serviceDate;
+    if (input.serviceDate > businessDate) {
+      throw new DomainError(
+        'service_date_in_future',
+        `Service date ${input.serviceDate} is after the business date ${businessDate}.`,
+        { status: 422 },
+      );
+    }
+    if (input.serviceDate < businessDate && tx.actor.kind === 'user' && !input.reason) {
+      throw new DomainError(
+        'late_service_date_reason_required',
+        'A reason is required for a past service date.',
+        { status: 422 },
+      );
+    }
     const dup = await sql<{
       id: string;
       folio_id: string;

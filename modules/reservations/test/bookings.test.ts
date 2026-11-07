@@ -253,7 +253,7 @@ describe('booking lifecycle', () => {
       org.fakes.finance.postCharge(tx, {
         propertyId: org.propertyId,
         target: { type: 'stay', id: b.stays[0]?.id ?? '' },
-        chargeCode: 'GREEN_TAX',
+        chargeCode: 'MISC',
         amount: { amountMinor: 2_400, currency: 'USD' },
         serviceDate: BUSINESS_DATE,
         description: 'Green Tax',

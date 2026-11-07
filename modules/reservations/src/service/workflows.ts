@@ -35,7 +35,16 @@ import { RESERVATIONS_EVENTS as E } from '../events';
 import { RESERVATIONS_PERMISSIONS as P } from '../manifest';
 import type { GuaranteeKind, KeyKind, KeyOperationResult, UnitCondition } from '../ports';
 import { type ForwardedResult, guardAuthority, isForwarded } from './authority';
-import { actorKey, actorName, type Deps, db, isModuleUnavailable, json, policy } from './context';
+import {
+  actorKey,
+  actorName,
+  chargeCodes,
+  type Deps,
+  db,
+  isModuleUnavailable,
+  json,
+  policy,
+} from './context';
 import { emitReservationEvent } from './event-payload';
 import { resolveGuest } from './guests';
 import { raiseIssue } from './issues';
@@ -660,6 +669,35 @@ async function stepSettle(
 
 // ───────────────────────────── confirm ─────────────────────────────
 
+/** Post an approved early check-in / late check-out fee when the service happens (service date = business date). */
+async function postTimeRequestFee(
+  deps: Deps,
+  tx: TxContext,
+  stay: StayRecord,
+  kind: 'early_check_in' | 'late_check_out',
+  bookingCode: string,
+): Promise<void> {
+  const approved = (kind === 'early_check_in' ? stay.row.early_check_in : stay.row.late_check_out) as {
+    time?: string;
+    fee?: Money | null;
+  } | null;
+  if (!approved?.fee || approved.fee.amountMinor <= 0 || stay.row.commercial_type !== 'standard') return;
+  const codes = await chargeCodes(deps, tx, stay.row.property_id);
+  const businessDate = await deps.ports.platform.getBusinessDate(tx, stay.row.property_id);
+  const ref: EntityRef = { type: 'stay', id: stay.row.id };
+  await deps.ports.finance.postCharge(tx, {
+    propertyId: stay.row.property_id,
+    target: ref,
+    chargeCode: kind === 'early_check_in' ? codes.earlyCheckIn : codes.lateCheckOut,
+    amount: approved.fee,
+    serviceDate: businessDate,
+    description: `${kind === 'early_check_in' ? 'Early check-in' : 'Late check-out'} at ${approved.time ?? ''} (booking ${bookingCode})`,
+    sourceRef: ref,
+    idempotencyKey: `fee:${stay.row.id}:${kind}`,
+    taxMode: 'compute',
+  });
+}
+
 async function confirmCheckIn(
   deps: Deps,
   tx: TxContext,
@@ -712,6 +750,7 @@ async function confirmCheckIn(
       ownerId: tx.actor.kind === 'user' ? tx.actor.userId : null,
     });
   }
+  await postTimeRequestFee(deps, tx, fresh, 'early_check_in', booking.code);
   await updateStay(tx, stay.row.id, { status: 'in_house', checked_in_at: tx.now });
   await bumpBooking(tx, booking.id, 'check_in');
   const primary = fresh.occupants.find((o) => o.is_primary && o.profile_id);
@@ -812,13 +851,14 @@ async function confirmCheckOut(
       await deps.ports.finance.postCharge(tx, {
         propertyId: stay.row.property_id,
         target: ref,
-        chargeCode: 'EARLY_DEPARTURE',
+        chargeCode: (await chargeCodes(deps, tx, stay.row.property_id)).earlyDeparture,
         amount: penalty,
         serviceDate: businessDate,
         description: `Early departure charge per agreed terms (booking ${booking.code})`,
         sourceRef: ref,
         idempotencyKey: `penalty:early_departure:${stay.row.id}:${releasedFrom}`,
         taxMode: 'compute',
+        reason: `Early departure on business date ${businessDate}`,
       });
     }
     const trimmed = fresh.segments
@@ -828,6 +868,7 @@ async function confirmCheckOut(
     await updateStay(tx, stay.row.id, { departure: releasedFrom });
     early = { releasedFrom, penalty: penalty.amountMinor > 0 ? penalty : null };
   }
+  await postTimeRequestFee(deps, tx, fresh, 'late_check_out', booking.code);
   await updateStay(tx, stay.row.id, { status: 'departed', checked_out_at: tx.now });
   const after = await loadBooking(tx, booking.id);
   const complete = bookingShouldComplete(

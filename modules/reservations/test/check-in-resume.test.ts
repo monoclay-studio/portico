@@ -1,4 +1,6 @@
-import { sql } from '@portico/db';
+import { sql, withTenantTx } from '@portico/db';
+import { systemAuthorizer } from '@portico/kernel';
+import { platform } from '@portico/platform';
 import type { TestDatabase } from '@portico/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Booking } from '../src/contracts';
@@ -207,10 +209,57 @@ describe('check-out as a resumable workflow', () => {
       ),
     ).toEqual(['2026-12-10']);
     const penalty = (await org.run((tx) => org.fakes.finance.postings(tx))).filter(
-      (p) => p.chargeCode === 'EARLY_DEPARTURE',
+      (p) => p.chargeCode === 'CXL',
     );
     expect(penalty.map((p) => p.amountMinor)).toEqual([30_000]);
     const issues = await org.run((tx) => org.svc.listIssues(tx, { propertyId: org.propertyId }));
     expect(issues.map((i) => i.kind)).toContain('departed_with_balance');
+  });
+});
+
+describe('fees post when the service happens (steward R-10)', () => {
+  it('a late check-out fee is approved by preview but charged at check-out, with the business date', async () => {
+    const org = await setupOrg(t);
+    await withTenantTx(t.db, { ...org.ctx, authz: systemAuthorizer }, (tx) =>
+      platform.setPolicy(tx, {
+        key: 'reservations.lateCheckOut.fee',
+        scopeType: 'property',
+        scopeId: org.propertyId,
+        value: { amountMinor: 5_000 },
+        reason: 'test',
+      }),
+    );
+    const b = created<Booking>(
+      await org.run((tx) =>
+        org.svc.createBooking(tx, org.booking({}, { unitId: org.units.V101, departure: '2026-12-11' })),
+      ),
+    );
+    const stayId = b.stays[0]?.id as string;
+    const p = await org.run((tx) =>
+      org.svc.previewChange(tx, { kind: 'late_check_out', stayId, time: '16:00' }),
+    );
+    expect(p.fees).toEqual([
+      expect.objectContaining({ kind: 'late_check_out', amount: { amountMinor: 5_000, currency: 'USD' } }),
+    ]);
+    await org.svc.commitChangeSafely(t.db, org.ctx, { previewToken: p.token });
+    expect(
+      (await org.run((tx) => org.fakes.finance.postings(tx))).filter((x) => x.key.startsWith('fee:')),
+    ).toEqual([]);
+    await org.svc.performWorkflow(t.db, org.ctx, {
+      stayId,
+      kind: 'check_in',
+      checkIn: { registration: { identityVerified: true } },
+    });
+    await org.run((tx) => sql`update platform.properties set business_date = '2026-12-11'`.execute(tx.db));
+    const out = await org.svc.performWorkflow(t.db, org.ctx, {
+      stayId,
+      kind: 'check_out',
+      checkOut: { settle: { leaveOpenReason: 'Paid at the desk later' } },
+    });
+    expect(out.run?.status).toBe('completed');
+    const fee = (await org.run((tx) => org.fakes.finance.postings(tx))).filter(
+      (x) => x.key === `fee:${stayId}:late_check_out`,
+    );
+    expect(fee.map((x) => [x.chargeCode, x.amountMinor])).toEqual([['MISC', 5_000]]);
   });
 });

@@ -41,6 +41,7 @@ import {
   actorName,
   actorUserId,
   businessDateOf,
+  chargeCodes,
   type Deps,
   db,
   json,
@@ -1109,13 +1110,14 @@ export async function markNoShow(
     const posted = await deps.ports.finance.postCharge(tx, {
       propertyId: row.property_id,
       target: { type: 'stay', id: stay.row.id },
-      chargeCode: 'NO_SHOW',
+      chargeCode: (await chargeCodes(deps, tx, row.property_id)).noShow,
       amount: penalty,
       serviceDate: stay.row.arrival,
       description: `No-show charge per agreed terms (booking ${row.code})`,
       sourceRef: { type: 'stay', id: stay.row.id },
       idempotencyKey: `penalty:no_show:${stay.row.id}`,
       taxMode: 'compute',
+      reason: `No-show for arrival ${stay.row.arrival} recorded on business date ${businessDate}`,
     });
     penaltyPostingIds = posted.postingIds;
   }

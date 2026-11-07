@@ -159,7 +159,7 @@ describe('change preview → commit token', () => {
     expect(res.booking.stays[0]?.status.stay).toBe('cancelled');
     const postings = await org.run((tx) => org.fakes.finance.postings(tx));
     expect(postings.map((x) => [x.chargeCode, x.amountMinor, x.key])).toEqual([
-      ['CANCEL_FEE', 30_000, `penalty:cancellation:${b.stays[0]?.id}`],
+      ['CXL', 30_000, `penalty:cancellation:${b.stays[0]?.id}`],
     ]);
     const ev = await org.run((tx) =>
       sql<{ type: string }>`select type from core.outbox where type = ${E.bookingCancelled}`.execute(tx.db),
@@ -192,7 +192,7 @@ describe('no-show (Day Close provider)', () => {
     );
     expect(again).toMatchObject({ replayed: true, penaltyPostingIds: first.penaltyPostingIds });
     expect(
-      (await org.run((tx) => org.fakes.finance.postings(tx))).filter((p) => p.chargeCode === 'NO_SHOW'),
+      (await org.run((tx) => org.fakes.finance.postings(tx))).filter((p) => p.chargeCode === 'CXL'),
     ).toHaveLength(1);
     const ev = await org.run((tx) =>
       sql<{ type: string }>`select type from core.outbox where type = ${E.stayNoShow}`.execute(tx.db),

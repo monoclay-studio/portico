@@ -396,6 +396,8 @@ export interface FinancePort {
       idempotencyKey: string;
       taxMode?: 'compute' | 'provided';
       taxLines?: TaxLine[];
+      /** Required by finance when a user posts with a service date before the business date. */
+      reason?: string;
     },
   ): Promise<{ postingIds: string[]; folioId: string }>;
   recordDeposit(

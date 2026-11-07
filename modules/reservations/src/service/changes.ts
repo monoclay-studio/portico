@@ -74,6 +74,8 @@ import {
 import {
   actorKey,
   actorName,
+  type ChargeCodes,
+  chargeCodes,
   type Deps,
   db,
   isModuleUnavailable,
@@ -154,6 +156,7 @@ interface Plan {
 interface Ctx {
   deps: Deps;
   tx: TxContext;
+  codes: ChargeCodes;
   propertyId: string;
   timezone: string;
   businessDate: LocalDate;
@@ -335,6 +338,7 @@ async function context(deps: Deps, tx: TxContext, propertyId: string, currency?:
   return {
     deps,
     tx,
+    codes: await chargeCodes(deps, tx, propertyId),
     propertyId,
     timezone: p.timezone,
     businessDate: p.businessDate,
@@ -428,7 +432,7 @@ function removalPenalty(
   return {
     stayId: stay.row.id,
     kind,
-    chargeCode: inHouse ? 'EARLY_DEPARTURE' : 'CANCEL_FEE',
+    chargeCode: inHouse ? c.codes.earlyDeparture : c.codes.cancellation,
     amount,
     description: inHouse
       ? `Early departure charge per agreed terms (${removed.length} night${removed.length === 1 ? '' : 's'} released)`
@@ -654,7 +658,7 @@ async function planTimeRequest(
         {
           stayId: stay.row.id,
           kind: request.kind,
-          chargeCode: early ? 'EARLY_CHECK_IN' : 'LATE_CHECK_OUT',
+          chargeCode: early ? c.codes.earlyCheckIn : c.codes.lateCheckOut,
           amount: fee,
           description: `${early ? 'Early check-in' : 'Late check-out'} at ${request.time}`,
           serviceDate: early ? stay.row.arrival : stay.row.departure,
@@ -719,7 +723,7 @@ async function planCancellation(
           charges.push({
             stayId: stay.row.id,
             kind: 'cancellation',
-            chargeCode: 'CANCEL_FEE',
+            chargeCode: c.codes.cancellation,
             amount: outcome.amount,
             description: outcome.description,
             serviceDate: c.businessDate,
@@ -1726,6 +1730,9 @@ async function applyPlan(
   // Penalties and fees are posted to the stay (finance billing rules choose the folio). Deterministic keys.
   for (const ch of plan.charges) {
     if (ch.waived || ch.amount.amountMinor === 0) continue;
+    // Early check-in / late check-out fees are posted when the service happens (check-in / check-out), never with
+    // a future service date (R-10); the approval stores the fee on the stay.
+    if (ch.kind === 'early_check_in' || ch.kind === 'late_check_out') continue;
     await finance.postCharge(tx, {
       propertyId: plan.propertyId,
       target: ch.stayId ? ref(ch.stayId) : { type: 'booking', id: booking.row.id },
@@ -1736,6 +1743,7 @@ async function applyPlan(
       sourceRef: ch.stayId ? ref(ch.stayId) : { type: 'booking', id: booking.row.id },
       idempotencyKey: ch.idempotencyKey,
       taxMode: 'compute',
+      reason: ch.description,
     });
   }
   const afterStays = await loadBooking(tx, booking.row.id);
