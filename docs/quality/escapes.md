@@ -114,7 +114,10 @@ Sources used for every entry:
   (`docs/orchestration/reviews/review-identity-plus.md`).
 - **Why it was missed.**
   1. **Only one order of events was tested.** The first review tested attacks where the victim exists first and the
-     attacker acts second. All 11 of its PoCs have that shape.
+     attacker acts second. All five of its cross-organization PoCs start from a victim who already has an identity:
+     "a trial-org admin resets the global password of a live-org GM", "strips the MFA of a live-org member",
+     "createUser … on an existing password-less global user", the wave-0 existing-person case, and the SSO PoC
+     (`reviews/identity-plus-poc/*review-poc*`, `*sso-poc*`).
   2. **The review's own fix created the hole.** Its fix for P0-1, item (3), said "an email that *already* belongs to a
      global user must create an invited membership". That implicitly allowed org-set passwords for *new* emails.
      ADR-0017 §2 adopted it (`docs/adr/0017-…md:43`, "password can be set only when a brand-new global user is
@@ -164,7 +167,7 @@ Sources used for every entry:
   loses their edits.
 - **Found.** L4 tester, 12:17: `blackbox-findings.md` P7 "Error handling"; `screens/p7-09-empty-name-save.jpg`.
 - **Should have been caught by.** The L2 backoffice review (11:33–12:02). Its brief asked it to check "problem+json
-  rendering" (`archive/steward-reviewer-v1.md`, Part 3 context; backoffice launch brief (a)).
+  rendering" (backoffice launch brief, item (a), in `docs/chronicle/agents/20261107T1133-steward-review-backoffice-ui.md`).
 - **Why it was missed.** The review tested server problem documents and the conflict flow (P2-7) but never submitted
   invalid input to a form.
 - **Checks added.** Steward reviewer v2: **SR2-5** (an invalid-input probe on every form). Pattern **UX-04/UX-05**.
@@ -425,7 +428,9 @@ the 8 merged modules are unchecked for this class (retro, improvement 1).
 - **Why it was missed.**
   - The tester's originals **exist**: `ux-round1/x-0[1-6]*.png` in the session scratchpad, verified this round.
   - Commit `3749673` ("compressed screens") converted and copied the `p*`/`01-*` files into `screens/*.jpg` and
-    rewrote their references. The `x-*` files, which the tester had cited without a `screens/` prefix, were skipped.
+    rewrote their references; the tester's original report cited bare `.png` names. The `x-*` files were neither
+    copied nor rewritten, and their references still read `x-0N-….png`. *(Inferred from the commit's file list and
+    the committed text; the copy command itself is not recorded.)*
   - Nothing checked that every cited file existed after the copy.
 - **Checks added.**
   - Black-box tester v2 **BT2-3** (evidence manifest).
