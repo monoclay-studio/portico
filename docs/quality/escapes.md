@@ -231,8 +231,8 @@ Sources used for every entry:
 
 ### L1-BSC — the builder's self-check (fix rounds) should have caught it
 
-These five came out of the identity-plus fix round. Only one other module has had a second review so far (see the
-retro, improvement 1).
+E-003 to E-007 came out of the identity-plus fix round. No other module has had a second review, so the fix rounds of
+the 8 merged modules are unchecked for this class (retro, improvement 1).
 
 #### E-003 · P1 · D · A pre-created SSO link skips the verified-domain gate, and a failed JIT sign-in commits the user and the link
 - **Found.** L2 second review: R2-P1-3 (PoC N-7).
