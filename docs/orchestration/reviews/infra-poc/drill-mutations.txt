@@ -1,3 +1,5 @@
+# Restore-drill verify.sql mutation probe (reviewer). One planted defect per run inside a rolled-back transaction.
+# CAUGHT = verify.sql failed (good). MISSED = verify.sql passed. The baseline (no defect) is expected to pass ("MISSED").
 MISSED  baseline (no defect)
 CAUGHT  RLS disabled on guests.profiles (app can read) :: DRILL FAIL: tenant isolation weakened: guests.profiles(rls disabled but accessible to portico_app)
 CAUGHT  RLS not forced on guests.profiles :: DRILL FAIL: tenant isolation weakened: guests.profiles(rls not forced)
