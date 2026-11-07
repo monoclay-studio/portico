@@ -271,4 +271,7 @@ Each agent's brief and report are in `agents/`.
 - **19:09 — Owner: make Portico Channex-ready** <!-- t: now @ 2026-11-07T19:09:42Z --> — ARI engine, outbox and queue within 20 ARI/min, a booking-revision
   webhook, and an acknowledgement flow. The distribution spec already covers all four. The build (distribution module +
   Channex adapter) is queued first for the next usage window.
+- **19:09 — Guests erasure fix merged** <!-- t: commit:096a038 @ 2026-11-07T19:09:03Z -->. Exact-identifier redaction; every writer of a guest's data locks the
+  profile first. The builder proved its tests with 14 mutations: each fix removed one at a time turns its test red.
+  This is the first full use of invariant closure (self-check v4 § 5).
 
