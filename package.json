@@ -20,7 +20,8 @@
     "dev:worker": "pnpm --filter @portico/worker dev",
     "dev:backoffice": "pnpm --filter @portico/backoffice dev",
     "seed:demo": "pnpm --filter @portico/api seed:demo",
-    "lint:boundaries": "node tools/check-boundaries.mjs"
+    "lint:boundaries": "node tools/check-boundaries.mjs",
+    "parity": "node tools/parity-report.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "catalog:",
