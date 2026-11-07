@@ -118,7 +118,8 @@ replaces that exception and adds three rules.
     their credentials, not their memberships. A person with no password, no active factor and no SSO link may set a
     first password through an emailed link from **any** organization's invitation. Unaccepted invitations elsewhere
     never block this. A password reset reaches people who only hold invitations.
-15. **SSO configuration is a root change.** Changing the issuer, the email allow-list, `trustIdpMfa` or
+15. **SSO configuration is a root change.** A root change is anything that decides who signs in, or which roles a
+    sign-in grants (clarified after the third review). Changing the issuer, the email allow-list, `trustIdpMfa` or
     SSO-required needs one of:
     - organization-wide `*` held by the editor;
     - a second administrator's approval.
@@ -132,3 +133,11 @@ replaces that exception and adds three rules.
     SSO creates or activates a membership only after every check in §5 passes. A refused sign-in persists neither the
     user nor the link. The verified-domain check runs whenever a membership would be created or activated, not only
     for new links.
+
+## Amendment 2 — demo second factor (2026-11-07, after fix round 4)
+
+16. **Demo organizations keep sensitive permissions usable.** Sensitive (⚑) permissions never take effect without
+    MFA. So, in **demo-environment organizations only**, the demo seed enrols a TOTP factor with a fixed demo secret
+    for its fictitious `*.portico.invalid` users. The secret is printed beside the demo password. This is refused
+    outside the demo environment and for any real email address, the same way as `seedDemoMember`.
+
