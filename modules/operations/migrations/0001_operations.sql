@@ -511,7 +511,40 @@ create table operations.sync_mutations (
 );
 select core.enable_tenant_isolation('operations.sync_mutations');
 
+---------------------------------------------------------------------------------------------------------
+-- Background-job routing (ScheduledJob): which (organization, property) pairs have operations data, so the
+-- escalation and preventive-maintenance jobs can open a tenant transaction for each. Routing metadata only; not
+-- RLS-protected, therefore NOT granted to the app role — read only through the reviewed function below.
+---------------------------------------------------------------------------------------------------------
+create table operations.property_directory (
+  tenant_id   uuid not null,
+  property_id uuid not null,
+  primary key (tenant_id, property_id)
+);
+
+create or replace function operations.register_property() returns trigger
+  language plpgsql security definer set search_path = operations, pg_temp as $$
+begin
+  insert into operations.property_directory (tenant_id, property_id)
+    values (new.tenant_id, new.property_id) on conflict do nothing;
+  return new;
+end $$;
+create trigger register_property after insert on operations.unit_status
+  for each row execute function operations.register_property();
+create trigger register_property after insert on operations.tasks
+  for each row execute function operations.register_property();
+create trigger register_property after insert on operations.preventive_schedules
+  for each row execute function operations.register_property();
+
+create or replace function operations.job_properties()
+  returns table (tenant_id uuid, property_id uuid)
+  language sql stable security definer set search_path = operations, pg_temp
+  as $$ select tenant_id, property_id from operations.property_directory order by tenant_id, property_id $$;
+
 select core.apply_standard_grants('operations');
+revoke all on operations.property_directory from portico_app;
+revoke execute on function operations.register_property(), operations.job_properties() from public, portico_app;
+grant execute on function operations.job_properties() to portico_app;
 -- Append-only tables lose update/delete again after the standard grants.
 select core.make_append_only('operations.unit_status_log');
 select core.make_append_only('operations.task_activity');

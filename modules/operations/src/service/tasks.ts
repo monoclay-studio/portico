@@ -558,7 +558,13 @@ export async function transitionTask(
   const me = actorUserId(tx);
   const relation = row.assignee_user_id ? (row.assignee_user_id === me ? 'assignee' : 'other') : 'unassigned';
   if (!meta.internal) {
-    requirePermission(tx, transitionPermissionNeeded(input.to, relation), { propertyId: row.property_id });
+    const needed = transitionPermissionNeeded(input.to, relation);
+    // task.manage covers everything task.update allows.
+    requireAny(
+      tx,
+      needed === 'operations.task.update' ? [needed, 'operations.task.manage'] : [needed],
+      row.property_id,
+    );
   }
   const from = row.status as TaskStatus;
   const kind = row.kind as TaskKind;
