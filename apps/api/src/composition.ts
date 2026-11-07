@@ -6,13 +6,30 @@
 import type { PorticoDatabase, SearchProvider, TxEventSubscription } from '@portico/db';
 import type { Authenticator, HttpModule } from '@portico/http';
 import { type IdentityPorts, identityAuthenticator, identityHttp, identityManifest } from '@portico/identity';
-import type { ModuleManifest } from '@portico/kernel';
+import {
+  createConnectorRegistry,
+  fetchWebhookTransport,
+  type IntegrationDeps,
+  type IntegrationJob,
+  integrationHttp,
+  integrationJobs,
+  integrationManifest,
+  integrationSearch,
+  integrationSubscriptions,
+  noAuthorityTransitions,
+  PmsSimulatorHub,
+  secretStoreFromEnv,
+  unavailableActivationScope,
+  unavailableCatalog,
+} from '@portico/integration';
+import type { ModuleManifest, TenantEnvironment } from '@portico/kernel';
 import { platform, platformHttp, platformManifest, platformSearch } from '@portico/platform';
 import { recordsHttp } from './records-routes';
 
 export const MANIFESTS: readonly ModuleManifest[] = [
   platformManifest,
   identityManifest,
+  integrationManifest,
   // wave-1 modules register here
 ];
 
@@ -21,6 +38,8 @@ export interface Composition {
   httpModules: HttpModule[];
   subscriptions: TxEventSubscription[];
   searchProviders: SearchProvider[];
+  /** Periodic background work (integration syncs, outbound dispatch, webhook delivery). The worker runs these. */
+  backgroundJobs(opts: { environmentOf: (tenantId: string) => Promise<TenantEnvironment> }): IntegrationJob[];
 }
 
 export function compose(database: PorticoDatabase): Composition {
@@ -31,15 +50,56 @@ export function compose(database: PorticoDatabase): Composition {
   const identityPorts: IdentityPorts = { propertyIdsInScope: platform.propertyIdsInScope };
   const identityModule = identityHttp({ database });
 
+  // ── integration ──
+  // Ports: platform is real (on main). Inventory / rates / finance catalogs, platform activation scope (G-04) and
+  // authority transitions (G-02) are bound to stubs until those providers merge (see modules/integration/README.md).
+  const pmsSimulators = new PmsSimulatorHub();
+  const integrationDeps: IntegrationDeps = {
+    ports: {
+      platform: {
+        async getProperty(tx, id) {
+          const p = await platform.getProperty(tx, id);
+          return {
+            id: p.id,
+            name: p.name,
+            code: p.code,
+            timezone: p.timezone,
+            baseCurrency: p.baseCurrency,
+            countryCode: p.countryCode,
+          };
+        },
+        getDataAuthority: (tx, propertyId, domain) => platform.getDataAuthority(tx, propertyId, domain),
+        setDataAuthority: (tx, input) => platform.setDataAuthority(tx, input),
+      },
+      catalog: unavailableCatalog({
+        unitType: 'inventory',
+        unit: 'inventory',
+        ratePlan: 'rates',
+        taxRule: 'rates',
+        chargeCode: 'finance',
+        ledgerAccount: 'finance',
+        outlet: 'platform (outlets)',
+      }),
+      activationScope: unavailableActivationScope,
+      transitions: noAuthorityTransitions,
+    },
+    connectors: createConnectorRegistry({ pmsSimulator: pmsSimulators }),
+    secrets: secretStoreFromEnv(),
+    transport: fetchWebhookTransport(),
+    simulators: { pms: pmsSimulators },
+  };
+  const integrationModule = integrationHttp({ database, integration: integrationDeps });
+
   // ── cross-module experience: global search, summaries, record history ──
-  const searchProviders: SearchProvider[] = [platformSearch];
+  const searchProviders: SearchProvider[] = [platformSearch, integrationSearch];
   const recordsModule = recordsHttp({ database, manifests: MANIFESTS, searchProviders });
 
   return {
     authenticator: identityAuthenticator(database, identityPorts),
-    httpModules: [platformModule, identityModule, recordsModule],
-    subscriptions: [],
+    httpModules: [platformModule, identityModule, integrationModule, recordsModule],
+    subscriptions: [...integrationSubscriptions()],
     searchProviders,
+    backgroundJobs: (opts) => [...integrationJobs(database, integrationDeps, opts)],
   };
 }
 

@@ -35,7 +35,7 @@ export const STATUS_VOCABULARIES: Record<StatusDomain, readonly VocabularyEntry[
     { value: 'inquiry', label: 'Inquiry', aliases: ['enq', 'enquiry', 'inq'] },
     { value: 'quoted', label: 'Quoted', aliases: ['quote'] },
     { value: 'held', label: 'Held', aliases: ['hold', 'option'] },
-    { value: 'tentative', label: 'Tentative', aliases: ['tent', 'prov', 'provisional'] },
+    { value: 'tentative', label: 'Tentative', aliases: ['ten', 'tent', 'prov', 'provisional'] },
     {
       value: 'confirmed',
       label: 'Confirmed',

@@ -20,6 +20,7 @@
     "@portico/db": "workspace:*",
     "@portico/http": "workspace:*",
     "@portico/identity": "workspace:*",
+    "@portico/integration": "workspace:*",
     "@portico/kernel": "workspace:*",
     "@portico/platform": "workspace:*",
     "zod": "catalog:",

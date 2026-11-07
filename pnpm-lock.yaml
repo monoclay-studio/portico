@@ -95,6 +95,9 @@ importers:
       '@portico/identity':
         specifier: workspace:*
         version: link:../../modules/identity
+      '@portico/integration':
+        specifier: workspace:*
+        version: link:../../modules/integration
       '@portico/kernel':
         specifier: workspace:*
         version: link:../../packages/kernel
@@ -172,6 +175,37 @@ importers:
       fastify:
         specifier: 'catalog:'
         version: 5.12.8
+      zod:
+        specifier: 'catalog:'
+        version: 4.6.7
+    devDependencies:
+      '@portico/platform':
+        specifier: workspace:*
+        version: link:../platform
+      '@portico/testing':
+        specifier: workspace:*
+        version: link:../../packages/testing
+      '@types/node':
+        specifier: 'catalog:'
+        version: 22.20.5
+      typescript:
+        specifier: 'catalog:'
+        version: 7.0.2
+      vitest:
+        specifier: 'catalog:'
+        version: 5.1.0(@types/node@22.20.5)(vite@8.3.6(@types/node@22.20.5)(esbuild@0.28.2)(tsx@4.23.15)(yaml@2.9.1))
+
+  modules/integration:
+    dependencies:
+      '@portico/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      '@portico/http':
+        specifier: workspace:*
+        version: link:../../packages/http
+      '@portico/kernel':
+        specifier: workspace:*
+        version: link:../../packages/kernel
       zod:
         specifier: 'catalog:'
         version: 4.6.7
