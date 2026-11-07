@@ -90,8 +90,11 @@ export class FakeGuests implements GuestsPort {
   /** Test helper: what an unmerge would send back to this module. */
   referencesToRestore(mergeId: string): Record<string, Array<EntityRef & { field?: string | null }>> {
     const out: Record<string, Array<EntityRef & { field?: string | null }>> = {};
-    for (const r of this.merges.get(mergeId)?.repoints ?? [])
-      (out[r.module] ??= []).push({ type: r.type, id: r.id, field: r.field ?? null });
+    for (const r of this.merges.get(mergeId)?.repoints ?? []) {
+      const list = out[r.module] ?? [];
+      list.push({ type: r.type, id: r.id, field: r.field ?? null });
+      out[r.module] = list;
+    }
     return out;
   }
 }
