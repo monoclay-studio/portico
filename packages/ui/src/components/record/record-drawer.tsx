@@ -1,6 +1,6 @@
 import { ChevronRight, Maximize2, X } from 'lucide-react';
 import { Dialog as DialogPrimitive } from 'radix-ui';
-import type { ReactNode } from 'react';
+import { type ReactNode, useRef } from 'react';
 import { cn } from '../../lib/cn';
 import { useUi } from '../../provider';
 import { IconButton } from '../button';
@@ -39,6 +39,7 @@ export function RecordDrawer({
 }) {
   const { strings } = useUi();
   const s = strings.record;
+  const bodyRef = useRef<HTMLDivElement>(null);
   return (
     <DialogPrimitive.Root open onOpenChange={(o) => !o && onBack()}>
       <DialogPrimitive.Portal>
@@ -46,6 +47,11 @@ export function RecordDrawer({
         <DialogPrimitive.Content
           aria-describedby={undefined}
           data-record-drawer
+          onOpenAutoFocus={(e) => {
+            // Land on the record itself (not the first toolbar button, whose tooltip would swallow the first Esc).
+            e.preventDefault();
+            bodyRef.current?.focus();
+          }}
           onPointerDownOutside={(e) => {
             e.preventDefault();
             onClose();
@@ -106,7 +112,10 @@ export function RecordDrawer({
               tooltip={false}
             />
           </div>
-          <DialogPrimitive.Title className="pt-sr-only">{title}</DialogPrimitive.Title>
+          {/* The dialog's accessible name; the visible record heading inside stays the only heading. */}
+          <DialogPrimitive.Title asChild>
+            <span className="pt-sr-only">{title}</span>
+          </DialogPrimitive.Title>
           <div className="min-h-0 flex-1 overflow-auto px-5 py-4">
             {loading ? <SkeletonList rows={6} /> : children}
           </div>
