@@ -197,4 +197,7 @@ Each agent's brief and report are in `agents/`.
     is the strongest evidence for the quality steward's "re-attack every fix" rule.
 - **17:31 — Owner-requested checkpoint** before logging out and back in (the usage display wasn't updating). Four
   agents were stopped, all work was committed and pushed, and the resume order was written in STATUS.
+- **17:38 — Resumed** after the owner's re-login (5-hour 41%, seven-day 64%). The four agents were resumed by message
+  with their transcripts intact: integration-step fixes, identity fix round 4, parity-ops, and quality steward
+  round 1.
 
