@@ -245,7 +245,7 @@ async function currentAuthorization(tx: TxContext, job: Job) {
     .orderBy('id', 'desc')
     .limit(1)
     .executeTakeFirst();
-  if (!a || a.kind !== 'production' || !a.expires_at) return null;
+  if (a?.kind !== 'production' || !a.expires_at) return null;
   return { planFingerprint: a.plan_fingerprint ?? '', grantedBy: a.granted_by, expiresAt: a.expires_at };
 }
 
@@ -364,10 +364,9 @@ export async function runFreezeStep(
         key: c.key as Parameters<typeof evaluateCutoverGate>[0]['checklist'][number]['key'],
         status: c.status,
       })),
-      certificate:
-        cert && cert.certifiedAt
-          ? { planFingerprint: cert.planFingerprint ?? '', exact: cert.exact === true }
-          : null,
+      certificate: cert?.certifiedAt
+        ? { planFingerprint: cert.planFingerprint ?? '', exact: cert.exact === true }
+        : null,
       planFingerprint: fingerprint,
       authorization: await currentAuthorization(tx, j),
       jobCreatedBy: j.createdBy,

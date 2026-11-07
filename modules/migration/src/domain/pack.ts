@@ -67,16 +67,6 @@ export interface PackResult {
   unknownStatuses: string[];
 }
 
-const DATE_FIELDS = new Set([
-  'arrival',
-  'departure',
-  'date',
-  'date_of_birth',
-  'received_on',
-  'invoice_date',
-  'due_date',
-]);
-
 function getter(t: PackTable) {
   const index = new Map(t.columns.map((c) => [c.field, c.index]));
   return (row: readonly string[], field: string): string => {

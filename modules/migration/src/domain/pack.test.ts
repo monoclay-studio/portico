@@ -25,6 +25,11 @@ function tables(pack: Record<string, string[][]>, overrides: Record<string, stri
 
 const byKey = (recs: SourceRecord[], c: string, k: string) =>
   recs.find((r) => r.dataClass === c && r.key === k);
+function payloadOf<T>(recs: SourceRecord[], c: string, k: string): T {
+  const p = byKey(recs, c, k)?.payload;
+  if (!p) throw new Error(`no payload for ${c}:${k}`);
+  return p as T;
+}
 
 describe('building canonical records from the guesthouse template pack', () => {
   const out = buildPack(tables(sampleGuesthousePack(BD)), { defaultCurrency: 'USD' });
@@ -68,15 +73,11 @@ describe('building canonical records from the guesthouse template pack', () => {
     ]);
     const incl = byKey(out.records, 'reservation', 'CN1008')?.payload as ReservationRecord;
     expect(incl).toMatchObject({ taxInclusive: true, roomTotalMinor: 40000, totalMinor: 40000 });
-    expect((byKey(out.records, 'reservation', 'CN1004')?.payload as ReservationRecord).status).toBe(
-      'in_house',
-    );
-    expect((byKey(out.records, 'reservation', 'CN1007')?.payload as ReservationRecord).status).toBe(
-      'no_show',
-    );
+    expect(payloadOf<ReservationRecord>(out.records, 'reservation', 'CN1004').status).toBe('in_house');
+    expect(payloadOf<ReservationRecord>(out.records, 'reservation', 'CN1007').status).toBe('no_show');
   });
   it('carries the tax already declared on deposits and the source’s control totals', () => {
-    expect((byKey(out.records, 'deposit', 'CN1001')?.payload as DepositRecord).taxDeclared).toEqual([
+    expect(payloadOf<DepositRecord>(out.records, 'deposit', 'CN1001').taxDeclared).toEqual([
       { code: 'TGST', name: 'T-GST', amountMinor: 1453 },
     ]);
     expect(out.controlTotals).toContainEqual({
@@ -245,7 +246,7 @@ describe('problems are reported per record, never guessed', () => {
     ]);
     const m2 = byKey(out.records, 'guest', 'M2');
     expect(m2?.problems.map((p) => [p.code, p.severity])).toEqual([['masked_contact', 'warning']]);
-    expect((m2?.payload as GuestRecord).email).toBeNull();
+    expect(payloadOf<GuestRecord>(out.records, 'guest', 'M2').email).toBeNull();
   });
   it('a folio whose charges minus payments differ from its balance is a finance problem', () => {
     const out = buildPack(

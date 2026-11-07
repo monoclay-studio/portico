@@ -169,12 +169,9 @@ describe('migration API', () => {
       url: `/v1/migration/jobs/${id}/ledger`,
       headers: auth,
     });
-    const states = (ledger.json().items as Array<{ dataClass: string; state: string }>).reduce<
-      Record<string, number>
-    >(
-      (acc, e) => ({ ...acc, [`${e.dataClass}:${e.state}`]: (acc[`${e.dataClass}:${e.state}`] ?? 0) + 1 }),
-      {},
-    );
+    const states: Record<string, number> = {};
+    for (const e of ledger.json().items as Array<{ dataClass: string; state: string }>)
+      states[`${e.dataClass}:${e.state}`] = (states[`${e.dataClass}:${e.state}`] ?? 0) + 1;
     expect(states).toMatchObject({
       'unit_type:imported': 3,
       'unit:imported': 6,

@@ -286,6 +286,7 @@ describe('mapping suggestions', () => {
 });
 
 describe('cutover gate, freeze and window', () => {
+  const AUTH = { planFingerprint: 'P', grantedBy: 'user:b', expiresAt: new Date('2026-12-02T00:00:00Z') };
   const ok: GateInput = {
     purpose: 'production',
     environment: 'live',
@@ -302,7 +303,7 @@ describe('cutover gate, freeze and window', () => {
     ).map((key) => ({ key, status: 'done' as const })),
     certificate: { planFingerprint: 'P', exact: true },
     planFingerprint: 'P',
-    authorization: { planFingerprint: 'P', grantedBy: 'user:b', expiresAt: new Date('2026-12-02T00:00:00Z') },
+    authorization: AUTH,
     jobCreatedBy: 'user:a',
     transition: { status: 'planned', approved: true },
     openBlockingExceptions: 0,
@@ -316,13 +317,11 @@ describe('cutover gate, freeze and window', () => {
   it('lists each blocker in plain language', () => {
     expect(codes({ environment: 'trial' })).toEqual(['not_live']);
     expect(codes({ certificate: null })).toEqual(['no_rehearsal']);
-    expect(
-      codes({ planFingerprint: 'Q', authorization: { ...ok.authorization!, planFingerprint: 'Q' } }),
-    ).toEqual(['plan_changed_since_rehearsal']);
-    expect(codes({ authorization: null })).toEqual(['production_authorization_missing']);
-    expect(codes({ authorization: { ...ok.authorization!, grantedBy: 'user:a' } })).toEqual([
-      'authorization_same_person',
+    expect(codes({ planFingerprint: 'Q', authorization: { ...AUTH, planFingerprint: 'Q' } })).toEqual([
+      'plan_changed_since_rehearsal',
     ]);
+    expect(codes({ authorization: null })).toEqual(['production_authorization_missing']);
+    expect(codes({ authorization: { ...AUTH, grantedBy: 'user:a' } })).toEqual(['authorization_same_person']);
     expect(codes({ now: new Date('2026-12-03T00:00:00Z') })).toEqual(['authorization_expired']);
     expect(codes({ transition: { status: 'planned', approved: false } })).toEqual([
       'transition_not_approved',

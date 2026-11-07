@@ -462,7 +462,7 @@ async function evidenceStep(
     const j = await loadJob(tx, job.id, { lock: true });
     await saveJob(tx, j, { certificate: evidence ? { ...evidence } : null });
   });
-  if (!evidence || !evidence.exact || !evidence.certifiedAt)
+  if (!evidence?.exact || !evidence.certifiedAt)
     return {
       status: 'waiting',
       detail:

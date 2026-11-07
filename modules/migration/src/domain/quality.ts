@@ -199,7 +199,7 @@ export function checkQuality(records: readonly SourceRecord[], ctx: QualityConte
     const id = recordId('in_house_balance', r.key);
     inHouseWithBalance.add(b.bookingKey);
     const booking = resByKey.get(b.bookingKey);
-    if (!booking || booking.status !== 'in_house')
+    if (booking?.status !== 'in_house')
       add(out, id, {
         code: 'balance_without_in_house_stay',
         severity: 'blocking',
