@@ -28,7 +28,9 @@ describe('KpiTile', () => {
     expect(await screen.findByText(/sellable units/)).toBeInTheDocument();
     await userEvent.keyboard('{Escape}');
     // Accessible name = metric + the visible content (label in name, WCAG 2.5.3).
-    await userEvent.click(screen.getByRole('button', { name: /^Occupancy tonight:\s?80%.*96 of 120 villas/ }));
+    await userEvent.click(
+      screen.getByRole('button', { name: /^Occupancy tonight:\s?80%.*96 of 120 villas/ }),
+    );
     expect(onOpen).toHaveBeenCalled();
     const v = await axeViolations(container);
     expect(v, formatViolations(v)).toEqual([]);
