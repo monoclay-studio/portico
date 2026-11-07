@@ -944,6 +944,11 @@ async function confirmCheckOut(
       .map((s) => ({ ...s, to: earlier(s.to, releasedFrom) }));
     await replaceSegments(tx, stay.row.id, trimmed);
     await updateStay(tx, stay.row.id, { departure: releasedFrom });
+    // Plan sales mirror inventory (R-15): the nights not stayed stop counting against sales limits.
+    await deps.ports.rates.releasePlanSale(tx, {
+      ref,
+      nights: { from: releasedFrom, to: fresh.row.departure },
+    });
     early = { releasedFrom, penalty: penalty.amountMinor > 0 ? penalty : null };
   }
   await postTimeRequestFee(deps, tx, fresh, 'late_check_out', booking.code);

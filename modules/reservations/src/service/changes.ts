@@ -86,6 +86,7 @@ import {
 import { emitReservationEvent } from './event-payload';
 import { raiseIssue } from './issues';
 import { keyOperation } from './keys';
+import { syncPlanSales } from './plan-sales';
 import { bookingRecord } from './record';
 import {
   type BookingRecord,
@@ -1531,6 +1532,7 @@ export async function commitChange(
     return forwarded;
   }
   const { bookingId, keys } = await applyPlan(deps, tx, plan, row.token);
+  await syncPlanSales(deps, tx, bookingId);
   await db(tx)
     .updateTable('reservations.change_previews')
     .set({ status: 'superseded' })
@@ -1906,7 +1908,9 @@ export async function applyChangeDirect(
       { blockers: plan.view.blockers },
     );
   }
-  return applyPlan(deps, tx, plan, reference);
+  const applied = await applyPlan(deps, tx, plan, reference);
+  await syncPlanSales(deps, tx, applied.bookingId);
+  return applied;
 }
 
 // ───────────────────────────── stale recovery (S01) ─────────────────────────────

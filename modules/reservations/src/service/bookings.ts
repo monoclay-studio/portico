@@ -52,6 +52,7 @@ import { emitReservationEvent } from './event-payload';
 import { resolveGuest } from './guests';
 import { raiseIssue } from './issues';
 import { keyOperation } from './keys';
+import { syncPlanSales } from './plan-sales';
 import { bookingRecord } from './record';
 import {
   type BookingRecord,
@@ -327,6 +328,9 @@ export async function createBookingInternal(
   if ((status === 'tentative' || status === 'confirmed') && input.intent !== 'waitlist') {
     await applyBillingInstructions(deps, tx, rec, input.billing);
   }
+  await syncPlanSales(deps, tx, bookingId, {
+    onLimit: opts.onShortfall === 'record_conflict' ? 'record_issue' : 'reject',
+  });
   rec = await loadBooking(tx, bookingId);
   await tx.audit({
     action: 'reservations.booking.create',
@@ -774,6 +778,7 @@ export async function transitionBooking(
   if ((input.to === 'tentative' || input.to === 'confirmed') && (from === 'quoted' || from === 'held')) {
     await applyBillingInstructions(deps, tx, updated, rec.row.billing as NewBookingInput['billing']);
   }
+  await syncPlanSales(deps, tx, row.id);
   await tx.audit({
     action: `reservations.booking.${input.to}`,
     target: { type: 'booking', id: row.id },
@@ -837,6 +842,7 @@ export async function expireBookings(
     for (const stay of rec.stays)
       await deps.ports.inventory.release(tx, { ref: { type: 'stay', id: stay.row.id } });
     await bumpBooking(tx, id, 'status:expired', { status: 'expired', hold_expires_at: null });
+    await syncPlanSales(deps, tx, id);
     await tx.audit({
       action: 'reservations.booking.expire',
       target: { type: 'booking', id },
@@ -1134,6 +1140,8 @@ export async function markNoShow(
     releaseFrom < stay.row.departure ? { from: releaseFrom, to: stay.row.departure } : null;
   if (releasedNights) {
     await deps.ports.inventory.release(tx, { ref, nights: releasedNights });
+    // Plan sales mirror inventory exactly (R-15): the released nights stop counting against sales limits.
+    await deps.ports.rates.releasePlanSale(tx, { ref, nights: releasedNights });
     if (stay.segments.some((s) => s.unitId))
       await deps.ports.inventory.unassignUnit(tx, { ref, nights: releasedNights });
   }
@@ -1234,6 +1242,7 @@ export async function confirmWaitlistedStay(
     .where('kind', '=', 'waitlist_available')
     .where('status', '=', 'open')
     .execute();
+  await syncPlanSales(deps, tx, row.id);
   const updated = await bumpBooking(tx, row.id, 'waitlist_confirm');
   await tx.audit({
     action: 'reservations.stay.waitlistConfirm',

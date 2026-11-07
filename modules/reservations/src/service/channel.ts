@@ -27,6 +27,7 @@ import { type Deps, db, json, propertyInfo } from './context';
 import { emitReservationEvent } from './event-payload';
 import { resolveGuest } from './guests';
 import { openRelocationCase, raiseIssue } from './issues';
+import { syncPlanSales } from './plan-sales';
 import {
   bumpBooking,
   insertSnapshot,
@@ -776,6 +777,7 @@ export async function ingestChannelBooking(
         `channel:${input.connectionId}:${input.externalId}:${input.revision}`,
       );
     }
+    await syncPlanSales(deps, tx, rec.row.id, { onLimit: 'record_issue' });
     await flagIssues(tx, {
       propertyId: payload.propertyId,
       bookingId: rec.row.id,

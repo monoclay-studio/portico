@@ -1,5 +1,15 @@
-import type { TxContext } from '@portico/db';
-import { eachNight, type LocalDate, money, type Occupancy, sum } from '@portico/kernel';
+import { sql, type TxContext } from '@portico/db';
+import {
+  BusinessRuleError,
+  type DateRange,
+  type EntityRef,
+  eachNight,
+  type LocalDate,
+  money,
+  newId,
+  type Occupancy,
+  sum,
+} from '@portico/kernel';
 import type {
   CancellationPolicy,
   DepositItem,
@@ -52,6 +62,91 @@ export class FakeRates implements RatesPort {
   configure(propertyId: string, plans: FakeRatePlan[], taxes: FakeTaxConfig): void {
     this.plans.set(propertyId, plans);
     this.taxes.set(propertyId, taxes);
+  }
+
+  /** A sales limit (RAT-R08) for a plan on some nights. */
+  async setSalesLimit(
+    tx: TxContext,
+    input: { propertyId: string; ratePlanId: string; nights: DateRange; limit: number },
+  ): Promise<void> {
+    for (const date of eachNight(input.nights)) {
+      await sql`insert into fake_rates.sales_limits values (${tx.tenantId}, ${input.propertyId}, ${input.ratePlanId}, ${date}::date, ${input.limit})
+                on conflict (tenant_id, rate_plan_id, stay_date) do update set sales_limit = excluded.sales_limit`.execute(
+        tx.db,
+      );
+    }
+  }
+
+  /** Like rates: idempotent per ref/plan/night; one advisory lock per property-night; refuses beyond the limit. */
+  async recordPlanSale(
+    tx: TxContext,
+    input: {
+      propertyId: string;
+      ratePlanId: string;
+      unitTypeId: string;
+      nights: DateRange;
+      quantity?: number;
+      ref: EntityRef;
+    },
+  ): Promise<void> {
+    const qty = input.quantity ?? 1;
+    if (!(this.plans.get(input.propertyId) ?? []).some((p) => p.id === input.ratePlanId))
+      throw new BusinessRuleError('rate_plan_not_found', `Rate plan ${input.ratePlanId} was not found.`);
+    for (const date of eachNight(input.nights)) {
+      await sql`select pg_advisory_xact_lock(hashtext(${`fake_rates.sales:${input.propertyId}:${date}`}))`.execute(
+        tx.db,
+      );
+      const already = await sql<{ id: string; released_at: Date | null }>`
+        select id, released_at from fake_rates.plan_sales where rate_plan_id = ${input.ratePlanId}
+           and stay_date = ${date}::date and ref_type = ${input.ref.type} and ref_id = ${input.ref.id}`.execute(
+        tx.db,
+      );
+      const row = already.rows[0];
+      if (row && row.released_at === null) continue;
+      const limit = await sql<{ sales_limit: number }>`
+        select sales_limit from fake_rates.sales_limits where rate_plan_id = ${input.ratePlanId}
+           and stay_date = ${date}::date`.execute(tx.db);
+      const max = limit.rows[0]?.sales_limit;
+      if (max !== undefined) {
+        const sold = await sql<{ n: number }>`
+          select coalesce(sum(quantity), 0)::int as n from fake_rates.plan_sales
+           where rate_plan_id = ${input.ratePlanId} and stay_date = ${date}::date and released_at is null`.execute(
+          tx.db,
+        );
+        const n = sold.rows[0]?.n ?? 0;
+        if (n + qty > max)
+          throw new BusinessRuleError(
+            'sales_limit_reached',
+            `The sales limit of ${max} for this rate on ${date} has been reached. Offer another rate.`,
+            { ratePlanId: input.ratePlanId, date, limit: max, sold: n },
+          );
+      }
+      if (row) {
+        await sql`update fake_rates.plan_sales set released_at = null, quantity = ${qty}, unit_type_id = ${input.unitTypeId}
+                   where id = ${row.id}`.execute(tx.db);
+      } else {
+        await sql`insert into fake_rates.plan_sales (id, tenant_id, property_id, rate_plan_id, unit_type_id, stay_date, ref_type, ref_id, quantity)
+                  values (${newId()}, ${tx.tenantId}, ${input.propertyId}, ${input.ratePlanId}, ${input.unitTypeId}, ${date}::date,
+                          ${input.ref.type}, ${input.ref.id}, ${qty})`.execute(tx.db);
+      }
+    }
+  }
+
+  async releasePlanSale(tx: TxContext, input: { ref: EntityRef; nights?: DateRange }): Promise<void> {
+    await sql`update fake_rates.plan_sales set released_at = ${tx.now}
+               where ref_type = ${input.ref.type} and ref_id = ${input.ref.id} and released_at is null
+                 and (${input.nights?.from ?? null}::date is null or stay_date >= ${input.nights?.from ?? null}::date)
+                 and (${input.nights?.to ?? null}::date is null or stay_date < ${input.nights?.to ?? null}::date)`.execute(
+      tx.db,
+    );
+  }
+
+  /** Active plan sales per night for a plan (test inspection). */
+  async planSales(tx: TxContext, ratePlanId: string): Promise<Array<{ date: string; refId: string }>> {
+    const { rows } = await sql<{ stay_date: string; ref_id: string }>`
+      select to_char(stay_date, 'YYYY-MM-DD') as stay_date, ref_id from fake_rates.plan_sales
+       where rate_plan_id = ${ratePlanId} and released_at is null order by stay_date, ref_id`.execute(tx.db);
+    return rows.map((r) => ({ date: r.stay_date, refId: r.ref_id }));
   }
 
   setBase(propertyId: string, ratePlanId: string, unitTypeId: string, minor: number): void {

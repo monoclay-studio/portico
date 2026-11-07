@@ -287,6 +287,23 @@ export interface RatesPort {
     tx: TxContext,
     input: { terms: TermsSnapshot; change: StayChangeRequest },
   ): Promise<RepricingResult>;
+  /**
+   * Sales limits (RAT-R08): count a stay's nights against the limits of its plan and unit type, in the caller's
+   * transaction. Idempotent per ref, plan and night. Throws BusinessRuleError `sales_limit_reached` when full.
+   */
+  recordPlanSale(
+    tx: TxContext,
+    input: {
+      propertyId: string;
+      ratePlanId: string;
+      unitTypeId: string;
+      nights: DateRange;
+      quantity?: number;
+      ref: EntityRef;
+    },
+  ): Promise<void>;
+  /** Release a stay's plan sales (all, or only `nights`). */
+  releasePlanSale(tx: TxContext, input: { ref: EntityRef; nights?: DateRange }): Promise<void>;
 }
 
 // ───────────────────────────── guests ─────────────────────────────

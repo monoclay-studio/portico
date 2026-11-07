@@ -69,3 +69,19 @@ select core.enable_tenant_isolation('fake_finance.postings');
 select core.enable_tenant_isolation('fake_finance.deposits');
 select core.enable_tenant_isolation('fake_finance.billing_rules');
 select core.apply_standard_grants('fake_finance');
+
+-- Fake rates' plan sales (RAT-R08 sales limits), Postgres-backed like rates.plan_sales so a rollback undoes them.
+create schema fake_rates;
+create table fake_rates.sales_limits (
+  tenant_id uuid not null, property_id uuid not null, rate_plan_id uuid not null, stay_date date not null,
+  sales_limit int not null, primary key (tenant_id, rate_plan_id, stay_date)
+);
+create table fake_rates.plan_sales (
+  id uuid primary key, tenant_id uuid not null, property_id uuid not null, rate_plan_id uuid not null,
+  unit_type_id uuid not null, stay_date date not null, ref_type text not null, ref_id text not null,
+  quantity int not null, released_at timestamptz,
+  unique (tenant_id, rate_plan_id, stay_date, ref_type, ref_id)
+);
+select core.enable_tenant_isolation('fake_rates.sales_limits');
+select core.enable_tenant_isolation('fake_rates.plan_sales');
+select core.apply_standard_grants('fake_rates');
