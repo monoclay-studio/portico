@@ -56,7 +56,18 @@ export async function createServer(opts: ServerOptions): Promise<PorticoApp> {
     logger:
       opts.logger === false
         ? false
-        : { level: typeof opts.logger === 'object' ? opts.logger.level : 'info', redact: LOG_REDACT },
+        : {
+            level: typeof opts.logger === 'object' ? opts.logger.level : 'info',
+            redact: LOG_REDACT,
+            serializers: {
+              // Query strings (search terms, filters) can contain personal data: log the path only.
+              req: (req: { method: string; url: string; id: string }) => ({
+                method: req.method,
+                url: req.url.split('?')[0],
+                id: req.id,
+              }),
+            },
+          },
     genReqId: (req) => {
       const incoming = req.headers['x-request-id'];
       return typeof incoming === 'string' && /^[\w.-]{8,100}$/.test(incoming) ? incoming : randomUUID();
