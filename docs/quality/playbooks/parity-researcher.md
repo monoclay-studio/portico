@@ -16,6 +16,16 @@
 | v2 | 2026-11-07 | **PR2-1** | **`tested` needs an asserting test on `main`.** Quote the `file:line` of the assertion that proves the row. A test on an unmerged branch caps the status at `built`, with `branch@sha` in the evidence. A test that only exercises the happy path, or runs sequentially where the row is about concurrency, is not `tested` | Reviews found rows marked `tested` for behaviour that was not built or not proven (finance F-12; payments P2-13: PAR-PAY-006, EC-PAY-012, EC-PAY-015 "sequential only", PAR-PAY-009). The v1 mid-run instruction pointed at unmerged branches. An overclaimed P0 row lets the parity gate pass | E-019 | Rows downgraded by later reviews: round 0 had ≥ 8 (finance "several" plus 4 in payments); target 0. Canary C-L5-01 |
 | v2 | 2026-11-07 | **PR2-2** | **Failure-class sweep.** For each module, walk the classes in `docs/quality/patterns.md` groups A–D (isolation, money, events/concurrency, contracts, effective-dated data) and add an edge case for each applicable class with its exact expected behaviour, or record "N/A: reason" in the gap file | 31 % of the rates edge cases and 19 % of the payments edge cases were added *after* review. The inventory review named real P0 rows that were missing. The catalogues came from competitor features, not failure classes | E-020, E-021, E-022, E-023 | Edge-case rows added after the next review, as a share of the catalogue (round 0: rates 31 %, payments 19 %); canary C-L5-02 |
 
+### Round-3 measurement: v2 works again; E-060 closed (no version change)
+
+The evidence re-run for inventory and reservations ran on v2:
+- **PR2-1:** every `tested` row quotes its assertion (inventory 45/45, reservations 21/21), resolved by a script.
+  Rows whose outcome a fake decides stay `built` (AP-51). Rows proven only on an unmerged branch are cited as
+  `built (branch@sha)`.
+- **Over-claims found at the source:** 13 rows that the inventory README calls tested are not (E-111).
+- **PR2-2:** the failure-class sweep added 21 + 28 edge cases, each tagged with its class.
+- **E-060 closed:** inventory 1 % → 42 % tested, reservations 1 % → 9 %.
+
 ### Round-2 measurement: v2 works (no version change)
 
 Parity-ops (10 modules) ran on v2:
