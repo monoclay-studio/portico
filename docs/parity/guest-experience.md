@@ -120,7 +120,7 @@ compete/pilot, P1 full-service/resort expectation, P2 differentiator or rare.
 | PAR-GXP-053 | No shared caching of sensitive data; document images never shown back after submission | assumption (R04 C1) | P0 | specified | guest-experience.md GXP-R35 | — |
 | PAR-GXP-054 | Self-service failure rate measured, with graceful hand-off to staff carrying the guest's context | R05 digest #36 (failed self-service lowers return intent) | P1 | missing | — | — |
 | PAR-GXP-055 | Portal next to an external PMS: registration forwarded to the PMS profile or labelled "Portico only"; folio from mirrored balances; booking-changing upsells become requests | Duve [guest experience platform][duve-gxp] · search-located 2026-11-07, unverified | P1 | specified | guest-experience.md §14 | — |
-| PAR-GXP-056 | Hotels that keep an existing guest app connect it through Portico's API and webhooks | RMS [Canary module][rms-selfci] · search-located 2026-11-07, unverified | P2 | specified | integration.md INT-R26, INT-R27 | — |
+| PAR-GXP-056 | Hotels that keep an existing guest app connect it through Portico's API and webhooks | RMS [Canary Technologies module][rms-canary] · search-located 2026-11-07, unverified | P2 | specified | integration.md INT-R26, INT-R27 | — |
 
 ## Edge cases
 
@@ -192,6 +192,7 @@ Registry checked 2026-11-07. **Opened** = the page was fetched from this environ
 - [OPERA Cloud 26.3 — Reservation Upgrade — Powered by Nor1 PRiME][op-nor1] (opened)
 - [OPERA Cloud 26.3 — Using eFolio Exports][op-efolio] (opened)
 - [OPERA Cloud 26.3 — Using the Mobile ID Document Scanner][op-idscanmob] (opened)
+- [RMS Cloud — Canary Technologies module (guest experience and kiosk partner)][rms-canary] (search-located)
 - [RMS Cloud — Digital check-in (digital registration card)][rms-digreg] (search-located)
 - [RMS Cloud — Guest Portal self check-in][rms-selfci] (search-located)
 - [RMS Cloud — Guest Portal self check-out][rms-selfco] (search-located)
@@ -230,6 +231,7 @@ Registry checked 2026-11-07. **Opened** = the page was fetched from this environ
 [op-prearrival]: https://docs.oracle.com/en/industries/hospitality/opera-cloud/26.3/ocsuh/t_booking_workspace_managing_pre-arrival_lookup_schedules.htm
 [op-queue]: https://docs.oracle.com/en/industries/hospitality/opera-cloud/26.3/ocsuh/t_arrivals_in-house_adding_reservation_to_queue.htm
 [op-upgrade]: https://docs.oracle.com/en/industries/hospitality/opera-cloud/26.3/ocsuh/t_managing_reservation_upgrade_offers.htm
+[rms-canary]: https://support.rmscloud.com/hc/en-gb/articles/15373766345743-Canary-Technologies
 [rms-digreg]: https://rms-help-centre.helpjuice.com/paperless-check-in-with-guest-portal/digital-check-in-reservation
 [rms-kioskdev]: https://rms-help-centre.helpjuice.com/register-device-for-digital-check-in
 [rms-selfci]: https://rms-help-centre.helpjuice.com/guest-portal-setup/guest-portal-self-check-in
