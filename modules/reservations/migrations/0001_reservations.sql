@@ -74,6 +74,7 @@ create table reservations.stays (
   tenant_id          uuid not null,
   property_id        uuid not null,
   booking_id         uuid not null references reservations.bookings (id),
+  position           int not null,          -- order of the stay within its booking (as entered)
   status             text not null check (status in ('expected', 'in_house', 'departed', 'cancelled', 'no_show', 'waitlisted')),
   commercial_type    text not null default 'standard' check (commercial_type in ('standard', 'complimentary', 'house_use')),
   commercial_reason  text,
@@ -98,7 +99,7 @@ create table reservations.stays (
   check (departure > arrival),
   check (commercial_type = 'standard' or commercial_reason is not null)
 );
-create index stays_booking_idx on reservations.stays (tenant_id, booking_id);
+create unique index stays_booking_position_uq on reservations.stays (tenant_id, booking_id, position);
 create index stays_arrival_idx on reservations.stays (tenant_id, property_id, arrival);
 create index stays_departure_idx on reservations.stays (tenant_id, property_id, departure);
 create index stays_status_idx on reservations.stays (tenant_id, property_id, status);

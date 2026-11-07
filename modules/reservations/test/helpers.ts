@@ -22,11 +22,15 @@ import { type FakeRatePlan, FakeRates } from './fakes/rates';
 const here = dirname(fileURLToPath(import.meta.url));
 
 /** Real Postgres with platform + reservations migrations and the test-only fake schemas. */
-export function startDb(): Promise<TestDatabase> {
-  return createTestDatabase([
+export async function startDb(): Promise<TestDatabase> {
+  const t = await createTestDatabase([
     ...sourcesFromManifests([platformManifest, reservationsManifest]),
     { module: 'zz_test_fakes', dir: join(here, 'fakes', 'sql') },
   ]);
+  // pg-pool resolves end() before its clients have closed; `drop database … with (force)` then terminates them and
+  // the termination surfaces as an unhandled pool 'error'. Swallow it here (see FOUNDATION_REQUESTS.md).
+  for (const pool of [t.db.pool, t.admin.pool]) pool.on('error', () => {});
+  return t;
 }
 
 export const BUSINESS_DATE = '2026-12-10';

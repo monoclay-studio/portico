@@ -182,7 +182,10 @@ export class FakeRates implements RatesPort {
     for (const date of eachNight(change.nights)) {
       const agreed = terms.nights.find((n) => n.date === date);
       let net: number;
-      if (!agreed || change.ratePlanId !== terms.ratePlanId) {
+      if (!agreed && change.unitTypeId !== terms.unitTypeId && change.typeChange === 'keep_agreed') {
+        // New night in an upgraded type, complimentary: priced as the originally booked type.
+        net = this.current(plan, terms.unitTypeId, change.occupancy);
+      } else if (!agreed || change.ratePlanId !== terms.ratePlanId) {
         net = this.current(plan, change.unitTypeId, change.occupancy);
       } else if (change.unitTypeId !== terms.unitTypeId) {
         const policy = change.typeChange ?? 'difference';

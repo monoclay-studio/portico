@@ -99,8 +99,7 @@ export async function loadBooking(
     .selectFrom('reservations.stays')
     .selectAll()
     .where('booking_id', '=', bookingId)
-    .orderBy('created_at')
-    .orderBy('id')
+    .orderBy('position')
     .execute();
   return { row, stays: await loadStayRecords(tx, stayRows) };
 }

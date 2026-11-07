@@ -51,6 +51,7 @@ export interface StaysTable {
   tenant_id: string;
   property_id: string;
   booking_id: string;
+  position: number;
   status: string;
   commercial_type: string;
   commercial_reason: string | null;

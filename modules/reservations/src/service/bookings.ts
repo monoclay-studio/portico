@@ -371,6 +371,11 @@ export async function insertStayWithInventory(
   const s = input.priced.input;
   const stayStatus: StayStatus = input.waitlisted ? 'waitlisted' : 'expected';
   const stayId = newId(tx.now.getTime());
+  const position = await db(tx)
+    .selectFrom('reservations.stays')
+    .select(sql<number>`coalesce(max(position) + 1, 0)::int`.as('next'))
+    .where('booking_id', '=', input.bookingId)
+    .executeTakeFirstOrThrow();
   await db(tx)
     .insertInto('reservations.stays')
     .values({
@@ -378,6 +383,7 @@ export async function insertStayWithInventory(
       tenant_id: tx.tenantId,
       property_id: input.propertyId,
       booking_id: input.bookingId,
+      position: position.next,
       status: stayStatus,
       commercial_type: s.commercialType,
       commercial_reason: s.commercialType === 'standard' ? null : (s.commercialReason ?? null),

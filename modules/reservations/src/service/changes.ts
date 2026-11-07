@@ -1239,8 +1239,8 @@ async function extensionAlternatives(
   const current = types.find((t) => t.id === last.unitTypeId);
   const others = types
     .filter((t) => t.id !== last.unitTypeId)
-    .sort((a, b) => b.rank - a.rank)
-    .filter((t) => !current || t.rank >= current.rank);
+    .filter((t) => !current || t.rank >= current.rank)
+    .sort((a, b) => a.rank - b.rank); // nearest upgrade first
   for (const t of others) {
     const units = await inventory.findAssignableUnits(c.tx, {
       propertyId: c.propertyId,
