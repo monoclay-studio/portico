@@ -1,10 +1,12 @@
 /**
  * Integration module over HTTP (composition root wiring): catalogue, simulated PMS, connection setup with
- * Idempotency-Key / If-Match / ETag, honest "module not connected" mapping issues while inventory/rates/finance
- * are not bound, problem+json explanations, health, search, record history, webhooks and tenant isolation.
+ * Idempotency-Key / If-Match / ETag, unit types and units from inventory, honest "module not connected" mapping
+ * issues while rates/finance are not bound, problem+json explanations, health, search, record history, webhooks,
+ * simulators refused in live organizations, and tenant isolation.
  */
 import { newId } from '@portico/kernel';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { provisionOrganization } from '../src';
 import { type ApiHarness, signedInOrg, startApi } from './helpers';
 
 let h: ApiHarness;
@@ -38,7 +40,36 @@ async function makeProperty(auth: Record<string, string>) {
   return p.json().id as string;
 }
 
+/** Simulated systems exist only in demo, trial, training and sandbox organizations (F8). */
+async function signedInSandboxOrg(name = 'Sandbox hotel') {
+  const email = `admin-${newId()}@example.mv`;
+  const password = 'correct horse battery staple';
+  await provisionOrganization(h.t.db, {
+    name,
+    slug: `org-${newId().slice(-12)}`,
+    environment: 'sandbox',
+    planCode: 'enterprise',
+    admin: { email, displayName: 'Admin', password },
+  });
+  const res = await h.app.inject({ method: 'POST', url: '/v1/auth/login', payload: { email, password } });
+  const body = res.json();
+  if (body.status !== 'signed_in') throw new Error(`login failed: ${res.body}`);
+  return { auth: { authorization: `Bearer ${body.token}` } };
+}
+
 describe('integration API', () => {
+  it('refuses a simulated PMS in a live organization', async () => {
+    const { auth } = await signedInOrg(h);
+    const sim = await h.app.inject({
+      method: 'POST',
+      url: '/v1/integration/simulators/pms',
+      headers: auth,
+      payload: { seed: true },
+    });
+    expect(sim.statusCode).toBe(422);
+    expect(sim.json().code).toBe('simulator_not_in_live');
+  });
+
   it('lists the catalogue honestly', async () => {
     const { auth } = await signedInOrg(h);
     const res = await h.app.inject({ method: 'GET', url: '/v1/integration/catalogue', headers: auth });
@@ -61,7 +92,7 @@ describe('integration API', () => {
   });
 
   it('runs the setup journey over HTTP up to the honest limit of this deployment', async () => {
-    const { auth } = await signedInOrg(h);
+    const { auth } = await signedInSandboxOrg();
     const propertyId = await makeProperty(auth);
     const sim = await h.app.inject({
       method: 'POST',
@@ -162,12 +193,13 @@ describe('integration API', () => {
       internalId: propertyId,
       autoConfirmed: true,
     });
-    // Inventory is not connected in this deployment yet: said plainly, never guessed.
+    // Unit types come from inventory; rates and finance are not connected in this deployment yet: said plainly,
+    // never guessed.
     const unavailable = set.issues.filter((i: { code: string }) => i.code === 'provider_unavailable');
     expect(unavailable.length).toBeGreaterThan(0);
-    expect(unavailable.map((i: { message: string }) => i.message).join(' ')).toMatch(
-      /inventory module is not connected.*unit type records/,
-    );
+    const messages = unavailable.map((i: { message: string }) => i.message).join(' ');
+    expect(messages).toMatch(/(rates|finance) module is not connected/);
+    expect(messages).not.toMatch(/inventory module is not connected/);
 
     const resolve = await h.app.inject({
       method: 'POST',
