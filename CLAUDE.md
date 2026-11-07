@@ -200,6 +200,10 @@ No compliance badges, certifications or partner logos without evidence and permi
 
 ## 10. UX principles (for every screen)
 
+Visual direction: `docs/product/design-direction.md` (simple, minimal, calm — **power before prettiness**).
+Interaction rules: `docs/product/ux-principles.md`.
+
+
 Current state, history, outstanding issues, owner and next actions visible on every important record.
 Facts vs pending vs estimates vs suggestions vs external data are visually distinct. Failed actions never look
 successful. Previews before consequential changes. Keyboard-first for desk staff, touch-first for mobile staff.
