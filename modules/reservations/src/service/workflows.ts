@@ -364,30 +364,33 @@ async function stepGuarantee(
   }
   const payments = deps.ports.payments;
   const stayRef: EntityRef = { type: 'stay', id: stay.row.id };
-  // Resume: an earlier attempt exists → read the AUTHORITATIVE status; never authorize again (RES-I09, S05).
-  if (step.idempotencyKey) {
-    const status = await payments.getPaymentStatus(tx, stayRef);
-    if (status.status === 'authorized' || status.status === 'succeeded') {
-      return {
-        status: 'done',
-        message: `Payment ${status.status} (verified).`,
-        result: { ...status },
-        idempotencyKey: step.idempotencyKey,
-      };
-    }
-    if (
-      status.status === 'pending_verification' ||
-      status.status === 'requires_action' ||
-      status.status === 'requested'
-    ) {
-      return {
-        status: 'pending',
-        message:
-          'The payment outcome is still pending verification. Do not take payment again — reconciliation will resolve it.',
-        result: { ...status },
-        idempotencyKey: step.idempotencyKey,
-      };
-    }
+  // ALWAYS read the authoritative status first (RES-I09, S05): an earlier attempt may have reached the provider
+  // even if our record of it was lost to an interruption. Never authorize again while one is authorized/pending.
+  const status = await payments.getPaymentStatus(tx, stayRef);
+  const declined = Number(step.result?.declinedAttempts ?? 0);
+  const keyFor = (n: number) => `checkin:${run.id}:guarantee:${n}`;
+  if (status.status === 'authorized' || status.status === 'succeeded') {
+    return {
+      status: 'done',
+      message: `Payment ${status.status} (verified with the payment provider).`,
+      result: { ...status, declinedAttempts: declined },
+      idempotencyKey: step.idempotencyKey ?? keyFor(declined),
+    };
+  }
+  if (
+    status.status === 'pending_verification' ||
+    status.status === 'requires_action' ||
+    status.status === 'requested'
+  ) {
+    return {
+      status: 'pending',
+      message:
+        status.status === 'requires_action'
+          ? 'The guest must complete card verification.'
+          : 'The payment outcome is pending verification. Do not take payment again — reconciliation will resolve it.',
+      result: { ...status, declinedAttempts: declined },
+      idempotencyKey: step.idempotencyKey ?? keyFor(declined),
+    };
   }
   const bookingStatus = await payments.getPaymentStatus(tx, { type: 'booking', id: booking.row.id });
   if (bookingStatus.status === 'succeeded' || bookingStatus.status === 'authorized') {
@@ -423,8 +426,9 @@ async function stepGuarantee(
       ),
       booking.row.currency,
     ).gross;
-  const failedAttempts = step.status === 'failed' ? step.attempts : 0;
-  const idempotencyKey = `checkin:${run.id}:guarantee:${failedAttempts}`;
+  // A NEW key only after the provider DECLINED the previous attempt; an interrupted attempt keeps its key so the
+  // payments journal returns the same operation.
+  const idempotencyKey = keyFor(declined);
   const attempt = await payments.authorize(tx, { methodId, amount, ref: stayRef, idempotencyKey });
   switch (attempt.status) {
     case 'authorized':
@@ -432,7 +436,7 @@ async function stepGuarantee(
       return {
         status: 'done',
         message: `Payment ${attempt.status}.`,
-        result: { attemptId: attempt.id, amount: attempt.amount },
+        result: { attemptId: attempt.id, amount: attempt.amount, declinedAttempts: declined },
         idempotencyKey,
       };
     case 'pending_verification':
@@ -443,14 +447,14 @@ async function stepGuarantee(
           attempt.status === 'requires_action'
             ? 'The guest must complete card verification.'
             : 'The payment outcome is pending verification. Do not take payment again — reconciliation will resolve it.',
-        result: { attemptId: attempt.id, amount: attempt.amount },
+        result: { attemptId: attempt.id, amount: attempt.amount, declinedAttempts: declined },
         idempotencyKey,
       };
     case 'failed':
       return {
         status: 'failed',
-        message: `Payment failed: ${attempt.failureReason ?? 'declined'}.`,
-        result: { attemptId: attempt.id },
+        message: `Payment failed: ${attempt.failureReason ?? 'declined'}. Try another card or payment method.`,
+        result: { attemptId: attempt.id, declinedAttempts: declined + 1 },
         idempotencyKey,
       };
   }

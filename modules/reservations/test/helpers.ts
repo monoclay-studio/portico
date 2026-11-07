@@ -2,6 +2,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sourcesFromManifests, type TxContext, withTenantTx } from '@portico/db';
 import {
+  type Clock,
   newId,
   type RequestContext,
   staticAuthorizer,
@@ -22,11 +23,14 @@ import { type FakeRatePlan, FakeRates } from './fakes/rates';
 const here = dirname(fileURLToPath(import.meta.url));
 
 /** Real Postgres with platform + reservations migrations and the test-only fake schemas. */
-export async function startDb(): Promise<TestDatabase> {
-  const t = await createTestDatabase([
-    ...sourcesFromManifests([platformManifest, reservationsManifest]),
-    { module: 'zz_test_fakes', dir: join(here, 'fakes', 'sql') },
-  ]);
+export async function startDb(opts: { clock?: Clock } = {}): Promise<TestDatabase> {
+  const t = await createTestDatabase(
+    [
+      ...sourcesFromManifests([platformManifest, reservationsManifest]),
+      { module: 'zz_test_fakes', dir: join(here, 'fakes', 'sql') },
+    ],
+    opts.clock ? { clock: opts.clock } : {},
+  );
   // pg-pool resolves end() before its clients have closed; `drop database … with (force)` then terminates them and
   // the termination surfaces as an unhandled pool 'error'. Swallow it here (see FOUNDATION_REQUESTS.md).
   for (const pool of [t.db.pool, t.admin.pool]) pool.on('error', () => {});
