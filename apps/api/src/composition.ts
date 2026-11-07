@@ -3,12 +3,19 @@
  * Each module contributes: a manifest (migrations + permissions), an HTTP module, event subscriptions and
  * port bindings. Keep one block per module to make parallel work merge cleanly.
  */
-import type { PorticoDatabase, SearchProvider, TxEventSubscription } from '@portico/db';
+import {
+  CORE_JOBS,
+  type PorticoDatabase,
+  type ScheduledJob,
+  type SearchProvider,
+  type TxEventSubscription,
+} from '@portico/db';
 import {
   createGuestsService,
   type GuestsCryptoPort,
   type GuestsService,
   guestsHttp,
+  guestsJobs,
   guestsManifest,
   guestsSearchProvider,
   localGuestsCrypto,
@@ -31,6 +38,8 @@ export interface Composition {
   httpModules: HttpModule[];
   subscriptions: TxEventSubscription[];
   searchProviders: SearchProvider[];
+  /** Periodic background jobs run by apps/worker (each module contributes its own). */
+  jobs: ScheduledJob[];
   /** Provider services other modules' ports bind to (domain map). */
   services: { guests: GuestsService };
 }
@@ -86,6 +95,7 @@ export function compose(database: PorticoDatabase): Composition {
     httpModules: [platformModule, identityModule, guestsModule, recordsModule],
     subscriptions: [],
     searchProviders,
+    jobs: [...CORE_JOBS, ...guestsJobs(guestsService)],
     services: { guests: guestsService },
   };
 }
