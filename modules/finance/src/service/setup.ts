@@ -17,6 +17,7 @@ import type {
   FxRate,
   fxRateInput,
 } from '../contracts';
+import { isReferenceRate } from '../domain/fx';
 import type { ChargeGroup } from '../domain/types';
 import type { AccountsTable, ChargeCodesTable } from '../tables';
 import { actorKey, type Deps, db, ensureChart, isUniqueViolation } from './support';
@@ -389,6 +390,12 @@ export async function recordFxRate(
   if (input.fromCurrency === input.toCurrency) {
     throw new ValidationError('invalid_fx_pair', 'An exchange rate needs two different currencies.');
   }
+  if (!isReferenceRate(input.source) && !input.reason?.trim()) {
+    throw new ValidationError(
+      'fx_reason_required',
+      `"${input.source}" is a manual rate. Give the reason it is used (e.g. "MMA rate not yet published; hotel board rate") — it is shown on the audit trail.`,
+    );
+  }
   await deps.ports.platform.getLegalEntity(tx, input.legalEntityId);
   const id = newId();
   try {
@@ -403,6 +410,7 @@ export async function recordFxRate(
         to_currency: input.toCurrency,
         rate: input.rate,
         source: input.source,
+        reason: input.reason?.trim() ?? null,
         entered_by: actorKey(tx),
       })
       .execute();
@@ -415,7 +423,12 @@ export async function recordFxRate(
     }
     throw err;
   }
-  await tx.audit({ action: 'finance.fxRate.record', target: { type: 'fx_rate', id }, after: input });
+  await tx.audit({
+    action: 'finance.fxRate.record',
+    target: { type: 'fx_rate', id },
+    after: input,
+    ...(input.reason ? { reason: input.reason } : {}),
+  });
   return { id, ...input };
 }
 
@@ -437,5 +450,6 @@ export async function listFxRates(tx: TxContext, legalEntityId: string, from?: s
     toCurrency: r.to_currency,
     rate: new Decimal(String(r.rate)).toString(),
     source: r.source,
+    ...(r.reason ? { reason: r.reason } : {}),
   }));
 }

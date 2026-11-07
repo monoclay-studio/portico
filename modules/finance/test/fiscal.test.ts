@@ -142,6 +142,7 @@ describe('fiscal documents', () => {
           toCurrency: 'USD',
           rate: hotelRate,
           source: 'Hotel board rate',
+          reason: 'Board rate used at the desk today',
         }),
       );
       await org.run((tx) =>

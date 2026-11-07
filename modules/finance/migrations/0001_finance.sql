@@ -64,6 +64,8 @@ create table finance.fx_rates (
   to_currency      char(3) not null,
   rate             numeric(24, 12) not null check (rate > 0),   -- units of `to` per 1 unit of `from`
   source           text not null,
+  -- Why a manual (non-reference) rate was entered (ADR-0016 §3); reference rates (MMA) need none.
+  reason           text,
   entered_by       text not null,
   created_at       timestamptz not null default now(),
   check (from_currency <> to_currency),

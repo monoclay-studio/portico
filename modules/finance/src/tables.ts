@@ -43,6 +43,7 @@ export interface FxRatesTable {
   to_currency: string;
   rate: string;
   source: string;
+  reason: string | null;
   entered_by: string;
   created_at: Ts;
 }

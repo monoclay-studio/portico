@@ -628,6 +628,8 @@ export const fxRateInput = z.object({
   toCurrency: currencyCode,
   rate: z.string().regex(/^\d{1,12}(\.\d{1,12})?$/, 'A positive decimal such as 15.42'),
   source: z.string().min(1).max(200),
+  /** Required for a manual rate (any source other than the MMA reference rate). */
+  reason: z.string().min(1).max(500).optional(),
 });
 export const fxRate = fxRateInput.extend({ id: uuid });
 export type FxRate = z.infer<typeof fxRate>;

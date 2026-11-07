@@ -422,3 +422,42 @@ describe('F-05: tax invoices state value and tax correctly (X11, X12)', () => {
     });
   });
 });
+
+describe('ADR-0016 §3: a missing exchange rate blocks; no silent fallback to an older rate', () => {
+  it('refuses yesterday’s rate, refuses a manual rate without a reason and accepts it with one', async () => {
+    const org = await setupOrg(h);
+    const s = await openStay(h, org);
+    const rate = (businessDate: string, source: string, reason?: string) =>
+      org.run((tx) =>
+        h.finance.recordFxRate(tx, {
+          legalEntityId: org.legalEntityId,
+          businessDate,
+          fromCurrency: 'USD',
+          toCurrency: 'MVR',
+          rate: '15.42',
+          source,
+          ...(reason ? { reason } : {}),
+        }),
+      );
+    await rate('2026-11-06', 'MMA');
+    const post = (key: string) =>
+      org.run((tx) =>
+        h.finance.postCharge(tx, {
+          propertyId: org.propertyId,
+          folioId: s.guestFolioId,
+          chargeCode: 'RETAIL',
+          amount: { amountMinor: 15420, currency: 'MVR' },
+          serviceDate: '2026-11-07',
+          description: 'Boutique',
+          sourceRef: { type: 't', id: key },
+          idempotencyKey: `fx:${key}:${s.stayId}`,
+        }),
+      );
+    await expect(post('a')).rejects.toMatchObject({ code: 'fx_rate_missing' });
+    await expect(rate('2026-11-07', 'Hotel board rate')).rejects.toMatchObject({ code: 'fx_reason_required' });
+    await rate('2026-11-07', 'Hotel board rate', 'MMA rate not yet published this morning');
+    await post('b');
+    const rates = await org.run((tx) => h.finance.listFxRates(tx, org.legalEntityId));
+    expect(rates.find((r) => r.businessDate === '2026-11-07')?.reason).toBe('MMA rate not yet published this morning');
+  });
+});
