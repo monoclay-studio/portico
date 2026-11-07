@@ -76,6 +76,7 @@ export async function processDeliveries(database: PorticoDatabase, opts: Dispatc
           tenantId: row.tenant_id,
           propertyId: row.property_id,
           aggregate: { type: row.aggregate_type, id: row.aggregate_id },
+          aggregateVersion: row.aggregate_version ?? null,
           occurredAt: new Date(row.occurred_at).toISOString(),
           actor: row.actor,
           correlationId: row.correlation_id,

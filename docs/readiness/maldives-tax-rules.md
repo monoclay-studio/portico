@@ -15,7 +15,8 @@ regulation text, consolidated — check for later amendments)**, or **unconfirme
 | Rule | Value | Effective | Status | Source |
 |---|---|---|---|---|
 | Tourism GST (TGST) | **17%** | supplies with time of supply on/after **2025-07-01** | verified (official page + circular) | [MIRA GST overview](https://mira.gov.mv/Pages/View/gst), [MIRA circular on TGST rate change](https://www.mira.gov.mv/ContentItems/View/circular-issued-changes-to-tgst-rate) |
-| TGST (history) | 16% | until 2025-06-30 | verified (official page) | same |
+| TGST (history) | 16% | 2023-01-01 → 2025-06-30 | verified (official page) | same |
+| TGST (history) | 12% (general sector 6%) | 2014-11-01 → 2022-12-31; 6th amendment raised to 16% / 8% from 2023-01-01, same 24-hour-operator midnight rule | verified (official news item) | [MIRA: GST rate changes from 1 January 2023](https://www.mira.gov.mv/ContentItems/View/newsgstratechange) |
 | General-sector GST | 8% | current | verified (official page) | [MIRA GST overview](https://mira.gov.mv/Pages/View/gst) |
 | Green Tax — resorts, integrated resorts, resort hotels, hotels, guesthouses, tourist vessels | **USD 12 per guest per day** | from **2025-01-01** | verified (official circular + amendment) | [MIRA circular on Green Tax rates from 1 Jan 2025](https://www.mira.gov.mv/ContentItems/View/circular-re-changes-to-grt-rates-on-20250101-news), [14th amendment to the Tourism Act](https://www.mira.gov.mv/Legislations/View/14-th-amendment-to%20the-tourism-act) |
 | Green Tax — hotels and guesthouses on **inhabited islands** with **≤ 50 registered rooms** | **USD 6 per guest per day** | from 2025-01-01 | verified (official circular) | same |

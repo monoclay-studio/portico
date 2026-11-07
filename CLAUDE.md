@@ -22,6 +22,12 @@ Then read `docs/product/decisions.md`, `docs/product/glossary.md`, `docs/archite
 
 ---
 
+## 0. Operating model
+
+The orchestrator owns the vision and coherence; **each module agent owns making its module 3x–10x more powerful,
+seamless, friendly and well-rounded than anything on the market — measured against its 10x brief**
+(`docs/orchestration/operating-model.md`, `docs/strategy/modules/<module>.md`).
+
 ## 1. Autonomy rule (applies to every Claude session and agent)
 
 **Never stop working because you need an answer from the owner, as long as some other part of the work is unblocked.**
@@ -158,6 +164,10 @@ named from `PORTICO_TEST_DB_PREFIX` (agents: set a unique prefix so parallel run
 A feature is **not** done because a screen exists. Done means: working behavior, persisted records, correct
 permissions, error handling, audit trail, tests (unit + integration), and evidence from the relevant
 operational scenarios in `docs/scenarios/`.
+
+A **module** is not complete until its competitive parity matrix and edge-case catalogue pass the gate
+(`docs/parity/README.md`, `node tools/parity-report.mjs --gate <module>`): every P0 capability and P0 edge case
+`tested`, every P1 row at least `specified` or explicitly `deferred`/`different` with a visible reason.
 
 Every capability and integration's readiness is tracked in `docs/readiness/readiness-register.md` on the
 owner's scale (operational-readiness brief §2):

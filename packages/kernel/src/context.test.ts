@@ -53,3 +53,36 @@ describe('field cipher', () => {
     expect(() => c.decrypt(ct, 'guest:other:passport')).toThrow();
   });
 });
+
+describe('field crypto from env', () => {
+  it('refuses missing or development keys in production and keeps index and cipher keys separate', async () => {
+    const { fieldCryptoFromEnv } = await import('./crypto');
+    expect(() => fieldCryptoFromEnv({ NODE_ENV: 'production' })).toThrow(/must be set in production/);
+    const dev = fieldCryptoFromEnv({});
+    expect(dev.keySource).toBe('local-dev');
+    expect(dev.blindIndex(' P 1234567 ')).toBe(dev.blindIndex('p1234567'));
+    const k1 = Buffer.from('a'.repeat(32)).toString('base64');
+    const k2 = Buffer.from('b'.repeat(32)).toString('base64');
+    expect(() =>
+      fieldCryptoFromEnv({ NODE_ENV: 'production', PORTICO_FIELD_KEY: k1, PORTICO_BLIND_INDEX_KEY: k1 }),
+    ).toThrow(/distinct/);
+    const prod = fieldCryptoFromEnv({
+      NODE_ENV: 'production',
+      PORTICO_FIELD_KEY: k1,
+      PORTICO_BLIND_INDEX_KEY: k2,
+    });
+    expect(prod.keySource).toBe('env');
+    expect(prod.cipher.decrypt(prod.cipher.encrypt('secret', 'aad'), 'aad')).toBe('secret');
+  });
+});
+
+describe('event ordering helper', () => {
+  it('ignores stale or duplicate versions and accepts unversioned events', async () => {
+    const { isNewerThan } = await import('./events');
+    expect(isNewerThan({ aggregateVersion: 5 }, 4)).toBe(true);
+    expect(isNewerThan({ aggregateVersion: 4 }, 4)).toBe(false);
+    expect(isNewerThan({ aggregateVersion: 3 }, 4)).toBe(false);
+    expect(isNewerThan({ aggregateVersion: null }, 9)).toBe(true);
+    expect(isNewerThan({ aggregateVersion: 1 }, null)).toBe(true);
+  });
+});
