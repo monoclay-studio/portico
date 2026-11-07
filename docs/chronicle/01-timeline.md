@@ -331,4 +331,8 @@ Each agent's brief and report are in `agents/`.
   - Clean: XFF spoofing through the deployed chain, SECURITY DEFINER hygiene, secrets kept out of plans, read-only
     non-root images.
   - The fix round goes back to the infra engineer. The quality steward's round 3 starts on the whole batch.
+- **22:00 — Migration module build launched** <!-- t: now @ 2026-11-07T22:00:37Z -->: gap-plan M8 increments 1–2, the guesthouse same-day path. CSV and
+  SMB sources, a rehearsal in a trial org, reconciliation, freeze and cutover through data-authority transitions,
+  rollback, and a guided checklist of the unavoidable human steps. Money-module rounds and the staff-app real-data
+  wiring wait for the integration-step merge.
 
