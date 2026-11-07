@@ -483,16 +483,8 @@ export function compose(database: PorticoDatabase, options: CompositionOptions =
             countryCode: p.countryCode,
           };
         },
-        // Platform governs one more domain (guestCommunications) than integration's enum; the answer is always for
-        // the domain integration asked about.
-        getDataAuthority: async (tx, propertyId, domain) => ({
-          ...(await platform.getDataAuthority(tx, propertyId, domain)),
-          domain,
-        }),
-        setDataAuthority: async (tx, input) => ({
-          ...(await platform.setDataAuthority(tx, input)),
-          domain: input.domain,
-        }),
+        getDataAuthority: (tx, propertyId, domain) => platform.getDataAuthority(tx, propertyId, domain),
+        setDataAuthority: (tx, input) => platform.setDataAuthority(tx, input),
       },
       // Unit types and units come from inventory (on main). Integration already authorized the user's intent and
       // property scope (ADR-0015), so the read goes through a system context scoped to that property.

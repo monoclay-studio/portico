@@ -7,7 +7,7 @@ import { createHmac } from 'node:crypto';
 import { newId } from '@portico/kernel';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { provisionOrganization } from '../src';
-import { type ApiHarness, startApi } from './helpers';
+import { type ApiHarness, enrolMfa, startApi } from './helpers';
 
 let h: ApiHarness;
 beforeAll(async () => {
@@ -27,6 +27,8 @@ async function demoOrg(name = 'Demo Resort') {
   });
   const login = await h.app.inject({ method: 'POST', url: '/v1/auth/login', payload: { email, password } });
   const auth = { authorization: `Bearer ${login.json().token}` };
+  // Sensitive (⚑) permissions such as legal entities and payment accounts need MFA (ADR-0017 §8).
+  await enrolMfa(h.app, auth, password);
   const post = (url: string, payload: unknown, key: string | null = newId()) =>
     h.app.inject({
       method: 'POST',

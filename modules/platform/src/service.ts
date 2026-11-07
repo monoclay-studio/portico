@@ -837,11 +837,12 @@ export async function propertyIdsInScope(
 
 // ───────────────────────────── Data authority (system of record) ─────────────────────────────
 
-export async function getDataAuthority(
+/** The answer always concerns the domain asked about (callers with a narrower domain enum keep their type). */
+export async function getDataAuthority<D extends DataDomain>(
   tx: TxContext,
   propertyId: string,
-  domain: DataDomain,
-): Promise<DataAuthority> {
+  domain: D,
+): Promise<DataAuthority & { domain: D }> {
   const row = await db(tx)
     .selectFrom('platform.data_authority')
     .selectAll()
@@ -1024,18 +1025,18 @@ export async function writeAuthorityVersion(
  * and `availability` (which need a second person's approval — use an authority transition; CR-10) unless the
  * actor is a trusted system process (provisioning, import).
  */
-export async function setDataAuthority(
+export async function setDataAuthority<D extends DataDomain>(
   tx: TxContext,
   input: {
     propertyId: string;
-    domain: DataDomain;
+    domain: D;
     authority: 'portico' | 'external';
     connectionId?: string;
     systemName?: string;
     writeMode: 'exclusive' | 'forward' | 'read_only';
     reason: string;
   },
-): Promise<DataAuthority> {
+): Promise<DataAuthority & { domain: D }> {
   requirePermission(tx, 'platform.dataAuthority.manage', { propertyId: input.propertyId });
   const problem = authorityCombinationProblem(input);
   if (problem) throw new ValidationError(problem.code, problem.message, { domain: input.domain });
@@ -1055,7 +1056,7 @@ export async function setDataAuthority(
     );
   }
   const { after } = await writeAuthorityVersion(tx, input);
-  return after;
+  return { ...after, domain: input.domain };
 }
 
 /** Version history of the system of record for a property (G-02, ST-13). */
