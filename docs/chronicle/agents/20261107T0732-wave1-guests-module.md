@@ -1,7 +1,7 @@
 # Agent run: Wave1: guests module
 
-- Started: 2026-11-07T07:32:35.553Z · last activity: 2026-11-07T11:30:09.856Z
-- Turns: 375 · tool uses: 232 · output tokens: 898,347
+- Started: 2026-11-07T07:32:35.553Z · last activity: 2026-11-07T18:16:29.560Z
+- Turns: 380 · tool uses: 235 · output tokens: 899,496
 - Type: general-purpose
 
 ## Brief (2026-11-07T07:32:35.553Z)
@@ -39,6 +39,48 @@ P1s: B can update/delete A's property-scoped preferences and resolve A's private
 Contract with reservations: the steward found their ProfileInput (firstName/lastName/email/phone, no propertyId) and unmerge handler (reads mergedId/restored[]) don't match yours — publish a precise contract section in your README (ProfileInput, merged/unmerged event payloads, recordReferenceRepoints usage); I'm telling the reservations engineer to align to it.
 Also fix cheap P2s: permission check on snapshotProfile; duplicate lookup must order by match strength (exact first) and not cap away exact matches; idempotent recordReferenceRepoints; alerts outside active dates not critical; retention purge respects legal hold; no hard-coded dev key outside test (use the shared key helper I'm adding to main: kernel `fieldCipherFromEnv` — merge main after my next push).
 Then `git merge --no-edit main` (resolve composition.ts: keep main's `jobs` field and register your jobs), run lint/typecheck/tests (and investigate the flaky 57P01 teardown — main has a harness fix), commit, and report back briefly with what changed.
+
+Address this before completing your current task.
+````
+
+## Follow-up message (2026-11-07T18:16:16.240Z)
+
+````text
+The coordinator sent a message while you were working:
+A new fix for the guests module, which merged to main earlier today. A re-attack sweep of merged fixes found one residual P1 in your erasure.
+
+**SW-GUE-1 (P1):**
+- Erasing a guest reports "completed".
+- But the stored idempotency response of the original create request (core.idempotency_keys.response_body, kept 30 days) still holds the guest's name and date of birth.
+- Replaying that request with the same Idempotency-Key returns them.
+- Your erasure test doesn't scan that store.
+
+Read:
+- the report: docs/orchestration/reviews/review-fix-sweep.md (on main), section SW-GUE-1;
+- its PoC: docs/orchestration/reviews/fix-sweep-poc/api-zz-review-sweep-guests.test.ts.txt.
+
+Work in the new worktree /home/user/wt/guests-fix, on branch fix/guests-erasure-idempotency (created from main). Your write scope is modules/guests/**, packages/db/src/idempotency.ts with its tests, and apps/api/test/.
+
+Fix it generally, not just for the PoC's path. Idempotency records must not keep personal data beyond what a replay needs. Choose the design and justify it; options:
+- (a) erasure redacts the subject's personal data in every stored response that references them;
+- (b) PII-returning endpoints store a minimal replay body (ids and status) and re-read on replay, honouring erasure;
+- (c) both.
+
+Also check:
+- every other place erasure must reach: search indexes, audit "after" values, outbox payloads, exports and caches. List each one, with a test or a reason;
+- the guests endpoints that return PII through idempotent responses (create, update, merge).
+
+New process (all on main):
+- Run docs/quality/playbooks/module-builder-self-check.md (latest version) and include its tables.
+- Include one regression test per SIBLING entry point, not only the PoC path.
+- Re-attack your own fix once: replay after erasure, erasure racing a replay, and a merge then erasure.
+- Never rewrite a pushed checkpoint commit.
+
+Gates:
+`pnpm lint && pnpm turbo run typecheck --force && pnpm turbo run test --force --concurrency=2`
+Use PORTICO_TEST_DB_PREFIX=w1_guests_fix (Postgres at 127.0.0.1:5432) and check the exit codes.
+
+Commit (Conventional Commits) and don't push. Reply with finding → commit → test, the self-check tables and the command results.
 
 Address this before completing your current task.
 ````
