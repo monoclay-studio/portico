@@ -20,6 +20,7 @@ import {
   type DataClass,
   type SourceRecord,
 } from '../domain/records';
+import { findCardNumbers, findCardNumbersInValue, hasCardNumber } from '../domain/sensitive';
 import { sourceAdapter } from '../sources/adapters';
 import { CardDataInFileError, readPack, type TableReview, type UploadedFile } from '../sources/files';
 import { recordsFromSimulator } from '../sources/simulator';
@@ -216,6 +217,34 @@ export async function applyToSourceState(
   );
 }
 
+/**
+ * The last guard before anything read from a source is written (MG-02): every text of the extract — table names,
+ * headers and cells of a file pack; every value and field name a system sent (simulator, rehearsal copy, future
+ * connectors) — is scanned with the kernel card-number detector. Files were scanned already when they were read;
+ * this choke point covers every other path into `extract_payloads`.
+ */
+export function assertNoCardData(source: StoredSource): void {
+  const where: string[] = [];
+  if (source.type === 'tables') {
+    source.tables.forEach((t, ti) => {
+      const label = hasCardNumber(t.name) ? `table ${ti + 1}` : t.name;
+      if (label !== t.name) where.push(`${label} (name)`);
+      for (const f of findCardNumbers(t.headers, t.rows))
+        where.push(f.row === 0 ? `${label}, header ${f.column}` : `${label}, row ${f.row}, ${f.column}`);
+    });
+  } else {
+    if (hasCardNumber(source.name)) where.push('source name');
+    findCardNumbersInValue(source.records, 'records', where);
+    findCardNumbersInValue(source.controlTotals, 'controlTotals', where);
+  }
+  if (where.length > 0)
+    throw new BusinessRuleError(
+      'card_data_in_source',
+      `The source sent what looks like a payment card number (${where.slice(0, 5).join('; ')}). Nothing from this read was stored. Remove card numbers in the source system (guarantees are re-collected from guests), then read it again.`,
+      { findings: where.slice(0, 20) },
+    );
+}
+
 /** Store a new extract and update the source state. Steps that depend on the data run again. */
 export async function storeExtract(
   tx: TxContext,
@@ -227,6 +256,7 @@ export async function storeExtract(
     .select((eb) => eb.fn.max('seq').as('seq'))
     .where('job_id', '=', job.id)
     .executeTakeFirst();
+  assertNoCardData(input.source);
   const seq = Number(last?.seq ?? 0) + 1;
   const classes = classesOf(input.source);
   const extract: StoredExtract = { seq, kind: input.kind, source: input.source, classes };
@@ -352,7 +382,10 @@ export async function uploadFiles(
           target: { type: 'migration_job', id: jobId },
           propertyId: job0.propertyId,
           reason: 'A file contained what looks like a payment card number; nothing was stored.',
-          metadata: { files: input.files.map((f) => f.name), findings: err.details?.findings ?? [] },
+          metadata: {
+            files: input.files.map((f) => (hasCardNumber(f.name) ? '(file name withheld)' : f.name)),
+            findings: err.details?.findings ?? [],
+          },
         }),
       );
     }

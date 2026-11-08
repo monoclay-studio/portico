@@ -9,4 +9,5 @@ export * from './ids';
 export * from './module';
 export * from './money';
 export * from './occupancy';
+export * from './pan';
 export * from './records';

@@ -129,8 +129,22 @@ function sheetRows(xml: string, shared: string[]): string[][] {
   return rows;
 }
 
+export interface Workbook {
+  /** Every worksheet with a header row, keyed by sheet name (workbook order). */
+  sheets: Map<string, Table>;
+  /** Every sheet name in the workbook (including empty sheets). */
+  sheetNames: string[];
+  /** Every shared string, referenced or not — scanned for card numbers like any cell. */
+  sharedStrings: string[];
+}
+
 /** Every worksheet of a workbook as a table, keyed by sheet name (workbook order). */
 export function readXlsx(buf: Buffer): Map<string, Table> {
+  return readWorkbook(buf).sheets;
+}
+
+/** The workbook's tables plus every text it holds outside cells (sheet names, shared strings). */
+export function readWorkbook(buf: Buffer): Workbook {
   if (!isZip(buf)) bad('The file is not an .xlsx workbook.');
   const parts = readZip(buf);
   const wb = parts.get('xl/workbook.xml')?.toString('utf8');
@@ -145,8 +159,10 @@ export function readXlsx(buf: Buffer): Map<string, Table> {
   const sharedXml = parts.get('xl/sharedStrings.xml')?.toString('utf8') ?? '';
   const shared = [...sharedXml.matchAll(/<si\b[^>]*>([\s\S]*?)<\/si>/g)].map((m) => runs(m[1] as string));
   const out = new Map<string, Table>();
+  const sheetNames: string[] = [];
   for (const m of wb.matchAll(/<sheet\b([^>]*)\/?>/g)) {
     const name = attr(m[1] as string, 'name') ?? `Sheet${out.size + 1}`;
+    sheetNames.push(name);
     const rid = attr(m[1] as string, 'r:id');
     const target = rid ? targets.get(rid) : undefined;
     const xml = target ? parts.get(`xl/${target}`)?.toString('utf8') : undefined;
@@ -162,7 +178,7 @@ export function readXlsx(buf: Buffer): Map<string, Table> {
     });
   }
   if (out.size === 0) bad('The workbook has no readable sheets.');
-  return out;
+  return { sheets: out, sheetNames, sharedStrings: shared };
 }
 
 // ───────────────────────────── writer (templates, tests) ─────────────────────────────

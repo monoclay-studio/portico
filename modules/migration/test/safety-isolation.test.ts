@@ -7,7 +7,8 @@ import { sql, withTenantTx } from '@portico/db';
 import { testContext } from '@portico/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { migration, sampleGuesthouseFiles, sampleGuesthousePack } from '../src';
-import { db } from '../src/service/context';
+import { db, loadJob } from '../src/service/context';
+import { storeExtract } from '../src/service/extract';
 import { ALL_MIGRATION, type Harness, type Org, setupOrg, startHarness } from './harness';
 
 let h: Harness;
@@ -67,6 +68,41 @@ describe('MG-02: a file containing a card number is refused before anything is s
     ).rejects.toMatchObject({
       code: 'card_data_in_file',
     });
+  });
+});
+
+describe('MG-02 / R-P0-1: every other path into storage is scanned too (simulator, rehearsal copy, connectors)', () => {
+  it('storeExtract refuses records that carry a card number and stores nothing', async () => {
+    const before = await withTenantTx(h.t.db, a.admin, (tx) =>
+      db(tx).selectFrom('migration.extracts').select('seq').where('job_id', '=', jobId).execute(),
+    );
+    await expect(
+      a.run(async (tx) => {
+        const job = await loadJob(tx, jobId);
+        return storeExtract(tx, job, {
+          kind: 'delta',
+          source: {
+            type: 'records',
+            name: 'connector',
+            records: [
+              {
+                dataClass: 'guest',
+                key: 'G1',
+                payload: null,
+                raw: { memo: 'card 4111 1111 1111 1111 12/27' },
+                origin: { file: 'connector', row: null },
+                problems: [],
+              },
+            ],
+            controlTotals: [],
+          },
+        });
+      }),
+    ).rejects.toMatchObject({ code: 'card_data_in_source' });
+    const after = await withTenantTx(h.t.db, a.admin, (tx) =>
+      db(tx).selectFrom('migration.extracts').select('seq').where('job_id', '=', jobId).execute(),
+    );
+    expect(after).toEqual(before);
   });
 });
 

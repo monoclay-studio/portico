@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { detectTable, kindFromName, mapColumns } from './columns';
 import { detectDelimiter, parseCsv, toCsv } from './csv';
-import { findCardNumbers, isMasked, looksLikeCardNumber, luhnValid } from './sensitive';
+import { findCardNumbers, findCardNumbersInValue, isMasked } from './sensitive';
 import { readXlsx, writeXlsx, zip } from './xlsx';
 
 describe('CSV reader', () => {
@@ -98,14 +98,30 @@ describe('XLSX reader', () => {
 });
 
 describe('card numbers and masked values (MG-02, DD11 F4)', () => {
-  it('Luhn and scheme ranges', () => {
-    expect(luhnValid('4111111111111111')).toBe(true);
-    expect(luhnValid('4111111111111112')).toBe(false);
-    expect(looksLikeCardNumber('4111111111111111')).toBe(true);
-    expect(looksLikeCardNumber('5555555555554444')).toBe(true);
-    expect(looksLikeCardNumber('378282246310005')).toBe(true);
+  it('uses the kernel rule: Luhn-valid numbers without a card scheme are not card numbers', () => {
     // Luhn-valid but no card scheme (an OTA itinerary number starting with 7)
-    expect(looksLikeCardNumber('7000000000000002')).toBe(false);
+    expect(findCardNumbers(['ref'], [['7000000000000002']])).toEqual([]);
+    expect(findCardNumbers(['ref'], [['378282246310005']])).toEqual([{ row: 1, column: 'ref' }]);
+  });
+  it('scans header cells (row 0) and never names a header that holds the number', () => {
+    expect(findCardNumbers(['4111 1111 1111 1111', 'notes'], [['x', '4111111111111111']])).toEqual([
+      { row: 0, column: 'column 1' },
+      { row: 1, column: 'notes' },
+    ]);
+  });
+  it('scans every value and field name a system sends, reporting paths only', () => {
+    const found = findCardNumbersInValue({
+      records: [
+        { key: 'A', payload: { notes: 'ok', n: 4111111111111111 } },
+        { key: 'B', raw: { '4111-1111-1111-1111': 'x', memo: 'card 5555 5555 5555 4444 12/27' } },
+      ],
+    });
+    expect(found).toEqual([
+      '$.records[0].payload.n',
+      '$.records[1].raw.<field name>',
+      '$.records[1].raw.memo',
+    ]);
+    expect(JSON.stringify(found)).not.toMatch(/4111|5555/);
   });
   it('finds a card number with spaces or dashes in any cell, reporting position only', () => {
     const f = findCardNumbers(
