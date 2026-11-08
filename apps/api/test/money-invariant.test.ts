@@ -50,9 +50,14 @@ import {
   startScenario,
 } from './scenarios/harness';
 
-/** Seeds a long run found failing, kept as regressions (see the report in the round-7 chronicle). */
-const REGRESSION_SEEDS: number[] = [];
-const CI_SEEDS = [11, 23, 37, 41, 59, 73];
+/**
+ * Seeds that failed while the generator was built, kept as regressions (each fails again if its fix is reverted):
+ *  - 1: a deposit forfeited for a penalty owed with no deposit held crashed ("no result") instead of `no_deposit`;
+ *  - 41: a balance transfer from a folio in credit moved debt nobody incurred (now `transfer_exceeds_balance`).
+ */
+const REGRESSION_SEEDS = [1, 41];
+/** The CI seeds also kill the earlier mutants N7 (15, 75), R1 (41) and R3 (45, 75) with the generator alone. */
+const CI_SEEDS = [11, 15, 23, 37, 45, 59, 73, 75];
 
 function parseSeeds(v: string): number[] {
   const out: number[] = [];
@@ -67,7 +72,7 @@ function parseSeeds(v: string): number[] {
 const SEEDS = process.env.MONEY_SEEDS
   ? parseSeeds(process.env.MONEY_SEEDS)
   : [...new Set([...REGRESSION_SEEDS, ...CI_SEEDS])];
-const STEPS = Number(process.env.MONEY_STEPS ?? 22);
+const STEPS = Number(process.env.MONEY_STEPS ?? 30);
 const CONCURRENT_SHARE = Number(process.env.MONEY_CONCURRENCY ?? 0.3);
 
 /** mulberry32: a small, well-mixed 32-bit PRNG; the whole sequence is a function of the seed. */
@@ -328,6 +333,7 @@ class Model {
   srcCache = new Map<string, string>();
   ruleOwner = new Map<string, string>();
   unmodelled = new Map<string, number>();
+  unpostedRefunds = 0;
   cards: Map<string, Card>;
 
   constructor(readonly w: World) {
@@ -456,6 +462,28 @@ class Model {
     return allocations;
   }
 
+  /**
+   * Net a folio's unapplied credits against its open debt the way its balance nets them: a card's money only against
+   * debt that card covers (a refund of its own money included), any other credit against what is least coverable.
+   */
+  net(folioId: string) {
+    const f = this.folio(folioId);
+    for (const c of f.credits) {
+      const card = this.card(c.src);
+      const lots = f.lots
+        .filter((l) => l.open > 0 && (!card || this.covers(card, l.meta)))
+        .sort((x, y) => (card ? 0 : this.coverability(x.meta) - this.coverability(y.meta)));
+      for (const lot of lots) {
+        const take = Math.min(lot.open, c.amount);
+        if (take <= 0) continue;
+        lot.open -= take;
+        c.amount -= take;
+        lot.paid.push({ src: c.src, amount: take });
+      }
+    }
+    f.credits = f.credits.filter((c) => c.amount > 0);
+  }
+
   /** Take `amount` off a lot: its open part first, then the money that paid it, which becomes unapplied credit. */
   takeFromLot(lot: Lot, amount: number) {
     const f = this.folio(lot.folio);
@@ -472,6 +500,7 @@ class Model {
       if (p.amount === 0) lot.paid.pop();
     }
     if (lot.open === 0 && lot.paid.every((p) => p.amount === 0)) f.lots = f.lots.filter((l) => l !== lot);
+    this.net(lot.folio);
     return left;
   }
 
@@ -598,7 +627,28 @@ class Model {
     return { origins: [owner], kind: 'charge' };
   }
 
-  async sync(): Promise<void> {
+  snapshot() {
+    return structuredClone({
+      folios: this.folios,
+      lotOf: this.lotOf,
+      metaOf: this.metaOf,
+      creditOf: this.creditOf,
+      creditFolio: this.creditFolio,
+      pool: this.pool,
+      received: this.received,
+      paid: this.paid,
+      seenPostings: this.seenPostings,
+      seenMovements: this.seenMovements,
+      violations: this.violations,
+    });
+  }
+  restore(x: ReturnType<Model['snapshot']>) {
+    const y = structuredClone(x);
+    Object.assign(this, y);
+  }
+
+  /** `order` 1 applies the step's non-debt entries in reverse: two concurrent commits may land either way round. */
+  async sync(order: 0 | 1 = 0): Promise<void> {
     this.trace = [];
     const w = this.w;
     const owners = [...w.stays.keys(), ...w.bookings.map((b) => b.id)];
@@ -648,6 +698,10 @@ class Model {
         .filter((p) => p.entry_id === e)
         .every((p) => p.amount >= 0 && (p.kind === 'charge' || p.kind === 'tax'));
     entries.sort((a, b) => Number(debtOnly(b)) - Number(debtOnly(a)));
+    if (order === 1) {
+      const firsts = entries.filter(debtOnly);
+      entries.splice(0, entries.length, ...firsts, ...entries.filter((e) => !debtOnly(e)).reverse());
+    }
     const prio = (p: PostingRow) =>
       p.kind === 'transfer_out'
         ? 0
@@ -817,7 +871,10 @@ class Model {
               mostCoverableFirst: true,
             });
             if (metas.reduce((n, x) => n + x.amount, 0) < amt)
-              this.violate('model', `balance transfer of ${amt} from a folio owing less`);
+              this.violate(
+                'b',
+                `a balance transfer moved ${amt} off ${this.folioName(p.folio_id)}, more than it owed: debt nobody incurred`,
+              );
             stash.set(stashKey(true), { metas, pieces: [] });
           }
         } else {
@@ -946,10 +1003,26 @@ async function checkInvariants(m: Model): Promise<string[]> {
       out.push(`(model) ${m.folioName(id)} balance ${db} on the ledger, ${m.balance(id)} in the model`);
   }
   // Every card's money taken (net of refunds) is on the ledger where the model saw it land.
-  const taken = await q(sql<{ method_id: string; n: number }>`
-    select method_id, coalesce(sum(amount_minor - refunded_minor), 0)::int as n from payments.payments
-     where method_id in (${sql.join(w.cards.map((c) => c.id))})
-       and status in ('processing', 'pending_verification', 'succeeded') group by method_id`);
+  // (A refund counts once it is on the ledger: one the provider returned but finance could not post yet is an owned
+  // exception for staff — the card has less money in, never more — and is counted in the run's statistics.)
+  const taken = await q(sql<{ method_id: string; n: number; unposted: number }>`
+    select p.method_id,
+           (sum(p.amount_minor) - coalesce(sum((select sum(r.amount_minor) from payments.refunds r
+              where r.payment_id = p.id and r.status in ('processing', 'pending_verification', 'succeeded')
+                and r.ledger_status = 'posted')), 0))::int as n,
+           coalesce(sum((select count(*) from payments.refunds r where r.payment_id = p.id
+              and r.status = 'succeeded' and r.ledger_status <> 'posted')), 0)::int as unposted
+      from payments.payments p
+     where p.method_id in (${sql.join(w.cards.map((c) => c.id))})
+       and p.status in ('processing', 'pending_verification', 'succeeded') group by p.method_id`);
+  m.unpostedRefunds = taken.reduce((n, r) => n + r.unposted, 0);
+  if (m.unpostedRefunds > 0) {
+    for (const e of await q(sql<{ e: string | null }>`
+      select distinct r.ledger_error::text as e from payments.refunds r join payments.payments p on p.id = r.payment_id
+       where p.method_id in (${sql.join(w.cards.map((c) => c.id))}) and r.status = 'succeeded'
+         and r.ledger_status <> 'posted'`))
+      unpostedReasons.add(String(e.e).slice(0, 200));
+  }
   for (const c of w.cards) {
     const db = taken.find((r) => r.method_id === c.id)?.n ?? 0;
     const seen = m.paid.get(c.src) ?? 0;
@@ -1423,6 +1496,9 @@ async function refreshDue(m: Model) {
 const outcomes = new Map<string, number>();
 const failures: Array<{ seed: number; step: number; violations: string[] }> = [];
 let sequencesRun = 0;
+let unpostedRefunds = 0;
+const unpostedReasons = new Set<string>();
+let concurrentSteps = 0;
 let stepsRun = 0;
 
 async function runSequence(seed: number) {
@@ -1435,6 +1511,7 @@ async function runSequence(seed: number) {
   const history: string[] = [];
   for (let step = 1; step <= STEPS; step++) {
     const concurrent = r.chance(CONCURRENT_SHARE);
+    if (concurrent) concurrentSteps += 1;
     const ops: Op[] = [];
     if (concurrent) {
       const folio = r.pick([...m.folios.keys()]);
@@ -1462,11 +1539,24 @@ async function runSequence(seed: number) {
     if (ops.some((op) => ['add_stay', 'cancel', 'no_show'].includes(op.name))) await refreshDue(m);
     const dueAfter = new Map(m.due);
     for (const [b, v] of dueBefore) m.due.set(b, Math.max(v, dueAfter.get(b) ?? 0));
+    const before = m.snapshot();
     await m.sync();
+    let violations = await checkInvariants(m);
+    if (violations.length > 0 && concurrent) {
+      // The ids do not show which of two concurrent commits came first: the step passes if either order explains it.
+      const first = { state: m.snapshot(), trace: m.trace };
+      m.restore(before);
+      await m.sync(1);
+      const other = await checkInvariants(m);
+      if (other.length === 0) violations = other;
+      else {
+        m.restore(first.state);
+        m.trace = first.trace;
+      }
+    }
     m.due = dueAfter;
     for (const t of m.trace) history.push(`${step}: ${t}`);
     stepsRun += 1;
-    const violations = await checkInvariants(m);
     if (violations.length > 0) {
       failures.push({ seed, step, violations });
       throw new Error(
@@ -1478,6 +1568,7 @@ async function runSequence(seed: number) {
     s.c.services.finance.integrityReport(tx, w.k.legalEntityId),
   );
   expect(report.checks.filter((c) => !c.ok)).toEqual([]);
+  unpostedRefunds += m.unpostedRefunds;
   sequencesRun += 1;
 }
 
@@ -1491,7 +1582,7 @@ describe('money invariant — seeded model-based sequences over the real composi
     const lines = [...outcomes.entries()]
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([k, v]) => `${k}: ${v}`);
-    const report = `money invariant: ${sequencesRun} sequences passed, ${stepsRun} steps, ${failures.length} failing seed(s)${failures.length ? `: ${failures.map((f) => `${f.seed}@${f.step}`).join(', ')}` : ''}\n${lines.join('\n')}`;
+    const report = `money invariant: ${sequencesRun} sequences passed, ${stepsRun} steps (${concurrentSteps} concurrent), ${unpostedRefunds} refund(s) left for staff to post${unpostedReasons.size ? ` (${[...unpostedReasons].join('; ')})` : ''}, ${failures.length} failing seed(s)${failures.length ? `: ${failures.map((f) => `${f.seed}@${f.step}`).join(', ')}` : ''}\n${lines.join('\n')}`;
     if (process.env.MONEY_REPORT) writeFileSync(process.env.MONEY_REPORT, `${report}\n`);
   });
 });
