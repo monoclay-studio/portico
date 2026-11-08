@@ -518,3 +518,5 @@ Each agent's brief and report are in `agents/`.
   - Out of scope until the reset (2026-11-11 17:00 UTC, Wednesday): new modules, UX rounds, the quality steward round,
     the partner platform, and the backoffice real-data round.
   - When the wave is done: checkpoint, then pause. The 17:03 Wednesday resume task picks up the STATUS order.
+- **05:38 — Owner: "don't let it effect your current work though. AT ALL"** <!-- t: owner:4f98af2a @ 2026-11-08T05:38:33.867Z -->. The scope limit never lowers the rigor of the current wave: full reviews,
+  full fix rounds with self-check v6, re-reviews until clean, and the full merge procedure.

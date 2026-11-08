@@ -215,6 +215,8 @@
     M15, and the backoffice real-data round.
   - **When the wave is done:** `tools/checkpoint.sh`, disable the usage-check chain, and leave the 17:03 Wednesday
     resume task to continue the order above.
+  - **Owner, 05:4x:** "don't let it effect your current work though. AT ALL". The scope limit never reduces the rigor
+    of this wave: full reviews, full fix rounds with self-check v6, re-reviews until clean, and the full merge procedure.
 
 ## 1. Owner, product and how to work with the owner
 
