@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { STEP_KEYS } from '../contracts';
 import { LeaseLostError, toFailure } from './errors';
 import {
+  businessDayMinute,
   classify,
   DEFAULT_BLOCKING_CODES,
   defaultPolicy,
@@ -201,6 +202,35 @@ describe('statistics', () => {
       computeKpis({ capacity: 10, outOfOrder: 0, sold: 10, complimentary: 0, houseUse: 0 }, 1)
         .occupancyPercent,
     ).toBe('100.00');
+  });
+});
+
+describe('policy: schedule and earliest start (DCL-R05 MUST, review P2-5)', () => {
+  it('orders local times within the close window (before noon = after midnight)', () => {
+    expect(businessDayMinute('23:30')).toBeLessThan(businessDayMinute('00:30'));
+    expect(businessDayMinute('02:00')).toBeGreaterThan(businessDayMinute('22:00'));
+    expect(businessDayMinute('13:00')).toBeLessThan(businessDayMinute('22:00'));
+  });
+  it('the default earliest start is set (22:00) and a schedule earlier than it is a problem', () => {
+    expect(defaultPolicy().earliestStartLocalTime).toBe('22:00');
+    const p = defaultPolicy();
+    expect(policyProblems({ ...p, schedule: { ...p.schedule, localTime: '02:00' } })).toEqual([]);
+    expect(policyProblems({ ...p, schedule: { ...p.schedule, localTime: '23:30' } })).toEqual([]);
+    expect(policyProblems({ ...p, schedule: { ...p.schedule, localTime: '10:00' } })).toEqual([]); // 10:00 of D+1
+    expect(policyProblems({ ...p, schedule: { ...p.schedule, localTime: '13:00' } })[0]).toMatch(
+      /earlier than/,
+    );
+    expect(policyProblems({ ...p, schedule: { ...p.schedule, localTime: '21:59' } })[0]).toMatch(
+      /earlier than/,
+    );
+  });
+  it('the no-show cut-off is never overridable', () => {
+    expect(classify({ code: 'no_shows_before_cutoff', severity: 'blocking' }, defaultPolicy(), true)).toEqual(
+      {
+        blocking: true,
+        overridable: false,
+      },
+    );
   });
 });
 

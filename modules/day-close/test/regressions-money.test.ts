@@ -145,6 +145,28 @@ describe('P0-1: a package line moved by re-pricing is posted once, by what it is
   });
 });
 
+describe('P0-1: a once-per-stay line that appears for a night already closed is posted at the next close', () => {
+  it('a room-only stay re-priced to all-inclusive after its first night: the arrival transfer is charged once', async () => {
+    const org = await setupOrg(h);
+    const s = await addStay(h, org, { arrival: D, departure: '2026-11-10', plan: 'BAR', unitType: 'WV' });
+    nightAudit(h, org);
+    expect((await close(org, 0)).runStatus).toBe('completed');
+    expect(await transfers(org, s.stayId)).toEqual([]);
+    await requote(h, org, s.stayId, { arrival: D, departure: '2026-11-10', ...AI2 });
+    expect((await close(org, 1)).runStatus).toBe('completed');
+    const arrival = await h.t.admin.kysely
+      .selectFrom('finance.journal_entries')
+      .select(['business_date'])
+      .where('tenant_id', '=', org.tenantId)
+      .where('idempotency_key', 'like', `inclusion:${s.stayId}:%:arrival`)
+      .execute();
+    expect(arrival).toEqual([{ business_date: '2026-11-08' }]);
+    expect((await close(org, 2)).runStatus).toBe('completed'); // last night: the departure transfer follows
+    const keys = (await transfers(org, s.stayId)).map((l) => l.key.split(':').pop());
+    expect(keys.sort()).toEqual(['arrival', 'departure']);
+  });
+});
+
 describe('P0-2: no allowance before its night exists; a correction never rolls the night back', () => {
   it('R-PREGRANT: an occupancy correction is posted from the corrected agreement — no idempotency conflict, room charged', async () => {
     const org = await setupOrg(h);
