@@ -216,6 +216,7 @@ export async function updateStay(
     early_check_in: string | null;
     late_check_out: string | null;
     no_show: string | null;
+    cancellation: string | null;
     checked_in_at: Date | null;
     checked_out_at: Date | null;
   }>,

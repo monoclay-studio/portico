@@ -45,7 +45,12 @@ async function agreementCard(
         termsVersion: 'T-2026-1',
         acceptedAt: h.clock.now().toISOString(),
         channel: 'front_desk',
-        scope: { legalEntityId: org.legalEntityId, purposes: [...ALL_PURPOSES], ...scope },
+        scope: {
+          legalEntityId: org.legalEntityId,
+          purposes: [...ALL_PURPOSES],
+          maxAmount: usd(10_000_000),
+          ...scope,
+        },
       },
     }),
   );
@@ -66,28 +71,24 @@ const hold = (org: Org, methodId: string, ref: { type: string; id: string }, amo
   );
 
 describe('R4-P1-1 — a booking consent covers its stays at the time of consent (Amendment 3)', () => {
-  it('a stay created after the agreement is not covered; one created before is; another booking never is', async () => {
+  it('a stay added after the agreement is not covered; the stays it listed are; a booking-level use needs every stay listed', async () => {
     const org = await setupOrg(h);
     const booking = newId();
     const before = newId();
-    const after = newId();
-    h.ledger.bookingOf.set(before, booking);
-    h.ledger.bookingOf.set(after, booking);
-    h.ledger.stayCreatedAt.set(before, new Date(h.clock.now().getTime() - 60_000).toISOString());
+    h.ledger.stays.set(before, booking);
     const card = await agreementCard(org, { bookingIds: [booking] });
-    // The stay staff add to the booking once the cardholder has consented (an add-stay): created after the agreement.
-    h.ledger.stayCreatedAt.set(after, new Date(h.clock.now().getTime() + 60_000).toISOString());
+    expect(codeOf(await hold(org, card, { type: 'booking', id: booking }))).toBe('accepted');
+    // The stay staff add to the booking once the cardholder has consented (an add-stay).
+    const after = newId();
+    h.ledger.stays.set(after, booking);
     expect(codeOf(await hold(org, card, { type: 'stay', id: before }))).toBe('accepted');
     expect(codeOf(await hold(org, card, { type: 'stay', id: after }))).toBe('mandate_reference_not_covered');
-    // A stay created at the same moment as the consent is not "before" it either (no tie in its favour).
-    const tie = newId();
-    h.ledger.bookingOf.set(tie, booking);
-    h.ledger.stayCreatedAt.set(tie, h.clock.now().toISOString());
-    const card2 = await agreementCard(org, { bookingIds: [booking] }, undefined, 'pm_card_mastercard');
-    expect(codeOf(await hold(org, card2, { type: 'stay', id: tie }))).toBe('mandate_reference_not_covered');
-    // Another booking (even one of the same payer, same family default) is never covered.
-    const other = newId();
-    expect(codeOf(await hold(org, card, { type: 'booking', id: other }))).toBe(
+    // R5-P1-2: the booking-level reference (no stay) is covered only while EVERY current stay is listed.
+    const viaBooking = await hold(org, card, { type: 'booking', id: booking });
+    expect(codeOf(viaBooking)).toBe('mandate_reference_not_covered');
+    expect(viaBooking.ok ? '' : (viaBooking.e as { message?: string }).message).toMatch(/changed since/);
+    // Another booking (even one of the same payer) is never covered.
+    expect(codeOf(await hold(org, card, { type: 'booking', id: newId() }))).toBe(
       'mandate_reference_not_covered',
     );
   });
@@ -144,10 +145,10 @@ describe('R4-P1-1 — a booking consent covers its stays at the time of consent 
 describe('R4-P1-2 / R4-P3-1 — open holds count against the agreement total, under the card lock', () => {
   it('concurrent holds on a USD 100 agreement: one stands, the others are refused', async () => {
     const org = await setupOrg(h);
-    const card = await agreementCard(org, { bookingIds: [org.bookingId], maxAmount: usd(10_000) });
-    // Four stays of the named booking (created before the consent), held at the same moment.
+    // Four stays of the named booking (listed in the consent), held at the same moment.
     const stays = [newId(), newId(), newId(), newId()];
-    for (const st of stays) h.ledger.bookingOf.set(st, org.bookingId);
+    for (const st of stays) h.ledger.stays.set(st, org.bookingId);
+    const card = await agreementCard(org, { bookingIds: [org.bookingId], maxAmount: usd(10_000) });
     const rs = await Promise.all(stays.map((id) => hold(org, card, { type: 'stay', id }, 10_000)));
     expect(rs.map(codeOf).sort()).toEqual([
       'accepted',
@@ -162,9 +163,9 @@ describe('R4-P1-2 — a hold increase in flight counts against the total', () =>
   it('an increase sent but not confirmed, then a charge: the charge is refused if both would pass the limit', async () => {
     const org = await setupOrg(h);
     const svc = h.module.service;
-    const card = await agreementCard(org, { bookingIds: [org.bookingId], maxAmount: usd(10_000) });
     const stay = newId();
-    h.ledger.bookingOf.set(stay, org.bookingId);
+    h.ledger.stays.set(stay, org.bookingId);
+    const card = await agreementCard(org, { bookingIds: [org.bookingId], maxAmount: usd(10_000) });
     const held = await hold(org, card, { type: 'stay', id: stay }, 5_000);
     expect(codeOf(held)).toBe('accepted');
     const holdId = held.ok ? held.v.id : '';

@@ -419,14 +419,14 @@ export async function ensureLinkDeactivated(
   }
   if (outcome.kind !== 'deactivated' && outcome.kind !== 'already_completed') return 'pending';
   const released = await withTenantTx(d.database, ctx, async (tx) => {
-    const recorded =
-      outcome.kind === 'deactivated' ||
-      (await db(tx)
-        .selectFrom('payments.payments')
-        .select('id')
-        .where('payment_request_id', '=', r.id)
-        .where('kind', '=', 'link')
-        .executeTakeFirst()) !== undefined;
+    // R5-P3-3: "already paid" means the provider completed the link — its whole amount. The payment it reports is
+    // recorded only when the request's paid total reaches that amount (an earlier partial payment is not it).
+    const now = await db(tx)
+      .selectFrom('payments.payment_requests')
+      .select(['paid_minor', 'amount_minor'])
+      .where('id', '=', r.id)
+      .executeTakeFirstOrThrow();
+    const recorded = outcome.kind === 'deactivated' || now.paid_minor >= now.amount_minor;
     await db(tx)
       .updateTable('payments.payment_requests')
       .set((eb) => ({
@@ -497,13 +497,19 @@ export async function raiseLinkNotStopped(tx: TxContext, r: RequestRow, why: str
 }
 
 /**
- * R4-P2-2: staff confirm a retired link is stopped (they stopped it in the provider dashboard). Idempotent with a late
- * provider confirmation (only a link still `deactivating`/`completed` changes). Audited with the reason.
+ * R4-P2-2 / R5-P2-1 (ADR-0015 Amendment 4 rule 4): finance confirms a retired link is dead — they stopped it in the
+ * provider dashboard after the provider refused or never confirmed. A staff attestation stands only for "the link is
+ * dead", never for "its payments are recorded":
+ *  - a link the provider reported as already paid (`completed`) is refused — the replacement waits for that payment to
+ *    be recorded (webhook, lookup, or finance recording it);
+ *  - only a finance role (`payments.reconciliation.manage`, the exception's owner), only while the
+ *    `payment_link_not_stopped` exception is open, and only at the version the caller saw (If-Match).
+ * Audited with the reason. A late provider confirmation afterwards changes nothing (only `deactivating` moves).
  */
 export async function confirmLinkStopped(
   d: PaymentsDeps,
   tx: TxContext,
-  input: { requestId: string; reason: string },
+  input: { requestId: string; reason: string; expectedVersion: number },
 ): Promise<void> {
   const r = await db(tx)
     .selectFrom('payments.payment_requests')
@@ -512,8 +518,33 @@ export async function confirmLinkStopped(
     .forUpdate()
     .executeTakeFirst();
   if (!r) throw new NotFoundError('payment_request', input.requestId);
-  requirePermission(tx, 'payments.paymentRequest.create', { propertyId: r.property_id });
-  if (r.link_status !== 'deactivating' && r.link_status !== 'completed') return;
+  requirePermission(tx, 'payments.reconciliation.manage', { propertyId: r.property_id });
+  if (r.version !== input.expectedVersion) {
+    throw new ConflictError(
+      'version_conflict',
+      `This payment request changed (version ${r.version}, you saw ${input.expectedVersion}). Reload it and check its link status before confirming.`,
+      { currentVersion: r.version },
+    );
+  }
+  if (r.link_status === 'completed') {
+    throw new BusinessRuleError(
+      'link_reported_paid',
+      'The provider reported a payment on this link. It is not "stopped": the replacement waits until that payment is recorded here (the provider webhook, a lookup, or finance recording the provider payment), so the guest is never asked twice.',
+    );
+  }
+  if (r.link_status !== 'deactivating') return;
+  const open = await db(tx)
+    .selectFrom('payments.exceptions')
+    .select('id')
+    .where('dedupe_key', '=', `link-not-stopped:${r.id}`)
+    .where('status', '=', 'open')
+    .executeTakeFirst();
+  if (!open) {
+    throw new BusinessRuleError(
+      'link_stop_not_due',
+      'The provider has not refused to stop this link, and its time to confirm has not run out. Portico keeps asking it; confirm here only once the "payment link may still be live" exception is raised.',
+    );
+  }
   await db(tx)
     .updateTable('payments.payment_requests')
     .set({ link_status: 'deactivated', link_status_at: tx.now, version: r.version + 1 })
@@ -527,7 +558,11 @@ export async function confirmLinkStopped(
     before: { linkStatus: r.link_status },
     after: { linkStatus: 'deactivated' },
   });
-  await resolveExceptionsByKey(tx, `link-not-stopped:${r.id}`, `Confirmed stopped by staff: ${input.reason}`);
+  await resolveExceptionsByKey(
+    tx,
+    `link-not-stopped:${r.id}`,
+    `Confirmed stopped by finance: ${input.reason}`,
+  );
   const ctx = requestContextOf(tx);
   tx.afterCommit(() => releaseWaitingLinks(d, ctx, { type: r.ref_type, id: r.ref_id }));
 }
@@ -969,6 +1004,7 @@ export async function registerVirtualCard(
       holder_name: null,
       owner_type: 'booking',
       owner_id: input.bookingId,
+      cardholder_ref: `booking:${input.bookingId}`,
       // A virtual card is issued by the channel to pay this stay: charging it is agreed by the channel contract.
       mit_agreement: true,
       mandate: JSON.stringify({
@@ -978,6 +1014,7 @@ export async function registerVirtualCard(
         channelConnectionId: booking.channelConnectionId,
         termsVersion: `channel-contract:${input.channel}`,
         acceptedAt: tx.now.toISOString(),
+        recordedBy: 'staff',
         scope: {
           legalEntityId: property.legalEntityId,
           propertyIds: [input.propertyId],
@@ -990,8 +1027,8 @@ export async function registerVirtualCard(
               d,
               tx,
               input.bookingId,
-              tx.now.toISOString(),
-              `channel:${input.channel}`,
+              'channel_virtual_card',
+              input.channel,
             ),
           },
         },

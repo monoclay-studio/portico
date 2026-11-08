@@ -69,6 +69,8 @@ export interface StaysTable {
   early_check_in: unknown;
   late_check_out: unknown;
   no_show: unknown;
+  /** R5-P1-1: the cancellation penalty recorded for this stay (`{ at, penalty, waived }`). */
+  cancellation: Generated<unknown>;
   checked_in_at: Date | null;
   checked_out_at: Date | null;
   created_at: Date;

@@ -20,6 +20,7 @@ import * as ledgerPort from './ledger-port';
 import * as payouts from './payouts';
 import type { ProvidedTaxLineInput } from './postings';
 import * as postings from './postings';
+import * as provenance from './provenance';
 import * as receivables from './receivables';
 import * as reports from './reports';
 import * as setup from './setup';
@@ -87,6 +88,7 @@ export function createFinance(ports: FinancePorts) {
     forfeitDeposit: bind(deps, deposits.forfeitDeposit),
     getDeposits: deposits.getDeposits,
     depositHeldMinor: deposits.depositHeldMinor,
+    folioProvenance: (tx: TxContext, folioId: string) => provenance.folioProvenance(tx, folioId),
     importOpeningDeposits: bind(deps, deposits.importOpeningDeposits),
     grantAllowance: bind(deps, allowances.grantAllowance),
     closeAllowances: bind(deps, allowances.closeAllowances),
@@ -302,6 +304,9 @@ export function financeLedgerForPayments(service: FinanceService) {
     },
     /** R4-P3-3: deposits held for the booking, not applied to a folio yet. */
     depositsHeldFor: (tx: TxContext, bookingId: string) => service.depositHeldMinor(tx, bookingId),
+    /** Re-review #5 R5-P1-2: owners of the debt on a folio other than its own (transferred, routed, to be routed). */
+    debtOriginsOf: async (tx: TxContext, folioId: string) =>
+      (await service.folioProvenance(tx, folioId)).debtOwners,
     /** Review R2-P1-3: the posting predicate itself, asked before any card is charged (new money). */
     assertTargetUsable: (tx: TxContext, ref: { type: 'folio' | 'booking'; id: string }, s: LedgerScope) =>
       service.assertTargetInScope(d(tx, s.propertyId), ref, scope(s), 'inflow'),

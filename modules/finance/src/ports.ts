@@ -154,6 +154,19 @@ export interface PaymentsPort {
    * whose balance it changes, so finance and payments always lock in the same order (collection → folio → request).
    */
   lockCollections(tx: TxContext, input: { folioIds: readonly string[] }): Promise<void>;
+  /**
+   * Re-review #5 (ADR-0015 Amendment 4 rule 2): may hotel-initiated card money from these sources meet debt of these
+   * owners on one folio? Sources: payments-module payment ids, bookings whose card-funded deposits are applied, and
+   * folios (every card payment taken on them, posted or not). Finance asks before it applies a deposit, transfers money
+   * or charges between folios, or routes charges to a folio; it never reads an agreement itself.
+   */
+  cardMoneyMayMeet(
+    tx: TxContext,
+    input: {
+      sources: { paymentIds?: string[]; depositBookingIds?: string[]; folioIds?: string[] };
+      owners: Array<{ type: string; id: string }>;
+    },
+  ): Promise<{ covered: true } | { covered: false; reason: string }>;
 }
 
 /** Payer particulars for folios and tax invoices (guests for people; companies/agencies when that module exists). */

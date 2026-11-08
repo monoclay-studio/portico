@@ -1728,7 +1728,18 @@ async function applyPlan(
       for (const op of sp.assignmentOps)
         if (op.op === 'unassign')
           await inventory.unassignUnit(tx, { propertyId: plan.propertyId, ref: stayRef });
-      await updateStay(tx, sp.stay.row.id, { status: 'cancelled', hold_id: null });
+      // ADR-0015 Amendment 4 (R5-P1-1): the cancellation penalty is recorded on the stay it applies to — the fact a
+      // card's no-show / cancellation consent may rest on (a waived penalty is recorded as waived, never chargeable).
+      const penalty = plan.charges.find((ch) => ch.kind === 'cancellation' && ch.stayId === sp.stay.row.id);
+      await updateStay(tx, sp.stay.row.id, {
+        status: 'cancelled',
+        hold_id: null,
+        cancellation: json({
+          at: tx.now.toISOString(),
+          penalty: penalty && !penalty.waived ? penalty.amount : null,
+          waived: penalty?.waived ?? false,
+        }),
+      });
     } else if (sp.mode === 'time_request' && sp.timeRequest) {
       const value = json({
         time: sp.timeRequest.time,

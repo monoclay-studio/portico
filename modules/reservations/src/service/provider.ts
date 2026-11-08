@@ -46,12 +46,24 @@ export async function describeBooking(
   return row ? { propertyId: row.property_id, status: row.status } : null;
 }
 
+/** A penalty reservations recorded for a stay (no-show at the night audit, or a cancellation), from agreed terms. */
+export interface RecordedPenalty {
+  kind: 'no_show' | 'cancellation';
+  amount: Money;
+}
+
 /**
  * Reference directory for money modules (review P1-1/P1-2): the property that owns a booking or a stay; null when no
  * such record exists in this organization; undefined for reference types reservations does not own.
+ *
+ * ADR-0015 Amendment 4: the money FACTS a card purpose may rest on, never a label a client sends —
+ *  - a booking's agreed deposit (`depositDue`): the deposit items of the payment schedules of its stays' agreed terms
+ *    (rates `instantiatePaymentSchedule`), cancelled and no-show stays excluded;
+ *  - a stay's recorded penalties (`penalties`): the no-show penalty the night audit recorded (`reservations.stay.noShow`
+ *    is the only writer) and a cancellation penalty recorded when the stay was cancelled (waived penalties excluded).
  */
 export async function describeReference(
-  _deps: Deps,
+  deps: Deps,
   tx: TxContext,
   ref: { type: string; id: string },
 ): Promise<
@@ -61,8 +73,9 @@ export async function describeReference(
       channelConnectionId?: string | null;
       bookingId: string;
       people: string[];
-      stayCreatedAt?: string;
       stayIds?: string[];
+      depositDue?: Money;
+      penalties?: RecordedPenalty[];
     }
   | null
   | undefined
@@ -73,43 +86,72 @@ export async function describeReference(
     ref.type === 'stay'
       ? await db(tx)
           .selectFrom('reservations.stays')
-          .select(['booking_id', 'created_at'])
+          .select(['booking_id', 'status', 'no_show', 'cancellation'])
           .where('id', '=', ref.id)
           .executeTakeFirst()
       : undefined;
   const bookingId = ref.type === 'booking' ? ref.id : stay?.booking_id;
   if (!bookingId) return null;
   // Review R2-P1-1: where the booking came from — payments accepts a channel's virtual card only for a booking of that
-  // channel connection. Re-review #3: its booking (the collection family) and its people (whose cards a standing
-  // card-on-file consent covers).
+  // channel connection. Re-review #3: its booking (the collection family) and its people.
   const b = await db(tx)
     .selectFrom('reservations.bookings')
-    .select(['property_id', 'source', 'channel_connection_id'])
+    .select(['property_id', 'source', 'channel_connection_id', 'currency'])
     .where('id', '=', bookingId)
     .executeTakeFirst();
   if (!b) return null;
-  // ADR-0015 Amendment 3: the stays a booking has NOW — a cardholder consenting to the booking consents to these; a
-  // stay added later is not covered.
-  const stayIds =
-    ref.type === 'booking'
-      ? (
-          await db(tx)
-            .selectFrom('reservations.stays')
-            .select('id')
-            .where('booking_id', '=', bookingId)
-            .orderBy('id')
-            .execute()
-        ).map((r) => r.id)
-      : undefined;
-  return {
+  const base = {
     propertyId: b.property_id,
     source: b.source,
     channelConnectionId: b.channel_connection_id,
     bookingId,
     people: [...(await bookingPeople(tx, bookingId))],
-    // ADR-0015 Amendment 3: a stay added after a cardholder consented to the booking is not covered by that consent.
-    ...(stay ? { stayCreatedAt: stay.created_at.toISOString() } : {}),
-    ...(stayIds ? { stayIds } : {}),
+  };
+  if (stay) {
+    const penalties: RecordedPenalty[] = [];
+    const noShow = (stay.status === 'no_show' ? stay.no_show : null) as { penalty?: Money } | null;
+    if (noShow?.penalty && noShow.penalty.amountMinor > 0)
+      penalties.push({ kind: 'no_show', amount: noShow.penalty });
+    const cancelled = (stay.status === 'cancelled' ? stay.cancellation : null) as {
+      penalty?: Money | null;
+      waived?: boolean;
+    } | null;
+    if (cancelled?.penalty && !cancelled.waived && cancelled.penalty.amountMinor > 0)
+      penalties.push({ kind: 'cancellation', amount: cancelled.penalty });
+    return { ...base, penalties };
+  }
+  // ADR-0015 Amendment 3: the stays a booking has NOW — a cardholder consenting to the booking consents to these; a
+  // stay added later is not covered.
+  const stays = await db(tx)
+    .selectFrom('reservations.stays')
+    .select(['id', 'status'])
+    .where('booking_id', '=', bookingId)
+    .orderBy('id')
+    .execute();
+  const live = stays.filter((x) => x.status !== 'cancelled' && x.status !== 'no_show').map((x) => x.id);
+  const segments =
+    live.length === 0
+      ? []
+      : await db(tx)
+          .selectFrom('reservations.stay_segments')
+          .select('terms_snapshot_id')
+          .where('stay_id', 'in', live)
+          .execute();
+  const snapshots = await loadSnapshots(
+    tx,
+    segments.map((x) => x.terms_snapshot_id),
+  );
+  let depositMinor = 0;
+  for (const terms of snapshots.values()) {
+    for (const item of deps.ports.rates.instantiatePaymentSchedule(terms)) {
+      if (item.kind === 'deposit' && item.amount.currency === b.currency)
+        depositMinor += item.amount.amountMinor;
+    }
+  }
+  return {
+    ...base,
+    stayIds: stays.map((x) => x.id),
+    depositDue: { amountMinor: depositMinor, currency: b.currency },
   };
 }
 

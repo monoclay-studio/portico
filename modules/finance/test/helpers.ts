@@ -21,6 +21,14 @@ export interface Harness {
   collections: BalanceSyncRequest[];
   openRequests: Map<string, number>;
   inflight: Set<string>;
+  /**
+   * Fake card-consent coverage (payments' `cardMoneyMayMeet`): every question finance asks is recorded; owner keys
+   * (`<type>:<id>`) in `refuse` are not covered by the card money asked about.
+   */
+  coverage: {
+    calls: Array<{ sources: unknown; owners: Array<{ type: string; id: string }> }>;
+    refuse: Set<string>;
+  };
   tax: FakeTax;
   /** Fake payer directory (guests): payer id → name. */
   payerNames: Map<string, string>;
@@ -130,6 +138,7 @@ export async function startHarness(): Promise<Harness> {
   const openRequests = new Map<string, number>();
   /** Folios with a payment still being confirmed (the fake defers like payments does). */
   const inflight = new Set<string>();
+  const coverage: Harness['coverage'] = { calls: [], refuse: new Set() };
   const payerNames = new Map<string, string>();
   /** Fake booking directory (reservations): tests register the bookings they take deposits for. */
   const bookings = new Map<string, { propertyId: string; status: string }>();
@@ -178,6 +187,16 @@ export async function startHarness(): Promise<Harness> {
     },
     payments: {
       async lockCollections() {},
+      async cardMoneyMayMeet(_tx, input) {
+        coverage.calls.push(input);
+        const refused = input.owners.find((o) => coverage.refuse.has(`${o.type}:${o.id}`));
+        return refused
+          ? {
+              covered: false as const,
+              reason: `card money does not cover ${refused.type} ${refused.id} (test)`,
+            }
+          : { covered: true as const };
+      },
       async syncBalanceRequest(_tx, input) {
         collections.push(input);
         const before = openRequests.get(input.folioId) ?? 0;
@@ -205,6 +224,7 @@ export async function startHarness(): Promise<Harness> {
     finance: createFinance(ports),
     ports,
     collections,
+    coverage,
     openRequests,
     inflight,
     tax,

@@ -1010,19 +1010,20 @@ export async function creditPaymentRequest(
     .executeTakeFirstOrThrow();
   const paid = r.paid_minor + amountMinor;
   const status = paymentRequestStatusFor(r.status, r.amount_minor, paid);
+  // R5-P3-3: a link the provider reported as completed is accounted for once the request's paid total reaches its
+  // amount — the payment the provider reported, not an earlier partial one.
+  const accounted = r.link_status === 'completed' && paid >= r.amount_minor;
   await db(tx)
     .updateTable('payments.payment_requests')
     .set({
       paid_minor: paid,
       status,
       version: r.version + 1,
-      ...(r.link_status === 'completed'
-        ? { link_status: 'deactivated' as const, link_status_at: tx.now }
-        : {}),
+      ...(accounted ? { link_status: 'deactivated' as const, link_status_at: tx.now } : {}),
     })
     .where('id', '=', r.id)
     .execute();
-  if (r.link_status === 'completed') {
+  if (accounted) {
     await resolveExceptionsByKey(
       tx,
       `link-not-stopped:${r.id}`,
@@ -1072,15 +1073,18 @@ export async function raiseIfOvercollected(
   const fmt = (n: number) => formatMoney(money(n, before.currency));
   const what = `A payment of ${fmt(amountMinor)} arrived on a ${retired ? (before.status === 'cancelled' ? 'cancelled (replaced or withdrawn)' : 'expired') : 'fully paid'} payment request`;
   if (balance !== null && balance >= 0) return; // it paid money still owed: nothing to refund
-  const excess = balance === null ? null : Math.min(amountMinor, -balance);
+  // R5-P3-3: the reference's credit and this payment's share of it are two numbers (the folio may already have been in
+  // credit before this payment).
+  const credit = balance === null ? null : -balance;
+  const excess = credit === null ? null : Math.min(amountMinor, credit);
   await raiseException(tx, {
     propertyId: before.property_id,
     kind: 'payment_request_overpaid',
     severity: 'urgent',
     problem:
-      excess === null
+      excess === null || credit === null
         ? `${what}. Portico cannot tell how much of it the guest still owed.`
-        : `${what}; the ${ref.type} is now ${fmt(excess)} in credit.`,
+        : `${what}; the ${ref.type} is now ${fmt(credit)} in credit, ${fmt(excess)} of it from this payment.`,
     businessImpact:
       excess === null
         ? 'The guest may have paid money they do not owe.'

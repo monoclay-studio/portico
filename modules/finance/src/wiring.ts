@@ -40,6 +40,10 @@ export function unavailableFinancePorts(): {
       async lockCollections() {
         // No payments module: nothing collects in parallel with finance.
       },
+      async cardMoneyMayMeet() {
+        // No payments module: no card money is taken under a cardholder agreement.
+        return { covered: true as const };
+      },
       async syncBalanceRequest() {
         return {
           status: 'unavailable',

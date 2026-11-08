@@ -56,13 +56,23 @@ export interface LedgerControls {
   balances: Map<string, number>;
   /** The booking every reference of a tenant belongs to by default (set by setupOrg). */
   defaultBooking: Map<string, string>;
-  /** Stays/folios registered under a specific booking. */
+  /** Folios registered under a specific booking (their owner is that booking unless `folioOwners` says otherwise). */
   bookingOf: Map<string, string>;
   /**
-   * When a stay was created (Amendment 3). The fake cannot list a booking's stays, so consent evidence carries no stay
-   * list here and coverage falls back to the stay's creation time: unregistered stays are old (created in 2000).
+   * Stays registered under a booking (Amendment 3): a booking lists exactly its registered stays, so a stay registered
+   * after a card's agreement named the booking is not covered by it. An unregistered stay belongs to the default
+   * booking and is NOT listed (register it before the card is saved when a test needs it covered).
    */
-  stayCreatedAt: Map<string, string>;
+  stays: Map<string, string>;
+  /** Stay → penalties reservations recorded (no-show / cancellation): the fact a `no_show` fee rests on. */
+  penalties: Map<
+    string,
+    Array<{ kind: 'no_show' | 'cancellation'; amount: { amountMinor: number; currency: string } }>
+  >;
+  /** Booking → the deposit its agreed schedule asks for (minor units, USD); default 10,000,000. */
+  depositDue: Map<string, number>;
+  /** Folio → owners of debt moved or routed onto it (finance's provenance). */
+  debtOrigins: Map<string, Array<{ type: string; id: string }>>;
   /** Booking → deposits finance holds for it, not yet applied (R4-P3-3). */
   depositsHeld: Map<string, number>;
 }
@@ -86,7 +96,7 @@ export function fakeReferences(controls: LedgerControls): ReferenceDirectoryPort
       const family =
         ref.type === 'booking'
           ? ref.id
-          : (controls.bookingOf.get(ref.id) ?? (controls.defaultBooking.get(tx.tenantId) as string));
+          : (controls.stays.get(ref.id) ?? (controls.defaultBooking.get(tx.tenantId) as string));
       return ref.type === 'booking'
         ? {
             propertyId: owner.propertyId,
@@ -94,12 +104,17 @@ export function fakeReferences(controls: LedgerControls): ReferenceDirectoryPort
             channelConnectionId: controls.directBookings.has(ref.id) ? null : DEFAULT_CHANNEL_CONNECTION,
             bookingId: family,
             people: [...people, `booking:${ref.id}`],
+            stayIds: [...controls.stays.entries()]
+              .filter(([, b]) => b === ref.id)
+              .map(([id]) => id)
+              .sort(),
+            depositDue: { amountMinor: controls.depositDue.get(ref.id) ?? 10_000_000, currency: 'USD' },
           }
         : {
             propertyId: owner.propertyId,
             people,
             bookingId: family,
-            stayCreatedAt: controls.stayCreatedAt.get(ref.id) ?? '2000-01-01T00:00:00.000Z',
+            penalties: controls.penalties.get(ref.id) ?? [],
           };
     },
   };
@@ -155,15 +170,23 @@ export function fakeLedger(controls: LedgerControls): LedgerPort {
       const payer = controls.defaultPayer.get(tx.tenantId);
       return {
         ...owner,
-        owner: controls.folioOwners.get(ref.id) ?? { type: 'stay', id: ref.id },
+        owner: controls.folioOwners.get(ref.id) ?? {
+          type: 'booking',
+          id: controls.bookingOf.get(ref.id) ?? (controls.defaultBooking.get(tx.tenantId) as string),
+        },
         payer: payer ? { type: 'guest', id: payer } : null,
       };
     },
     async balanceOf(_tx, ref) {
-      return controls.balances.get(ref.id) ?? null;
+      // The fake world: a folio owes plenty (USD 100,000) unless a test sets its balance; a booking has no balance.
+      if (ref.type !== 'folio') return null;
+      return controls.balances.has(ref.id) ? (controls.balances.get(ref.id) as number) : 10_000_000;
     },
     async depositsHeldFor(_tx, bookingId) {
       return controls.depositsHeld.get(bookingId) ?? 0;
+    },
+    async debtOriginsOf(_tx, folioId) {
+      return controls.debtOrigins.get(folioId) ?? [];
     },
     // The same predicate the fake uses when posting (review R2-P1-3): unknown → refused; other scope → refused.
     async assertTargetUsable(tx, ref, scope) {
@@ -343,7 +366,10 @@ export async function startHarness(): Promise<Harness> {
     balances: new Map(),
     defaultBooking: new Map(),
     bookingOf: new Map(),
-    stayCreatedAt: new Map(),
+    stays: new Map(),
+    penalties: new Map(),
+    depositDue: new Map(),
+    debtOrigins: new Map(),
     depositsHeld: new Map(),
   };
   const http = {
@@ -499,6 +525,8 @@ export function standingMandate(org: Org, at: string, extra: Record<string, unkn
     scope: {
       legalEntityId: org.legalEntityId,
       purposes: [...ALL_PURPOSES],
+      // Amendment 4 rule 3: a staff-recorded agreement states its amount limit (generous in the fake world).
+      maxAmount: { amountMinor: 10_000_000, currency: 'USD' },
       bookingIds: [org.bookingId],
       ...extra,
     },
@@ -535,6 +563,7 @@ export async function addMethod(
               scope: {
                 legalEntityId: org.legalEntityId,
                 purposes: [...ALL_PURPOSES],
+                maxAmount: { amountMinor: 10_000_000, currency: 'USD' },
                 bookingIds: [org.bookingId],
               },
             },

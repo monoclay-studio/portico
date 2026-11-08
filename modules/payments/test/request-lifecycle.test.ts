@@ -81,8 +81,10 @@ describe('payment request lifecycle (provider as an external writer)', () => {
       expect.objectContaining({ status: 'cancelled', link_status: 'deactivating' }),
       expect.objectContaining({ status: 'open', link_status: 'pending' }), // waits for the confirmation
     ]);
-    // The guest pays the old link before the provider confirmed (an external write).
+    // The guest pays the old link before the provider confirmed (an external write) — on top of what the folio owed,
+    // so the folio ends in credit (the fake ledger's balance after posting).
     await setControls(h, org, { outage: null });
+    h.ledger.balances.set(folio, -23_400);
     await svc.simulateRequestPayment(org.ctx, first?.id as string);
     await deliverWebhooks(h, org);
     expect(await urgentRefunds(org)).toEqual([{ severity: 'urgent', ref_id: first?.id }]);

@@ -454,9 +454,33 @@ export async function createMethod(
   const storedToken = simulated
     ? `${input.providerToken}#${input.propertyId}:${input.owner.type}:${input.owner.id}`
     : input.providerToken;
-  // ADR-0015 Amendment 3: the evidence of each booking the agreement names (when, through which channel, and the
-  // booking's stays then) and of a card its cardholder entered for their booking is built here, never by the client.
-  const storedMandate: Record<string, unknown> = input.mandate ? { ...input.mandate } : {};
+  // ADR-0015 Amendment 4 rule 3: an agreement staff record (terminal, phone, paper form) states the most the hotel may
+  // take or hold on the card. Only the cardholder, saving their own card, may choose no limit, and only explicitly.
+  const recordedBy = tx.actor.kind === 'guest' ? 'cardholder' : 'staff';
+  if (input.mandate && scope && !scope.maxAmount) {
+    if (recordedBy === 'staff' || !scope.noLimitChosenByCardholder) {
+      throw new ValidationError(
+        'mandate_limit_required',
+        recordedBy === 'staff'
+          ? 'An agreement recorded by staff must state the most the cardholder agreed the hotel may take or hold on the card (maxAmount).'
+          : 'State the most the hotel may take or hold on your card, or choose explicitly to set no limit.',
+      );
+    }
+  }
+  if (recordedBy === 'staff' && scope?.noLimitChosenByCardholder) {
+    throw new ValidationError(
+      'mandate_no_limit_cardholder_only',
+      'Only the cardholder, saving their own card, can choose no amount limit. Record the limit the cardholder agreed to.',
+    );
+  }
+  // ADR-0015 Amendments 3 and 4: the evidence of each booking the agreement names (when — the server's clock —, who
+  // recorded it — the server's channel —, the channel the client declared, and the booking's stays then) and of a card
+  // its cardholder entered for their booking is built here, never taken from the client.
+  const serverChannel = recordedBy === 'cardholder' ? 'guest_self_service' : 'staff_recorded';
+  const storedMandate: Record<string, unknown> = input.mandate ? { ...input.mandate, recordedBy } : {};
+  if (input.mandate && scope?.noLimitChosenByCardholder) {
+    storedMandate.scope = { ...scope, noLimitChosenAt: tx.now.toISOString() };
+  }
   if (input.mandate && scope?.bookingIds?.length) {
     const bookingEvidence: Record<string, { at: string; channel: string; stayIds?: string[] }> = {};
     for (const bookingId of new Set(scope.bookingIds)) {
@@ -477,11 +501,16 @@ export async function createMethod(
         d,
         tx,
         bookingId,
-        input.mandate.acceptedAt,
+        serverChannel,
         input.mandate.channel,
       );
     }
-    storedMandate.scope = { ...scope, bookingIds: Object.keys(bookingEvidence), bookingEvidence };
+    storedMandate.scope = {
+      ...(storedMandate.scope as object | undefined),
+      ...scope,
+      bookingIds: Object.keys(bookingEvidence),
+      bookingEvidence,
+    };
   }
   for (const folioId of scope?.folioIds ?? []) {
     const f = await d.ledger.describeTarget(tx, { type: 'folio', id: folioId });
@@ -497,13 +526,12 @@ export async function createMethod(
     }
   }
   if (tx.actor.kind === 'guest' && input.owner.type === 'booking') {
-    storedMandate.supplied = await bookingConsentEvidence(
-      d,
-      tx,
-      input.owner.id,
-      tx.now.toISOString(),
-      'hosted_entry',
-    ).then((e) => ({ bookingId: input.owner.id, ...e }));
+    storedMandate.supplied = await bookingConsentEvidence(d, tx, input.owner.id, 'hosted_entry').then(
+      (e) => ({
+        bookingId: input.owner.id,
+        ...e,
+      }),
+    );
   }
   const id = newId(tx.now.getTime());
   // P2-2: saving the same token again for the same owner returns the existing method (no aborted transaction).
@@ -524,6 +552,7 @@ export async function createMethod(
       holder_name: input.holderName ?? null,
       owner_type: input.owner.type,
       owner_id: input.owner.id,
+      cardholder_ref: `${input.owner.type}:${input.owner.id}`,
       mit_agreement: input.mitAgreement ?? false,
       mandate: JSON.stringify(storedMandate),
       entry_channel: entryChannel,
@@ -885,11 +914,12 @@ export async function confirmCardForBooking(
     .where('id', '=', input.methodId)
     .forUpdate()
     .executeTakeFirst();
+  // R5-P3-2: the cardholder the card was saved for — never the owner a profile merge rewrote.
   const own =
     m &&
     actor &&
-    ((m.owner_type === 'guest_profile' && m.owner_id === actor.guestProfileId) ||
-      (m.owner_type === 'booking' && m.owner_id === actor.bookingId));
+    ((actor.guestProfileId !== undefined && m.cardholder_ref === `guest_profile:${actor.guestProfileId}`) ||
+      (actor.bookingId !== undefined && m.cardholder_ref === `booking:${actor.bookingId}`));
   if (!m || !own) {
     throw new ForbiddenError('payments.card.confirmForBooking', {});
   }
@@ -918,13 +948,7 @@ export async function confirmCardForBooking(
   // The booking's stays as they are now: a stay added after this consent is not covered by it.
   const evidence = {
     ...(mandate.scope.bookingEvidence ?? {}),
-    [input.bookingId]: await bookingConsentEvidence(
-      d,
-      tx,
-      input.bookingId,
-      tx.now.toISOString(),
-      'guest_self_service',
-    ),
+    [input.bookingId]: await bookingConsentEvidence(d, tx, input.bookingId, 'guest_self_service'),
   };
   const row = await db(tx)
     .updateTable('payments.payment_methods')

@@ -30,6 +30,7 @@ import type { z } from 'zod';
 import type {
   adjustmentInput,
   authorizeInput,
+  CollectionPurpose,
   chargeInput,
   confirmBankTransferInput,
   recordAuthorizationInput,
@@ -40,7 +41,7 @@ import type {
 import { capturableMinor, refundableMinor } from '../domain/states';
 import { PaymentsEvents } from '../events';
 import type { PropertyInfo } from '../ports';
-import { assertWithinConsent } from './consent';
+import { assertDestinationCovered, assertWithinConsent } from './consent';
 import {
   clearingOf,
   ledgerKey,
@@ -50,6 +51,7 @@ import {
   tryLedger,
 } from './ledger';
 import { assertBreakerAllows, createOperation } from './operations';
+import { assertWithinFact, derivePurpose, folioOwedNow } from './purpose';
 import {
   type AccountRow,
   type AuthorizationRow,
@@ -77,9 +79,6 @@ export interface Started {
   operationId: string | null;
   replayed: boolean;
 }
-
-/** R4-P3-4: `no_show` is a charge purpose too (no-show and cancellation fees), matching the mandate purpose. */
-export type CollectionPurpose = 'deposit' | 'balance' | 'incidentals' | 'no_show' | 'custom';
 
 function capability(account: AccountRow, cap: string): boolean {
   return ((account.capabilities as string[]) ?? []).includes(cap);
@@ -142,7 +141,8 @@ function defaultPurpose(ref: { type: 'folio' | 'booking' }): CollectionPurpose {
   return ref.type === 'booking' ? 'deposit' : 'balance';
 }
 
-const REQUEST_PURPOSE: Record<string, CollectionPurpose> = {
+/** A payment request's purpose as a collection purpose (incidentals pre-authorisations and custom links are neither). */
+const REQUEST_PURPOSE: Record<string, string> = {
   deposit: 'deposit',
   balance: 'balance',
   incidentals_preauth: 'incidentals',
@@ -153,16 +153,16 @@ const isLedgerRef = (ref: { type: string; id: string }): ref is { type: 'folio' 
   ref.type === 'folio' || ref.type === 'booking';
 
 /**
- * P1-2 (until collection plans exist): a payment link owns the money it asks for. Fix sweep SW-PAY-1/2 and re-review #3
- * R3-P2-1: every collection path calls this (charge, capture, recorded payment, VCC through charge; holds warn early)
- * under the family collection lock, and neither the purpose label nor the exact reference decides it. A booking, its
- * stays and their folios are ONE family. A new collection needs the stated separate-collection reason (audited) when:
- *  - any link is open or paid on the very same reference, whatever its purpose and whatever the new label;
+ * P1-2 (until collection plans exist): a payment link owns the money it asks for. Fix sweep SW-PAY-1/2, re-review #3
+ * R3-P2-1 and #5 R5-P1-1: every collection path calls this (charge, capture, recorded payment, VCC through charge; holds
+ * warn early) under the family collection lock, with the purpose DERIVED from the facts (`purpose.ts` — no label the
+ * client sends reaches it). A booking, its stays and their folios are ONE family. A new collection needs the stated
+ * separate-collection reason (audited) when:
+ *  - any link is open or paid on the very same reference, whatever its purpose;
  *  - a link in the family is still open (the guest may still pay it);
- *  - a paid link in the family has the same purpose, or the new collection is labelled `custom` or `incidentals`
- *    (labels that can stand for anything).
- * A balance collected on a folio after a paid deposit link on its booking is the normal flow (the deposit is applied
- * to the folio) and needs no reason.
+ *  - a paid link in the family has the same purpose;
+ *  - it collects a folio's balance or a no-show fee beyond what the folio owes now, less deposits held for the booking
+ *    and payments not yet posted — before a paid deposit is applied, the same money would be collected twice.
  */
 async function assertCollectionOwnership(
   d: PaymentsDeps,
@@ -186,26 +186,20 @@ async function assertCollectionOwnership(
     )
     .orderBy('created_at')
     .execute();
-  // R4-P3-3: a balance collected on a folio after a paid deposit link on its booking is the normal flow only up to what
-  // the folio owes now, less the deposits still held for the booking (a folio's balance nets a deposit only once it is
-  // applied); beyond it — e.g. before the deposit is applied — the same money could be collected twice, so the reason
-  // is required.
-  const balanceFree =
-    purpose === 'balance' && ref.type === 'folio' && opts.amountMinor !== undefined
-      ? await (async () => {
-          const owed = await d.ledger.balanceOf(tx, ref);
-          const held = bookingId ? await d.ledger.depositsHeldFor(tx, bookingId) : 0;
-          return owed !== null && (opts.amountMinor as number) <= owed - held;
-        })()
+  // R4-P3-3 / R5-P1-1: a folio's balance (or a no-show fee, which is part of it) collected after a paid link elsewhere in
+  // the family is the normal flow only up to what the folio owes now — less deposits held for the booking (a folio nets
+  // a deposit only once it is applied) and less money not yet posted; beyond it the same money could be taken twice.
+  const folioMoney = purpose === 'balance' || purpose === 'no_show';
+  const withinOwed =
+    folioMoney && ref.type === 'folio' && opts.amountMinor !== undefined && owners.length > 0
+      ? opts.amountMinor <= (await folioOwedNow(d, tx, ref.id, bookingId))
       : false;
   const owner = owners.find(
     (r) =>
       (r.ref_type === ref.type && r.ref_id === ref.id) ||
       r.status !== 'paid' ||
       REQUEST_PURPOSE[r.purpose] === purpose ||
-      purpose === 'custom' ||
-      purpose === 'incidentals' ||
-      (purpose === 'balance' && !balanceFree),
+      (folioMoney && !withinOwed),
   );
   if (!owner) return;
   if (override?.reason) {
@@ -337,6 +331,7 @@ export async function authorize(
   } else {
     await lockCollectionRefs(d, tx, [input.ref]);
   }
+  if (initiator === 'merchant') await assertDestinationCovered(d, tx, method, property, input.ref);
   const mode = d.registry.modeFor(tx, account);
   await assertBreakerAllows(d, tx, account);
   const id = newId(tx.now.getTime());
@@ -593,12 +588,15 @@ export async function capture(
   // (domain-map order: authorization → card → collection → folio → request).
   // R4-P3-6: a customer-initiated hold is captured only onto its own booking family.
   const holdRef = { type: a.ref_type, id: a.ref_id };
-  if (a.method_id) {
-    const method = await db(tx)
-      .selectFrom('payments.payment_methods')
-      .selectAll()
-      .where('id', '=', a.method_id)
-      .executeTakeFirstOrThrow();
+  const holdMethod = a.method_id
+    ? await db(tx)
+        .selectFrom('payments.payment_methods')
+        .selectAll()
+        .where('id', '=', a.method_id)
+        .executeTakeFirstOrThrow()
+    : null;
+  if (holdMethod) {
+    const method = holdMethod;
     if (a.initiator === 'merchant') {
       await assertWithinConsent(d, tx, method, property, 'merchant', {
         kind: 'capture',
@@ -632,6 +630,9 @@ export async function capture(
       amountMinor,
     });
   }
+  // Amendment 4 rule 2, under the collection lock: where a merchant hold's money lands is still covered.
+  if (holdMethod && a.initiator === 'merchant')
+    await assertDestinationCovered(d, tx, holdMethod, property, ref);
   await assertBreakerAllows(d, tx, account);
   const id = newId(tx.now.getTime());
   const inserted = await insertPayment(
@@ -775,13 +776,12 @@ export async function charge(
 ): Promise<Started> {
   requirePermission(tx, 'payments.payment.collect', { propertyId: input.propertyId });
   const businessKey = `charge:${input.businessKey}`;
-  const purpose: CollectionPurpose = input.purpose ?? defaultPurpose(input.ref);
   const hash = requestHash({
     p: input.propertyId,
     m: input.methodId,
     a: input.amount,
     r: input.ref,
-    u: purpose,
+    u: input.purpose ?? defaultPurpose(input.ref),
   });
   const existing = await db(tx)
     .selectFrom('payments.payments')
@@ -800,6 +800,9 @@ export async function charge(
   assertAccountUsable(account, property, input.amount.currency);
   requireCapability(account, 'charge', 'Charging a card');
   const initiator = deriveInitiator(tx);
+  // ADR-0015 Amendment 4 rule 1 (R5-P1-1): the purpose is the fact that justifies the money, not the client's label.
+  const fact = await derivePurpose(d, tx, input.ref, input.purpose);
+  const purpose = fact.purpose;
   await assertWithinConsent(d, tx, method, property, initiator, {
     kind: 'charge',
     purpose,
@@ -809,6 +812,12 @@ export async function charge(
   await assertCollectionOwnership(d, tx, input.ref, purpose, input.separateCollection, {
     amountMinor: input.amount.amountMinor,
   });
+  if (initiator === 'merchant') {
+    // Under the collection lock: within what the fact still allows (deposit due, folio owed, penalty owed), and the
+    // destination is still covered (no other stay's charges moved onto it while this charge waited) — rule 2.
+    await assertWithinFact(d, tx, method, fact, input.ref, input.amount);
+    await assertDestinationCovered(d, tx, method, property, input.ref);
+  }
   const mode = d.registry.modeFor(tx, account);
   await assertBreakerAllows(d, tx, account);
   const id = newId(tx.now.getTime());
@@ -826,6 +835,7 @@ export async function charge(
       virtual_card_id: extras.virtualCardId ?? null,
       kind: 'charge',
       purpose,
+      purpose_basis: fact.basis,
       method: extras.method ?? (method.kind === 'virtual_card' ? 'virtual_card' : 'card'),
       initiator,
       ref_type: input.ref.type,
@@ -1040,7 +1050,6 @@ export async function recordPayment(
 ): Promise<Started> {
   requirePermission(tx, 'payments.externalRecord.create', { propertyId: input.propertyId });
   const businessKey = `record:${input.businessKey}`;
-  const purpose: CollectionPurpose = input.purpose ?? defaultPurpose(input.ref);
   const hash = requestHash({
     p: input.propertyId,
     m: input.method,
@@ -1088,6 +1097,9 @@ export async function recordPayment(
   if (receivedAt.getTime() > tx.now.getTime() + 5 * 60_000) {
     throw new ValidationError('received_in_future', 'The payment time cannot be in the future.');
   }
+  // R5-P1-1: the purpose the ownership guard reads is derived from the facts, as for a card charge.
+  const fact = await derivePurpose(d, tx, input.ref, input.purpose);
+  const purpose = fact.purpose;
   await assertCollectionOwnership(d, tx, input.ref, purpose, input.separateCollection, {
     amountMinor: input.amount.amountMinor,
   });
@@ -1122,6 +1134,7 @@ export async function recordPayment(
       virtual_card_id: null,
       kind: 'recorded',
       purpose,
+      purpose_basis: fact.basis,
       method: input.method,
       initiator: null,
       ref_type: input.ref.type,

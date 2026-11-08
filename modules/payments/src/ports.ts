@@ -71,6 +71,12 @@ export interface LedgerPort {
    */
   depositsHeldFor(tx: TxContext, bookingId: string): Promise<number>;
   /**
+   * ADR-0015 Amendment 4 rule 2: where the debt on a folio comes from, other than the folio's own owner — the owner of
+   * every charge transferred or routed onto it (followed to the original posting), and the owner of every active
+   * billing rule that routes charges to it. Card money on this folio would pay for these owners too.
+   */
+  debtOriginsOf(tx: TxContext, folioId: string): Promise<Array<{ type: string; id: string }>>;
+  /**
    * Review R2-P1-3 (AP-44): finance's own posting predicate for new money on this target at this scope, asked BEFORE
    * any card is charged, so pre-check and posting can never disagree (e.g. a booking whose deposits are held at
    * another property, or an imported deposit of a booking reservations does not know). Throws the refusal.
@@ -217,10 +223,15 @@ export interface ReferenceOwner {
    * `agency:<id>`, `booking:<id>`) — a standing card-on-file consent covers only its cardholder's own bookings.
    */
   people?: string[];
-  /** Stays only: when the stay was created — consent given before it does not cover it (ADR-0015 Amendment 3). */
-  stayCreatedAt?: string;
   /** Bookings only: the booking's stays now — what a cardholder consenting to it now consents to (Amendment 3). */
   stayIds?: string[];
+  /** Bookings only: the deposit the booking's agreed payment schedule asks for (Amendment 4: the fact for `deposit`). */
+  depositDue?: { amountMinor: number; currency: string };
+  /**
+   * Stays only: penalties reservations recorded for the stay (no-show at the night audit, cancellation), from the
+   * agreed terms (Amendment 4: the fact for `no_show`).
+   */
+  penalties?: Array<{ kind: 'no_show' | 'cancellation'; amount: { amountMinor: number; currency: string } }>;
 }
 
 export interface PropertyInfo {

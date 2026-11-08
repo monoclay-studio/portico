@@ -55,6 +55,12 @@ export function paymentsCollectionsForFinance(service: Pick<PaymentsService, 'pr
         input.folioIds.map((id) => ({ type: 'folio', id })),
       );
     },
+    /** Re-review #5 R5-P1-2: finance asks whether card money may meet this debt before it moves either. */
+    cardMoneyMayMeet: (
+      tx: TxContext,
+      input: Parameters<PaymentsService['provider']['cardMoneyMayMeet']>[1],
+    ): ReturnType<PaymentsService['provider']['cardMoneyMayMeet']> =>
+      service.provider.cardMoneyMayMeet(tx, input),
     async syncBalanceRequest(
       tx: TxContext,
       input: FinanceBalanceSync,

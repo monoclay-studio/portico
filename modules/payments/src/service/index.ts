@@ -14,6 +14,7 @@ import type { LedgerPort, PlatformPort, ReferenceDirectoryPort } from '../ports'
 import type { ProviderRegistry } from '../providers/registry';
 import * as accounts from './accounts';
 import * as collect from './collect';
+import * as consent from './consent';
 import { executeOperation, verifyOperation } from './operations';
 import * as queries from './queries';
 import * as reconcile from './reconcile';
@@ -284,6 +285,12 @@ export function createPaymentsService(input: PaymentsServiceDeps) {
       lockCollections: (tx: TxContext, refs: ReadonlyArray<{ type: string; id: string }>) =>
         lockCollectionRefs(d, tx, refs),
       /**
+       * Re-review #5 R5-P1-2 (ADR-0015 Amendment 4 rule 2): may hotel-initiated card money from these sources meet debt
+       * of these owners on one folio? Finance asks before it applies a deposit, transfers or routes onto a folio.
+       */
+      cardMoneyMayMeet: (tx: TxContext, i: Parameters<typeof consent.cardMoneyMayMeet>[2]) =>
+        consent.cardMoneyMayMeet(d, tx, i),
+      /**
        * Review R2-P1-2: keep the ONE open balance request of a departed folio equal to what the folio owes (finance
        * calls it under its folio lock after every balance change). Intent only; links are made after commit.
        */
@@ -411,8 +418,10 @@ export function createPaymentsService(input: PaymentsServiceDeps) {
       listPaymentRequests: requests.listPaymentRequests,
       confirmCardForBooking: (tx: TxContext, i: { methodId: string; bookingId: string }) =>
         accounts.confirmCardForBooking(d, tx, i),
-      confirmLinkStopped: (tx: TxContext, i: { requestId: string; reason: string }) =>
-        requests.confirmLinkStopped(d, tx, i),
+      confirmLinkStopped: (
+        tx: TxContext,
+        i: { requestId: string; reason: string; expectedVersion: number },
+      ) => requests.confirmLinkStopped(d, tx, i),
       cancelPaymentRequest: (tx: TxContext, id: string, v: number, reason: string) =>
         requests.cancelPaymentRequest(d, tx, id, v, reason),
       registerVirtualCard: (tx: TxContext, i: Parameters<typeof requests.registerVirtualCard>[2]) =>

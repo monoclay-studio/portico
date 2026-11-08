@@ -134,13 +134,16 @@ describe('P0-1: a collection can only post to a folio/booking of the caller’s 
   it('a capture into a foreign folio is refused, and every posting carries property + legal entity', async () => {
     const org = await setupOrg(h);
     const svc = h.module.service;
+    // The stay is the agreement's booking's stay when the card is saved (Amendment 3: the stays it covers).
+    const stayId = newId();
+    h.ledger.stays.set(stayId, org.bookingId);
     const methodId = await addMethod(h, org);
     const auth = await org.tx((tx) =>
       svc.tx.authorize(tx, {
         propertyId: org.propertyId,
         methodId,
         amount: { amountMinor: 10_000, currency: 'USD' },
-        ref: { type: 'stay', id: newId() },
+        ref: { type: 'stay', id: stayId },
         businessKey: newId(),
       }),
     );

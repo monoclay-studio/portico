@@ -231,10 +231,9 @@ describe("SW-PAY-2 — purpose 'custom' is not a way around the guard", () => {
         businessKey: newId(),
         ...(reason ? { separateCollection: { reason } } : {}),
       });
-    // `custom` is never inside a cardholder's agreement (R3-P1-2) — with or without a reason.
-    await expect(charge('custom')).rejects.toMatchObject({ code: 'mandate_purpose_not_covered' });
-    await expect(charge('custom', 'separate')).rejects.toMatchObject({ code: 'mandate_purpose_not_covered' });
-    // Any other label for the same money needs the stated reason (R3-P2-1), audited.
+    // R5-P1-1: a label is display text — on a booking the money is its deposit, which the paid link owns; whatever it
+    // is called, it needs the stated reason (R3-P2-1), audited.
+    await expect(charge('custom')).rejects.toMatchObject({ code: 'collection_owned_by_payment_request' });
     await expect(charge('incidentals')).rejects.toMatchObject({
       code: 'collection_owned_by_payment_request',
     });
@@ -282,6 +281,7 @@ describe('SW-PAY-3 — a card is a parameter only at the property it was saved a
         mitAgreement: true,
         mandate: mandate({
           scope: {
+            maxAmount: { amountMinor: 10_000_000, currency: 'USD' },
             legalEntityId: org.legalEntityId,
             purposes: [...ALL_PURPOSES],
             bookingIds: [org.bookingId],
@@ -354,6 +354,7 @@ describe('SW-PAY-3 — a card is a parameter only at the property it was saved a
         mitAgreement: true,
         mandate: mandate({
           scope: {
+            maxAmount: { amountMinor: 10_000_000, currency: 'USD' },
             legalEntityId: org.legalEntityId,
             propertyIds: [org.otherPropertyId],
             purposes: ['balance'],

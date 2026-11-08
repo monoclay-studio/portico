@@ -23,6 +23,7 @@ import type { ChargeGroup, PaymentMethodKind, RuleCap, RuleSelector } from '../d
 import type { AllowanceInstancesTable, ChargeCodesTable } from '../tables';
 import { syncDepartedFolios } from './departed-folios';
 import { assertSameProperty, defaultFolio, prepareDestination, reopenInPlace } from './folios';
+import { assertDebtMayLand, assertMoneyMayLand, folioProvenance, postingRoot } from './provenance';
 import { chargeCodeByCode, chargeGroupMap } from './setup';
 import {
   accountId,
@@ -1375,6 +1376,33 @@ export async function transferPostings(
     }
   } else {
     pairs.push({ amount: input.amountMinor as number, original: null, description: 'Balance transfer' });
+  }
+  // Re-review #5 R5-P1-2 (ADR-0015 Amendment 4 rule 2): card money and the debt it may pay meet only where the
+  // cardholder's agreement covers them — money moved onto the destination must cover its stay and every charge on it;
+  // charges moved onto it must be covered by the card money already there (or being taken there). Reverse orders (move
+  // the charges first, then charge the card) are refused by payments' consent, which reads the same provenance.
+  const movedMoney = { paymentIds: [] as string[], depositBookingIds: [] as string[] };
+  const movedDebt: Array<{ type: string; id: string }> = [];
+  if (input.items) {
+    for (const item of input.items) {
+      const root = await postingRoot(tx, item.postingId);
+      if (root.kind === 'payment') movedMoney.paymentIds.push(root.id);
+      else if (root.kind === 'deposit') movedMoney.depositBookingIds.push(root.bookingId);
+      else if (root.kind === 'debt') movedDebt.push(root.owner);
+      else if (root.kind === 'folio_balance') {
+        const src = await folioProvenance(tx, root.folioId);
+        movedDebt.push(src.owner, ...src.debtOwners);
+      }
+    }
+  } else {
+    const src = await folioProvenance(tx, from.id);
+    movedDebt.push(src.owner, ...src.debtOwners);
+  }
+  if (movedMoney.paymentIds.length + movedMoney.depositBookingIds.length > 0) {
+    await assertMoneyMayLand(tx, deps, to.id, movedMoney, 'transfer_not_covered_by_card_consent');
+  }
+  if (movedDebt.length > 0) {
+    await assertDebtMayLand(tx, deps, to.id, movedDebt, 'transfer_not_covered_by_card_consent');
   }
   const postings: PostingDraft[] = [];
   const lines: Array<LineDraft & { accountId?: string }> = [];

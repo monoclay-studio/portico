@@ -1,38 +1,42 @@
 /**
- * Cardholder consent (ADR-0015 Amendments 2 and 3; re-reviews #3 R3-P1-2 and #4 R4-P1-1, R4-P1-2, R4-P3-1, R4-P3-6).
+ * Cardholder consent (ADR-0015 Amendments 2, 3 and 4; re-reviews #3 R3-P1-2, #4 R4-P1-1/2, #5 R5-P1-1/2).
  *
  * Staff permission decides WHO may initiate; the cardholder's consent decides WHAT may be taken. Every use of a stored
- * card the hotel initiates — a charge, a hold, a hold increase, a capture — must lie inside the recorded agreement:
- *  - terms version and acceptance recorded (`mit_agreement`), WITH its scope (an agreement without a recorded scope is
- *    not stretched to "anything": it needs new consent) — or the card was entered by its cardholder FOR a booking,
- *    which is consent for that booking's guarantee, deposit, balance and no-show charge;
+ * card the hotel initiates — a charge, a hold, a hold increase, a capture — must lie inside the recorded agreement, and
+ * every input to that decision is a cardholder fact or a server fact, never a client label (Amendment 4 rule 1):
+ *  - terms version and acceptance recorded (`mit_agreement`), WITH its scope — or the card was entered by its
+ *    cardholder FOR a booking (consent for that booking's guarantee, deposit, balance and no-show fee);
+ *  - an amount limit when staff recorded the agreement (rule 3); the cardholder alone may choose no limit;
  *  - the hotel company (legal entity) and properties it names;
- *  - the purpose (`guarantee` for holds and their captures; `deposit`, `balance`, `incidentals`, `no_show` for charges;
- *    a `custom` charge is never covered);
- *  - the bookings (and folios) it NAMES, as recorded with evidence when the cardholder consented (Amendment 3). Nothing
- *    staff can write — booker, occupants, payer, company, an added stay, a profile merge — extends it. A booking's
- *    consent covers the stays it had then (the evidence lists them); a stay added later is not covered. A future-stays /
- *    payer-account scope does not exist (Q160);
- *  - its amount: `maxAmount` is the most the hotel may have taken or held on the card under the agreement at any time:
- *    every merchant-initiated charge and capture so far, plus every hold still open, plus this use. The running total
- *    is read under a lock on the card row (R4-P1-2), so parallel uses cannot each see the old total.
- * Anything beyond it needs NEW consent from the cardholder (a payment link, the terminal, hosted entry, or the guest's
- * own self-service); no staff permission stands in for it. A guest acting for themselves may use only a card they
- * entered themselves (R4-P3-6).
+ *  - the purpose DERIVED from the facts (`purpose.ts`: booking → deposit, folio → balance, a recorded penalty →
+ *    no_show; `guarantee` for holds and their captures);
+ *  - the bookings (and folios) it NAMES, with the stays each booking had when the cardholder consented (Amendment 3):
+ *    a stay is covered only if it is listed; a booking-level reference (the booking, or a folio it owns) only while
+ *    EVERY current stay of the booking is listed; nothing staff can write — booker, occupants, payer, company, an added
+ *    stay, a profile merge — extends it;
+ *  - where the money lands (rule 2): a folio is covered only if every owner of the debt on it — charges transferred or
+ *    routed onto it from other stays or bookings, followed to the original posting — is covered too. The same check
+ *    runs again under the collection lock (`assertDestinationCovered`), and finance asks it before it moves card money
+ *    or debt between folios (`cardMoneyMayMeet`);
+ *  - its amount: `maxAmount` is the most the hotel may have taken or held on the card under the agreement at any time
+ *    (charges and captures in flight or done, every open hold, every hold increase in flight, this use), read under a
+ *    lock on the card row (R4-P1-2).
+ * Anything beyond it needs NEW consent from the cardholder. A guest acting for themselves may use only a card saved
+ * for them (judged on `cardholder_ref`, which a merge never rewrites) and entered by them (R4-P3-6, R5-P3-2).
  *
- * Lock order (domain map): authorization row → card row → collection lock → folio → payment request.
+ * Lock order (domain map): authorization row → card row → collection lock → deposit account / folio → payment request.
  */
 import type { TxContext } from '@portico/db';
 import { BusinessRuleError, formatMoney, money } from '@portico/kernel';
+import type { CollectionPurpose } from '../contracts';
 import type { PropertyInfo } from '../ports';
-import { db, type MethodRow, type PaymentsDeps, referenceContext } from './shared';
-
-export type ConsentPurpose = 'guarantee' | 'deposit' | 'balance' | 'incidentals' | 'no_show' | 'custom';
+import { db, type MethodRow, type PaymentsDeps, type ReferenceContext, referenceContext } from './shared';
 
 export interface ConsentUse {
   /** `hold`: a new authorization, or an increase (pass `authorizationId` and the hold's NEW total); `charge`; `capture`. */
   kind: 'hold' | 'charge' | 'capture';
-  purpose: ConsentPurpose;
+  /** A charge's purpose as DERIVED from the facts (`derivePurpose`); holds and captures: `guarantee`. */
+  purpose: CollectionPurpose | 'guarantee';
   /** Omitted: the amount is not known yet (assessing a card before a hold). */
   amount?: { amountMinor: number; currency: string };
   ref: { type: string; id: string };
@@ -40,23 +44,32 @@ export interface ConsentUse {
   authorizationId?: string;
 }
 
+interface StoredScope {
+  legalEntityId?: string;
+  propertyIds?: string[];
+  purposes?: string[];
+  maxAmount?: { amountMinor: number; currency: string };
+  noLimitChosenByCardholder?: true;
+  bookingIds?: string[];
+  /** Folios named directly (no booking): exactly these. */
+  folioIds?: string[];
+  /**
+   * Server-built, per named booking: when (server clock) and through which channel (server: who recorded it) the
+   * cardholder consented to it, the channel the client declared, and the stays the booking had then.
+   */
+  bookingEvidence?: Record<
+    string,
+    { at: string; channel: string; declaredChannel?: string; stayIds?: string[] }
+  >;
+}
+
 interface StoredMandate {
+  kind?: string;
   termsVersion?: string;
   acceptedAt?: string;
-  scope?: {
-    legalEntityId?: string;
-    propertyIds?: string[];
-    purposes?: string[];
-    maxAmount?: { amountMinor: number; currency: string };
-    bookingIds?: string[];
-    /** Folios named directly (no booking): exactly these. */
-    folioIds?: string[];
-    /**
-     * Server-built, per named booking: when and through which channel the cardholder consented to it, and the stays
-     * the booking had then — the consent covers those stays only.
-     */
-    bookingEvidence?: Record<string, { at: string; channel: string; stayIds?: string[] }>;
-  };
+  /** Server fact: who recorded the agreement (`staff` or `cardholder`). Absent on rows saved before Amendment 4. */
+  recordedBy?: 'staff' | 'cardholder';
+  scope?: StoredScope;
   /** A card its cardholder entered for a booking (hosted entry): the booking's stays at that moment (server-built). */
   supplied?: { bookingId: string; at: string; stayIds?: string[] };
 }
@@ -67,6 +80,98 @@ const NEW_CONSENT =
 export interface ConsentProblem {
   code: string;
   message: string;
+}
+
+/**
+ * The agreement a hotel-initiated use is judged against: the recorded mandate, or — for a card its cardholder entered
+ * for a booking (hosted entry, no separate agreement) — consent for that booking as it was then. Null: no agreement.
+ */
+function effectiveMandate(
+  method: MethodRow,
+  legalEntityId: string,
+): { mandate: StoredMandate; supplied: boolean } {
+  const stored = (method.mandate ?? {}) as StoredMandate;
+  const supplied =
+    method.owner_type === 'booking' && method.entry_channel === 'hosted_entry' && !method.mit_agreement;
+  if (!supplied) return { mandate: stored, supplied };
+  const at = new Date(method.created_at).toISOString();
+  return {
+    supplied,
+    mandate: {
+      termsVersion: 'supplied-for-booking',
+      acceptedAt: at,
+      recordedBy: 'cardholder',
+      scope: {
+        legalEntityId,
+        purposes: ['guarantee', 'deposit', 'balance', 'no_show'],
+        bookingIds: [method.owner_id],
+        ...(stored.supplied?.bookingId === method.owner_id
+          ? {
+              bookingEvidence: {
+                [method.owner_id]: {
+                  at,
+                  channel: 'hosted_entry',
+                  ...(stored.supplied.stayIds ? { stayIds: stored.supplied.stayIds } : {}),
+                },
+              },
+            }
+          : {}),
+      },
+    },
+  };
+}
+
+type OwnerCoverage = 'covered' | 'not_named' | 'stay_added' | 'booking_changed';
+
+/**
+ * Amendment 3: does the agreement cover what this reference context is — a stay (listed in its booking's evidence), or
+ * a booking-level reference (EVERY current stay of the booking listed)? No list → not covered (fails closed).
+ */
+function ownerCoverage(scope: StoredScope, ctx: ReferenceContext): OwnerCoverage {
+  if (!ctx.bookingId || !(scope.bookingIds ?? []).includes(ctx.bookingId)) return 'not_named';
+  const listed = scope.bookingEvidence?.[ctx.bookingId]?.stayIds;
+  if (!listed) return 'booking_changed';
+  if (ctx.stayId !== null) return listed.includes(ctx.stayId) ? 'covered' : 'stay_added';
+  if (ctx.bookingStayIds === null) return 'booking_changed';
+  return ctx.bookingStayIds.every((id) => listed.includes(id)) ? 'covered' : 'booking_changed';
+}
+
+function coverageMessage(what: string, why: Exclude<OwnerCoverage, 'covered'>): string {
+  if (why === 'stay_added')
+    return `The cardholder’s agreement does not cover this ${what}: it covers only the bookings the cardholder agreed to, and this stay was added after that agreement. ${NEW_CONSENT}`;
+  if (why === 'booking_changed')
+    return `The cardholder’s agreement does not cover this ${what}: the booking changed since the cardholder agreed (a stay was added), so ask them to confirm it again. ${NEW_CONSENT}`;
+  return `The cardholder’s agreement does not cover this ${what}: it covers only the bookings the cardholder agreed to. ${NEW_CONSENT}`;
+}
+
+/**
+ * Amendments 3 and 4 rule 2: the reference itself is covered (a named folio, or a covered stay / booking), and — for
+ * a folio — so is every owner of the debt on it (charges transferred or routed onto it from elsewhere).
+ */
+async function coverageProblem(
+  d: PaymentsDeps,
+  tx: TxContext,
+  scope: StoredScope,
+  ref: { type: string; id: string },
+): Promise<ConsentProblem | null> {
+  const namedFolio = ref.type === 'folio' && (scope.folioIds ?? []).includes(ref.id);
+  if (!namedFolio) {
+    const why = ownerCoverage(scope, await referenceContext(d, tx, ref));
+    if (why !== 'covered')
+      return { code: 'mandate_reference_not_covered', message: coverageMessage(ref.type, why) };
+  }
+  if (ref.type === 'folio') {
+    for (const origin of await d.ledger.debtOriginsOf(tx, ref.id)) {
+      const why = ownerCoverage(scope, await referenceContext(d, tx, origin));
+      if (why !== 'covered') {
+        return {
+          code: 'mandate_reference_not_covered',
+          message: `This folio carries charges of another ${origin.type} (transferred or routed onto it) that the cardholder did not agree to pay. Move those charges back, or collect them from their own guest. ${NEW_CONSENT}`,
+        };
+      }
+    }
+  }
+  return null;
 }
 
 /**
@@ -98,48 +203,20 @@ export async function consentProblem(
       message: `This saved card is ${method.status}. Ask the guest for another card or send a payment link.`,
     };
   }
-  const ownerKey = `${method.owner_type}:${method.owner_id}`;
   if (initiator === 'customer') {
-    // R3-P3-1 / R4-P3-6: a guest acting for themselves pays only with a card THEY entered (hosted entry), for
-    // themselves or their own booking — never a channel's virtual card or a card staff keyed in.
+    // R3-P3-1 / R4-P3-6 / R5-P3-2: a guest acting for themselves pays only with a card THEY entered (hosted entry),
+    // saved for themselves or their own booking — judged on who it was saved for, never on an owner a merge rewrote.
     const actor = tx.actor.kind === 'guest' ? tx.actor : null;
     const own =
       method.entry_channel === 'hosted_entry' &&
-      ((actor?.guestProfileId && ownerKey === `guest_profile:${actor.guestProfileId}`) ||
-        (actor?.bookingId && ownerKey === `booking:${actor.bookingId}`));
+      ((actor?.guestProfileId && method.cardholder_ref === `guest_profile:${actor.guestProfileId}`) ||
+        (actor?.bookingId && method.cardholder_ref === `booking:${actor.bookingId}`));
     return own
       ? null
       : { code: 'card_not_yours', message: 'This saved card is not one you entered. Use your own card.' };
   }
-  const stored = (method.mandate ?? {}) as StoredMandate;
-  // A card its cardholder entered FOR a booking (self-service / hosted entry) is consent for that booking: its
-  // guarantee and its charges — at the moment the card was entered (Amendment 2: "the card supplied for this booking").
-  const suppliedForBooking =
-    method.owner_type === 'booking' && method.entry_channel === 'hosted_entry' && !method.mit_agreement;
-  const suppliedAt = new Date(method.created_at).toISOString();
-  const mandate: StoredMandate = suppliedForBooking
-    ? {
-        termsVersion: 'supplied-for-booking',
-        acceptedAt: suppliedAt,
-        scope: {
-          legalEntityId: property.legalEntityId,
-          purposes: ['guarantee', 'deposit', 'balance', 'no_show'],
-          bookingIds: [method.owner_id],
-          ...(stored.supplied?.bookingId === method.owner_id
-            ? {
-                bookingEvidence: {
-                  [method.owner_id]: {
-                    at: suppliedAt,
-                    channel: 'hosted_entry',
-                    ...(stored.supplied.stayIds ? { stayIds: stored.supplied.stayIds } : {}),
-                  },
-                },
-              }
-            : {}),
-        },
-      }
-    : stored;
-  if (!suppliedForBooking && (!method.mit_agreement || !mandate.termsVersion || !mandate.acceptedAt)) {
+  const { mandate, supplied } = effectiveMandate(method, property.legalEntityId);
+  if (!supplied && (!method.mit_agreement || !mandate.termsVersion || !mandate.acceptedAt)) {
     return {
       code: 'mit_not_agreed',
       message:
@@ -151,6 +228,18 @@ export async function consentProblem(
     return {
       code: 'mandate_scope_missing',
       message: `The cardholder’s agreement was recorded without its scope (which hotel, which purposes, which bookings, how much), so it is not stretched to cover this. ${NEW_CONSENT}`,
+    };
+  }
+  // Amendment 4 rule 3: an agreement staff recorded carries an amount limit; only the cardholder may choose none. (A
+  // card entered for a booking is bounded by the facts each purpose rests on: deposit due, folio balance, penalty.)
+  if (
+    !supplied &&
+    !scope.maxAmount &&
+    !(mandate.recordedBy === 'cardholder' && scope.noLimitChosenByCardholder)
+  ) {
+    return {
+      code: 'mandate_limit_missing',
+      message: `The cardholder’s agreement was recorded without an amount limit, so the hotel cannot charge or hold the card under it. Record the agreement again with the most the cardholder agreed to. ${NEW_CONSENT}`,
     };
   }
   if (
@@ -166,36 +255,17 @@ export async function consentProblem(
   const purposes = scope.purposes ?? [];
   const purposeOk =
     use.kind === 'charge'
-      ? use.purpose !== 'custom' && purposes.includes(use.purpose)
-      : purposes.includes('guarantee') || purposes.includes('incidentals') || purposes.includes(use.purpose);
+      ? purposes.includes(use.purpose)
+      : purposes.includes('guarantee') || purposes.includes('incidentals');
   if (!purposeOk) {
     return {
       code: 'mandate_purpose_not_covered',
-      message: `The cardholder agreed to ${purposes.join(', ') || 'no'} charges on this card, not to ${use.kind === 'charge' ? `a ${use.purpose} charge` : 'this hold'}. ${NEW_CONSENT}`,
+      message: `The cardholder agreed to ${purposes.join(', ') || 'no'} charges on this card, not to ${use.kind === 'charge' ? `a ${use.purpose.replace('_', '-')} charge` : 'this hold'}. ${NEW_CONSENT}`,
     };
   }
-  // Amendment 3 / R4-P1-1: only the bookings the agreement NAMES, as consented — never the people staff link.
-  const ctx = await referenceContext(d, tx, use.ref);
-  const named = scope.bookingIds ?? [];
-  const inNamedBooking = ctx.bookingId !== null && named.includes(ctx.bookingId);
-  // A stay added to the booking after the cardholder's consent is not part of what they agreed to: the consent covers
-  // the stays its evidence lists (the booking's stays when they consented). Evidence without that list (a directory
-  // that cannot list a booking's stays) falls back to the stay's creation time: strictly before the consent.
-  const stayCovered = (bookingId: string): boolean => {
-    if (ctx.stayId === null) return true;
-    const evidence = scope.bookingEvidence?.[bookingId];
-    if (evidence?.stayIds) return evidence.stayIds.includes(ctx.stayId);
-    const consentedAt = new Date(evidence?.at ?? (mandate.acceptedAt as string));
-    return ctx.stayCreatedAt !== null && ctx.stayCreatedAt.getTime() < consentedAt.getTime();
-  };
-  const namedFolio = use.ref.type === 'folio' && (scope.folioIds ?? []).includes(use.ref.id);
-  const covered = namedFolio || (inNamedBooking && stayCovered(ctx.bookingId as string));
-  if (!covered) {
-    return {
-      code: 'mandate_reference_not_covered',
-      message: `The cardholder’s agreement does not cover this ${use.ref.type}: it covers only the bookings the cardholder agreed to${inNamedBooking ? ', and this stay was added after that agreement' : ''}. ${NEW_CONSENT}`,
-    };
-  }
+  // Amendments 3 and 4: only the bookings and folios the agreement NAMES, as consented — and where the money lands.
+  const coverage = await coverageProblem(d, tx, scope, use.ref);
+  if (coverage) return coverage;
   const max = scope.maxAmount;
   if (max && use.amount) {
     if (max.currency !== use.amount.currency) {
@@ -213,6 +283,80 @@ export async function consentProblem(
     }
   }
   return null;
+}
+
+/**
+ * Amendment 4 rule 2, under the collection lock: the destination of a hotel-initiated card collection is (still)
+ * covered — a transfer or routing of another stay's charges onto the folio that committed while this collection waited
+ * for the lock is seen here.
+ */
+export async function assertDestinationCovered(
+  d: PaymentsDeps,
+  tx: TxContext,
+  method: MethodRow,
+  property: PropertyInfo,
+  ref: { type: string; id: string },
+): Promise<void> {
+  const { mandate } = effectiveMandate(method, property.legalEntityId);
+  const problem = mandate.scope
+    ? await coverageProblem(d, tx, mandate.scope, ref)
+    : { code: 'mandate_scope_missing', message: NEW_CONSENT };
+  if (problem) throw new BusinessRuleError(problem.code, problem.message, { methodId: method.id, ref });
+}
+
+/**
+ * Amendment 4 rule 2 (finance asks before it moves money or debt): may card money from these sources meet debt of these
+ * owners on one folio? Sources: payments by id, the card-funded deposits of bookings, and every card payment taken on
+ * folios. Only hotel-initiated card money is bound by an agreement (a guest's own payment, a link, cash are not).
+ */
+export async function cardMoneyMayMeet(
+  d: PaymentsDeps,
+  tx: TxContext,
+  input: {
+    sources: { paymentIds?: string[]; depositBookingIds?: string[]; folioIds?: string[] };
+    owners: Array<{ type: string; id: string }>;
+  },
+): Promise<{ covered: true } | { covered: false; reason: string }> {
+  const { paymentIds = [], depositBookingIds = [], folioIds = [] } = input.sources;
+  if (input.owners.length === 0 || paymentIds.length + depositBookingIds.length + folioIds.length === 0)
+    return { covered: true };
+  const rows = await db(tx)
+    .selectFrom('payments.payments as p')
+    .innerJoin('payments.payment_methods as m', 'm.id', 'p.method_id')
+    .selectAll('m')
+    .select(['p.legal_entity_id as paymentLegalEntityId'])
+    .where('p.initiator', '=', 'merchant')
+    .where('p.status', 'in', ['processing', 'pending_verification', 'succeeded'])
+    .where((eb) => eb('p.amount_minor', '>', eb.ref('p.refunded_minor')))
+    .where((eb) =>
+      eb.or([
+        ...(paymentIds.length ? [eb('p.id', 'in', paymentIds)] : []),
+        ...(depositBookingIds.length
+          ? [eb.and([eb('p.ref_type', '=', 'booking'), eb('p.ref_id', 'in', depositBookingIds)])]
+          : []),
+        ...(folioIds.length
+          ? [eb.and([eb('p.ref_type', '=', 'folio'), eb('p.ref_id', 'in', folioIds)])]
+          : []),
+      ]),
+    )
+    .execute();
+  const seen = new Set<string>();
+  for (const row of rows) {
+    if (seen.has(row.id)) continue;
+    seen.add(row.id);
+    const { paymentLegalEntityId, ...method } = row;
+    const scope = effectiveMandate(method, paymentLegalEntityId).mandate.scope;
+    for (const owner of input.owners) {
+      const why = scope ? ownerCoverage(scope, await referenceContext(d, tx, owner)) : 'not_named';
+      if (why !== 'covered') {
+        return {
+          covered: false,
+          reason: `Money taken from a saved card (${method.brand ?? 'card'} ${method.last4 ? `•••• ${method.last4}` : ''}) under its cardholder’s agreement would pay for a ${owner.type} that agreement does not cover. Keep it with the stays the cardholder agreed to, ask the cardholder to confirm the card for this booking again, or refund it and collect from the right guest.`,
+        };
+      }
+    }
+  }
+  return { covered: true };
 }
 
 /**

@@ -19,6 +19,7 @@ import type { DepositAccountsTable } from '../tables';
 import { syncDepartedFolios } from './departed-folios';
 import { prepareDestination } from './folios';
 import { assertTargetInScope, describeTarget } from './ledger-port';
+import { assertMoneyMayLand } from './provenance';
 import { chargeCodeByCode } from './setup';
 import {
   accountId,
@@ -473,6 +474,16 @@ export async function applyDeposits(
       { bookingId: input.bookingId, folioId: f0.id },
     );
   }
+  // Re-review #5 R5-P1-2 (ADR-0015 Amendment 4 rule 2): card money keeps its cardholder's agreement where it lands — a
+  // deposit taken from a saved card is applied only to a folio whose stay (and every charge moved onto it) the
+  // agreement covers. The check-in deposit step comes through here too.
+  await assertMoneyMayLand(
+    tx,
+    deps,
+    f0.id,
+    { depositBookingIds: [input.bookingId] },
+    'deposit_not_covered_by_card_consent',
+  );
   const businessDate = await deps.ports.platform.getBusinessDate(tx, f0.property_id);
   const movements = await db(tx)
     .selectFrom('finance.deposit_movements')

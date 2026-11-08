@@ -174,8 +174,8 @@ describe('card data never enters Portico (PAY-I05)', () => {
   it('the database refuses PAN-shaped tokens and has no column that could hold card data', async () => {
     const org = await setupOrg(h);
     await expect(
-      sql`insert into payments.payment_methods (id, tenant_id, account_id, property_id, kind, provider_token, owner_type, owner_id)
-        values (${newId()}, ${org.tenantId}, ${org.simAccountId}, ${org.propertyId}, 'card', '4242 4242 4242 4242', 'guest_profile', ${newId()})`.execute(
+      sql`insert into payments.payment_methods (id, tenant_id, account_id, property_id, kind, provider_token, owner_type, owner_id, cardholder_ref)
+        values (${newId()}, ${org.tenantId}, ${org.simAccountId}, ${org.propertyId}, 'card', '4242 4242 4242 4242', 'guest_profile', ${newId()}, 'guest_profile:x')`.execute(
         h.t.admin.kysely,
       ),
     ).rejects.toThrow(/check constraint/);

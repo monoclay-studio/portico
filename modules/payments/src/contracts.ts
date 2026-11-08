@@ -122,9 +122,26 @@ export const accountHealth = z.object({
 });
 export type AccountHealth = z.infer<typeof accountHealth>;
 
+/**
+ * ADR-0015 Amendment 4 (R5-P1-1): the purpose of money collected, DERIVED by the server from the fact that justifies
+ * it — never the label a client sends:
+ *  - `deposit`: a booking reference, up to the deposit the booking's agreed payment schedule asks for;
+ *  - `balance`: a folio reference, up to what the folio owes;
+ *  - `no_show`: a folio of a stay for which reservations recorded a no-show or cancellation penalty, up to what that
+ *    penalty still owes (the night audit's `reservations.stay.noShow` or a cancellation is the only writer of the fact).
+ * The one purpose taxonomy: collections use these three; an agreement may also cover holds (`guarantee`,
+ * `incidentals`).
+ */
+export const collectionPurpose = z.enum(['deposit', 'balance', 'no_show']);
+export type CollectionPurpose = z.infer<typeof collectionPurpose>;
 /** What a card-on-file mandate lets the hotel use the card for (ADR-0015 Amendment 1 (b)). */
-export const mandatePurpose = z.enum(['guarantee', 'deposit', 'balance', 'incidentals', 'no_show']);
+export const mandatePurpose = z.enum([...collectionPurpose.options, 'guarantee', 'incidentals']);
 export type MandatePurpose = z.infer<typeof mandatePurpose>;
+/**
+ * The label a client may send with a collection. Display text only, except `no_show`, which asks the server to rest
+ * the collection on the stay's recorded penalty (refused when none is recorded). The stored purpose is derived.
+ */
+export const collectionLabel = z.enum(['deposit', 'balance', 'incidentals', 'no_show', 'custom']);
 export const mandateScope = z
   .object({
     /** The hotel company (merchant of record) the cardholder agreed with. */
@@ -137,6 +154,11 @@ export const mandateScope = z
      * merchant-initiated charge and capture plus every open hold (re-review #4 R4-P1-2 / R4-P3-4 — not "per use").
      */
     maxAmount: money.optional(),
+    /**
+     * ADR-0015 Amendment 4 rule 3: an agreement recorded by staff must state `maxAmount`. Only the cardholder, saving
+     * their own card, may choose no limit — and only by saying so here (recorded with the time, server-side).
+     */
+    noLimitChosenByCardholder: z.literal(true).optional(),
     /**
      * What the agreement covers (ADR-0015 Amendment 3). `named_bookings` (the only kind today): exactly the bookings in
      * `bookingIds`, as consented — no relationship staff can create (booker, occupant, payer, an added stay, a profile
@@ -348,8 +370,11 @@ export const chargeInput = z
     methodId: z.uuid(),
     amount: money,
     ref: ledgerRef,
-    /** Defaults: booking → deposit, folio → balance. A payment request owns its purpose on a reference. */
-    purpose: z.enum(['deposit', 'balance', 'incidentals', 'no_show', 'custom']).optional(),
+    /**
+     * A label (display text). The purpose is derived from the reference (booking → deposit, folio → balance); `no_show`
+     * asks for the stay's recorded no-show or cancellation penalty (ADR-0015 Amendment 4).
+     */
+    purpose: collectionLabel.optional(),
     separateCollection: separateCollection.optional(),
     description: text(200).optional(),
   })
@@ -373,7 +398,8 @@ export const recordPaymentInput = z
       .optional(),
     receivedAt: z.iso.datetime(),
     authorizationId: z.uuid().optional(),
-    purpose: z.enum(['deposit', 'balance', 'incidentals', 'no_show', 'custom']).optional(),
+    /** A label, as for charges: the stored purpose is derived from the reference and the recorded facts. */
+    purpose: collectionLabel.optional(),
     separateCollection: separateCollection.optional(),
     /** The same approval code/receipt number really is a second payment: say why (audited). */
     duplicateOverride: separateCollection.optional(),

@@ -235,59 +235,83 @@ function ownerKeyOfPayer(p: { type: string; id: string | null } | null | undefin
 
 /**
  * Re-review #3: what a reference belongs to — its booking (the collection family: a booking, its stays and their
- * folios, R3-P2-1) and the people of that booking or folio (whose cards a standing card-on-file consent covers,
- * ADR-0015 Amendment 2). Reads only (no locks).
+ * folios, R3-P2-1) and the people of that booking or folio. ADR-0015 Amendments 3 and 4: the stay it is (or whose
+ * folio it is), or — for a booking or a booking-owned folio — the booking's stays NOW; and the money facts recorded
+ * for it (a stay's penalties, a booking's agreed deposit). Reads only (no locks).
  */
-export async function referenceContext(
-  d: PaymentsDeps,
-  tx: TxContext,
-  ref: { type: string; id: string },
-): Promise<{
+export interface ReferenceContext {
   bookingId: string | null;
   people: Set<string>;
   /** The stay the reference is (or whose folio it is); null for a booking or a booking-level folio. */
   stayId: string | null;
-  stayCreatedAt: Date | null;
-}> {
-  const people = new Set<string>();
-  let stayId: string | null = null;
-  let stayCreatedAt: Date | null = null;
+  /** No stay: the booking's stays now (null when the directory cannot list them — then nothing is covered). */
+  bookingStayIds: string[] | null;
+  /** The folio's owner when the reference is a folio. */
+  folioOwner: { type: string; id: string } | null;
+  penalties: Array<{ kind: 'no_show' | 'cancellation'; amount: { amountMinor: number; currency: string } }>;
+  depositDue: { amountMinor: number; currency: string } | null;
+}
+
+export async function referenceContext(
+  d: PaymentsDeps,
+  tx: TxContext,
+  ref: { type: string; id: string },
+): Promise<ReferenceContext> {
+  const out: ReferenceContext = {
+    bookingId: null,
+    people: new Set<string>(),
+    stayId: null,
+    bookingStayIds: null,
+    folioOwner: null,
+    penalties: [],
+    depositDue: null,
+  };
   const fromDirectory = async (r: { type: string; id: string }) => {
     const o = await d.references.describeReference(tx, r);
-    for (const p of o?.people ?? []) people.add(p);
-    if (r.type === 'stay' && o) {
-      stayId = r.id;
-      if (o.stayCreatedAt) stayCreatedAt = new Date(o.stayCreatedAt);
+    for (const p of o?.people ?? []) out.people.add(p);
+    if (o && r.type === 'stay') {
+      out.stayId = r.id;
+      out.penalties = o.penalties ?? [];
     }
-    return o?.bookingId ?? (r.type === 'booking' && o ? r.id : null);
+    if (o && r.type === 'booking') {
+      out.bookingStayIds = o.stayIds ?? null;
+      out.depositDue = o.depositDue ?? null;
+    }
+    out.bookingId = o?.bookingId ?? (r.type === 'booking' && o ? r.id : null);
   };
   if (ref.type === 'booking' || ref.type === 'stay') {
-    const bookingId = await fromDirectory(ref);
-    return { bookingId, people, stayId, stayCreatedAt };
+    await fromDirectory(ref);
+    return out;
   }
-  if (ref.type !== 'folio') return { bookingId: null, people, stayId, stayCreatedAt };
+  if (ref.type !== 'folio') return out;
   const f = await d.ledger.describeTarget(tx, { type: 'folio', id: ref.id });
   const payer = ownerKeyOfPayer(f?.payer);
-  if (payer) people.add(payer);
+  if (payer) out.people.add(payer);
+  out.folioOwner = f?.owner ?? null;
   const owner = f?.owner;
-  const bookingId =
-    owner && (owner.type === 'stay' || owner.type === 'booking') ? await fromDirectory(owner) : null;
-  return { bookingId, people, stayId, stayCreatedAt };
+  if (owner && (owner.type === 'stay' || owner.type === 'booking')) await fromDirectory(owner);
+  return out;
 }
 
 /**
- * The evidence of a cardholder's consent to one booking (ADR-0015 Amendment 3): when, through which channel, and the
- * booking's stays at that moment — the consent covers those stays, never one added later. Server-built only.
+ * The evidence of a cardholder's consent to one booking (ADR-0015 Amendments 3 and 4): when (the server's clock),
+ * through which channel (the server's: who recorded it), the channel the client declared, and the booking's stays at
+ * that moment — the consent covers those stays, never one added later. Server-built only.
  */
 export async function bookingConsentEvidence(
   d: PaymentsDeps,
   tx: TxContext,
   bookingId: string,
-  at: string,
   channel: string,
-): Promise<{ at: string; channel: string; stayIds?: string[] }> {
+  declaredChannel?: string,
+): Promise<{ at: string; channel: string; declaredChannel?: string; stayIds?: string[] }> {
   const b = await d.references.describeReference(tx, { type: 'booking', id: bookingId });
-  return { at, channel, ...(b?.stayIds ? { stayIds: b.stayIds } : {}) };
+  return {
+    at: tx.now.toISOString(),
+    channel,
+    ...(declaredChannel !== undefined ? { declaredChannel } : {}),
+    ...(b?.stayIds ? { stayIds: b.stayIds } : {}),
+  };
 }
 
 /**

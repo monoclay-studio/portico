@@ -27,6 +27,7 @@ import { CHARGE_GROUPS, type ChargeGroup, type RuleCap, type RuleSelector } from
 import type { BillingRulesTable } from '../tables';
 import { defaultFolio } from './folios';
 import { capUsage, loadRules } from './postings';
+import { assertDebtMayLand } from './provenance';
 import { chargeGroupMap } from './setup';
 import { type Deps, db, displayName, loadFolio } from './support';
 
@@ -154,6 +155,22 @@ async function lockOwner(tx: TxContext, owner: { type: string; id: string }): Pr
   );
 }
 
+/**
+ * Re-review #5 R5-P1-2 (ADR-0015 Amendment 4 rule 2): routing an owner's charges to a folio that holds card money is
+ * allowed only when that money's agreement covers the owner (the money would pay those charges). Charges routed to a
+ * folio before card money arrives are refused by payments' consent, which reads the active rules as debt origins.
+ */
+async function assertRoutingCovered(
+  tx: TxContext,
+  deps: Deps,
+  owner: { type: string; id: string },
+  destinationFolioId: string,
+): Promise<void> {
+  // The destination's collection lock first (domain-map order), so a card collection on it serializes with this rule.
+  await deps.ports.payments.lockCollections(tx, { folioIds: [destinationFolioId] });
+  await assertDebtMayLand(tx, deps, destinationFolioId, [owner], 'routing_not_covered_by_card_consent');
+}
+
 /** Create a billing rule. Ties with existing rules are configuration errors (no ranking). */
 export async function createBillingRule(
   tx: TxContext,
@@ -165,6 +182,7 @@ export async function createBillingRule(
   await lockOwner(tx, input.owner);
   const cap = (input.cap ?? null) as RuleCap | null;
   const groups = await validateRule(tx, { ...input, cap });
+  await assertRoutingCovered(tx, deps, input.owner, input.destinationFolioId);
   const existing = await loadRules(tx, input.owner);
   const id = newId(tx.now.getTime());
   const conflicts = findConflicts({ id, selector: input.selector }, existing, (c) => groups.get(c));
@@ -231,6 +249,8 @@ export async function updateBillingRule(
     cap: (patch.cap === undefined ? current.cap : patch.cap) as RuleCap | null,
   };
   const groups = await validateRule(tx, { propertyId: current.property_id, owner, ...next });
+  if (next.destinationFolioId !== current.destination_folio_id)
+    await assertRoutingCovered(tx, deps, owner, next.destinationFolioId);
   const conflicts = findConflicts({ id, selector: next.selector }, await loadRules(tx, owner), (c) =>
     groups.get(c),
   );
@@ -480,6 +500,7 @@ export async function mergeBillingRules(
       selector: r.selector,
       cap: r.cap,
     });
+    if (!input.preview) await assertRoutingCovered(tx, deps, input.owner, r.destinationFolioId);
   }
   const scope = new Set(input.rules.map((r) => r.source));
   const existing = await db(tx)

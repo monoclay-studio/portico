@@ -70,6 +70,8 @@ export interface PaymentMethodsTable {
   declared_entry_channel: string | null;
   /** R2-P2-1: the owner before a guest-profile merge (restored by an unmerge). */
   merged_from_owner_id: string | null;
+  /** R5-P3-2: the cardholder the card was saved for (`<owner_type>:<owner_id>` at save); never rewritten by a merge. */
+  cardholder_ref: string;
   token_portability: 'provider_bound' | 'network_token' | 'vault_portable' | 'unknown';
   portability_note: string | null;
   status: 'active' | 'detached' | 'expired';
@@ -118,6 +120,8 @@ export interface PaymentsTable {
   virtual_card_id: string | null;
   kind: 'charge' | 'capture' | 'link' | 'recorded';
   purpose: Generated<'deposit' | 'balance' | 'incidentals' | 'no_show' | 'custom' | null>;
+  /** R5-P1-1: the server fact the purpose rests on (`penalty:<stayId>` for a no-show or cancellation fee). */
+  purpose_basis: Generated<string | null>;
   method: 'card' | 'virtual_card' | 'payment_link' | 'external_terminal' | 'cash' | 'bank_transfer';
   initiator: 'customer' | 'merchant' | null;
   ref_type: 'folio' | 'booking';
