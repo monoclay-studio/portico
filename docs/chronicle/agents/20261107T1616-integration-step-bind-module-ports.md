@@ -1,7 +1,7 @@
 # Agent run: Integration step: bind module ports
 
-- Started: 2026-11-07T16:16:26.294Z · last activity: 2026-11-07T23:55:41.551Z
-- Turns: 1137 · tool uses: 1170 · output tokens: 989,378
+- Started: 2026-11-07T16:16:26.294Z · last activity: 2026-11-08T00:50:31.993Z
+- Turns: 1313 · tool uses: 1348 · output tokens: 1,196,121
 - Type: general-purpose
 
 ## Brief (2026-11-07T16:16:26.294Z)
@@ -1370,6 +1370,178 @@ The R4-P1-1, R4-P2, R4-P3 and E-114 lines there are marked DONE.
 - `/home/user/wt/integration-step/apps/api/test/review-regressions-r4.test.ts`
 - `/home/user/wt/integration-step/modules/payments/test/review-r4-regressions.test.ts`
 - `/home/user/wt/integration-step/apps/api/test/scenarios/harness.ts`
+- `/home/user/wt/integration-step/docs/architecture/domain-map.md`
+- `/home/user/wt/integration-step/modules/payments/README.md`
+- `/home/user/wt/integration-step/docs/orchestration/pending-fixes.md`
+````
+
+## Report (2026-11-08T00:50:31.897Z)
+
+````text
+## Integration-step fix round 5: report
+
+Round 5 is done at `333a83e`; all four gates exit 0. This round closes the class (no staff-editable input reaches a consent decision) rather than the reviewer's single path. I committed locally, pushed nothing and amended nothing.
+
+- **Gates:** `PORTICO_TEST_DB_PREFIX=w1_intstep_fix5`, output redirected to log files.
+  - Install, lint (`--error-on-warnings`), typecheck (`--force`) and test (`--force --concurrency=2`) all exit 0; turbo ran 16/16 test tasks.
+  - Test counts: payments 161, api 166 (+29 todo), finance 92, reservations 154; every other package passes.
+- **Mutation table:** 26 mutants, all killed. That covers the reviewer's `pending_verification` mutant and M6 again, now by a deterministic test.
+- **Reviewer's r5 PoC file run at head:**
+  - R5-A2, R5-C and R5-D now fail at their FINDING lines (307, 408, 506).
+  - R5-A1 is refused one step earlier (line 242): an uncapped staff agreement can no longer be saved.
+  - The clean tests (R5-B ×3, R5-M) pass.
+- **State:** tree clean, no leftover test databases.
+- **Lint-failing commits:** `efd7a5f` and `4a9be2b` each failed lint on their own; `40bc7c9` fixed it.
+
+### Commits
+| Commit | Content |
+|---|---|
+| `f16e108` | Merge of `main`: re-review #5, Amendment 4, Q160 |
+| `1c2f106` | Core round-5 fix: purposes are facts, coverage where money lands, staff agreements capped, R5-P2-1, R5-P3-1/2/3. Payments migration 0005, reservations migration 0002 |
+| `cfdf0c0` | Existing suites adapted: folios owe before a card on file pays them; capped staff agreements; deposits within the agreed schedule; R4-E confirmed by finance over HTTP with If-Match; an unresolved payment is reported before the amount check |
+| `efd7a5f`, `4a9be2b`, `40bc7c9` | Payments-module round-5 regressions and two style fixes |
+| `2729eb6` | Round-5 regressions run over the real composition (api) |
+| `333a83e` | Docs: domain map, payments README, pending-fixes |
+
+### Finding → commit → test
+Test files: api `apps/api/test/review-regressions-r5.test.ts`; payments `modules/payments/test/review-r5-regressions.test.ts`.
+
+| Finding | Commit | Regression test | Reverse order and siblings |
+|---|---|---|---|
+| R5-P1-1 | 1c2f106 | api "PoC R5-A1 flipped": `no_show_not_recorded`; the desk cannot record a no-show (403); after the night audit records it, the fee is taken up to the penalty; anything more is `no_show_penalty_exceeded`. api "PoC R5-A2 flipped" | Cancellation penalty (charged; a waived penalty is refused); deposit only up to the agreed schedule and balance only up to what the folio owes, whatever the label; a recorded cash payment labelled `no_show` is refused; module tests for the fact, its basis and the derived purpose stored |
+| R5-P1-2 | 1c2f106 | api "PoC R5-D flipped (both orders)": the booking-level deposit after `add_stay` is refused ("changed since"); a deposit taken before is not applied to Otto's folio but is applied to Vera's; after Vera confirms again it is covered | Folio transfers in both orders (money onto another folio, debt onto a paid folio, move first then charge); routing in both orders; a held-transaction test of the re-check under the collection lock; module test for debt origins |
+| Amendment 4 rule 3 | 1c2f106 | Module: a staff agreement without a limit is refused (`mandate_limit_required`); staff cannot claim "no limit"; the cardholder can, explicitly; an uncapped legacy row is refused (`mandate_limit_missing`) | — |
+| R5-P2-1 | 1c2f106 | api "PoC R5-C flipped": desk 403; finance gets `link_reported_paid`; the replacement waits for the payment; the guest pays once | Confirming a deactivating link: `link_stop_not_due` before the exception opens, `version_conflict` on a stale version, then accepted; HTTP route requires If-Match (R4-E test) |
+| R5-P2-2 | 1c2f106, 2729eb6 | api "CLEAN R5-M (taken)" (the reviewer's test) | Hold sibling: a hold whose outcome is unknown counts against the limit |
+| R5-P3-1 | 1c2f106 | Module "evidence time and channel are set by the server" | — |
+| R5-P3-2 | 1c2f106 | Module "after a profile merge rewrites the owner…" (confirm 403, `card_not_yours`; the original cardholder still allowed) | — |
+| R5-P3-3 | 1c2f106 | api "the replacement waits until the link's whole amount is recorded" | — |
+| R5-P3-4 | 2729eb6, efd7a5f | M6: module barrier test (the second use waits, then `mandate_amount_exceeded`). `applyDeposits` lock order: api held collection lock plus a `FOR UPDATE NOWAIT` probe | — |
+
+### How the class is closed
+**Purposes come from facts** (`modules/payments/src/service/purpose.ts`):
+- A booking collects a `deposit`, up to the deposit the booking's agreed payment schedule asks for. Reservations computes it from rates over the live stays.
+- A folio collects its `balance`, up to what it owes, less deposits held and less payments not yet posted.
+- `no_show` is allowed only on the folio of a stay with a recorded penalty, up to what that penalty still owes.
+  - The no-show penalty's only writer is `markNoShow`.
+  - The cancellation penalty is now recorded on the cancelled stay.
+- These amount limits are checked under the collection lock.
+- The client's label is display text only. There is now one purpose taxonomy in `contracts.ts`.
+
+**Coverage where money lands:**
+- **Booking-level references.** The booking itself, or a folio the booking owns, is covered only while every current stay of the booking is in the cardholder's evidence. If there is no stay list, nothing is covered; the timestamp fallback is gone.
+- **Folios.** A folio is covered only if every owner of its debt is covered. Finance works this out in `modules/finance/src/service/provenance.ts`:
+  - transferred postings are followed to the original posting;
+  - routed charges count against their routing rule's owner;
+  - a balance transfer carries the source folio's debt;
+  - active routing rules into the folio count too.
+- **Finance asks first.** Finance calls payments' new `cardMoneyMayMeet` before:
+  - applying a deposit;
+  - transferring money or charges between folios;
+  - creating, updating or merging a billing rule.
+- **Payments re-checks.** The destination is checked again under the collection lock on charge, authorize and capture.
+
+### § 5.1 Control facts, with the input source of every consent input
+| Input to `consentProblem` / card-money moves | Where checked | Source |
+|---|---|---|
+| Card status and agreement, read under the card-row lock | `consent.ts:198`, `:200`, `:221` | Server fact |
+| Customer-path ownership (`cardholder_ref`, entry channel) | `consent.ts:206` | Server fact; `cardholder_ref` is never rewritten by a merge |
+| Scope present; limit present (staff agreements) | `consent.ts:229`, `:241` | Cardholder fact; `recordedBy` is set by the server |
+| Legal entity and properties | `consent.ts:246` | Cardholder fact |
+| Purpose | `collect.ts:804` derives it; consent check at `consent.ts:256` | Server fact (reservations deposit schedule and penalties, finance balance) |
+| Booking or folio named; stays at consent | `consent.ts:267` (`ownerCoverage`) | Cardholder fact plus server-built evidence (server time and channel) |
+| Current stays of the booking | `describeReference.stayIds` | Server fact (reservations) |
+| Debt origins of a folio | `LedgerPort.debtOriginsOf` | Server fact (finance provenance) |
+| Amount: running total and the fact's own limit | `consent.ts:277`; `collect.ts:828` (`assertWithinFact`) | Server fact |
+| Destination re-check after the lock | `collect.ts:829` (charge), `:334` (authorize), `:635` (capture) | Server fact |
+| Money sources and debt owners in finance moves | `deposits.ts` `assertMoneyMayLand`; `postings.ts:1401-1405`; billing rules `:171` | Server fact |
+
+No cell is a client label.
+
+### Every writer that moves money or debt between folios, stays or bookings (from grep)
+- **Postings that move value:**
+  - `deposits.ts:539` `deposit_application`: checked by `assertMoneyMayLand`; tested by R5-D, mutant N9.
+  - `postings.ts:1431/1439` `transfer_out` / `transfer_in`: money and debt both checked; transfer sibling test, mutants N10 and N11.
+  - `receivables.ts:405` `receivables_transfer`: not checked. It moves debt to a receivables account, and cards on file cannot pay receivables (payments only charges folio and booking references). Stated as N/A.
+- **Billing-rule writers:** `billing-rules.ts:191` (create), `:259` (update), `:598/605` (merge) all call `assertRoutingCovered`, which takes the collection lock first. `:306` (deactivate) only removes a route. Routing test, mutant N12.
+- **Payments collections that land on a ledger reference:**
+  - `collect.ts:349` (authorize), `:654` (capture), `:851` (charge), `:1150` (record) and VCC through charge: consent plus the re-check under the lock.
+  - `requests.ts:208/1054` and `webhooks.ts:914` (links): the guest's own new consent, so no agreement applies.
+
+### State machine additions
+- `completed` (provider says already paid) leaves only when the request's paid total reaches the link's amount; staff confirmation is refused.
+- `deactivating → deactivated` by staff needs a finance role, an open exception and the matching version.
+
+### § 5.4 Mutation table
+Each mutant was applied, then the module r4+r5 files (17 tests) and the api r4+r5 files (37 tests) were run, then the source was restored. All 26 were killed.
+
+| Mutant | Guard removed | Tests that went red |
+|---|---|---|
+| N1 | `no_show` fact check | module ×2; api R5-A1, R5-A2, cancellation, R4-P3-4 |
+| N2 | fact limits under the lock | module ×2; api R5-A1, deposit/balance, R4-J |
+| N3 | penalty already collected not subtracted | module no-show test |
+| N4 | deposit already collected not subtracted | module and api deposit tests |
+| N5 | `no_show` treated as folio money in the ownership guard | api R5-A2 |
+| N6 | booking-level reference needs every stay | module stay test; api R5-D |
+| N7 | folio debt origins | module origins test; api transfer, routing, re-check |
+| N8 | destination re-check under the lock | api re-check (held transfer) |
+| N9 | `applyDeposits` coverage | api R5-D |
+| N10, N11 | transfer of money / of debt | api transfer test |
+| N12 | routing coverage | api routing test |
+| N13, N14 | limit required at save / when used | module tests |
+| N15–N18 | link-stopped: completed refused / open exception / finance permission / version | api R5-C, the deactivating sibling, R4-E |
+| N19 (reviewer's R5-M2) | `pending_verification` in the taken total | api R5-M |
+| N20 | `pending_verification` holds | api hold sibling |
+| M6 | card-row `FOR UPDATE` | module barrier test (deterministic) and concurrent holds; api R4-B, three holds |
+| N21, N22 | `cardholder_ref` in the customer path / in confirm | module merge test |
+| N23 | server evidence time | module evidence test |
+| N24 | `applyDeposits` lock order | api NOWAIT probe |
+| N25 | "already paid" means fully paid | api partial-payment test |
+
+### § 6 Claim ledger
+Claims checked over the changed lines of `modules/payments/README.md` and the round-5 section of `docs/architecture/domain-map.md`.
+
+| Claim | Evidence | Verdict |
+|---|---|---|
+| "purposes are derived … the label is display text" | Mutants N1–N4; module and api fact tests | keep |
+| "a booking-level reference only while every current stay is listed" | N6 | keep |
+| "a folio carrying another stay's charges is not covered; finance refuses uncovered moves" | N7, N9–N12 | keep |
+| "re-checked under the collection lock" | N8, with a held-transaction test | keep |
+| "staff agreements must state `maxAmount`; only the cardholder may choose none" | N13, N14 | keep |
+| "evidence time and channel are the server's" | N23 | keep (round-4 claim "never by the client" was false; now true) |
+| "judged on `cardholder_ref`, which a merge never rewrites" | N21, N22 | keep (round-4 claim "consent never reads the owner" removed) |
+| "`confirmCardForBooking` not reachable until the guest portal ships" | `routes.ts` has no route | rewritten from "guest self-service" |
+| "finance-only link-stopped, open exception, If-Match; never `completed`" | N15–N18 | keep |
+| "already paid only when the paid total reaches the link amount; credit and share stated separately" | N25; wording in code | keep |
+| Lock order and the new owner-rule-lock → collection-lock edge | N24; code read | keep |
+| README counts | Corrected to 161 / 105 / 57 | — |
+
+### Decisions you may want to review
+- **Card balance limit:** a card on file now takes no more than a folio owes, minus deposits held. A stated separate-collection reason does not lift that limit.
+- **Labels are display text:** `custom`, `incidentals` and `deposit` sent against a folio are all collected as its balance.
+- **Residuals** (recorded in pending-fixes):
+  - consent capture through a payment link or the terminal, and a route for `confirmCardForBooking`, are not built;
+  - an extension that adds nights to a covered stay keeps it covered, bounded by `maxAmount`;
+  - a channel virtual card is bounded by its registered amount, not by the deposit schedule or folio balance;
+  - a card entered for a booking (hosted entry) has no amount limit, but each purpose it can pay is bounded by its fact;
+  - a charge staff post straight onto a covered folio for another stay's service cannot be told apart, so only `maxAmount` bounds it.
+
+### Files
+- `/home/user/wt/integration-step/modules/payments/src/service/consent.ts`
+- `/home/user/wt/integration-step/modules/payments/src/service/purpose.ts`
+- `/home/user/wt/integration-step/modules/payments/src/service/collect.ts`
+- `/home/user/wt/integration-step/modules/payments/src/service/requests.ts`
+- `/home/user/wt/integration-step/modules/payments/src/service/accounts.ts`
+- `/home/user/wt/integration-step/modules/payments/src/service/shared.ts`
+- `/home/user/wt/integration-step/modules/payments/migrations/0005_consent_facts.sql`
+- `/home/user/wt/integration-step/modules/finance/src/service/provenance.ts`
+- `/home/user/wt/integration-step/modules/finance/src/service/deposits.ts`
+- `/home/user/wt/integration-step/modules/finance/src/service/postings.ts`
+- `/home/user/wt/integration-step/modules/finance/src/service/billing-rules.ts`
+- `/home/user/wt/integration-step/modules/reservations/src/service/provider.ts`
+- `/home/user/wt/integration-step/modules/reservations/migrations/0002_stay_cancellation_penalty.sql`
+- `/home/user/wt/integration-step/apps/api/test/review-regressions-r5.test.ts`
+- `/home/user/wt/integration-step/modules/payments/test/review-r5-regressions.test.ts`
 - `/home/user/wt/integration-step/docs/architecture/domain-map.md`
 - `/home/user/wt/integration-step/modules/payments/README.md`
 - `/home/user/wt/integration-step/docs/orchestration/pending-fixes.md`

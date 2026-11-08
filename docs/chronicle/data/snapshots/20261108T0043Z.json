@@ -1,0 +1,278 @@
+{
+ "taken_at": "20261108T0043Z",
+ "head": "f96ef5d",
+ "git": {
+  "commits_main": 566,
+  "commits_all_refs": 691,
+  "branches": [
+   "docs/adoption-integration",
+   "docs/back-of-house-specs",
+   "docs/guest-journey-audit",
+   "docs/market-deep-dive",
+   "docs/operational-readiness",
+   "docs/parity-evidence",
+   "docs/parity-finance",
+   "docs/parity-front",
+   "docs/parity-ops",
+   "docs/product-strategy",
+   "docs/quality",
+   "docs/strategy",
+   "docs/ux-round-1",
+   "feat/backoffice-core",
+   "feat/day-close",
+   "feat/distribution-channex",
+   "feat/finance-core",
+   "feat/guests-core",
+   "feat/identity-platform-enterprise",
+   "feat/infra-aws",
+   "feat/integration-core",
+   "feat/integration-step",
+   "feat/inventory-core",
+   "feat/migration",
+   "feat/operations-core",
+   "feat/payments-core",
+   "feat/rates-core",
+   "feat/reservations-core",
+   "fix/guests-erasure-idempotency",
+   "main",
+   "ux/lab"
+  ],
+  "module_merges_to_main": [
+   "2026-11-07T22:52:33+00:00 merge: feat/infra-aws \u2014 AWS infrastructure as code (not deployed), security review fixes: least-privilege deploy role with exact OIDC subject, NAT default (Q158), restore drill that pages when it fails or never runs",
+   "2026-11-07T22:25:46+00:00 merge: docs/quality round 3 \u2014 builder v5/v6 (complete closure, mutation proof, claim ledger), orchestrator v4, refiner v2.1, 32 escapes, cost recount",
+   "2026-11-07T21:42:31+00:00 merge: docs/parity-evidence \u2014 inventory 1%\u219242% and reservations 1%\u21929% tested (every tested row quotes its assertion); failure-class sweep added 49 edge cases",
+   "2026-11-07T19:09:03+00:00 merge: fix/guests-erasure-idempotency \u2014 erasure reaches stored request responses (replay plans + exact-identifier redaction), writers lock before status check (fix sweep SW-GUE-1 + re-review R2-P2-1/2; 14 mutations prove the tests)",
+   "2026-11-07T18:57:28+00:00 merge: docs/quality round 2 \u2014 invariant closure (builder v4), scenario v3, orchestrator v3, 23 new escapes (74% fix-related), recall measured",
+   "2026-11-07T18:36:31+00:00 merge: feat/identity-platform-enterprise \u2014 MFA, SSO/SCIM, custom roles, break-glass, API clients, trials, activation, ADR-0017 (3 steward reviews + spot-check; gates green; Playwright 12/12 incl. sign-in code step)",
+   "2026-11-07T18:02:48+00:00 merge: docs/parity-ops \u2014 parity matrices + edge-case catalogues for operations, guests, integration, identity, comms, resort, access, guest-experience, crm, ai (playbook v2: every tested row quotes its asserting test)",
+   "2026-11-07T17:57:39+00:00 merge: docs/quality round 1 \u2014 24 new escapes (half from fixes), orchestrator playbook, steward v2.1, builder self-check v3, first scripted canaries",
+   "2026-11-07T17:26:52+00:00 merge: docs/quality round 0 \u2014 v2 playbooks, 38 escapes traced, 51 attack patterns + 17 UX traps, canary catalogue, checker scorecard, day-1 retro",
+   "2026-11-07T17:22:19+00:00 merge: feat/backoffice-core \u2014 design system and staff web app (steward review fixes verified: lint, typecheck --force, all tests, Playwright 11/11 incl. axe)",
+   "2026-11-07T17:09:42+00:00 merge: docs/strategy \u2014 platform gap plan (14 moves) and 32 module 10x briefs; Q150\u2013Q155",
+   "2026-11-07T16:46:12+00:00 merge: docs/ux-round-1 \u2014 83 refinements (44 wiring, 6 missing, 33 design), consistency rules C1\u2013C12, scorecard baselines",
+   "2026-11-07T12:24:59+00:00 merge: feat/finance-core \u2014 ledger, folios, billing rules, AR, invoices, cashier (steward review fixes verified)",
+   "2026-11-07T12:23:03+00:00 merge: feat/integration-core \u2014 connector framework, setup, health, webhooks, safeFetch (steward review fixes verified)",
+   "2026-11-07T12:20:47+00:00 merge: feat/reservations-core \u2014 bookings, stays, front desk, change previews (steward review fixes verified)",
+   "2026-11-07T12:13:37+00:00 merge: feat/payments-core \u2014 payments, Stripe Connect adapter, Route D terminal records (steward review fixes verified)",
+   "2026-11-07T12:07:41+00:00 merge: feat/rates-core \u2014 rates, restrictions, policies, tax engine, sealed terms (steward review fixes verified)",
+   "2026-11-07T12:03:07+00:00 merge: docs/market-deep-dive \u2014 market, vendors, research, patents, Maldives, one-button migration (docs/research/05-*)",
+   "2026-11-07T11:57:27+00:00 merge: feat/operations-core \u2014 housekeeping, maintenance, tasks, offline sync (steward review fixes verified)",
+   "2026-11-07T11:44:23+00:00 Merge branch 'docs/parity-finance': parity matrices + edge cases for finance, payments, day-close, accounting, fnb-pos, procurement, stock, analytics",
+   "2026-11-07T11:38:28+00:00 Merge branch 'feat/inventory-core': inventory module (unit types, units, composites, availability ledger, holds, assignments, blocks, overbooking vs conflicts, external availability) \u2014 steward-reviewed, fixes verified",
+   "2026-11-07T11:32:12+00:00 Merge branch 'docs/parity-front': parity matrices + edge cases for inventory, rates, reservations, groups, distribution, platform",
+   "2026-11-07T11:30:27+00:00 Merge branch 'feat/guests-core': guests module (profiles, companies/agencies, consent, encrypted documents, duplicates, reversible merges, cross-property sharing, DSR) \u2014 steward-reviewed",
+   "2026-11-07T11:19:01+00:00 Merge branch 'docs/back-of-house-specs': accounting, F&B POS, procurement, stock, workforce, concessions, utilities specs",
+   "2026-11-07T11:16:13+00:00 Merge branch 'docs/guest-journey-audit': guest journey coverage (235 touchpoints), gap register, 5 new module specs, spec change requests",
+   "2026-11-07T07:53:03+00:00 Merge branch 'docs/product-strategy': competitive synthesis, editions, personas, UX principles, 18 module specs, scenario catalogue",
+   "2026-11-07T07:52:01+00:00 Merge branch 'docs/adoption-integration': adoption, integration and migration deliverables",
+   "2026-11-07T07:32:42+00:00 Merge branch 'docs/operational-readiness': 12 operational readiness deliverables"
+  ]
+ },
+ "code": {
+  "apps/api": {
+   "files": 31,
+   "lines": 5793,
+   "test_files": 17,
+   "migrations": 0
+  },
+  "apps/backoffice": {
+   "files": 96,
+   "lines": 13014,
+   "test_files": 6,
+   "migrations": 0
+  },
+  "apps/worker": {
+   "files": 1,
+   "lines": 65,
+   "test_files": 0,
+   "migrations": 0
+  },
+  "modules/finance": {
+   "files": 61,
+   "lines": 20524,
+   "test_files": 17,
+   "migrations": 1
+  },
+  "modules/guests": {
+   "files": 52,
+   "lines": 14582,
+   "test_files": 15,
+   "migrations": 1
+  },
+  "modules/identity": {
+   "files": 56,
+   "lines": 16469,
+   "test_files": 17,
+   "migrations": 2
+  },
+  "modules/integration": {
+   "files": 62,
+   "lines": 20112,
+   "test_files": 18,
+   "migrations": 1
+  },
+  "modules/inventory": {
+   "files": 47,
+   "lines": 13714,
+   "test_files": 12,
+   "migrations": 3
+  },
+  "modules/operations": {
+   "files": 54,
+   "lines": 17795,
+   "test_files": 18,
+   "migrations": 1
+  },
+  "modules/payments": {
+   "files": 50,
+   "lines": 18990,
+   "test_files": 12,
+   "migrations": 1
+  },
+  "modules/platform": {
+   "files": 35,
+   "lines": 9647,
+   "test_files": 7,
+   "migrations": 3
+  },
+  "modules/rates": {
+   "files": 46,
+   "lines": 15698,
+   "test_files": 12,
+   "migrations": 1
+  },
+  "modules/reservations": {
+   "files": 74,
+   "lines": 19806,
+   "test_files": 23,
+   "migrations": 2
+  },
+  "packages/db": {
+   "files": 16,
+   "lines": 1537,
+   "test_files": 1,
+   "migrations": 4
+  },
+  "packages/http": {
+   "files": 6,
+   "lines": 439,
+   "test_files": 1,
+   "migrations": 0
+  },
+  "packages/kernel": {
+   "files": 16,
+   "lines": 1386,
+   "test_files": 3,
+   "migrations": 0
+  },
+  "packages/testing": {
+   "files": 3,
+   "lines": 117,
+   "test_files": 0,
+   "migrations": 0
+  },
+  "packages/ui": {
+   "files": 64,
+   "lines": 9362,
+   "test_files": 11,
+   "migrations": 0
+  }
+ },
+ "code_totals": {
+  "files": 770,
+  "lines": 199050,
+  "test_files": 190,
+  "migrations": 20
+ },
+ "docs": {
+  "markdown_files": 328,
+  "markdown_lines": 66729,
+  "specs": 31,
+  "adrs": 17,
+  "parity_files": 29,
+  "open_questions_total": 73,
+  "open_questions_answered": 1
+ },
+ "reviews": {
+  "review-backoffice.md": {
+   "counts": "**P0 1 \u00b7 P1 6 \u00b7 P2 18 \u00b7 P3 10**",
+   "verdict": "merge after fixes"
+  },
+  "review-finance.md": {
+   "counts": "P0 = 2 \u00b7 P1 = 10 \u00b7 P2 = 17 \u00b7 P3 = 12",
+   "verdict": "do not merge"
+  },
+  "review-fix-sweep.md": {
+   "counts": "(new findings):** P0 0 \u00b7 **P1 4** \u00b7 P2 4 \u00b7 P3 2.",
+   "verdict": null
+  },
+  "review-guests-erasure-fix.md": {
+   "counts": "| P0 0 \u00b7 P1 0 \u00b7 **P2 4** \u00b7 P3 5 |",
+   "verdict": "|"
+  },
+  "review-guests.md": {
+   "counts": "P0 = 2, P1 = 6, P2 = 13, P3 = 10.",
+   "verdict": "do not merge"
+  },
+  "review-identity-plus-2.md": {
+   "counts": "(new findings): **P0 1 \u00b7 P1 3 \u00b7 P2 6 \u00b7 P3 9**.",
+   "verdict": "do not merge"
+  },
+  "review-identity-plus-3.md": {
+   "counts": "(new findings): **P0 0 \u00b7 P1 2 \u00b7 P2 3 \u00b7 P3 5**.",
+   "verdict": "merge after fixes"
+  },
+  "review-identity-plus.md": {
+   "counts": "**P0 2 \u00b7 P1 8 \u00b7 P2 17 \u00b7 P3 12**.",
+   "verdict": "do not merge"
+  },
+  "review-infra.md": {
+   "counts": "| **P0 0 \u00b7 P1 3 \u00b7 P2 11 \u00b7 P3 12** |",
+   "verdict": "|"
+  },
+  "review-integration-step-2.md": {
+   "counts": "**P0 0 \u00b7 P1 3 \u00b7 P2 4 \u00b7 P3 5.**",
+   "verdict": "merge after fixes"
+  },
+  "review-integration-step-3.md": {
+   "counts": "**P0 0 \u00b7 P1 2 \u00b7 P2 4 \u00b7 P3 4.**",
+   "verdict": "merge after fixes"
+  },
+  "review-integration-step-4.md": {
+   "counts": "**P0 0 \u00b7 P1 2 \u00b7 P2 2 \u00b7 P3 6.**",
+   "verdict": "merge after fixes"
+  },
+  "review-integration-step-5.md": {
+   "counts": "**P0 0 \u00b7 P1 2 \u00b7 P2 2 \u00b7 P3 4.**",
+   "verdict": "merge after fixes"
+  },
+  "review-integration-step.md": {
+   "counts": "**P0 0 \u00b7 P1 3 \u00b7 P2 7 \u00b7 P3 9**.",
+   "verdict": "merge after fixes"
+  },
+  "review-integration.md": {
+   "counts": "**P0 1 \u00b7 P1 8 \u00b7 P2 10 \u00b7 P3 10**",
+   "verdict": "merge after fixes"
+  },
+  "review-inventory.md": {
+   "counts": "erexample tests (scratch copy)",
+   "verdict": "merge after fixes"
+  },
+  "review-operations.md": {
+   "counts": null,
+   "verdict": "merge after fixes"
+  },
+  "review-payments.md": {
+   "counts": "**P0 3 \u00b7 P1 12 \u00b7 P2 14 \u00b7 P3 10**",
+   "verdict": "merge after fixes"
+  },
+  "review-rates.md": {
+   "counts": "P0 = 1 \u00b7 P1 = 10 \u00b7 P2 = 18 \u00b7 P3 = 7",
+   "verdict": "merge after fixes"
+  },
+  "review-reservations.md": {
+   "counts": "P0 1 \u00b7 P1 16 \u00b7 P2 12 \u00b7 P3 6.**",
+   "verdict": "merge after fixes"
+  }
+ }
+}
