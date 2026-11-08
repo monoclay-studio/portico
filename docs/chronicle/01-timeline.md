@@ -471,3 +471,18 @@ Each agent's brief and report are in `agents/`.
   - Focus: regressions in normal front-desk flows caused by the stricter consent model.
   - Rationale: whatever is unused at the weekly reset is lost, and merging integration-step before the pause lets the
     restart begin with downstream work.
+- **01:07 — Integration-step re-review #6: merge after fixes** <!-- t: agent-a05151b1b0071532a @ 2026-11-08T01:07:44.581Z (Focused re-review #6: integration-step) --> (P0 0 · P1 2 · P2 1 · P3 3).
+  - The r5 attacks are all refused. No front-desk regressions: walk-in at the terminal, a corporate card via a master
+    folio, a deposit by link, and a no-show fee after night audit all work.
+  - The builder's N7 and N8 mutants were confirmed killed.
+  - Two more siblings of the consent class:
+    - a capture judged as "guarantee" but landing as a folio balance;
+    - a refund posting with no provenance, moved onto a covered folio and then charged.
+  - Orchestrator: ADR-0015 Amendment 5 (judge the purpose where money lands; every posting has an owner; the no-show
+    fee rests on the ledger penalty).
+  - Fix round 6 was written up for the resume, not sent: seven-day ≈ 95%, and a round costs about 4–5 points.
+- **01:08 — Data-safety checkpoint (seven-day ≈ 95%)** <!-- t: now @ 2026-11-08T01:08:32Z -->.
+  - `tools/checkpoint.sh` pushes every branch. The resume is already scheduled for 2026-11-11 17:03 UTC.
+  - Built and waiting: distribution, day-close and migration reviews; integration-step fix round 6.
+  - Lesson for quality round 4: six review rounds on one consent model. Each fix closed the named path, and the next
+    review found the sibling. Amendments 4 and 5 now state the class as rules.
