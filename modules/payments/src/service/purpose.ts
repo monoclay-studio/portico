@@ -148,13 +148,15 @@ export async function assertWithinFact(
   const penalty = ctx.penalties
     .filter((p) => p.amount.currency === amount.currency)
     .reduce((n, p) => n + p.amount.amountMinor, 0);
+  // Amendment 5 rule 3 (R6-P2-1): the penalty as it stands on the ledger (posted − credited), never the record alone.
+  const onLedger = ctx.stayId ? await d.ledger.penaltyOwedOn(tx, ref.id, ctx.stayId) : 0;
   const collected = await collectedMinor(tx, { basis: fact.basis as string });
-  const left = Math.min(penalty - collected, owedNow);
+  const left = Math.min(Math.min(penalty, onLedger) - collected, owedNow);
   if (amount.amountMinor > left) {
     throw new BusinessRuleError(
       'no_show_penalty_exceeded',
-      `The recorded penalty for this stay is ${fmt(penalty)}; ${fmt(collected)} of it is already collected and the folio owes ${fmt(owedNow)} now, so at most ${fmt(left)} can be taken as the no-show or cancellation fee.`,
-      { penaltyMinor: penalty, collectedMinor: collected, owedMinor: owedNow },
+      `The penalty for this stay is ${fmt(Math.min(penalty, onLedger))} as it stands on the folio (recorded ${fmt(penalty)}, less any credit); ${fmt(collected)} of it is already collected and the folio owes ${fmt(owedNow)} now, so at most ${fmt(left)} can be taken as the no-show or cancellation fee.`,
+      { penaltyMinor: penalty, onLedgerMinor: onLedger, collectedMinor: collected, owedMinor: owedNow },
     );
   }
 }

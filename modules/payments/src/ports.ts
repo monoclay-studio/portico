@@ -77,6 +77,11 @@ export interface LedgerPort {
    */
   debtOriginsOf(tx: TxContext, folioId: string): Promise<Array<{ type: string; id: string }>>;
   /**
+   * Re-review #6 R6-P2-1 (Amendment 5 rule 3): what the stay's no-show / cancellation penalty still amounts to on this
+   * folio as it stands on the ledger (posted, less credited, less moved off). A `no_show` collection rests on it.
+   */
+  penaltyOwedOn(tx: TxContext, folioId: string, stayId: string): Promise<number>;
+  /**
    * Review R2-P1-3 (AP-44): finance's own posting predicate for new money on this target at this scope, asked BEFORE
    * any card is charged, so pre-check and posting can never disagree (e.g. a booking whose deposits are held at
    * another property, or an imported deposit of a booking reservations does not know). Throws the refusal.

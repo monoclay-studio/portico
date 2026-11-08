@@ -250,3 +250,43 @@ export async function assertDebtMayLand(
     code,
   );
 }
+
+/**
+ * Re-review #6 R6-P2-1 (Amendment 5 rule 3): what the no-show / cancellation penalty of `stayId` still amounts to ON
+ * this folio — the penalty postings (journal entries `penalty:no_show:<stay>` / `penalty:cancellation:<stay>`, with
+ * their taxes) followed through corrections and transfers: posted, less credited, less moved off, plus moved on.
+ */
+export async function penaltyOn(tx: TxContext, folioId: string, stayId: string): Promise<number> {
+  const keys = [`penalty:no_show:${stayId}`, `penalty:cancellation:${stayId}`];
+  const roots = await db(tx)
+    .selectFrom('finance.postings as p')
+    .innerJoin('finance.journal_entries as e', 'e.id', 'p.entry_id')
+    .select('p.id')
+    .where('e.idempotency_key', 'in', keys)
+    .execute();
+  if (roots.length === 0) return 0;
+  const rootIds = new Set(roots.map((r) => r.id));
+  const rows = await db(tx)
+    .selectFrom('finance.postings')
+    .select(COLUMNS)
+    .where('folio_id', '=', folioId)
+    .execute();
+  let total = 0;
+  for (const p0 of rows) {
+    let p: PostingLite | undefined = p0;
+    for (let hop = 0; p && hop < 64; hop++) {
+      if (rootIds.has(p.id)) {
+        total += Number(p0.amount_minor);
+        break;
+      }
+      const next: string | null =
+        p.kind === 'transfer_in' || p.kind === 'transfer_out' || p.kind === 'adjustment'
+          ? p.corrects_posting_id
+          : p.kind === 'tax'
+            ? p.parent_posting_id
+            : null;
+      p = next ? await posting(tx, next) : undefined;
+    }
+  }
+  return Math.max(0, total);
+}

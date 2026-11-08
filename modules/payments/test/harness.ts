@@ -71,6 +71,8 @@ export interface LedgerControls {
   >;
   /** Booking → the deposit its agreed schedule asks for (minor units, USD); default 10,000,000. */
   depositDue: Map<string, number>;
+  /** Folio → the penalty as it stands on the ledger (default USD 100,000: as recorded). */
+  ledgerPenalty: Map<string, number>;
   /** Folio → owners of debt moved or routed onto it (finance's provenance). */
   debtOrigins: Map<string, Array<{ type: string; id: string }>>;
   /** Booking → deposits finance holds for it, not yet applied (R4-P3-3). */
@@ -187,6 +189,9 @@ export function fakeLedger(controls: LedgerControls): LedgerPort {
     },
     async debtOriginsOf(_tx, folioId) {
       return controls.debtOrigins.get(folioId) ?? [];
+    },
+    async penaltyOwedOn(_tx, folioId) {
+      return controls.ledgerPenalty.get(folioId) ?? 10_000_000;
     },
     // The same predicate the fake uses when posting (review R2-P1-3): unknown → refused; other scope → refused.
     async assertTargetUsable(tx, ref, scope) {
@@ -370,6 +375,7 @@ export async function startHarness(): Promise<Harness> {
     penalties: new Map(),
     depositDue: new Map(),
     debtOrigins: new Map(),
+    ledgerPenalty: new Map(),
     depositsHeld: new Map(),
   };
   const http = {

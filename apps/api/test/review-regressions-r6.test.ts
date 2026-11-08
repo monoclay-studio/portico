@@ -161,7 +161,7 @@ const owe = (
       idempotencyKey: `pos:${newId()}`,
     }),
   );
-const _balanceOf = async (org: ScenarioOrg, folioId: string) =>
+const balanceOf = async (org: ScenarioOrg, folioId: string) =>
   (await org.run(org.setup, (tx) => s.c.services.finance.getFolio(tx, folioId))).balance.amountMinor;
 const cardCharge = (
   ctx: RequestContext,
@@ -417,5 +417,63 @@ describe('R6-P1-2 — a refund posting is the debt of the stay it was refunded o
     expect(codeOf(await cardCharge(desk, k, card.id, { type: 'folio', id: f1 }, 50_000))).toBe('accepted');
     await s.drain();
     expect(codeOf(await transfer())).toBe('transfer_not_covered_by_card_consent');
+  });
+});
+
+// ───────────────────────── R6-P2-1: the penalty as it stands on the ledger ─────────────────────────
+
+describe('R6-P2-1 — a no-show fee rests on the penalty as it stands on the ledger (posted − credited − collected)', () => {
+  it('PoC R6-D flipped: after the penalty is credited off, an ordinary bill is not taken as `no_show`; a partial credit leaves only the rest', async () => {
+    const org = await organization(s);
+    const k = await kandu(s, org, '2027-03-10');
+    const { reservations, finance } = s.c.services;
+    const desk = org.staff('front_desk', 'Hassan', [k.id]);
+    const gm = org.staff('general_manager', 'GM', [k.id]);
+    const auditor = org.staff('night_auditor', 'Night audit', [k.id]);
+    const { profileId } = await guestWithCard(s, org, k);
+    const b = await bookFor(org, k, desk, profileId, '2027-03-10', '2027-03-14');
+    const stayId = b.stays[0]?.id as string;
+    const folioId = await folioOfStay(org, k, stayId, profileId);
+    const card = await methodFor(
+      org,
+      k,
+      { type: 'guest_profile', id: profileId },
+      { purposes: ['guarantee', 'no_show'], bookingIds: [b.id] },
+    );
+    const noShow = await org.run(auditor, (tx) =>
+      reservations.markNoShow(tx, { stayId, idempotencyKey: newId() }),
+    );
+    await s.drain();
+    const postingId = noShow.penaltyPostingIds[0] as string;
+    const gross = await balanceOf(org, folioId);
+    // A partial goodwill credit: only what is left of the penalty can be taken as the fee.
+    await org.run(gm, (tx) =>
+      finance.adjustPosting(tx, {
+        postingId,
+        amountMinor: Math.floor(gross / 2),
+        reasonCode: 'goodwill',
+        note: 'Half the penalty waived',
+        idempotencyKey: newId(),
+      }),
+    );
+    const left = await balanceOf(org, folioId);
+    await owe(org, k, desk, stayId, gross, 'Minibar and laundry');
+    const folio = { type: 'folio' as const, id: folioId };
+    expect(codeOf(await cardCharge(desk, k, card.id, folio, left + 1, 'no_show'))).toBe(
+      'no_show_penalty_exceeded',
+    );
+    // The rest of the penalty is credited too: nothing is left to take as a no-show fee (the PoC's FINDING).
+    await org.run(gm, (tx) =>
+      finance.adjustPosting(tx, {
+        postingId,
+        reasonCode: 'goodwill',
+        note: 'Penalty waived as goodwill',
+        idempotencyKey: newId(),
+      }),
+    );
+    expect(codeOf(await cardCharge(desk, k, card.id, folio, 1_000, 'no_show'))).toBe(
+      'no_show_penalty_exceeded',
+    );
+    expect(await paymentsOn(folioId)).toEqual([]);
   });
 });

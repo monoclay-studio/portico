@@ -89,6 +89,7 @@ export function createFinance(ports: FinancePorts) {
     getDeposits: deposits.getDeposits,
     depositHeldMinor: deposits.depositHeldMinor,
     folioProvenance: (tx: TxContext, folioId: string) => provenance.folioProvenance(tx, folioId),
+    penaltyOn: (tx: TxContext, folioId: string, stayId: string) => provenance.penaltyOn(tx, folioId, stayId),
     importOpeningDeposits: bind(deps, deposits.importOpeningDeposits),
     grantAllowance: bind(deps, allowances.grantAllowance),
     closeAllowances: bind(deps, allowances.closeAllowances),
@@ -307,6 +308,8 @@ export function financeLedgerForPayments(service: FinanceService) {
     /** Re-review #5 R5-P1-2: owners of the debt on a folio other than its own (transferred, routed, to be routed). */
     debtOriginsOf: async (tx: TxContext, folioId: string) =>
       (await service.folioProvenance(tx, folioId)).debtOwners,
+    /** Re-review #6 R6-P2-1: the stay's penalty as it stands on this folio (posted − credited ± moved). */
+    penaltyOwedOn: (tx: TxContext, folioId: string, stayId: string) => service.penaltyOn(tx, folioId, stayId),
     /** Review R2-P1-3: the posting predicate itself, asked before any card is charged (new money). */
     assertTargetUsable: (tx: TxContext, ref: { type: 'folio' | 'booking'; id: string }, s: LedgerScope) =>
       service.assertTargetInScope(d(tx, s.propertyId), ref, scope(s), 'inflow'),
