@@ -7,12 +7,19 @@ Writes (idempotent; re-run at every checkpoint):
   docs/chronicle/data/agents.json           every agent run: role/description, start, end, turns, tool uses, tokens
   docs/chronicle/agents/<start>-<slug>.md   each agent's brief (verbatim) and final report(s) (verbatim)
   docs/chronicle/data/session-stats.json    orchestrator stats (messages, tool use counts)
+  docs/chronicle/data/usage.json            token usage by model and by UTC day (orchestrator + every agent; each
+                                            API message id counted once)
 Usage: python3 -I tools/chronicle/extract.py <session-jsonl> <repo-root>
 """
-import json, os, re, sys, collections, glob
+import json, os, re, sys, collections, glob, itertools
 
 sess, root = sys.argv[1], sys.argv[2]
 sub_dir = sess[:-len('.jsonl')] + '/subagents'
+# The same session can have transcripts under several project folders (the first container ran from /home/user,
+# later ones from /home/user/portico). Agent logs and usage are read from all of them.
+session_id = os.path.basename(sess)[:-len('.jsonl')]
+proj_root = os.path.dirname(os.path.dirname(os.path.abspath(sess)))
+session_files = sorted(set(glob.glob(os.path.join(proj_root, '*', session_id + '.jsonl'))) | {os.path.abspath(sess)})
 out = os.path.join(root, 'docs/chronicle')
 os.makedirs(os.path.join(out, 'data'), exist_ok=True)
 os.makedirs(os.path.join(out, 'agents'), exist_ok=True)
@@ -94,9 +101,11 @@ def slug(s):
     return re.sub(r'[^a-z0-9]+', '-', (s or 'agent').lower()).strip('-')[:60]
 
 agents = []
-files = {os.path.basename(f)[len('agent-'):-len('.jsonl')]: f for f in glob.glob(os.path.join(sub_dir, 'agent-*.jsonl'))}
+files = collections.defaultdict(list)
+for f in sorted(glob.glob(os.path.join(proj_root, '*', session_id, 'subagents', 'agent-*.jsonl')), key=os.path.getmtime):
+    files[os.path.basename(f)[len('agent-'):-len('.jsonl')]].append(f)
 for aid in sorted(set(files) | set(agent_desc) | set(reports_main)):
-    f = files.get(aid)
+    f = files.get(aid) or []
     a_first = a_last = None; briefs = []; reports = []; tool_uses = 0; out_tok = 0; in_tok = 0; turns = 0; seen_ids = set()
     if not f:
         d = agent_desc.get(aid, {})
@@ -105,7 +114,7 @@ for aid in sorted(set(files) | set(agent_desc) | set(reports_main)):
         a_last = reports_main[aid][-1]['ts'] if reports_main.get(aid) else a_first
         briefs += followups.get(aid, [])
         reports = list(reports_main.get(aid, []))
-    for o in (load(f) if f else []):
+    for o in itertools.chain.from_iterable(load(x) for x in f):
         ts = o.get('timestamp'); a_first = a_first or ts; a_last = ts or a_last
         m = o.get('message') or {}
         if o.get('type') == 'user':
@@ -162,3 +171,36 @@ with open(os.path.join(out, '03-owner-directions.md'), 'w') as w:
     for kind, ts, text in sorted(items, key=lambda x: x[1] or ''):
         label = 'Answers to clarifying questions' if kind == 'answers' else 'Owner'
         w.write(f'## {ts[:16].replace("T", " ")} UTC — {label}\n\n````text\n{text}\n````\n\n')
+
+# Token usage (owner request 2026-11-08): the orchestrator transcript plus every agent transcript, each API message id
+# counted once. A cache write that the API did not split by TTL counts as 5-minute (the API's default TTL).
+FIELDS = ('input', 'output', 'cache_write_5m', 'cache_write_1h', 'cache_read', 'messages')
+by_model = collections.defaultdict(lambda: dict.fromkeys(FIELDS, 0))
+by_day = collections.defaultdict(lambda: dict.fromkeys(FIELDS, 0))
+usage_seen = set()
+transcripts = session_files + sorted(t for sf in session_files
+                                     for t in glob.glob(os.path.join(sf[:-len('.jsonl')], '**', '*.jsonl'), recursive=True))
+for path in transcripts:
+    for o in load(path):
+        if o.get('type') != 'assistant':
+            continue
+        m = o.get('message') or {}
+        mid, u, model = m.get('id'), m.get('usage'), m.get('model')
+        if not mid or not isinstance(u, dict) or not model or model == '<synthetic>' or mid in usage_seen:
+            continue
+        usage_seen.add(mid)
+        split = u.get('cache_creation') if isinstance(u.get('cache_creation'), dict) else None
+        w1h = (split or {}).get('ephemeral_1h_input_tokens', 0) or 0
+        w5m = (split or {}).get('ephemeral_5m_input_tokens', 0) or 0
+        if not split:
+            w5m = u.get('cache_creation_input_tokens', 0) or 0
+        row = {'input': u.get('input_tokens', 0) or 0, 'output': u.get('output_tokens', 0) or 0,
+               'cache_write_5m': w5m, 'cache_write_1h': w1h,
+               'cache_read': u.get('cache_read_input_tokens', 0) or 0, 'messages': 1}
+        day = (o.get('timestamp') or '')[:10] or 'unknown'
+        for bucket in (by_model[model], by_day[day]):
+            for k, v in row.items():
+                bucket[k] += v
+json.dump({'by_model': dict(sorted(by_model.items())), 'by_day': dict(sorted(by_day.items()))},
+          open(os.path.join(out, 'data/usage.json'), 'w'), indent=1)
+print(f"usage: {len(usage_seen)} API messages across {len(transcripts)} transcripts · models {sorted(by_model)}")

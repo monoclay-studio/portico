@@ -31,7 +31,7 @@ for finance), R-P1-3 (two-sided reconciliation; needs the MIG-CR-1 read-back), R
 
 ---
 
-## 2. Findings (appended as confirmed)
+## 2. Findings
 
 ### R-P0-1 · The card-number guard misses PANs written in ordinary ways, so card numbers are stored
 
@@ -279,7 +279,9 @@ for finance), R-P1-3 (two-sided reconciliation; needs the MIG-CR-1 read-back), R
 
 ## 1. Command results (scratch copy = `45be8b9` + `main` @ `2df56d1`, exit codes read from files, never piped)
 
-`PORTICO_TEST_DB_PREFIX=review_migration`, `DATABASE_URL=postgres://postgres@127.0.0.1:5432/postgres`. `main` later moved
+`PORTICO_TEST_DB_PREFIX=review_migration`, `DATABASE_URL=postgres://postgres@127.0.0.1:5432/postgres`. Every log and exit
+file was written to this review's own scratch folder (`scratchpad/rvmig/`), never to the shared `scratchpad/gates/`
+(which another reviewer wrote to during this run), so these results do not depend on it. `main` later moved
 to `0b108b6` (docs only — no code file changed), so no re-merge was needed.
 
 | Command | Exit | Notes |
@@ -317,17 +319,6 @@ Quoted from the builder's report (chronicle `20261107T2200-build-migration-modul
 | "Freeze ≤ 15 min … under 1 minute, and the test asserts it. Still a TARGET for real sources." | Holds as stated (honest TARGET) | builder test |
 | "**The parity gate fails** … 3 P0 rows are still 'building'" | **Holds** (honest) | § 1 |
 | §5 mutation table rows "One Portico record per source key … yes (ledger skip removed)" and "Production gate holds … yes (authorization check removed)" | **Reproduced** — both mutants killed (§ 5) | § 5 |
-
-## 5. Mutation check (v3 "verify the proof")
-
-Run on the merged copy by `rvmig/mutants.sh`; each mutant applied alone, the source restored with `git checkout` after
-each (`git status --short src` clean apart from review files).
-
-| Mutant | Change | Tests run | Result |
-|---|---|---|---|
-| **M1** (builder §5 row 1) | `importer.ts:302-305` — delete `if (imported && ledger.importedHash === hash) { summary.unchanged++; return; }` | `rehearsal`, `concurrency-interruption`, `scenario-simulator-drill` | **Killed** — exit 1, 11 tests fail (e.g. "running again (and again) creates nothing: zero duplicate reservations", "a crash inside the reservations import …") |
-| **M2** (builder §5 row 3) | `domain/cutover.ts:143-147` — the `production_authorization_missing` blocker removed | `production-gate`, `src/domain/reconcile.test.ts` | **Killed** — exit 1, 2 tests fail ("without a valid authorization the cutover does not start …", "lists each blocker in plain language") |
-| **M3** (mine; the guard I judged riskiest for rule 12: the simulator refused in live **at extraction time**) | `extract.ts:429-433` — the `simulator_not_in_live` throw removed; `createJob`'s refusal kept | whole module (113 incl. review PoCs) + `apps/api` `migration` and `integration` tests (7) | **Survived** — exit 0 / 0 → R-P3-8. Only `createJob`'s refusal is tested; the extraction guard (the one that would matter if an organization's environment ever changed mid-job, AP-19) has no test |
 
 ## 4. Coverage declaration
 
@@ -420,6 +411,17 @@ each (`git status --short src` clean apart from review files).
 **Totals:** 61 patterns in A–E; **50 applicable** — 28 probed, 19 code-read, 3 applied as review steps (AP-45, AP-54,
 AP-57); **0 applicable left unprobed**; 11 not applicable (AP-03, 07, 12, 13, 14, 16, 25, 27, 33, 43, 48 — reasons above).
 Group F (18 UX traps) not applicable — no UI in this branch.
+
+## 5. Mutation check (v3 "verify the proof")
+
+Run on the merged copy by `rvmig/mutants.sh`; each mutant applied alone, the source restored with `git checkout` after
+each (`git status --short src` clean apart from review files).
+
+| Mutant | Change | Tests run | Result |
+|---|---|---|---|
+| **M1** (builder §5 row 1) | `importer.ts:302-305` — delete `if (imported && ledger.importedHash === hash) { summary.unchanged++; return; }` | `rehearsal`, `concurrency-interruption`, `scenario-simulator-drill` | **Killed** — exit 1, 11 tests fail (e.g. "running again (and again) creates nothing: zero duplicate reservations", "a crash inside the reservations import …") |
+| **M2** (builder §5 row 3) | `domain/cutover.ts:143-147` — the `production_authorization_missing` blocker removed | `production-gate`, `src/domain/reconcile.test.ts` | **Killed** — exit 1, 2 tests fail ("without a valid authorization the cutover does not start …", "lists each blocker in plain language") |
+| **M3** (mine; the guard I judged riskiest for rule 12: the simulator refused in live **at extraction time**) | `extract.ts:429-433` — the `simulator_not_in_live` throw removed; `createJob`'s refusal kept | whole module (113 incl. review PoCs) + `apps/api` `migration` and `integration` tests (7) | **Survived** — exit 0 / 0 → R-P3-8. Only `createJob`'s refusal is tested; the extraction guard (the one that would matter if an organization's environment ever changed mid-job, AP-19) has no test |
 
 ## 6. Spec coverage and scenario claims
 

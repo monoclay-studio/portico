@@ -1,10 +1,18 @@
 # Agent run: Steward review: guests module
 
 - Started: 2026-11-07T08:17:03.671Z · last activity: 2026-11-07T11:13:45.712Z
-- Turns: 99 · tool uses: 102 · output tokens: 80,550
+- Turns: 99 · tool uses: 201 · output tokens: 80,550
 - Type: general-purpose
 
 ## Brief (2026-11-07T08:17:03.671Z)
+
+````text
+You are Portico's architecture steward. Read and follow the review brief at /tmp/claude-0/-home-user/4f98af2a-3564-5e4b-aedc-2d94c911507d/scratchpad/steward-review.md exactly.
+Branch under review: `feat/guests-core` in worktree /home/user/wt/guests — module `guests` (spec: /home/user/portico/docs/specs/guests.md on main). The author's README is modules/guests/README.md and FOUNDATION_REQUESTS.md lists requested foundation changes — assess each foundation request too (agree/disagree, proposed fix). There is no parity file for guests yet (being produced in parallel at /home/user/wt/parity-ops/docs/parity/guests.md — use it if present; otherwise skip the parity gate but list capabilities you know competitors such as OPERA Cloud profiles, Shiji Daylight cross-property profiles, Mews guest profiles offer that are missing).
+Use PORTICO_TEST_DB_PREFIX=review_guests. Write your report to /tmp/claude-0/-home-user/4f98af2a-3564-5e4b-aedc-2d94c911507d/scratchpad/review-guests.md.
+````
+
+## Follow-up message (2026-11-07T08:17:03.671Z)
 
 ````text
 You are Portico's architecture steward. Read and follow the review brief at /tmp/claude-0/-home-user/4f98af2a-3564-5e4b-aedc-2d94c911507d/scratchpad/steward-review.md exactly.

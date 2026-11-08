@@ -1,10 +1,36 @@
 # Agent run: Wave1: reservations module
 
 - Started: 2026-11-07T07:32:35.563Z · last activity: 2026-11-07T12:15:03.424Z
-- Turns: 426 · tool uses: 444 · output tokens: 653,149
+- Turns: 426 · tool uses: 608 · output tokens: 653,149
 - Type: general-purpose
 
 ## Brief (2026-11-07T07:32:35.563Z)
+
+````text
+You are the engineer for Portico's **reservations** module (wave 1) — bookings, stays and the front desk workflows. It is the heart of the product and depends on other wave-1 modules being built in parallel, so you code against PORTS (src/ports.ts) matching docs/architecture/domain-map.md exactly, and test with high-fidelity in-memory fakes of those ports (write them carefully: e.g. a fake inventory that enforces capacity and assignment overlap, a fake rates that returns a TermsSnapshot). First read the shared playbook at /tmp/claude-0/-home-user/4f98af2a-3564-5e4b-aedc-2d94c911507d/scratchpad/wave1-playbook.md and follow it exactly.
+
+Your worktree: /home/user/wt/reservations (branch feat/reservations-core). Test DB prefix: PORTICO_TEST_DB_PREFIX=w1_reservations. Module path: modules/reservations (package @portico/reservations, schema `reservations`). Spec: /home/user/wt/product/docs/specs/reservations.md (long — read it all).
+
+Ports you need (from domain-map): InventoryPort (consume/release/changeConsumption/createHold/convertHold/assignUnit/unassignUnit/findAssignableUnits), RatesPort (quote, priceChange), GuestsPort (resolveProfile, recordStayHistory), FinancePort (openFolio, postCharge, recordDeposit/applyDeposits, getFolioBalance), PaymentsPort (getPaymentStatus, createPaymentRequest), OperationsPort (getUnitCondition), PlatformPort (getProperty/getBusinessDate/assertWritable — real platform exists on main; you may call it directly or via port).
+
+Build:
+- Booking (confirmation code, booker, source/channel/market segment, company/agency, commission terms, guarantee, deposit requirement, notes) containing Stays (unit type, nights, occupants adults/children ages, rate plan, TermsSnapshot persisted immutably, assigned unit, status). Booking status and stay status machines per glossary; keep booking status, stay status, occupancy, unit condition, availability and payment status DISTINCT.
+- Flows: quote → hold (expiring) → tentative → confirm; walk-ins; multi-room bookings; cancellation with policy fee computed from the snapshot (property time zone deadlines); no-show (markNoShow idempotent); waitlist; comps & house use.
+- CHANGE PREVIEW (brief §4): for date changes, unit type changes, occupancy changes, rate plan changes, room moves, extensions, shortenings, split stays, early arrival / late departure — compute and return the effect on availability, nightly prices, taxes, inclusions, deposits and remaining balance BEFORE commit; commit requires the preview token/hash so the user commits exactly what they saw (if anything changed meanwhile → 409 with new preview).
+- Room assignment and moves (unit reassignment mid-stay creates segments), extensions into nights where the assigned villa is taken (scenario s03: preview shows the conflict + alternatives: same type other villa, move for the extra nights, upgrade).
+- Check-in as a resumable multi-step workflow with persisted step status (verify identity/required info, unit assigned & ready (OperationsPort), payment guarantee/authorization (PaymentsPort), deposits applied (FinancePort), keys issued (AccessPort stub honoring environment safety), status → in_house). An interrupted check-in shows exactly which steps succeeded and which remain (brief §6). Check-out similarly (balance resolved, folio settlement status, keys revoked).
+- Front desk views: arrivals, departures, in-house with readiness composition (assigned? unit inspected? payment secured? requests pending?) and the single blocking reason per arrival.
+- Shift handover: log of unresolved tasks/financial exceptions/guest commitments with owner, acknowledged by the incoming shift.
+- ingestChannelBooking(connectionId, externalId, revision, payload) idempotent: duplicates by (connection, externalId, revision) → 'duplicate'; out-of-order older revisions ignored with a recorded note; modification/cancellation of existing; inventory conflicts create a `relocation required` issue rather than silently overbooking (scenario s02 reservations part).
+- Optimistic concurrency on bookings/stays (version, If-Match) — scenario s14: two users edit the same reservation, the second gets 409 with what changed.
+- Data authority: `reservations` domain via assertWritable (read_only → refuse with explanation; forward → create a pending forwarded change record and do not mark effective until acknowledged — model the record, the integration module will deliver it later).
+- Events per domain-map. HTTP routes for all of the above with ETag/If-Match/Idempotency-Key; list endpoints with filters and cursor pagination.
+- Groups/blocks are NOT in scope (wave 2 `groups` module) — but keep a nullable block reference on stays.
+
+Tests: s01 (via fake inventory with real concurrency semantics is not enough — also add a test note for the integration test the orchestrator will run with real inventory), s03, s04 booking side (family multi-room, company payer for accommodation, guests pay incidentals → billing instructions passed to FinancePort), s14, s02 ingestion idempotency, interrupted check-in resume, change-preview commit token mismatch, isolation/permissions.
+````
+
+## Follow-up message (2026-11-07T07:32:35.563Z)
 
 ````text
 You are the engineer for Portico's **reservations** module (wave 1) — bookings, stays and the front desk workflows. It is the heart of the product and depends on other wave-1 modules being built in parallel, so you code against PORTS (src/ports.ts) matching docs/architecture/domain-map.md exactly, and test with high-fidelity in-memory fakes of those ports (write them carefully: e.g. a fake inventory that enforces capacity and assignment overlap, a fake rates that returns a TermsSnapshot). First read the shared playbook at /tmp/claude-0/-home-user/4f98af2a-3564-5e4b-aedc-2d94c911507d/scratchpad/wave1-playbook.md and follow it exactly.

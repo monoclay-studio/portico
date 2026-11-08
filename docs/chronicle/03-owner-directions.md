@@ -1081,3 +1081,9 @@ let's do this current wave of tasks you are on right now. feel free to introduce
 don't let it effect your current work though. AT ALL
 ````
 
+## 2026-11-08 05:48 UTC — Owner
+
+````text
+im doing a write up so "Please add token usage to the chronicle: in tools/chronicle/extract.py, sum the usage of the orchestrator transcript and every agent transcript, counting each API message id once. Write docs/chronicle/data/usage.json as {"by_model": {"<model>": {"input", "output", "cache_write_5m", "cache_write_1h", "cache_read", "messages"}}, "by_day": {"YYYY-MM-DD": {same fields}}}, refresh it at every checkpoint, then commit and push."
+````
+

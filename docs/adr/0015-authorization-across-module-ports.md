@@ -134,3 +134,31 @@ The rules, stated so they close the class:
    defined owner and direction, and the coverage checks run for each.
 3. **A no-show fee rests on the penalty as it stands on the ledger**: posted minus credited, minus what was already
    collected. It never rests on the penalty record alone.
+
+## Amendment 6 — every obligation is one balance, and the invariant is tested generatively (2026-11-08, integration-step re-review #7)
+
+Re-review #7 found two more siblings:
+- a card-funded deposit could be forfeited for a penalty that was then also charged to the card (R7-P1-1);
+- when a credit moved off a folio, the debit it left behind had no owner, so another guest's card could pay it
+  (R7-P1-2).
+
+Seven review rounds have now closed named paths and stated rules, and each time a sibling remained. Two changes end
+that pattern.
+1. **One balance per obligation.**
+   - Every amount someone owes is a single finance-owned balance with an owner: each deposit due, each penalty
+     (no-show, cancellation), and each folio balance.
+   - Every way of settling it draws that same balance down, under one lock: card charge or capture, cash, cheque,
+     terminal, link, forfeit of a deposit, transfer, credit or write-off.
+   - No collection is limited by a record of what was due. It is limited by what is still owed on the ledger, net of
+     everything already applied by any method.
+   - Moving money or debt between folios moves the obligation and its owner. The debit a credit leaves behind belongs
+     to whoever the credit now benefits.
+2. **The invariant is tested generatively, not by enumeration.** A seeded, model-based test runs random sequences of
+   every money operation, across at least two guests, two folios and two cards with agreements, including
+   concurrency. It asserts after every step:
+   - no card ever pays more than the obligations its agreement covers;
+   - no obligation is collected more than once across all methods;
+   - the ledger balances.
+
+   A failing seed is kept as a regression test. Reviewers then check the generator's coverage of operations instead
+   of hunting siblings by hand.

@@ -1,10 +1,33 @@
 # Agent run: Wave1: integration framework
 
 - Started: 2026-11-07T07:32:35.598Z · last activity: 2026-11-07T12:15:14.162Z
-- Turns: 372 · tool uses: 409 · output tokens: 650,711
+- Turns: 372 · tool uses: 573 · output tokens: 650,711
 - Type: general-purpose
 
 ## Brief (2026-11-07T07:32:35.598Z)
+
+````text
+You are the engineer for Portico's **integration** module (wave 1) — the connector framework that makes Portico "the easiest platform to integrate, evaluate and adopt" (read docs/product/adoption-integration-brief.md in full; it is your primary brief, especially §2, §5–§9, §12–§13). First read the shared playbook at /tmp/claude-0/-home-user/4f98af2a-3564-5e4b-aedc-2d94c911507d/scratchpad/wave1-playbook.md and follow it exactly.
+
+Your worktree: /home/user/wt/integration (branch feat/integration-core). Test DB prefix: PORTICO_TEST_DB_PREFIX=w1_integration. Module path: modules/integration (package @portico/integration, schema `integration`). Spec: /home/user/wt/product/docs/specs/integration.md (may appear later — re-check). Also check /home/user/wt/adoption/docs/adoption/ (a docs agent is writing the connection lifecycle & health spec there now; reconcile before finishing).
+
+Build (provider contract in docs/architecture/domain-map.md § integration):
+- Connector SDK in code: ConnectorDefinition { key, category (pms, channel, pos, accounting, payments, doorLock, rms, crm, messaging, spaActivities, transport, procurement, identity, fiscal, dataPlatform, file), vendor, products & versions, regions, access model (public API / partner program / on-prem interface / file), local connector required?, credential schema (Zod), vendor-side setup steps (plain English), WorkflowCapability[] (workflow, operations read/create/update/receive, sync realtime/periodic/manual/file, status supported/limited/unsupported/unverified, limitations), cost notes ("quote required" when unknown), implementation status per CLAUDE.md §7 }. A catalogue API listing connectors with honest statuses — never imply certification.
+- Reference connectors: (1) `pms.simulator` — a simulated external PMS (reservations, rooms, room status, charges) with controllable faults (delay, duplicates, out-of-order, outage, credential expiry) to prove connect-alongside flows; (2) `file.csv` — file-based import/export connector (clearly labeled file-based, never "live"); (3) `webhooks.outbound` — partner webhook delivery with HMAC signatures, retries/backoff, replay of a delivery by an admin, endpoint disable after repeated failures.
+- Connections: per organization with property scope; the 9-step setup journey as a persisted state machine (selected → compatibility_reviewed → authorized → mappings_suggested → issues_resolved → validated → previewed → active → monitoring; plus paused, disconnected, error), progress preserved, each step with actor/time. Activation sets platform data authority for the domains the connection governs (platform.setDataAuthority — real platform exists on main) with a clear scope summary and impact preview.
+- Credentials: never plaintext — stored via a SecretStore port (dev: kernel localFieldCipher with key from env; prod: AWS Secrets Manager/KMS — document), expiry dates, rotation flow, "credential expiring" health signal.
+- Mappings: kinds property, unitType, unit, ratePlan, outlet, chargeCode, taxRule, ledgerAccount, status; suggestion engine (name/code similarity, structural hints) with confidence and reasons; financially significant or ambiguous mappings REQUIRE human review before activation; mapping versions and audit.
+- Exchange log (inbound/outbound, workflow, external ref, idempotency key, outcome, latency) and sync runs (periodic/manual/file) with counts; inbound message store with dedupe (connection, external id, revision) and ordering rules; outbound command queue with idempotency keys that NEVER blindly replays money-moving or inventory-reopening actions after reconnection — they require revalidation (brief §8).
+- Health: last successful exchange per workflow, current delay vs expected, failed/incomplete workflows, mapping problems, credential expiry, vendor-required changes; overall status (healthy/degraded/down/paused) with URGENT vs ROUTINE separation; impact statement listing affected properties and hotel functions.
+- Exceptions: problem, business impact, responsible party (hotel/monoclay/vendor), next step, related records, owner, resolution — plain English, no payload dumps for staff (technical detail available to admins).
+- Safe pause / disconnect / credential rotation / provider replacement with an impact preview of which hotel functions are affected before acting.
+- Environment safety: every outbound call gated by assertExternalEffectAllowed (integration.read / integration.write / channel.publish); trial organizations can read but never write to real systems.
+- HTTP routes for catalogue, connections & setup steps, mappings (suggest/review), validation runs, preview, activation, health dashboard (property and portfolio views), exceptions, pause/resume/disconnect/rotate, webhook subscriptions & deliveries. Permissions e.g. integration.connection.read, integration.connection.manage (sensitive), integration.mapping.review, integration.exception.manage, integration.webhook.manage.
+
+Tests: full setup journey on pms.simulator incl. a required review of an ambiguous mapping; duplicate/out-of-order/delayed inbound messages; outage → health degraded with impact; reconnection does not replay a money-moving command without revalidation; credential expiry signal; trial org cannot write; webhook HMAC + retries + replay; isolation/permissions.
+````
+
+## Follow-up message (2026-11-07T07:32:35.598Z)
 
 ````text
 You are the engineer for Portico's **integration** module (wave 1) — the connector framework that makes Portico "the easiest platform to integrate, evaluate and adopt" (read docs/product/adoption-integration-brief.md in full; it is your primary brief, especially §2, §5–§9, §12–§13). First read the shared playbook at /tmp/claude-0/-home-user/4f98af2a-3564-5e4b-aedc-2d94c911507d/scratchpad/wave1-playbook.md and follow it exactly.

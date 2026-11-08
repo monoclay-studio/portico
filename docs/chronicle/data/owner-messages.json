@@ -158,5 +158,10 @@
   "ts": "2026-11-08T05:38:33.866Z",
   "text": "don't let it effect your current work though. AT ALL",
   "via": "queued"
+ },
+ {
+  "ts": "2026-11-08T05:48:51.375Z",
+  "text": "im doing a write up so \"Please add token usage to the chronicle: in tools/chronicle/extract.py, sum the usage of the orchestrator transcript and every agent transcript, counting each API message id once. Write docs/chronicle/data/usage.json as {\"by_model\": {\"<model>\": {\"input\", \"output\", \"cache_write_5m\", \"cache_write_1h\", \"cache_read\", \"messages\"}}, \"by_day\": {\"YYYY-MM-DD\": {same fields}}}, refresh it at every checkpoint, then commit and push.\"",
+  "via": "queued"
  }
 ]

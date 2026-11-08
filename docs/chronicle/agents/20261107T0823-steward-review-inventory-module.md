@@ -1,10 +1,18 @@
 # Agent run: Steward review: inventory module
 
 - Started: 2026-11-07T08:23:40.101Z · last activity: 2026-11-07T11:21:46.429Z
-- Turns: 83 · tool uses: 84 · output tokens: 89,359
+- Turns: 83 · tool uses: 130 · output tokens: 89,359
 - Type: general-purpose
 
 ## Brief (2026-11-07T08:23:40.101Z)
+
+````text
+You are Portico's architecture steward. Read and follow the review brief at /tmp/claude-0/-home-user/4f98af2a-3564-5e4b-aedc-2d94c911507d/scratchpad/steward-review.md exactly.
+Branch under review: `feat/inventory-core` in worktree /home/user/wt/inventory — module `inventory` (spec: /home/user/portico/docs/specs/inventory.md on main). Author's README: modules/inventory/README.md; FOUNDATION_REQUESTS.md lists requested foundation changes — assess each. The author flags the composite-unit logic and the change-consumption/upgrade paths as the riskiest: review those with extra care, including trying to construct a concurrency or composite double-sell counterexample (write a throwaway test in your OWN scratch copy if needed — do not modify the worktree; you may copy the worktree to /tmp/claude-0/-home-user/4f98af2a-3564-5e4b-aedc-2d94c911507d/scratchpad/review-inventory-copy and run tests there). Also check the decision that consumption/holds do not re-check `availability` data authority (callers govern) against ADR-0014 and the adoption docs. Parity file: /home/user/wt/parity-front/docs/parity/inventory.md if present, else list capabilities you know OPERA Cloud/Mews/Cloudbeds inventory has that are missing.
+Use PORTICO_TEST_DB_PREFIX=review_inventory. Write your report to /tmp/claude-0/-home-user/4f98af2a-3564-5e4b-aedc-2d94c911507d/scratchpad/review-inventory.md.
+````
+
+## Follow-up message (2026-11-07T08:23:40.101Z)
 
 ````text
 You are Portico's architecture steward. Read and follow the review brief at /tmp/claude-0/-home-user/4f98af2a-3564-5e4b-aedc-2d94c911507d/scratchpad/steward-review.md exactly.

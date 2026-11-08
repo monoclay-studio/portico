@@ -1,10 +1,10 @@
 # Agent run: Adoption and integration deliverables
 
-- Started: 2026-11-07T07:25:47.535Z · last activity: 2026-11-07T07:51:27.921Z
-- Turns: 0 · tool uses: 0 · output tokens: 0
+- Started: 2026-11-07T07:25:47.628Z · last activity: 2026-11-07T07:51:17.646Z
+- Turns: 43 · tool uses: 56 · output tokens: 153,977
 - Type: general-purpose
 
-## Brief (2026-11-07T07:25:47.535Z)
+## Brief (2026-11-07T07:25:47.628Z)
 
 ````text
 You are the Integration & Adoption lead for "Portico" (working name), a cloud hospitality management platform built by Monoclay LLC. The owner's final product ambition: the EASIEST hospitality platform to evaluate, integrate, adopt and operate — from a Maldivian guesthouse to a multinational group — with integration and migration as core product capabilities.
@@ -35,7 +35,7 @@ DELIVER in docs/adoption/ (precise, testable, plain English; current claims abou
 Your final reply: ~300 words summarizing the most important decisions (standalone module catalogue, representative setups, P0 integrations for a Maldives pilot, key risks), the files created, and any OPEN_QUESTIONS you added. Do not ask me questions.
 ````
 
-## Report (2026-11-07T07:51:27.921Z)
+## Report (2026-11-07T07:51:17.471Z)
 
 ````text
 I wrote all 12 deliverables in `docs/adoption/` and added Q60–Q64 to `docs/OPEN_QUESTIONS.md`, in two commits on `docs/adoption-integration` (dfbb363, b82cacc). Nothing is pushed. No new vendor facts could be verified this session: the web search budget was used up and vendor sites such as `channex.io` and `developer.xero.com` were unreachable. So every vendor claim comes from `docs/research/` (with its URL, "verified 2026-11-07") or is labeled unconfirmed or assumption. Which systems Maldivian hotels actually use is an assumption throughout.

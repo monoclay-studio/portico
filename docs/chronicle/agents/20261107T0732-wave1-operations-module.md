@@ -1,10 +1,33 @@
 # Agent run: Wave1: operations module
 
 - Started: 2026-11-07T07:32:35.588Z · last activity: 2026-11-07T11:56:01.787Z
-- Turns: 301 · tool uses: 314 · output tokens: 521,946
+- Turns: 301 · tool uses: 523 · output tokens: 521,946
 - Type: general-purpose
 
 ## Brief (2026-11-07T07:32:35.588Z)
+
+````text
+You are the engineer for Portico's **operations** module (wave 1) — housekeeping, maintenance, tasks and service delivery. It must also be offerable STANDALONE alongside an external PMS (adoption brief §2: "replace selected capabilities", housekeeping is the flagship example), so design connected mode from the start. First read the shared playbook at /tmp/claude-0/-home-user/4f98af2a-3564-5e4b-aedc-2d94c911507d/scratchpad/wave1-playbook.md and follow it exactly.
+
+Your worktree: /home/user/wt/operations (branch feat/operations-core). Test DB prefix: PORTICO_TEST_DB_PREFIX=w1_operations. Module path: modules/operations (package @portico/operations, schema `operations`). Spec: /home/user/wt/product/docs/specs/operations.md (may still be in progress — re-check later; also read the reservations and inventory specs there for interfaces).
+
+Build (provider contract in domain-map § operations):
+- Unit condition (dirty, cleaning, clean, inspected, failed_inspection) separate from physical occupancy (vacant/occupied from stays; discrepancies skip/sleep/occupied-no-luggage reported by housekeeping), DND, turndown status, readiness timestamps and expected completion.
+- Housekeeping tasks generated from events and day plans: departure clean, stayover service, turndown, deep clean, inspection; priorities (arrival due soon, VIP, early check-in), credits/points workload model; assignment suggestions balancing workload by section/floor/island zone (explain the suggestion); supervisor reassign.
+- Inspections with checklist and pass/fail reasons; failed inspection → re-clean task + operations.inspection.failed event with the affected arriving stay (scenario s07: front desk learns before the guest reaches reception; your part = event + readiness API showing not-ready with reason + ETA).
+- Generic tasks: owning department, assignee, due time, priority, status (open, in_progress, blocked, done, verified, cancelled), SLA timers and escalation path (escalate to supervisor/department head after configurable delays), comments/attachments refs, links to stays/units/guests. Service requests (guest-originated) create tasks; "done" requires the task to be done (brief §8: a message saying done is insufficient).
+- Maintenance work orders: asset/location registry (units, public areas, equipment), urgency, fault category, photos (object-store refs), parts/notes, history per asset, preventive schedules generating work orders. Request out-of-order/out-of-service via an InventoryPort.blockUnit (port; fake in tests) and surface affected assignments returned by inventory as "resolution required" items for front office (scenario s08). Return-to-service requires work order completion AND a passed inspection (configurable policy).
+- Lost & found registry (item, location found, finder, storage, matched guest, release/disposal with signature ref).
+- OFFLINE SYNC API for the mobile staff app (scenario s13): client submits a batch of mutations each with client mutation id, client timestamp, base version; server applies idempotently (mutation id dedupe), rejects stale ones with conflict details (e.g. room was re-assigned / already inspected by supervisor), returns authoritative state + per-mutation results; never applies a stale update silently. Also a delta-pull endpoint (changes since cursor).
+- Event consumers (subscriptions in composition): reservations.stay.checkedOut → unit dirty + departure task; reservations.stay.moved → tasks; inventory.unit.blocked → mark unit/tasks; reservations.booking.confirmed for arrivals planning (consume when provided).
+- Data authority domains `roomStatus` and `maintenance`: in connected mode (external PMS is authority with write_mode forward) record forwarded status changes as pending until acknowledged — model it; delivery is done by the integration module later.
+- HTTP routes: boards (rooms by condition/occupancy/priority with filters), task CRUD/transitions, assignments, inspections, work orders, assets, preventive schedules, lost & found, offline sync. Permissions e.g. operations.unit.read, operations.housekeeping.update, operations.housekeeping.assign, operations.housekeeping.inspect, operations.task.manage, operations.task.update, operations.maintenance.manage, operations.lostFound.manage.
+- Seed helper with realistic resort sections (island zones, overwater jetty), attendants and preventive schedules (AC servicing, water villa ladder inspection).
+
+Tests: s07, s08 (operations part), s13 offline batch with stale + duplicate mutations, escalation timing with a fixed clock, workload assignment suggestion, isolation/permissions.
+````
+
+## Follow-up message (2026-11-07T07:32:35.588Z)
 
 ````text
 You are the engineer for Portico's **operations** module (wave 1) — housekeeping, maintenance, tasks and service delivery. It must also be offerable STANDALONE alongside an external PMS (adoption brief §2: "replace selected capabilities", housekeeping is the flagship example), so design connected mode from the start. First read the shared playbook at /tmp/claude-0/-home-user/4f98af2a-3564-5e4b-aedc-2d94c911507d/scratchpad/wave1-playbook.md and follow it exactly.

@@ -1,10 +1,18 @@
 # Agent run: Steward review: rates module
 
 - Started: 2026-11-07T08:24:34.709Z · last activity: 2026-11-07T11:23:55.287Z
-- Turns: 69 · tool uses: 73 · output tokens: 98,667
+- Turns: 69 · tool uses: 110 · output tokens: 98,667
 - Type: general-purpose
 
 ## Brief (2026-11-07T08:24:34.709Z)
+
+````text
+You are Portico's architecture steward. Read and follow the review brief at /tmp/claude-0/-home-user/4f98af2a-3564-5e4b-aedc-2d94c911507d/scratchpad/steward-review.md exactly.
+Branch under review: `feat/rates-core` in worktree /home/user/wt/rates — module `rates` (spec: /home/user/portico/docs/specs/rates.md on main). Author's README: modules/rates/README.md (incl. contract changes and open questions). Focus extra care on: (a) the tax & fee engine vs /home/user/portico/docs/readiness/maldives-tax-rules.md (time of supply, Green Tax per-person-day with under-2 exemption and 12-hour check-out rule, GST not on Green Tax, service charge inside the GST base, USD reporting, inclusive/exclusive rounding); (b) TermsSnapshot immutability and whether it is truly sufficient to post every night later; (c) derived-rate semantics (amount adjustments per room-night only — judge whether this matches market practice in OPERA/Mews/Cloudbeds and the spec) and cycle prevention under concurrency; (d) money rounding consistency. Parity file: /home/user/wt/parity-front/docs/parity/rates.md if present, else list capabilities you know OPERA Cloud / Mews / Cloudbeds rate management has that are missing.
+Use PORTICO_TEST_DB_PREFIX=review_rates. Write your report to /tmp/claude-0/-home-user/4f98af2a-3564-5e4b-aedc-2d94c911507d/scratchpad/review-rates.md.
+````
+
+## Follow-up message (2026-11-07T08:24:34.709Z)
 
 ````text
 You are Portico's architecture steward. Read and follow the review brief at /tmp/claude-0/-home-user/4f98af2a-3564-5e4b-aedc-2d94c911507d/scratchpad/steward-review.md exactly.
