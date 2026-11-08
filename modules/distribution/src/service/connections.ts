@@ -28,7 +28,7 @@ import {
   connectionSettings,
   createConnectionInput,
 } from '../contracts';
-import { ARI_KINDS, type AriKind } from '../domain/ari';
+import { ARI_KINDS, type AriKind, nextFullResyncAt } from '../domain/ari';
 import { clipRanges } from '../domain/ranges';
 import { P, RECORD } from '../manifest';
 import { activeMappings, markDirty, windowFor } from './ari-dirty';
@@ -237,6 +237,7 @@ export async function createConnection(
         verified_at: null,
         webhook_hub_id: null,
         verify_lease_until: null,
+        last_worked_at: null,
         created_by: actorKey(tx),
         created_at: tx.now,
         updated_at: tx.now,
@@ -494,11 +495,13 @@ export async function requestResync(
     .execute();
   const full = !input.range && !input.kinds;
   if (full) {
+    const s = settingsOf(conn);
+    const property = await deps.ports.platform.getProperty(tx, conn.property_id);
     await db(tx)
       .updateTable('distribution.connections')
       .set({
         last_full_sync_at: tx.now,
-        next_full_sync_at: new Date(tx.now.getTime() + settingsOf(conn).fullResyncHours * 3_600_000),
+        next_full_sync_at: nextFullResyncAt(tx.now, property.timezone, s.fullResyncHours, s.resyncLocalHour),
       })
       .where('id', '=', conn.id)
       .execute();

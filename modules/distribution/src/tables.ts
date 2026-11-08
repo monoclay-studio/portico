@@ -38,6 +38,7 @@ export interface ConnectionsTable {
   verified_at: TsN;
   webhook_hub_id: string | null;
   verify_lease_until: TsN;
+  last_worked_at: TsN;
   created_by: string;
   created_at: Ts;
   updated_at: Ts;

@@ -51,6 +51,9 @@ create table distribution.connections (
   webhook_hub_id        text,
   -- One Verify at a time per connection (its hub calls happen between two transactions — P3-1).
   verify_lease_until    timestamptz,
+  -- Dead-man signal (P3-8): the last time the scheduler completed this connection's work. Health reads it at
+  -- read time, so a stopped worker is visible even though nothing refreshes the stored health.
+  last_worked_at        timestamptz,
   created_by            text not null,
   created_at            timestamptz not null,
   updated_at            timestamptz not null,

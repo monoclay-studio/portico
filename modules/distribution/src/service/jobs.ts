@@ -101,10 +101,15 @@ async function connectionWork(
   }
   // 4. Acknowledgements of committed outcomes.
   res.acked += (await dispatchAcks(database, deps, ctx, c.id)).acked;
-  // 5. Escalations and health.
+  // 5. Escalations, the dead-man signal (P3-8) and health.
   await withTenantTx(database, ctx, async (tx) => {
     const conn = await loadConnection(tx, c.id);
     await escalateParked(tx, conn);
+    await db(tx)
+      .updateTable('distribution.connections')
+      .set({ last_worked_at: tx.now })
+      .where('id', '=', conn.id)
+      .execute();
     await refreshHealth(tx, deps, conn);
   });
 }

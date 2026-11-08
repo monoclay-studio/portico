@@ -1,7 +1,8 @@
 /**
  * Review P3 fixes: one Verify at a time and no duplicate webhook registration after a token rotation (P3-1);
  * Dismiss never reaches a revision Portico has not tried (P3-4); search applies the property scope before its limit
- * (P3-5); records carry an owner (P3-9).
+ * (P3-5); the daily resync runs at the property's quiet hour (P3-7); a stopped scheduler is visible (P3-8);
+ * records carry an owner (P3-9).
  */
 import { sql, withTenantTx } from '@portico/db';
 import { addDays } from '@portico/kernel';
@@ -17,6 +18,7 @@ import {
   simState,
   startHarness,
   sys,
+  tick,
 } from './harness';
 
 let h: Harness;
@@ -122,5 +124,26 @@ describe('P3-5 search and P3-9 owner', () => {
     expect(hits.every((x) => x.propertyId === org.propertyId)).toBe(true);
     const view = await org.run((tx) => svc.getConnection(tx, h.dist.deps, c.connectionId));
     expect(view.owner).toMatchObject({ kind: 'department', id: 'distribution' });
+  });
+});
+
+describe('P3-7 and P3-8', () => {
+  it('the daily resync is scheduled at 03:00 property time; a scheduler silent for 30 minutes shows "failing" on read', async () => {
+    const org = await setupOrg(h);
+    const c = await connect(org);
+    await runFor(org, 2_000);
+    const view = await org.run((tx) => svc.getConnection(tx, h.dist.deps, c.connectionId));
+    // START is 06:00 UTC = 11:00 in the Maldives (UTC+5): the next 03:00 local is 22:00 UTC the same day.
+    expect(view.nextFullSyncAt).toBe('2026-11-07T22:00:00.000Z');
+    expect((await org.run((tx) => svc.getHealth(tx, h.dist.deps, c.connectionId))).health).toBe('connected');
+    h.clock.advance(30 * 60_000); // no scheduler pass for 30 minutes
+    const silent = await org.run((tx) => svc.getHealth(tx, h.dist.deps, c.connectionId));
+    expect(silent.health).toBe('failing');
+    expect(silent.reason).toContain('has not run since');
+    expect(silent.banner?.severity).toBe('urgent');
+    await tick(org); // the scheduler is back
+    expect((await org.run((tx) => svc.getHealth(tx, h.dist.deps, c.connectionId))).health).not.toBe(
+      'failing',
+    );
   });
 });

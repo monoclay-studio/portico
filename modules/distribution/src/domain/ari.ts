@@ -156,3 +156,30 @@ export function compareCell(input: {
 export function publicationWindow(businessDate: LocalDate, horizonDays: number): DateRange {
   return { from: businessDate, to: addDays(businessDate, horizonDays) };
 }
+
+/**
+ * The next full resync instant (P3-7). The default daily resync is anchored to a quiet hour of the PROPERTY's local
+ * day (never "24 h after activation", which could fall on the morning peak); other intervals stay interval-based.
+ * Always strictly later than `now` and at least one hour away.
+ */
+export function nextFullResyncAt(now: Date, timezone: string, everyHours: number, localHour: number): Date {
+  if (everyHours !== 24) return new Date(now.getTime() + everyHours * 3_600_000);
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: timezone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(now);
+  const get = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? '0');
+  // Offset of the zone at `now` (minutes): local wall time read as UTC minus the instant.
+  const wallAsUtc = Date.UTC(get('year'), get('month') - 1, get('day'), get('hour'), get('minute'));
+  const offsetMs = wallAsUtc - Math.floor(now.getTime() / 60_000) * 60_000;
+  for (let day = 0; day < 3; day++) {
+    const candidate = Date.UTC(get('year'), get('month') - 1, get('day') + day, localHour, 0) - offsetMs;
+    if (candidate - now.getTime() >= 3_600_000) return new Date(candidate);
+  }
+  return new Date(now.getTime() + 24 * 3_600_000);
+}

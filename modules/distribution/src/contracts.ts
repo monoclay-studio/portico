@@ -143,6 +143,8 @@ export const connectionSettings = z
      * is redacted (ids, dates, products and amounts stay). P2-7.
      */
     guestDataRetentionDays: z.number().int().min(1).max(3650).default(90),
+    /** Local hour of the property's day at which the daily full resync runs (quiet time; P3-7). */
+    resyncLocalHour: z.number().int().min(0).max(23).default(3),
     /** Full non-destructive resync interval (nightly by default). */
     fullResyncHours: z.number().int().min(1).max(168).default(24),
   })

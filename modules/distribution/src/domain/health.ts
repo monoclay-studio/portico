@@ -40,7 +40,17 @@ export interface HealthFacts {
   freshnessTargetMs: number;
   /** How long an inbound gap keeps the connection degraded. */
   gapCooldownMs: number;
+  /** Dead-man signal (P3-8): the last completed scheduler pass for this connection (null: none yet). */
+  lastWorkedAt?: Date | null;
+  /** The last full resync and the configured interval (a missed daily resync is visible). */
+  lastFullSyncAt?: Date | null;
+  fullResyncMs?: number;
 }
+
+/** No scheduler pass for this long (the ceiling is 15 min) means background processing stopped. */
+export const WORKER_SILENCE_MS = 20 * 60_000;
+/** Grace beyond the resync interval before a missed full resync degrades the connection. */
+export const RESYNC_GRACE_MS = 2 * 3_600_000;
 
 export interface HealthResult {
   health: ConnectionHealth;
@@ -63,6 +73,13 @@ export function computeHealth(f: HealthFacts): HealthResult {
       health: 'paused',
       reason: 'Publication is paused: changes are queued and sent when the connection is resumed.',
       staleSince: stale,
+    };
+  }
+  if (f.lastWorkedAt && age(f.lastWorkedAt, f.now) > WORKER_SILENCE_MS) {
+    return {
+      health: 'failing',
+      reason: `Background processing for this connection has not run since ${f.lastWorkedAt.toISOString()}: nothing is being published, pulled or acknowledged.`,
+      staleSince: stale ?? f.lastWorkedAt.toISOString(),
     };
   }
   if (f.credentialState === 'invalid') {
@@ -111,6 +128,18 @@ export function computeHealth(f: HealthFacts): HealthResult {
       health: 'degraded',
       reason: `Changes have waited more than ${Math.round(f.freshnessTargetMs / 1000)} seconds for the channel to confirm them.`,
       staleSince: stale,
+    };
+  }
+  if (
+    f.status === 'active' &&
+    f.lastFullSyncAt &&
+    f.fullResyncMs &&
+    age(f.lastFullSyncAt, f.now) > f.fullResyncMs + RESYNC_GRACE_MS
+  ) {
+    return {
+      health: 'degraded',
+      reason: `The scheduled full resync has not run since ${f.lastFullSyncAt.toISOString()}; drift is not being corrected.`,
+      staleSince: f.lastFullSyncAt.toISOString(),
     };
   }
   if (f.inboundGapAt && age(f.inboundGapAt, f.now) < f.gapCooldownMs) {

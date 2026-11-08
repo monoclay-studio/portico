@@ -37,10 +37,15 @@ const minDate = (vals: Array<Date | string | null | undefined>): Date | null => 
   return ds.length ? ds.reduce((a, b) => (a.getTime() <= b.getTime() ? a : b)) : null;
 };
 
+/**
+ * `deadMan`: include the scheduler's own liveness (P3-8). Only for READS (the banner, the API): the stored health and
+ * stop-sell protection are computed BY the scheduler, so its own earlier absence must not count as a present failure.
+ */
 export async function gatherFacts(
   tx: TxContext,
   deps: DistributionDeps,
   conn: ConnectionRow,
+  opts: { deadMan?: boolean } = {},
 ): Promise<HealthFacts> {
   const s = settingsOf(conn);
   const [dirty, msgs, ack, failed, parked] = await Promise.all([
@@ -104,6 +109,14 @@ export async function gatherFacts(
     now: tx.now,
     freshnessTargetMs: s.freshnessTargetSeconds * 1000,
     gapCooldownMs: s.stopSellProtection.cooldownMinutes * 60_000,
+    ...(opts.deadMan
+      ? {
+          lastWorkedAt: conn.last_worked_at ? new Date(conn.last_worked_at) : null,
+          lastFullSyncAt: conn.last_full_sync_at ? new Date(conn.last_full_sync_at) : null,
+          // The daily resync is anchored to a local hour (up to ~48 h apart in the worst case): allow the full day.
+          fullResyncMs: (s.fullResyncHours === 24 ? 48 : s.fullResyncHours) * 3_600_000,
+        }
+      : {}),
   };
 }
 
@@ -230,7 +243,7 @@ export async function getHealth(
 ): Promise<HealthView> {
   const conn = await loadConnection(tx, connectionId);
   requireOnConnection(tx, conn, P.channelRead);
-  const facts = await gatherFacts(tx, deps, conn);
+  const facts = await gatherFacts(tx, deps, conn, { deadMan: true });
   const r = computeHealth(facts);
   const s = settingsOf(conn);
   const [dirty, open, budgets, errors, revs, exc, disc, protection, mapping] = await Promise.all([

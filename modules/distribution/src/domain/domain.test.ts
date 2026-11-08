@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { compareCell, compressRuns, publishedAvailability, restrictionValueFrom } from './ari';
+import {
+  compareCell,
+  compressRuns,
+  nextFullResyncAt,
+  publishedAvailability,
+  restrictionValueFrom,
+} from './ari';
 import { BUDGET_WINDOW_MS, maxInAnyWindow, nextSlotAt, reserveSlot, restampAtCompletion } from './budget';
 import { classifyHttp, isEscalated, nextAttemptAt, retryDelayMs } from './delivery';
 import { computeHealth, type HealthFacts } from './health';
@@ -500,5 +506,60 @@ describe('health — an outage never looks synced', () => {
     expect(computeHealth(facts({ status: 'paused' })).health).toBe('paused');
     expect(computeHealth(facts({ inboundGapAt: at(3600 - 60) })).health).toBe('degraded');
     expect(computeHealth(facts({ inboundGapAt: at(0) })).health).toBe('connected');
+  });
+});
+
+describe('nightly resync anchor (P3-7)', () => {
+  it('runs at the property-local quiet hour, not 24 h after activation', () => {
+    // Activated at 10:00 Malé time (UTC+5) → next resync 03:00 Malé the next day (= 22:00 UTC).
+    expect(nextFullResyncAt(new Date('2026-11-07T05:00:00Z'), 'Indian/Maldives', 24, 3).toISOString()).toBe(
+      '2026-11-07T22:00:00.000Z',
+    );
+    // At 02:30 local the 03:00 slot is less than an hour away: the next day's.
+    expect(nextFullResyncAt(new Date('2026-11-07T21:30:00Z'), 'Indian/Maldives', 24, 3).toISOString()).toBe(
+      '2026-11-08T22:00:00.000Z',
+    );
+    // A zone with DST and a negative offset.
+    expect(nextFullResyncAt(new Date('2026-07-01T12:00:00Z'), 'America/New_York', 24, 3).toISOString()).toBe(
+      '2026-07-02T07:00:00.000Z',
+    );
+    // Other intervals stay interval-based.
+    expect(nextFullResyncAt(new Date('2026-11-07T05:00:00Z'), 'Indian/Maldives', 6, 3).toISOString()).toBe(
+      '2026-11-07T11:00:00.000Z',
+    );
+  });
+});
+
+describe('dead-man signal (P3-8)', () => {
+  const base = {
+    status: 'active' as const,
+    credentialState: 'valid' as const,
+    publicationBlocked: null,
+    hubRefused: null,
+    oldestUnconfirmedChangeAt: null,
+    ariFailingSince: null,
+    ackFailingSince: null,
+    applyFailingSince: null,
+    parkedOverdue: 0,
+    inboundGapAt: null,
+    now: new Date('2026-11-07T12:00:00Z'),
+    freshnessTargetMs: 120_000,
+    gapCooldownMs: 600_000,
+  };
+  it('a scheduler silent for more than 20 minutes makes the connection failing; a missed resync degrades it', () => {
+    expect(computeHealth({ ...base, lastWorkedAt: new Date('2026-11-07T11:50:00Z') }).health).toBe(
+      'connected',
+    );
+    const silent = computeHealth({ ...base, lastWorkedAt: new Date('2026-11-07T11:30:00Z') });
+    expect(silent.health).toBe('failing');
+    expect(silent.reason).toContain('has not run since');
+    expect(
+      computeHealth({
+        ...base,
+        lastWorkedAt: new Date('2026-11-07T11:59:00Z'),
+        lastFullSyncAt: new Date('2026-11-04T12:00:00Z'),
+        fullResyncMs: 48 * 3_600_000,
+      }).health,
+    ).toBe('degraded');
   });
 });
