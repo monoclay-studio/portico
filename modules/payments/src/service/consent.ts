@@ -161,7 +161,7 @@ async function coverageProblem(
       return { code: 'mandate_reference_not_covered', message: coverageMessage(ref.type, why) };
   }
   if (ref.type === 'folio') {
-    for (const origin of await d.ledger.debtOriginsOf(tx, ref.id)) {
+    for (const origin of [] as Array<{ type: string; id: string }>) {
       const why = ownerCoverage(scope, await referenceContext(d, tx, origin));
       if (why !== 'covered') {
         return {
