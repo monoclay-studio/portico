@@ -486,3 +486,10 @@ Each agent's brief and report are in `agents/`.
   - Built and waiting: distribution, day-close and migration reviews; integration-step fix round 6.
   - Lesson for quality round 4: six review rounds on one consent model. Each fix closed the named path, and the next
     review found the sibling. Amendments 4 and 5 now state the class as rules.
+- **05:04 — Owner: "let's keep going"** <!-- t: owner:4f98af2a @ 2026-11-08T05:04:29.835Z -->. Work resumed from the pause, using the remaining weekly allowance (≈ 6% at 01:10) on the
+  critical path.
+  - Integration-step fix round 6 was sent at once (ADR-0015 Amendment 5; lean, a commit after every step).
+  - The usage-check chain was re-enabled. Each check pushes the branch so a hard stop loses at most one step, and runs
+    `checkpoint.sh` at 97%.
+  - The UX heartbeat stays off (no UX rounds at this usage level).
+  - The 2026-11-11 17:03 resume task stays as the fallback.

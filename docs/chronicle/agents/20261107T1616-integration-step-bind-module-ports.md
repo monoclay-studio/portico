@@ -1,7 +1,7 @@
 # Agent run: Integration step: bind module ports
 
-- Started: 2026-11-07T16:16:26.294Z · last activity: 2026-11-08T00:50:31.993Z
-- Turns: 1313 · tool uses: 1348 · output tokens: 1,196,121
+- Started: 2026-11-07T16:16:26.294Z · last activity: 2026-11-08T05:05:39.181Z
+- Turns: 1314 · tool uses: 1349 · output tokens: 1,196,479
 - Type: general-purpose
 
 ## Brief (2026-11-07T16:16:26.294Z)
@@ -812,6 +812,46 @@ Merge main first.
 - § 6 claim ledger over the README and domain-map lines you change.
 
 Gates as before (lint `--error-on-warnings`). Commit after every meaningful step. Do not push, and never rewrite or amend existing commits.
+
+Address this before completing your current task.
+````
+
+## Follow-up message (2026-11-08T05:05:06.082Z)
+
+````text
+The coordinator sent a message while you were working:
+Integration-step fix round 6. Re-review #6 says "merge after fixes" (P0 0, P1 2, P2 1, P3 3).
+
+Round 5 held:
+- the r5 attacks are refused;
+- N7/N8 confirmed killed;
+- **no front-desk regressions** (walk-in terminal, corporate card via master folio, deposit link, no-show after night audit).
+
+**Budget warning:** the account's weekly allowance is at about 94% with no overage, and work may stop hard at any moment. So:
+- Work lean.
+- **Commit after every meaningful step** (each fix with its test), so a stop loses almost nothing.
+- Fix the P1s first, then P2, then P3.
+- Don't push, and never amend or rewrite commits.
+
+Read first, all on main:
+- `docs/orchestration/reviews/review-integration-step-6.md`, plus the PoC `docs/orchestration/reviews/integration-step-poc/r6-fix-attacks.test.ts.txt`
+- `docs/adr/0015-authorization-across-module-ports.md` **Amendment 5**
+- the "integration-step fix round 6" line in `docs/orchestration/pending-fixes.md`
+
+Merge main first.
+
+1. **R6-P1-1:** consent is judged on the purpose of the money **where it lands**. This applies to every operation that turns card authority into money on a ledger reference: charge, capture, increment, recorded payment, link payment, deposit application, forfeit. Fact limits apply at landing, under the collection lock. A hold's stated purpose never carries through to its capture. Regression test: the reviewer's R6-A (balance refused, then hold + capture of the same amount).
+2. **R6-P1-2:** finance provenance never returns `none` for a non-zero posting. Refund, reversal, correction, allowance, forfeit and receivables transfer each have an owner and direction, and the coverage checks run for each. Regression test: R6-B (Otto's refunded spa moved to Vera's folio, then Vera's card charged).
+3. **R6-P2-1:** the no-show fee rests on the ledger penalty: posted − credited − already collected. Regression test: R6-D.
+4. **P3s:**
+   - `forfeitDeposit` needs a recorded penalty for card-funded deposits, and joins the money-moving writer list.
+   - The deposit owed is summed per stay, not per terms snapshot.
+   - Correct the two overstated claim-ledger lines.
+   - Add an api test for card money still in flight; the reviewer's R6-M1 mutant is killed only by the module suite today.
+
+**Self-check v6**, as in round 5, plus a **landing table**: every operation that turns card authority into money on a ledger reference × the purpose and fact limit checked at landing (file:line) × the test. Also give the § 5.4 mutation rows for each new guard.
+
+Gates as before. Report done when they exit 0.
 
 Address this before completing your current task.
 ````

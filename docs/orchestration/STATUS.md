@@ -192,6 +192,12 @@
   - **First action on resume:** send integration-step fix round 6 (pending-fixes line; ADR-0015 Amendment 5). In
     parallel, the steward reviews of distribution, day-close and migration.
 
+- **2026-11-08 05:05 UTC — RESUMED on the owner's direction ("let's keep going").**
+  - Integration-step fix round 6 was sent to the integration-step author (lean, a commit after every step).
+  - The usage-check chain was re-enabled (each check pushes `feat/integration-step`; `checkpoint.sh` at 97%; stop at 99%).
+  - The UX heartbeat stays disabled.
+  - If the weekly allowance runs out, the 2026-11-11 17:03 resume task continues from this log.
+
 ## 1. Owner, product and how to work with the owner
 
 - Owner: founder of **Monoclay LLC** (Delaware, Stripe Atlas), based in the Maldives. Product: **Portico** (final name).
