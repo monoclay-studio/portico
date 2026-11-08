@@ -9,6 +9,7 @@ import { addDays, DomainError, type LocalDate, requirePermission } from '@portic
 import type { DayClosePolicy, Readiness, ReadinessItem, RunStatus } from '../contracts';
 import { classify, effectiveBlockingCodes } from '../domain/policy';
 import { itemKey, sortItems, summarize, transferDelayed } from '../domain/readiness';
+import { earliestStart } from '../domain/schedule';
 import { DAY_CLOSE_PERMISSIONS as P } from '../manifest';
 import type { DueStay } from '../ports';
 import { type Deps, db } from './context';
@@ -218,6 +219,29 @@ export async function collectReadiness(
     });
   }
 
+  // The no-show cut-off (review P2-5): while this run's no-show step is still to come, nothing is no-showed before the
+  // earliest start, whatever the policy or whoever resumes. Not overridable.
+  if (opts.runId && policy.noShow.mode !== 'off') {
+    const floor = earliestStart(businessDate, policy.earliestStartLocalTime, property.timezone);
+    const step = await db(tx)
+      .selectFrom('day_close.steps')
+      .select('status')
+      .where('run_id', '=', opts.runId)
+      .where('key', '=', 'no_shows')
+      .executeTakeFirst();
+    if (floor && step && step.status !== 'completed' && step.status !== 'skipped' && tx.now < floor) {
+      raws.push({
+        source: 'dayClose',
+        code: 'no_shows_before_cutoff',
+        severity: 'blocking',
+        ref: { type: 'property', id: propertyId },
+        owner: 'night_audit',
+        message: `Arrivals of ${businessDate} are not marked no-show before ${policy.earliestStartLocalTime} property time (${floor.toISOString()}): guests can still arrive. Resume from then (an automatic close continues by itself).`,
+        actions: [],
+        details: { notBefore: floor.toISOString() },
+      });
+    }
+  }
   await gather('reservations.arrivals', async () =>
     (await ports.reservations.listDueArrivals(tx, { propertyId, date: businessDate })).map((s) =>
       arrivalItem(s, policy, tx.now),

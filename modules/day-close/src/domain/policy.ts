@@ -96,6 +96,12 @@ export function effectiveBlockingCodes(p: DayClosePolicy): string[] {
   return [...set].sort();
 }
 
+/**
+ * Blocking codes no override clears (besides integrity): an irreversible guest-facing effect before its cut-off
+ * (review P2-5 — "whatever the policy").
+ */
+export const NON_OVERRIDABLE_CODES = ['no_shows_before_cutoff'] as const;
+
 export function isIntegrityCode(code: string): boolean {
   return (INTEGRITY_CODES as readonly string[]).includes(code);
 }
@@ -109,7 +115,8 @@ export function classify(
   policy: DayClosePolicy,
   overridden: boolean,
 ): { blocking: boolean; overridable: boolean } {
-  if (isIntegrityCode(item.code)) return { blocking: true, overridable: false };
+  if (isIntegrityCode(item.code) || (NON_OVERRIDABLE_CODES as readonly string[]).includes(item.code))
+    return { blocking: true, overridable: false };
   const codes = new Set(effectiveBlockingCodes(policy));
   const demoted = policy.warningCodes.includes(item.code);
   const blocks = codes.has(item.code) || (item.severity === 'blocking' && !demoted);

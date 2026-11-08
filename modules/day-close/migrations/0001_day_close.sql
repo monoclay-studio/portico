@@ -355,7 +355,7 @@ create table day_close.schedule_log (
   id            uuid primary key,
   tenant_id     uuid not null,
   property_id   uuid not null,
-  event         text not null check (event in ('configured', 'skipped_today', 'fired', 'fire_refused', 'overdue')),
+  event         text not null check (event in ('configured', 'skipped_today', 'fired', 'fire_refused', 'adopted_run')),
   business_date date,
   detail        jsonb not null default '{}',
   actor         text not null,
