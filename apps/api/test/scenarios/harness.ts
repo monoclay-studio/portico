@@ -484,6 +484,7 @@ export async function cardOnFile(
     mandate?: boolean;
     mandateFor?: string[];
     purposes?: Array<'guarantee' | 'deposit' | 'balance' | 'incidentals' | 'no_show'>;
+    maxAmount?: { amountMinor: number; currency: string };
   } = {},
 ) {
   const p = s.c.services.payments;
@@ -510,6 +511,8 @@ export async function cardOnFile(
                 legalEntityId,
                 purposes:
                   opts.purposes ?? (['guarantee', 'deposit', 'balance', 'incidentals', 'no_show'] as const),
+                // ADR-0015 Amendment 4 rule 3: an agreement staff record states its limit (USD 50,000 in scenarios).
+                maxAmount: opts.maxAmount ?? { amountMinor: 5_000_000, currency: 'USD' },
                 ...(opts.mandateFor ? { bookingIds: opts.mandateFor } : {}),
               },
             },

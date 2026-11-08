@@ -438,7 +438,8 @@ describe('P2-1 — FD-15: housekeeping cannot tell paid from unpaid arrivals nor
     await payments.chargeNow(desk, {
       propertyId: k.id,
       methodId: card.id,
-      amount: { amountMinor: 90_000, currency: 'USD' },
+      // Within the deposit the booking's agreed schedule asks for (Amendment 4: the fact a deposit rests on).
+      amount: { amountMinor: 30_000, currency: 'USD' },
       ref: { type: 'booking', id: paid.id },
       businessKey: `dep:${newId()}`,
     });

@@ -812,6 +812,16 @@ export async function charge(
   await assertCollectionOwnership(d, tx, input.ref, purpose, input.separateCollection, {
     amountMinor: input.amount.amountMinor,
   });
+  // One collection in flight per reference (the unique index is the backstop): an unresolved payment on it is the
+  // first thing staff must see — it may already have taken the money the fact still allows.
+  const inflight = await db(tx)
+    .selectFrom('payments.payments')
+    .select('id')
+    .where('ref_type', '=', input.ref.type)
+    .where('ref_id', '=', input.ref.id)
+    .where('status', 'in', ['processing', 'pending_verification'])
+    .executeTakeFirst();
+  if (inflight) throw await pendingPaymentError(tx, input.ref);
   if (initiator === 'merchant') {
     // Under the collection lock: within what the fact still allows (deposit due, folio owed, penalty owed), and the
     // destination is still covered (no other stay's charges moved onto it while this charge waited) — rule 2.

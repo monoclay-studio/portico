@@ -83,24 +83,50 @@ async function demoOrg(name = 'Demo Resort') {
         scope: {
           legalEntityId: le.json().id,
           purposes: ['guarantee', 'deposit', 'balance', 'incidentals', 'no_show'],
+          // ADR-0015 Amendment 4 rule 3: an agreement recorded by staff states its amount limit.
+          maxAmount: { amountMinor: 1_000_000, currency: 'USD' },
           folioIds,
         },
       },
     });
-  /** A folio of this property (payments refuse unknown bookings and folios — review P1-1). */
-  const folio = async () =>
-    (
+  // A charge code, so folios can owe something: a card on file pays only what a folio owes (Amendment 4 rule 1).
+  const code = await post('/v1/finance/charge-codes', {
+    propertyId: prop.json().id,
+    code: 'MISC',
+    name: 'Miscellaneous',
+    group: 'misc',
+    taxGroup: null,
+  });
+  expect(code.statusCode).toBe(201);
+  /** The folio owes this much (a posted charge, no tax). */
+  const owe = async (folioId: string, amountMinor: number) => {
+    const r = await post('/v1/finance/charges', {
+      propertyId: prop.json().id,
+      folioId,
+      chargeCode: 'MISC',
+      amount: { amountMinor, currency: 'USD' },
+      description: 'Stay charges',
+    });
+    expect(r.statusCode, r.body).toBe(201);
+  };
+  /** A folio of this property (payments refuse unknown bookings and folios — review P1-1) that owes `oweMinor`. */
+  const folio = async (oweMinor = 100_000) => {
+    const id = (
       await post('/v1/finance/folios', {
         propertyId: prop.json().id,
         owner: { type: 'stay', id: newId() },
         payer: { type: 'guest', id: guestId, name: 'Guest' },
       })
     ).json().id as string;
+    await owe(id, oweMinor);
+    return id;
+  };
   return {
     tenantId,
     auth,
     post,
     folio,
+    owe,
     guestId,
     propertyId: prop.json().id as string,
     accountId: account.json().id as string,
@@ -201,6 +227,7 @@ describe('payments API', () => {
       payer: { type: 'guest', id: org.guestId, name: 'Nadia Rasheed' },
     });
     expect(folio.statusCode).toBe(201);
+    await org.owe(folio.json().id, 1_000);
     const m = await org.method('pm_card_visa', [folio.json().id]);
     const charge = (propertyId: string, folioId: string) =>
       org.post('/v1/payments/charges', {
@@ -217,7 +244,7 @@ describe('payments API', () => {
       url: `/v1/finance/folios/${folio.json().id}`,
       headers: org.auth,
     });
-    expect(read.json().balance).toEqual({ amountMinor: -1_000, currency: 'USD' });
+    expect(read.json().balance).toEqual({ amountMinor: 0, currency: 'USD' });
 
     // Nobody can place an unknown folio: refused, nothing recorded.
     const unknownId = newId();

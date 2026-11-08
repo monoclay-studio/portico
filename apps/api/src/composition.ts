@@ -322,6 +322,9 @@ export function compose(database: PorticoDatabase, options: CompositionOptions =
       // Re-review #3 (R3-P3-3): finance takes payments' collection lock before locking a folio (one lock order).
       lockCollections: (tx, input) =>
         paymentsCollectionsForFinance(bound(paymentsRef, 'payments')).lockCollections(tx, input),
+      // Re-review #5 (R5-P1-2, ADR-0015 Amendment 4 rule 2): card money keeps its agreement's coverage where it lands.
+      cardMoneyMayMeet: (tx, input) =>
+        paymentsCollectionsForFinance(bound(paymentsRef, 'payments')).cardMoneyMayMeet(tx, input),
     },
     // Payer names and invoice particulars for folios and tax invoices: guest profiles, companies and agencies (guests).
     payers: {

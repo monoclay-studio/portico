@@ -114,7 +114,8 @@ const methodFor = async (
         termsVersion: 'card-on-file-2027-01',
         acceptedAt: s.clock.now().toISOString(),
         channel: 'front_desk',
-        scope: { legalEntityId: k.legalEntityId, ...scope } as never,
+        // Amendment 4 rule 3: an agreement staff record states its limit (a test may set a smaller one).
+        scope: { legalEntityId: k.legalEntityId, maxAmount: usd(5_000_000), ...scope } as never,
       },
     }),
   );
@@ -245,7 +246,8 @@ describe('R4-P1-1 — a card-on-file agreement covers only the bookings it names
         payments.chargeNow(desk, {
           propertyId: k.id,
           methodId: card.id,
-          amount: usd(500_000),
+          // Within any agreed deposit: the refusals below are about coverage, not the amount.
+          amount: usd(10_000),
           ref: { type: 'booking', id: bookingId },
           purpose: 'deposit',
           businessKey: newId(),
@@ -767,21 +769,39 @@ describe('R4-P2-2 — a deactivation the provider never confirms is owned, aged 
       // The late item never claims a link exists to send.
       const items = (await lateItems(folio?.id as string)).filter((i) => i.status === 'open');
       for (const i of items) expect(i.message).not.toMatch(/is open — send it/);
-      // Staff stop it in the provider dashboard and confirm it over HTTP; the exception closes, the replacement goes out.
+      // Finance stops it in the provider dashboard and confirms it over HTTP (If-Match); the exception closes and the
+      // replacement goes out (R5-P2-1: a finance role only — not the desk, which may create links).
       await org.run(org.setup, (tx) => payments.tx.setSimulatorControls(tx, account, { outage: null }));
-      // A role without payment-request rights cannot confirm it.
-      const housekeeping = org.staff('housekeeping_supervisor', 'Mariyam', [k.id]);
-      const denied = await settle(
-        org.run(housekeeping, (tx) =>
-          payments.tx.confirmLinkStopped(tx, { requestId: first?.id as string, reason: 'Not mine to say' }),
-        ),
-      );
-      expect(denied.ok ? 'confirmed' : (denied.e as { status?: number }).status).toBe(403);
+      const version = (
+        await sql<{
+          version: number;
+        }>`select version from payments.payment_requests where id = ${first?.id}`.execute(s.t.admin.kysely)
+      ).rows[0]?.version as number;
+      for (const role of ['front_desk', 'housekeeping_supervisor'] as const) {
+        const denied = await settle(
+          org.run(org.staff(role, 'Not finance', [k.id]), (tx) =>
+            payments.tx.confirmLinkStopped(tx, {
+              requestId: first?.id as string,
+              reason: 'Not mine to say',
+              expectedVersion: version,
+            }),
+          ),
+        );
+        expect(denied.ok ? 'confirmed' : (denied.e as { status?: number }).status).toBe(403);
+      }
       const auth = await signIn(s, org);
-      const confirmed = await s.app.inject({
+      const noMatch = await s.app.inject({
         method: 'POST',
         url: `/v1/payments/requests/${first?.id}/link-stopped`,
         headers: { ...auth, 'idempotency-key': newId() },
+        payload: { reason: 'Expired in the dashboard' },
+      });
+      expect(noMatch.statusCode).toBe(400);
+      expect(noMatch.json().code).toBe('if_match_required');
+      const confirmed = await s.app.inject({
+        method: 'POST',
+        url: `/v1/payments/requests/${first?.id}/link-stopped`,
+        headers: { ...auth, 'idempotency-key': newId(), 'if-match': `"${version}"` },
         payload: { reason: 'Expired in the dashboard' },
       });
       expect(confirmed.statusCode, confirmed.body).toBe(200);
@@ -1014,10 +1034,26 @@ describe('R4-P3-3 / R4-P3-4 — balance after a paid deposit link; the no-show p
         )
       ).find((f) => f.id === folioId)?.balance.amountMinor;
     expect(await bal()).toBe(0);
-    expect(codeOf(await balance('Guest asked to pay the extras now, separately'))).toBe('accepted');
+    // R5-P1-1: a reason does not make money owed — the folio owes nothing beyond the deposit held, so the card on file
+    // pays nothing as its balance.
+    expect(codeOf(await balance('Guest asked to pay the extras now, separately'))).toBe('balance_not_owed');
+    // Once the stay's charges are on the folio, the card pays what the held deposit does not: no reason needed.
+    await org.run(desk, (tx) =>
+      finance.postCharge(tx, {
+        propertyId: k.id,
+        target: { type: 'stay', id: b.stays[0]?.id as string },
+        chargeCode: 'MISC',
+        amount: usd(60_000),
+        description: 'Dinner and excursions',
+        serviceDate: '2027-03-10',
+        sourceRef: { type: 'pos_check', id: newId() },
+        idempotencyKey: `pos:${newId()}`,
+      }),
+    );
+    expect(codeOf(await balance())).toBe('accepted');
   });
 
-  it('R4-P3-4: a no-show fee is the `no_show` purpose — covered by a no-show consent, refused without one', async () => {
+  it('R4-P3-4, corrected by R5-P1-1: `no_show` is not a label — without a recorded penalty it is refused for any card', async () => {
     const org = await organization(s);
     const k = await kandu(s, org, '2027-03-10');
     const { payments } = s.c.services;
@@ -1031,26 +1067,20 @@ describe('R4-P3-3 / R4-P3-4 — balance after a paid deposit link; the no-show p
       { type: 'guest_profile', id: profileId },
       { purposes: ['guarantee', 'no_show'], bookingIds: [b.id] },
     );
-    const guaranteeOnly = await methodFor(
-      org,
-      k,
-      { type: 'guest_profile', id: profileId },
-      { purposes: ['guarantee'], bookingIds: [b.id] },
-      'pm_card_mastercard',
+    const fee = await settle(
+      payments.chargeNow(desk, {
+        propertyId: k.id,
+        methodId: withNoShow.id,
+        amount: usd(40_000),
+        ref: { type: 'folio', id: folioId },
+        purpose: 'no_show',
+        businessKey: newId(),
+      }),
     );
-    const fee = (methodId: string) =>
-      settle(
-        payments.chargeNow(desk, {
-          propertyId: k.id,
-          methodId,
-          amount: usd(40_000),
-          ref: { type: 'folio', id: folioId },
-          purpose: 'no_show',
-          businessKey: newId(),
-        }),
-      );
-    expect(codeOf(await fee(guaranteeOnly.id))).toBe('mandate_purpose_not_covered');
-    expect(codeOf(await fee(withNoShow.id))).toBe('accepted');
+    // The booking arrives three months later: no no-show is recorded, so there is no fee to take (the round-4 version
+    // of this test asserted `accepted` — the reviewer's evidence for R5-P1-1).
+    expect(codeOf(fee)).toBe('no_show_not_recorded');
+    expect(await paymentsOn(folioId)).toEqual([]);
   });
 
   it('R4-K (clean, kept): a legacy agreement without a scope is refused on charge, hold, increase and capture', async () => {
@@ -1135,10 +1165,11 @@ describe('R4-P3-3 / R4-P3-4 — balance after a paid deposit link; the no-show p
       );
       codes.push(codeOf(r));
     }
+    // R5-P1-1: every label is display text — the money is the folio's balance, which the paid link owns.
     expect(codes).toEqual([
       'collection_owned_by_payment_request',
       'collection_owned_by_payment_request',
-      'mandate_purpose_not_covered',
+      'collection_owned_by_payment_request',
     ]);
   });
 });
@@ -1163,6 +1194,19 @@ describe('E-114 — the per-reference collection lock: a competing writer inside
     const b = await bookFor(org, k, desk, profileId, '2027-06-14', '2027-06-16');
     await cardholderConfirms(s, org, card.id, b.id);
     const folioId = await folioOfStay(org, k, b.stays[0]?.id as string, profileId);
+    // The folio owes the stay's charges (a card on file pays what is owed — Amendment 4).
+    await org.run(desk, (tx) =>
+      s.c.services.finance.postCharge(tx, {
+        propertyId: k.id,
+        target: { type: 'stay', id: b.stays[0]?.id as string },
+        chargeCode: 'MISC',
+        amount: usd(60_000),
+        description: 'Stay charges',
+        serviceDate: '2027-03-10',
+        sourceRef: { type: 'pos_check', id: newId() },
+        idempotencyKey: `pos:${newId()}`,
+      }),
+    );
     const requestInput = () => ({
       propertyId: k.id,
       payer: { type: 'guest_profile' as const, id: profileId, name: 'Elena Ivanova' },

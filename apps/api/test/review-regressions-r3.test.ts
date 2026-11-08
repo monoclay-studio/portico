@@ -421,7 +421,7 @@ describe('R3-P2-1 — the guard treats a booking and its folios as one family; l
   it("PoC R3-D1 flipped: after a paid balance link, the same money labelled 'incidentals' or 'deposit' needs a reason", async () => {
     const org = await organization(s);
     const k = await kandu(s, org, '2027-03-10');
-    const { folioId, card, profileId, desk } = await bookingWithFolio(org, k);
+    const { b, folioId, card, profileId, desk } = await bookingWithFolio(org, k);
     const folio = { type: 'folio' as const, id: folioId };
     await paidLink(org, k, folio, 'balance', profileId);
     for (const purpose of [undefined, 'incidentals', 'deposit'] as const) {
@@ -432,6 +432,20 @@ describe('R3-P2-1 — the guard treats a booking and its folios as one family; l
     expect(
       (await paymentsOn(folioId)).filter((p) => p.status === 'succeeded').map((p) => p.amount_minor),
     ).toEqual([30_000]);
+    // R5-P1-1: whatever the label, a card on file pays only what the folio owes — a second bill, once posted, is paid
+    // with the stated reason (audited).
+    await org.run(desk, (tx) =>
+      s.c.services.finance.postCharge(tx, {
+        propertyId: k.id,
+        target: { type: 'stay', id: b.stays[0]?.id as string },
+        chargeCode: 'MISC',
+        amount: { amountMinor: 60_000, currency: 'USD' },
+        description: 'Room service',
+        serviceDate: '2027-03-10',
+        sourceRef: { type: 'pos_check', id: newId() },
+        idempotencyKey: `pos:${newId()}`,
+      }),
+    );
     const ok = await charge(desk, k, card.id, folio, 'incidentals', 'Second room service bill, separate');
     expect(ok.ok).toBe(true);
   });

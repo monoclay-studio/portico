@@ -809,7 +809,9 @@ export async function assessGuaranteeCard(
     named &&
     scope.legalEntityId === property.legalEntityId &&
     (scope.propertyIds === undefined || scope.propertyIds.includes(property.id)) &&
-    (scope.purposes ?? []).includes('guarantee')
+    (scope.purposes ?? []).includes('guarantee') &&
+    // Amendment 4: "named" is not enough — the booking as it is now (every stay) must be inside the consent.
+    consent.withinConsent
   ) {
     if (!withinAmount()) return tooMuch();
     return {

@@ -63,6 +63,20 @@ describe('S06 — refund retried after an interruption', () => {
       owner: { type: 'stay', id: b.stays[0]?.id as string },
       payer: { type: 'guest', id: guest, name: 'Nadia Rasheed' },
     });
+    // The stay's bill: the card on file pays what the folio owes (ADR-0015 Amendment 4).
+    await org.run(org.setup, (tx) =>
+      finance.postCharge(tx, {
+        propertyId: k.id,
+        target: { type: 'stay', id: b.stays[0]?.id as string },
+        chargeCode: 'MISC',
+        amount: { amountMinor: 80_000, currency: 'USD' },
+        priceMode: 'inclusive',
+        description: 'Stay charges',
+        serviceDate: '2027-03-08',
+        sourceRef: { type: 'pos_check', id: newId() },
+        idempotencyKey: `pos:${newId()}`,
+      }),
+    );
     const paid = await post('/v1/payments/charges', {
       propertyId: k.id,
       methodId: card.id,
@@ -110,7 +124,8 @@ describe('S06 — refund retried after an interruption', () => {
     );
     expect(ops.rows.every((r) => r.attempts === 1)).toBe(true);
     const f = await org.run(manager, (tx) => finance.getFolio(tx, folio.json().id));
-    expect(f.balance).toEqual({ amountMinor: -50_000, currency: 'USD' });
+    // The bill (80,000) was paid by the card (80,000); the 30,000 refunded is owed again.
+    expect(f.balance).toEqual({ amountMinor: 30_000, currency: 'USD' });
     const original = await s.app.inject({
       method: 'GET',
       url: `/v1/payments/transactions/${paymentId}`,
