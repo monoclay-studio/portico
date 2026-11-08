@@ -321,6 +321,49 @@ describe('R6-P1-1 — consent is judged on the purpose of the money where it lan
   });
 });
 
+describe('R6-P1-1 sibling — the fact limit applies at landing: a capture onto the booking is a deposit up to the schedule', () => {
+  it('a hold bigger than the deposit owed is captured onto the booking only up to the agreed deposit', async () => {
+    const org = await organization(s);
+    const k = await kandu(s, org, '2027-03-10');
+    const { payments } = s.c.services;
+    const desk = org.staff('front_desk', 'Hassan', [k.id]);
+    const { profileId } = await guestWithCard(s, org, k);
+    const b = await bookFor(org, k, desk, profileId, '2027-04-10', '2027-04-12');
+    const card = await methodFor(
+      org,
+      k,
+      { type: 'guest_profile', id: profileId },
+      { purposes: ['guarantee', 'deposit'], bookingIds: [b.id] },
+    );
+    const hold = await settle(
+      org.run(desk, (tx) =>
+        payments.tx.authorize(tx, {
+          propertyId: k.id,
+          methodId: card.id,
+          amount: usd(4_000_000),
+          ref: { type: 'booking', id: b.id },
+          businessKey: newId(),
+        }),
+      ),
+    );
+    expect(codeOf(hold)).toBe('accepted');
+    const holdId = hold.ok ? hold.v.id : '';
+    await payments.settle(desk, { type: 'authorization', id: holdId });
+    const capture = (amountMinor?: number) =>
+      settle(
+        org.run(desk, (tx) =>
+          payments.tx.capture(tx, {
+            authorizationId: holdId,
+            ...(amountMinor ? { amount: usd(amountMinor) } : {}),
+            businessKey: newId(),
+          }),
+        ),
+      );
+    expect(codeOf(await capture())).toBe('deposit_not_due');
+    expect(codeOf(await capture(10_000))).toBe('accepted');
+  });
+});
+
 // ───────────────────────── R6-P1-2: every posting has an owner ─────────────────────────
 
 describe('R6-P1-2 — a refund posting is the debt of the stay it was refunded on; moving it never lets another card pay it', () => {
