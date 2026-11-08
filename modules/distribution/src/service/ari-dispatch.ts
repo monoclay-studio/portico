@@ -21,7 +21,7 @@ import {
 import { availabilityBody, restrictionsBody } from '../adapters/channex/wire';
 import { type AriResult, HubError } from '../adapters/hub';
 import type { AriKind, CellValue, PublishReason } from '../domain/ari';
-import { type BudgetState, reserveSlot } from '../domain/budget';
+import { BUDGET_WINDOW_MS, type BudgetState, reserveSlot, restampAtCompletion } from '../domain/budget';
 import { type HubFailure, isEscalated, nextAttemptAt, RATE_LIMIT_PAUSE_MS } from '../domain/delivery';
 import { countNights, normalizeRanges, takeNights } from '../domain/ranges';
 import { DISTRIBUTION_EVENTS as E } from '../events';
@@ -29,6 +29,7 @@ import { RECORD } from '../manifest';
 import type { Product } from './ari-dirty';
 import { type BuiltCell, buildCells, type ProductRanges, packCells } from './ari-values';
 import {
+  budgetNow,
   type ConnectionRow,
   type DistributionDeps,
   db,
@@ -80,22 +81,58 @@ async function loadBudget(tx: TxContext, conn: ConnectionRow, kind: AriKind): Pr
   };
 }
 
+/** The budget's limit and window for a kind: the hub's 60 s plus the connection's safety margin (P2-2). */
+function budgetRule(conn: ConnectionRow, kind: AriKind): { limit: number; windowMs: number } {
+  const s = settingsOf(conn);
+  return {
+    limit: kind === 'availability' ? s.availabilityPerMinute : s.restrictionsPerMinute,
+    windowMs: BUDGET_WINDOW_MS + s.budgetMarginSeconds * 1000,
+  };
+}
+
+async function saveSends(tx: TxContext, connectionId: string, kind: AriKind, sends: readonly Date[]) {
+  await sql`update distribution.ari_budget set sends = ${sends.map((d) => d.toISOString())}::timestamptz[]
+            where connection_id = ${connectionId} and kind = ${kind}`.execute(tx.db);
+}
+
 /**
  * Atomically spend one token of the connection's budget for `kind` (row lock: concurrent dispatchers serialize and
- * never exceed the limit). Returns when the next token is free if none is.
+ * never exceed the limit), stamped on the budget clock read AFTER the lock is held. Returns the stamp (re-stamped at
+ * completion), or when the next token is free.
  */
 export async function reserveBudget(
   tx: TxContext,
+  deps: Pick<DistributionDeps, 'config'>,
   conn: ConnectionRow,
   kind: AriKind,
-): Promise<{ ok: true } | { ok: false; retryAt: Date }> {
-  const s = settingsOf(conn);
-  const limit = kind === 'availability' ? s.availabilityPerMinute : s.restrictionsPerMinute;
+): Promise<{ ok: true; stamp: Date } | { ok: false; retryAt: Date }> {
+  const { limit, windowMs } = budgetRule(conn, kind);
   const state = await loadBudget(tx, conn, kind);
-  const r = reserveSlot(state, tx.now, limit);
-  await sql`update distribution.ari_budget set sends = ${r.sends.map((d) => d.toISOString())}::timestamptz[]
-            where connection_id = ${conn.id} and kind = ${kind}`.execute(tx.db);
-  return r.ok ? { ok: true } : { ok: false, retryAt: r.retryAt };
+  const now = await budgetNow(tx, deps);
+  const r = reserveSlot(state, now, limit, windowMs);
+  await saveSends(tx, conn.id, kind, r.sends);
+  // retryAt is on the budget clock: hand the scheduler the same DELAY on the transaction's clock.
+  return r.ok
+    ? { ok: true, stamp: r.stamp }
+    : { ok: false, retryAt: new Date(tx.now.getTime() + (r.retryAt.getTime() - now.getTime())) };
+}
+
+/** Count the request's slot from its completion (P2-2). Caller holds the connection and message locks. */
+async function restampBudget(
+  tx: TxContext,
+  deps: Pick<DistributionDeps, 'config'>,
+  conn: ConnectionRow,
+  kind: AriKind,
+  reserved: Date,
+): Promise<void> {
+  const { windowMs } = budgetRule(conn, kind);
+  const state = await loadBudget(tx, conn, kind);
+  await saveSends(
+    tx,
+    conn.id,
+    kind,
+    restampAtCompletion(state.sends, reserved, await budgetNow(tx, deps), windowMs),
+  );
 }
 
 async function pauseBudget(tx: TxContext, connectionId: string, kind: AriKind, until: Date): Promise<void> {
@@ -107,9 +144,13 @@ async function pauseBudget(tx: TxContext, connectionId: string, kind: AriKind, u
     .execute();
 }
 
-export async function nextBudgetSlot(tx: TxContext, conn: ConnectionRow, kind: AriKind): Promise<Date> {
-  const s = settingsOf(conn);
-  const limit = kind === 'availability' ? s.availabilityPerMinute : s.restrictionsPerMinute;
+export async function nextBudgetSlot(
+  tx: TxContext,
+  deps: Pick<DistributionDeps, 'config'>,
+  conn: ConnectionRow,
+  kind: AriKind,
+): Promise<Date> {
+  const { limit, windowMs } = budgetRule(conn, kind);
   const row = await db(tx)
     .selectFrom('distribution.ari_budget')
     .selectAll()
@@ -117,15 +158,17 @@ export async function nextBudgetSlot(tx: TxContext, conn: ConnectionRow, kind: A
     .where('kind', '=', kind)
     .executeTakeFirst();
   if (!row) return tx.now;
+  const now = await budgetNow(tx, deps);
   const r = reserveSlot(
     {
       sends: (row.sends ?? []).map((d) => new Date(d)),
       pausedUntil: row.paused_until ? new Date(row.paused_until) : null,
     },
-    tx.now,
+    now,
     limit,
+    windowMs,
   );
-  return r.ok ? tx.now : r.retryAt;
+  return r.ok ? tx.now : new Date(tx.now.getTime() + (r.retryAt.getTime() - now.getTime()));
 }
 
 async function openMessage(tx: TxContext, connectionId: string, kind: AriKind, forUpdate: boolean) {
@@ -149,6 +192,8 @@ type Claim =
       hubCtx: Awaited<ReturnType<typeof hubContext>>;
       batch: ReturnType<typeof packCells>;
       provenance: 'live' | 'sandbox' | 'simulated';
+      /** The budget slot's reservation stamp (re-stamped at completion). */
+      budgetStamp: Date;
     };
 
 /**
@@ -284,7 +329,7 @@ async function claim(
       }
       return { kind: 'skip', nextDueAt: null };
     }
-    const budget = await reserveBudget(tx, conn, kind);
+    const budget = await reserveBudget(tx, deps, conn, kind);
     if (!budget.ok) return { kind: 'skip', nextDueAt: budget.retryAt };
     for (const c of consumed) {
       if (c.rest.length === 0)
@@ -377,7 +422,16 @@ async function claim(
         })
         .execute();
     }
-    return { kind: 'send', connectionId: conn.id, messageId, token, hubCtx, batch, provenance };
+    return {
+      kind: 'send',
+      connectionId: conn.id,
+      messageId,
+      token,
+      hubCtx,
+      batch,
+      provenance,
+      budgetStamp: budget.stamp,
+    };
   });
 }
 
@@ -426,6 +480,7 @@ export async function upsertChannelState(
 
 async function record(
   database: PorticoDatabase,
+  deps: DistributionDeps,
   ctx: RequestContext,
   c: Extract<Claim, { kind: 'send' }>,
   kind: AriKind,
@@ -440,6 +495,8 @@ async function record(
       .where('id', '=', c.messageId)
       .forUpdate()
       .executeTakeFirst();
+    // Whatever the answer (even a late one), the request is complete: count its slot from now (P2-2).
+    await restampBudget(tx, deps, conn, kind, c.budgetStamp);
     if (msg?.status !== 'sending' || msg.lease_token !== c.token) {
       // A late answer for a send that was already taken over or decided: logged, never applied.
       await recordExchange(tx, {
@@ -715,7 +772,7 @@ export async function dispatchKind(
       outcome = { ok: false, failure: err.failure, ms: Date.now() - started };
     }
   }
-  const result = await record(database, ctx, c, kind, outcome);
+  const result = await record(database, deps, ctx, c, kind, outcome);
   // Health and protection follow the committed outcome, in their own transaction (protection marks cells dirty
   // under the ARI lock, which must never be awaited while holding a message row).
   if (result.outcome !== 'late') {

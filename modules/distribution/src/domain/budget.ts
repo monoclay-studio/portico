@@ -10,24 +10,30 @@
 export const BUDGET_WINDOW_MS = 60_000;
 
 export interface BudgetState {
-  /** Instants of requests still inside the window (older ones may be present; they are pruned). */
+  /** Instants of requests still inside the window, possibly LATER than `now` (another worker, a completion). */
   sends: readonly Date[];
   /** Set after the hub refused for rate (HTTP 429): nothing is sent before this instant. */
   pausedUntil: Date | null;
 }
 
 export type Reservation =
-  | { ok: true; sends: Date[] }
+  | { ok: true; sends: Date[]; stamp: Date }
   | { ok: false; sends: Date[]; retryAt: Date; reason: 'budget_exhausted' | 'paused_after_rate_limit' };
 
+/**
+ * Drop only stamps that have LEFT the window (P2-2). A stamp later than `now` is kept and counted: it was written by
+ * a worker whose clock is ahead, or re-stamped at a request's completion; discarding what this worker cannot see as
+ * past is how two workers granted 20 requests in one minute.
+ */
 export function pruneSends(sends: readonly Date[], now: Date, windowMs = BUDGET_WINDOW_MS): Date[] {
   const floor = now.getTime() - windowMs;
-  return sends
-    .filter((s) => s.getTime() > floor && s.getTime() <= now.getTime())
-    .sort((a, b) => a.getTime() - b.getTime());
+  return sends.filter((s) => s.getTime() > floor).sort((a, b) => a.getTime() - b.getTime());
 }
 
-/** Try to spend one token at `now`. Pure: the caller persists the returned `sends` under a row lock. */
+/**
+ * Try to spend one token at `now`. Pure: the caller persists the returned `sends` under a row lock. The stamp is
+ * never earlier than the latest stamp (monotonic: a clock stepping back cannot free a slot).
+ */
 export function reserveSlot(
   state: BudgetState,
   now: Date,
@@ -39,14 +45,37 @@ export function reserveSlot(
     return { ok: false, sends, retryAt: state.pausedUntil, reason: 'paused_after_rate_limit' };
   }
   const cap = Math.max(0, Math.floor(limit));
-  if (sends.length < cap) return { ok: true, sends: [...sends, now] };
+  if (sends.length < cap) {
+    const latest = sends[sends.length - 1];
+    const stamp = latest && latest.getTime() > now.getTime() ? latest : now;
+    return { ok: true, sends: [...sends, stamp], stamp };
+  }
   const oldest = sends[sends.length - cap] ?? sends[0] ?? now;
   return {
     ok: false,
     sends,
-    retryAt: new Date(oldest.getTime() + windowMs),
+    retryAt: new Date(Math.max(now.getTime(), oldest.getTime() + windowMs)),
     reason: 'budget_exhausted',
   };
+}
+
+/**
+ * A request finished (answer, failure or timeout): its slot is counted from the LATER of its reservation and its
+ * completion, since the hub may have received it at any instant in between (latency, a cold TLS handshake) — P2-2.
+ * The reservation stamp is replaced (or the completion added when it was already pruned).
+ */
+export function restampAtCompletion(
+  sends: readonly Date[],
+  reserved: Date,
+  completedAt: Date,
+  windowMs = BUDGET_WINDOW_MS,
+): Date[] {
+  const later = completedAt.getTime() > reserved.getTime() ? completedAt : reserved;
+  const out = [...sends];
+  const i = out.findIndex((s) => s.getTime() === reserved.getTime());
+  if (i >= 0) out[i] = later;
+  else out.push(later);
+  return pruneSends(out, later, windowMs);
 }
 
 /** When the next token is available (now when one is free). */

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { compareCell, compressRuns, publishedAvailability, restrictionValueFrom } from './ari';
-import { BUDGET_WINDOW_MS, maxInAnyWindow, nextSlotAt, reserveSlot } from './budget';
+import { BUDGET_WINDOW_MS, maxInAnyWindow, nextSlotAt, reserveSlot, restampAtCompletion } from './budget';
 import { classifyHttp, isEscalated, nextAttemptAt, retryDelayMs } from './delivery';
 import { computeHealth, type HealthFacts } from './health';
 import { clipRanges, countNights, mergeRanges, normalizeRanges, subtractRanges, takeNights } from './ranges';
@@ -102,6 +102,59 @@ describe('budget — never more than the limit in ANY 60-second window', () => {
   });
   it('a limit of 0 never sends', () => {
     expect(reserveSlot({ sends: [], pausedUntil: null }, at(0), 0).ok).toBe(false);
+  });
+
+  it('P2-2: stamps later than "now" are kept and counted (a worker whose clock is behind cannot erase them)', () => {
+    const ahead = Array.from({ length: 10 }, (_, i) => new Date(at(2).getTime() + i));
+    const r = reserveSlot({ sends: ahead, pausedUntil: null }, at(0), 10);
+    expect(r.ok).toBe(false);
+    expect(r.sends).toHaveLength(10);
+  });
+
+  it('P2-2: stamps are monotonic — a clock stepping back cannot free a slot', () => {
+    const r = reserveSlot({ sends: [at(30)], pausedUntil: null }, at(10), 10);
+    expect(r).toMatchObject({ ok: true, stamp: at(30) });
+  });
+
+  it('P2-2: re-stamping at completion replaces the reservation (or adds the completion when it was pruned)', () => {
+    expect(restampAtCompletion([at(0), at(1)], at(0), at(3))).toEqual([at(1), at(3)]);
+    expect(restampAtCompletion([at(1)], at(0), at(3))).toEqual([at(1), at(3)]);
+    // A completion never moves a stamp earlier.
+    expect(restampAtCompletion([at(5)], at(5), at(4))).toEqual([at(5)]);
+  });
+
+  it('P2-2 (B5 inverted): with re-stamping at completion the HUB never sees more than the limit in any 60 s, whatever the latency', () => {
+    let seed = 11;
+    const rand = () => {
+      seed = (seed * 1103515245 + 12345) % 2 ** 31;
+      return seed / 2 ** 31;
+    };
+    for (const margin of [0, 2_000]) {
+      const windowMs = BUDGET_WINDOW_MS + margin;
+      let sends: Date[] = [];
+      const arrivals: Date[] = [];
+      let t = at(0).getTime();
+      let inFlight: Array<{ reserved: Date; done: number }> = [];
+      for (let step = 0; step < 20_000; step++) {
+        t += Math.floor(rand() * 400);
+        // Requests whose answer is in are re-stamped at their completion.
+        const still: typeof inFlight = [];
+        for (const f of inFlight) {
+          if (f.done <= t) sends = restampAtCompletion(sends, f.reserved, new Date(f.done), windowMs);
+          else still.push(f);
+        }
+        inFlight = still;
+        const r = reserveSlot({ sends, pausedUntil: null }, new Date(t), 10, windowMs);
+        sends = r.sends;
+        if (!r.ok) continue;
+        // Latency jitter: a cold TLS handshake (up to 3 s) or a warm connection (20 ms); the hub counts arrival.
+        const latency = rand() < 0.2 ? Math.floor(rand() * 3_000) : 20;
+        arrivals.push(new Date(t + latency));
+        inFlight.push({ reserved: r.stamp, done: t + latency + 5 });
+      }
+      expect(arrivals.length).toBeGreaterThan(500);
+      expect(maxInAnyWindow(arrivals, BUDGET_WINDOW_MS)).toBeLessThanOrEqual(10);
+    }
   });
 });
 

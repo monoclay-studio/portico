@@ -172,7 +172,7 @@ describe('concurrency: the budget is reserved atomically', () => {
             .selectAll()
             .where('id', '=', c.connectionId)
             .executeTakeFirstOrThrow();
-          return svc.reserveBudget(tx, row as never, 'availability');
+          return svc.reserveBudget(tx, h.dist.deps, row as never, 'availability');
         }),
       ),
     );

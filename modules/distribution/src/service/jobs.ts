@@ -150,7 +150,7 @@ export async function nextDue(
           .where('connection_id', '=', c.id)
           .where('kind', '=', kind)
           .executeTakeFirst();
-        if (dirty?.at && !open) push(await nextBudgetSlot(tx, c, kind));
+        if (dirty?.at && !open) push(await nextBudgetSlot(tx, deps, c, kind));
         // Re-evaluate health once, when the oldest unconfirmed change crosses the freshness target.
         if (dirty?.at)
           pushFuture(

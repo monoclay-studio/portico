@@ -212,7 +212,9 @@ export async function startHarness(opts: { http?: HubTransport } = {}): Promise<
     database: t.db,
     ports: bindPorts(inventory, rates, reservations, secrets),
     http,
-    config: { publicApiBaseUrl: 'https://api.portico.test' },
+    // Simulated time: the budget is accounted on the transaction's (fixed, advanced) clock. The production default,
+    // the database clock, is exercised by test/budget-clock.test.ts.
+    config: { publicApiBaseUrl: 'https://api.portico.test', budgetClock: 'transaction' },
   });
   const environmentCache = new Map<string, TenantEnvironment>();
   return {

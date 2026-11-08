@@ -98,6 +98,11 @@ export const connectionSettings = z
     /** Requests per minute per kind. Defaults follow the Channex limit (10 + 10 = the owner's 20 ARI/minute). */
     availabilityPerMinute: z.number().int().min(1).max(100).default(10),
     restrictionsPerMinute: z.number().int().min(1).max(100).default(10),
+    /**
+     * Safety margin added to the hub's 60-second window: a budget slot returns 60 s + this after the later of its
+     * reservation and its completion (latency jitter, clock differences between the hub and the database).
+     */
+    budgetMarginSeconds: z.number().int().min(0).max(30).default(2),
     /** Nights published ahead of the business date (DST-R05: 400). */
     horizonDays: z.number().int().min(30).max(730).default(400),
     /** A change the channel has not confirmed within this time makes the connection degraded. */

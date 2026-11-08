@@ -1118,7 +1118,8 @@ export async function pullFeed(
       const r = await storeRevision(tx, conn, it.revision, via);
       if (r.outcome === 'stored') {
         stored++;
-        const age = it.revision.insertedAt ? tx.now.getTime() - Date.parse(it.revision.insertedAt) : 0;
+        const at = hubMicrosOf(it.revision.insertedAt);
+        const age = at === null ? 0 : tx.now.getTime() - Math.floor(at / 1000);
         if (conn.activated_at && age > s.freshnessTargetSeconds * 1000) gap = true;
       } else duplicates++;
     }

@@ -22,13 +22,27 @@ export interface DistributionConfig {
   callDeadlineMs: number;
   /** A claimed send is owned by its sender for this long. */
   leaseMs: number;
+  /**
+   * The clock the ARI budget is accounted on (P2-2). `database`: the database's `clock_timestamp()`, read under the
+   * budget row lock — ONE clock every worker shares, so a worker whose clock is ahead or behind can neither erase
+   * nor double-spend slots. `transaction`: the transaction's clock (tests that simulate time with a fixed clock).
+   */
+  budgetClock: 'database' | 'transaction';
 }
 
 export const DEFAULT_CONFIG: DistributionConfig = {
   publicApiBaseUrl: 'http://localhost:4000',
   callDeadlineMs: 45_000,
   leaseMs: 60_000,
+  budgetClock: 'database',
 };
+
+/** Now, on the budget's clock (call it while holding the budget row lock, so the instant is after the wait). */
+export async function budgetNow(tx: TxContext, deps: Pick<DistributionDeps, 'config'>): Promise<Date> {
+  if (deps.config.budgetClock === 'transaction') return tx.now;
+  const r = await sql<{ now: Date }>`select clock_timestamp() as now`.execute(tx.db);
+  return new Date(r.rows[0]?.now ?? tx.now);
+}
 
 export interface DistributionDeps {
   ports: DistributionPorts;
