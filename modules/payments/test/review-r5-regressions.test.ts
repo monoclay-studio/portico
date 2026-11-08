@@ -244,9 +244,8 @@ describe('Amendment 4 rule 3 and R5-P3-1 — staff agreements are capped; eviden
       recordedBy: 'cardholder',
       scope: { noLimitChosenByCardholder: true },
     });
-    expect((row?.mandate.scope as { noLimitChosenAt?: string }).noLimitChosenAt).toBe(
-      h.clock.now().toISOString(),
-    );
+    const scope = (row?.mandate ?? {}).scope as { noLimitChosenAt?: string } | undefined;
+    expect(scope?.noLimitChosenAt).toBe(h.clock.now().toISOString());
   });
 
   it('an agreement staff saved without a limit (before rule 3) is not used', async () => {
