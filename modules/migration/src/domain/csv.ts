@@ -10,6 +10,8 @@ export interface Table {
   /** Data rows (header excluded). Short rows are padded with ''; extra cells are kept. */
   rows: string[][];
   delimiter: string;
+  /** Spreadsheets only: date serials count from 1904-01-01 (Mac-origin workbooks), not from 1899-12-30. */
+  date1904?: boolean;
 }
 
 export const CSV_LIMITS = { maxBytes: 20 * 1024 * 1024, maxRows: 200_000, maxColumns: 200, maxCell: 10_000 };

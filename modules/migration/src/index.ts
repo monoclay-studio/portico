@@ -5,6 +5,7 @@ export {
   FREEZE_TARGET_MINUTES,
   ROLLBACK_WINDOW_HOURS,
 } from './domain/cutover';
+export { XLSX_LIMITS, zip as writeZip } from './domain/xlsx';
 export { MIGRATION_EVENTS, migrationSubscriptions } from './events';
 export { migrationHousekeeping, migrationJobs } from './jobs';
 export * from './manifest';

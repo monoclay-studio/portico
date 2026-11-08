@@ -1,14 +1,40 @@
 /**
  * Minimal XLSX (Office Open XML spreadsheet) reader and writer — no dependency. Reads every worksheet into a
  * `Table` (first row = headers): shared strings, inline strings, numbers, booleans. Dates arrive as Excel serial
- * numbers and are converted by `normalize.ts` only in date columns. Limits: no ZIP64, no encryption, bounded
- * uncompressed size (zip-bomb guard). The writer produces the downloadable templates.
+ * numbers and are converted by `normalize.ts` only in date columns (the workbook's 1900/1904 date system travels
+ * with the table). The writer produces the downloadable templates.
+ *
+ * Hostile files (R-P1-1): every quantity the file declares is untrusted. The reader enforces its own limits on what
+ * it actually produces — inflated bytes across all parts (each part inflated with the remaining budget as its
+ * output cap), compression ratio, declared size and CRC equal to what was inflated, no duplicate names, no
+ * overlapping or out-of-range parts, only the parts a workbook needs are inflated (workbook, its relationships,
+ * shared strings, referenced sheets), column index, rows per sheet, cells and characters per workbook, characters
+ * per cell. XML is scanned with a forward-only cursor (no backtracking regular expressions over the sheet). Any
+ * failure is a plain `unreadable_spreadsheet` refusal, never a crash.
  */
 import { crc32, deflateRawSync, inflateRawSync } from 'node:zlib';
-import { ValidationError } from '@portico/kernel';
-import type { Table } from './csv';
+import { DomainError, ValidationError } from '@portico/kernel';
+import { CSV_LIMITS, type Table } from './csv';
 
-export const XLSX_LIMITS = { maxEntries: 2000, maxUncompressed: 60 * 1024 * 1024, maxRatio: 200 };
+export const XLSX_LIMITS = {
+  /** Parts in the archive. */
+  maxEntries: 2000,
+  /** Bytes actually inflated across every part read. */
+  maxUncompressed: 60 * 1024 * 1024,
+  /** Inflated bytes per compressed byte, for parts larger than `ratioFloor`. */
+  maxRatio: 200,
+  ratioFloor: 1024 * 1024,
+  maxSheets: 100,
+  /** Same as CSV: columns per sheet (by column letter, not by cells present). */
+  maxColumns: CSV_LIMITS.maxColumns,
+  /** Same as CSV: data rows per sheet. */
+  maxRows: CSV_LIMITS.maxRows,
+  /** Cells produced per workbook, empty padding included (a shared string can be referenced a million times). */
+  maxCells: 4_000_000,
+  /** Characters produced per workbook (counted per cell, so repeated shared strings count every time). */
+  maxChars: 60 * 1024 * 1024,
+  maxCell: CSV_LIMITS.maxCell,
+};
 
 export interface ZipEntry {
   name: string;
@@ -26,59 +52,119 @@ export function isZip(buf: Buffer): boolean {
   return buf.length > 4 && buf.readUInt32LE(0) === 0x04034b50;
 }
 
-function readZip(buf: Buffer): Map<string, Buffer> {
-  // End of central directory: last 22 bytes (+ comment up to 64 KiB).
-  let eocd = -1;
-  for (let i = buf.length - 22; i >= Math.max(0, buf.length - 65_557); i--) {
-    if (buf.readUInt32LE(i) === 0x06054b50) {
-      eocd = i;
-      break;
+interface CentralEntry {
+  name: string;
+  method: number;
+  crc: number;
+  compSize: number;
+  size: number;
+  local: number;
+  dataStart: number;
+}
+
+/** Validated directory of an archive; parts are inflated on demand against one shared budget. */
+class Archive {
+  private readonly entries = new Map<string, CentralEntry>();
+  private inflated = 0;
+
+  constructor(private readonly buf: Buffer) {
+    let eocd = -1;
+    for (let i = buf.length - 22; i >= Math.max(0, buf.length - 65_557); i--) {
+      if (buf.readUInt32LE(i) === 0x06054b50) {
+        eocd = i;
+        break;
+      }
+    }
+    if (eocd < 0) bad('The file is not a valid spreadsheet (no ZIP directory).');
+    const count = buf.readUInt16LE(eocd + 10);
+    const cdSize = buf.readUInt32LE(eocd + 12);
+    const cdOffset = buf.readUInt32LE(eocd + 16);
+    if (count === 0xffff || cdOffset === 0xffffffff) bad('Very large (ZIP64) workbooks are not supported.');
+    if (count > XLSX_LIMITS.maxEntries) bad('The workbook has too many parts.');
+    if (cdOffset + cdSize > eocd) bad('The spreadsheet directory is damaged.');
+    const list: CentralEntry[] = [];
+    let p = cdOffset;
+    for (let n = 0; n < count; n++) {
+      if (p + 46 > eocd || buf.readUInt32LE(p) !== 0x02014b50) bad('The spreadsheet directory is damaged.');
+      const flags = buf.readUInt16LE(p + 8);
+      const method = buf.readUInt16LE(p + 10);
+      const crc = buf.readUInt32LE(p + 16);
+      const compSize = buf.readUInt32LE(p + 20);
+      const size = buf.readUInt32LE(p + 24);
+      const nameLen = buf.readUInt16LE(p + 28);
+      const extraLen = buf.readUInt16LE(p + 30);
+      const commentLen = buf.readUInt16LE(p + 32);
+      const local = buf.readUInt32LE(p + 42);
+      if (p + 46 + nameLen > eocd) bad('The spreadsheet directory is damaged.');
+      const nameBytes = buf.subarray(p + 46, p + 46 + nameLen);
+      const name = nameBytes.toString('utf8');
+      p += 46 + nameLen + extraLen + commentLen;
+      if (flags & 0x1) bad('Password-protected workbooks cannot be read.');
+      if (this.entries.has(name)) bad('The workbook contains the same part twice.');
+      if (local + 30 > cdOffset || buf.readUInt32LE(local) !== 0x04034b50)
+        bad('A spreadsheet part is damaged.');
+      const localNameLen = buf.readUInt16LE(local + 26);
+      const localExtraLen = buf.readUInt16LE(local + 28);
+      if (localNameLen !== nameLen || !buf.subarray(local + 30, local + 30 + nameLen).equals(nameBytes))
+        bad('A spreadsheet part is damaged.');
+      const dataStart = local + 30 + localNameLen + localExtraLen;
+      if (dataStart + compSize > cdOffset) bad('A spreadsheet part is damaged.');
+      const entry = { name, method, crc, compSize, size, local, dataStart };
+      this.entries.set(name, entry);
+      list.push(entry);
+    }
+    // Parts may not share or overlap bytes (one deflated stream referenced by many names is a zip bomb).
+    list.sort((a, b) => a.local - b.local);
+    for (let i = 1; i < list.length; i++) {
+      const prev = list[i - 1] as CentralEntry;
+      if ((list[i] as CentralEntry).local < prev.dataStart + prev.compSize)
+        bad('The workbook has overlapping parts.');
     }
   }
-  if (eocd < 0) bad('The file is not a valid spreadsheet (no ZIP directory).');
-  const entries = buf.readUInt16LE(eocd + 10);
-  const cdOffset = buf.readUInt32LE(eocd + 16);
-  if (entries === 0xffff || cdOffset === 0xffffffff) bad('Very large (ZIP64) workbooks are not supported.');
-  if (entries > XLSX_LIMITS.maxEntries) bad('The workbook has too many parts.');
-  const out = new Map<string, Buffer>();
-  let p = cdOffset;
-  let total = 0;
-  for (let n = 0; n < entries; n++) {
-    if (p + 46 > buf.length || buf.readUInt32LE(p) !== 0x02014b50)
-      bad('The spreadsheet directory is damaged.');
-    const flags = buf.readUInt16LE(p + 8);
-    const method = buf.readUInt16LE(p + 10);
-    const compSize = buf.readUInt32LE(p + 20);
-    const size = buf.readUInt32LE(p + 24);
-    const nameLen = buf.readUInt16LE(p + 28);
-    const extraLen = buf.readUInt16LE(p + 30);
-    const commentLen = buf.readUInt16LE(p + 32);
-    const local = buf.readUInt32LE(p + 42);
-    const name = buf.toString('utf8', p + 46, p + 46 + nameLen);
-    p += 46 + nameLen + extraLen + commentLen;
-    if (flags & 0x1) bad('Password-protected workbooks cannot be read.');
-    if (local + 30 > buf.length || buf.readUInt32LE(local) !== 0x04034b50)
-      bad('A spreadsheet part is damaged.');
-    const start = local + 30 + buf.readUInt16LE(local + 26) + buf.readUInt16LE(local + 28);
-    const raw = buf.subarray(start, start + compSize);
-    total += size;
-    if (total > XLSX_LIMITS.maxUncompressed || (compSize > 0 && size / compSize > XLSX_LIMITS.maxRatio))
-      bad('The workbook expands to an unreasonable size.');
-    if (!name.endsWith('.xml') && !name.endsWith('.rels')) continue;
-    let data: Buffer;
-    if (method === 0) data = Buffer.from(raw);
-    else if (method === 8) data = inflateRawSync(raw, { maxOutputLength: XLSX_LIMITS.maxUncompressed });
-    else bad(`Compression method ${method} is not supported.`);
-    out.set(name, data);
+
+  has(name: string): boolean {
+    return this.entries.has(name);
   }
-  return out;
+
+  /** Inflate one part, counting the bytes actually produced against the workbook budget. */
+  read(name: string): Buffer | undefined {
+    const e = this.entries.get(name);
+    if (!e) return undefined;
+    const remaining = XLSX_LIMITS.maxUncompressed - this.inflated;
+    if (e.size > remaining) bad('The workbook expands to an unreasonable size.');
+    const raw = this.buf.subarray(e.dataStart, e.dataStart + e.compSize);
+    let data: Buffer;
+    if (e.method === 0) data = Buffer.from(raw);
+    else if (e.method === 8) {
+      const ratioCap = Math.max(XLSX_LIMITS.ratioFloor, e.compSize * XLSX_LIMITS.maxRatio);
+      const cap = Math.min(remaining, ratioCap, Math.max(e.size, 1));
+      try {
+        data = inflateRawSync(raw, { maxOutputLength: cap });
+      } catch {
+        bad(
+          e.size > ratioCap
+            ? 'The workbook expands to an unreasonable size.'
+            : 'A spreadsheet part is damaged or larger than it declares.',
+        );
+      }
+    } else bad(`Compression method ${e.method} is not supported.`);
+    if (data.length !== e.size) bad('A spreadsheet part is damaged or larger than it declares.');
+    if (data.length > XLSX_LIMITS.ratioFloor && data.length > e.compSize * XLSX_LIMITS.maxRatio)
+      bad('The workbook expands to an unreasonable size.');
+    if (crc32(data) >>> 0 !== e.crc >>> 0) bad('A spreadsheet part is damaged (checksum).');
+    this.inflated += data.length;
+    return data;
+  }
 }
 
 const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
 export function xmlText(s: string): string {
-  return s.replace(/&(#x[0-9a-fA-F]+|#\d+|[a-z]+);/g, (m, e: string) => {
-    if (e.startsWith('#x')) return String.fromCodePoint(Number.parseInt(e.slice(2), 16));
-    if (e.startsWith('#')) return String.fromCodePoint(Number.parseInt(e.slice(1), 10));
+  if (!s.includes('&')) return s;
+  return s.replace(/&(#x[0-9a-fA-F]{1,6}|#\d{1,7}|[a-z]{2,4});/g, (m, e: string) => {
+    if (e.startsWith('#')) {
+      const cp = e.startsWith('#x') ? Number.parseInt(e.slice(2), 16) : Number.parseInt(e.slice(1), 10);
+      return cp > 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : '\ufffd';
+    }
     return ENTITIES[e] ?? m;
   });
 }
@@ -88,39 +174,103 @@ function attr(attrs: string, name: string): string | null {
   return m ? xmlText(m[1] as string) : null;
 }
 
-/** Text of all <t> runs inside a fragment (shared string item or inline string). */
+/** Forward-only element scanner: every step moves the cursor, so cost is linear in the XML length. */
+interface Element {
+  attrs: string;
+  /** Inner XML ('' for a self-closing element). */
+  inner: string;
+}
+
+function* elements(xml: string, tag: string, from = 0, to = xml.length): Generator<Element> {
+  const open = `<${tag}`;
+  const close = `</${tag}>`;
+  let pos = from;
+  while (pos < to) {
+    const at = xml.indexOf(open, pos);
+    if (at < 0 || at >= to) return;
+    const after = xml.charCodeAt(at + open.length);
+    // `<c` must not match `<col`; the next character ends the name.
+    if (!(after === 32 || after === 62 || after === 47 || after === 9 || after === 10 || after === 13)) {
+      pos = at + open.length;
+      continue;
+    }
+    const gt = xml.indexOf('>', at);
+    if (gt < 0 || gt >= to) bad('A sheet is damaged (unterminated element).');
+    if (xml.charCodeAt(gt - 1) === 47) {
+      yield { attrs: xml.slice(at + open.length, gt - 1), inner: '' };
+      pos = gt + 1;
+      continue;
+    }
+    const end = xml.indexOf(close, gt + 1);
+    if (end < 0 || end + close.length > to) bad('A sheet is damaged (unterminated element).');
+    yield { attrs: xml.slice(at + open.length, gt), inner: xml.slice(gt + 1, end) };
+    pos = end + close.length;
+  }
+}
+
+/** Text of the <t> runs of a shared string item or inline string (phonetic guides `<rPh>` excluded). */
 function runs(fragment: string): string {
+  const visible = fragment.includes('<rPh') ? fragment.replace(/<rPh\b[\s\S]*?<\/rPh>/g, '') : fragment;
   let s = '';
-  for (const m of fragment.matchAll(/<t(?:\s[^>]*)?>([\s\S]*?)<\/t>/g)) s += xmlText(m[1] as string);
+  for (const t of elements(visible, 't')) s += xmlText(t.inner);
   return s;
 }
 
+/** Zero-based column of a cell reference; refuses letters beyond the column limit (never allocates by it). */
 function columnIndex(ref: string): number {
-  const letters = /^[A-Z]+/.exec(ref)?.[0] ?? 'A';
   let n = 0;
-  for (const ch of letters) n = n * 26 + (ch.charCodeAt(0) - 64);
-  return n - 1;
+  let i = 0;
+  for (; i < ref.length; i++) {
+    const c = ref.charCodeAt(i);
+    if (c < 65 || c > 90) break;
+    n = n * 26 + (c - 64);
+    if (n > XLSX_LIMITS.maxColumns)
+      bad(`A sheet uses more than ${XLSX_LIMITS.maxColumns} columns (cell ${ref.slice(0, 8)}).`);
+  }
+  return i === 0 ? -1 : n - 1;
 }
 
-function sheetRows(xml: string, shared: string[]): string[][] {
+interface Budget {
+  cells: number;
+  chars: number;
+}
+
+function spend(budget: Budget, cells: number, chars: number) {
+  budget.cells += cells;
+  budget.chars += chars;
+  if (budget.cells > XLSX_LIMITS.maxCells) bad(`The workbook holds more than ${XLSX_LIMITS.maxCells} cells.`);
+  if (budget.chars > XLSX_LIMITS.maxChars) bad('The workbook holds more text than can be imported at once.');
+}
+
+function sheetRows(xml: string, shared: readonly string[], budget: Budget, sheet: string): string[][] {
   const rows: string[][] = [];
-  for (const rm of xml.matchAll(/<row\b[^>]*>([\s\S]*?)<\/row>/g)) {
+  const dataStart = xml.indexOf('<sheetData');
+  if (dataStart < 0) return rows;
+  for (const row of elements(xml, 'row', dataStart)) {
+    if (rows.length > XLSX_LIMITS.maxRows)
+      bad(`The sheet "${sheet}" has more than ${XLSX_LIMITS.maxRows} rows. Split it and upload the parts.`);
     const cells: string[] = [];
     let next = 0;
-    for (const cm of (rm[1] as string).matchAll(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)) {
-      const attrs = cm[1] as string;
-      const inner = cm[2] ?? '';
-      const ref = attr(attrs, 'r');
-      const idx = ref ? columnIndex(ref) : next;
+    for (const c of elements(row.inner, 'c')) {
+      const ref = attr(c.attrs, 'r');
+      const parsed = ref ? columnIndex(ref) : -1;
+      const idx = parsed >= 0 ? parsed : next;
+      if (idx >= XLSX_LIMITS.maxColumns) bad(`A sheet uses more than ${XLSX_LIMITS.maxColumns} columns.`);
       next = idx + 1;
-      const t = attr(attrs, 't');
-      const v = /<v>([\s\S]*?)<\/v>/.exec(inner)?.[1];
+      const t = attr(c.attrs, 't');
+      const vAt = c.inner.indexOf('<v>');
+      const v = vAt >= 0 ? c.inner.slice(vAt + 3, c.inner.indexOf('</v>', vAt)) : undefined;
       let value = '';
-      if (t === 's') value = shared[Number(v)] ?? '';
-      else if (t === 'inlineStr') value = runs(inner);
+      if (t === 's') {
+        const i = Number(v);
+        value = Number.isInteger(i) && i >= 0 ? (shared[i] ?? '') : '';
+      } else if (t === 'inlineStr') value = runs(c.inner);
       else if (t === 'b') value = v === '1' ? 'TRUE' : 'FALSE';
       else if (t === 'e') value = '';
       else value = v === undefined ? '' : xmlText(v);
+      if (value.length > XLSX_LIMITS.maxCell)
+        bad(`A cell in "${sheet}" holds more than ${XLSX_LIMITS.maxCell} characters.`);
+      spend(budget, Math.max(1, idx + 1 - cells.length), value.length);
       while (cells.length < idx) cells.push('');
       cells[idx] = value;
     }
@@ -136,6 +286,8 @@ export interface Workbook {
   sheetNames: string[];
   /** Every shared string, referenced or not — scanned for card numbers like any cell. */
   sharedStrings: string[];
+  /** The workbook counts dates from 1904 (Mac-origin workbooks): serial 0 = 1904-01-01. */
+  date1904: boolean;
 }
 
 /** Every worksheet of a workbook as a table, keyed by sheet name (workbook order). */
@@ -146,39 +298,72 @@ export function readXlsx(buf: Buffer): Map<string, Table> {
 /** The workbook's tables plus every text it holds outside cells (sheet names, shared strings). */
 export function readWorkbook(buf: Buffer): Workbook {
   if (!isZip(buf)) bad('The file is not an .xlsx workbook.');
-  const parts = readZip(buf);
-  const wb = parts.get('xl/workbook.xml')?.toString('utf8');
+  try {
+    return parseWorkbook(new Archive(buf));
+  } catch (err) {
+    if (err instanceof DomainError) throw err;
+    // Anything the parser did not anticipate is a refusal of this file, never a crash or a 500.
+    bad('The workbook could not be read.');
+  }
+}
+
+function parseWorkbook(parts: Archive): Workbook {
+  const wb = parts.read('xl/workbook.xml')?.toString('utf8');
   if (!wb) bad('The workbook has no sheet list.');
-  const rels = parts.get('xl/_rels/workbook.xml.rels')?.toString('utf8') ?? '';
+  const rels = parts.read('xl/_rels/workbook.xml.rels')?.toString('utf8') ?? '';
   const targets = new Map<string, string>();
-  for (const m of rels.matchAll(/<Relationship\b([^>]*)\/?>/g)) {
-    const id = attr(m[1] as string, 'Id');
-    const target = attr(m[1] as string, 'Target');
+  for (const r of elements(rels, 'Relationship')) {
+    const id = attr(r.attrs, 'Id');
+    const target = attr(r.attrs, 'Target');
     if (id && target) targets.set(id, target.replace(/^\/?xl\//, '').replace(/^\//, ''));
   }
-  const sharedXml = parts.get('xl/sharedStrings.xml')?.toString('utf8') ?? '';
-  const shared = [...sharedXml.matchAll(/<si\b[^>]*>([\s\S]*?)<\/si>/g)].map((m) => runs(m[1] as string));
+  const pr = [...elements(wb, 'workbookPr')][0];
+  const flag = pr ? attr(pr.attrs, 'date1904') : null;
+  const date1904 = flag === '1' || flag === 'true';
+  const sharedXml = parts.read('xl/sharedStrings.xml')?.toString('utf8') ?? '';
+  const shared: string[] = [];
+  const budget: Budget = { cells: 0, chars: 0 };
+  for (const si of elements(sharedXml, 'si')) {
+    const text = runs(si.inner);
+    if (text.length > XLSX_LIMITS.maxCell)
+      bad(`A text in the workbook holds more than ${XLSX_LIMITS.maxCell} characters.`);
+    shared.push(text);
+    if (shared.length > XLSX_LIMITS.maxCells) bad('The workbook holds too many texts.');
+  }
   const out = new Map<string, Table>();
   const sheetNames: string[] = [];
-  for (const m of wb.matchAll(/<sheet\b([^>]*)\/?>/g)) {
-    const name = attr(m[1] as string, 'name') ?? `Sheet${out.size + 1}`;
+  const read = new Set<string>();
+  for (const sh of elements(wb, 'sheet')) {
+    if (sheetNames.length >= XLSX_LIMITS.maxSheets)
+      bad(`The workbook has more than ${XLSX_LIMITS.maxSheets} sheets.`);
+    const name = attr(sh.attrs, 'name') ?? `Sheet${sheetNames.length + 1}`;
     sheetNames.push(name);
-    const rid = attr(m[1] as string, 'r:id');
+    const rid = attr(sh.attrs, 'r:id');
     const target = rid ? targets.get(rid) : undefined;
-    const xml = target ? parts.get(`xl/${target}`)?.toString('utf8') : undefined;
+    if (!target || read.has(target)) continue;
+    read.add(target);
+    const xml = parts.read(`xl/${target}`)?.toString('utf8');
     if (!xml) continue;
-    const rows = sheetRows(xml, shared).filter((r) => r.some((c) => c.trim() !== ''));
+    const rows = sheetRows(xml, shared, budget, name).filter((r) => r.some((c) => c.trim() !== ''));
     const [headers, ...data] = rows;
     if (!headers) continue;
     const width = headers.length;
+    spend(
+      budget,
+      data.reduce((n, r) => n + Math.max(0, width - r.length), 0),
+      0,
+    );
+    const pad = (r: string[]) =>
+      r.length < width ? [...r, ...new Array<string>(width - r.length).fill('')] : r;
     out.set(name, {
       headers: headers.map((h) => h.trim()),
-      rows: data.map((r) => (r.length < width ? [...r, ...new Array(width - r.length).fill('')] : r)),
+      rows: data.map(pad),
       delimiter: 'xlsx',
+      ...(date1904 ? { date1904: true } : {}),
     });
   }
   if (out.size === 0) bad('The workbook has no readable sheets.');
-  return { sheets: out, sheetNames, sharedStrings: shared };
+  return { sheets: out, sheetNames, sharedStrings: shared, date1904 };
 }
 
 // ───────────────────────────── writer (templates, tests) ─────────────────────────────

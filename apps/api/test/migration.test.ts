@@ -5,7 +5,7 @@
  * MIG-CR-1), ETag / If-Match on mapping review, problem+json, search, record history, isolation.
  */
 import { newId } from '@portico/kernel';
-import { sampleGuesthouseFiles } from '@portico/migration';
+import { sampleGuesthouseFiles, writeZip as zip } from '@portico/migration';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { type ApiHarness, enrolMfa, provisionWithAdmin, signedInOrg, startApi } from './helpers';
 
@@ -224,6 +224,53 @@ describe('migration API', () => {
     });
     expect(history.statusCode).toBe(200);
     expect(history.json().items.map((i: { action: string }) => i.action)).toContain('migration.job.create');
+  });
+
+  it('R-P1-1: the review crash workbook (939 bytes) is a plain 400 refusal on preview, and the server keeps serving', async () => {
+    const { auth } = await signedIn('live');
+    const propertyId = await makeProperty(auth);
+    const created = await h.app.inject({
+      method: 'POST',
+      url: '/v1/migration/jobs',
+      headers: { ...auth, 'idempotency-key': newId() },
+      payload: { propertyId, sourceAdapter: 'portico.pack.v1', sourceSystem: 'Sheets' },
+    });
+    const id = created.json().id as string;
+    const ns = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
+    const rel = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+    const rows = Array.from(
+      { length: 40 },
+      (_, i) => `<row r="${i + 1}"><c r="ZZZZZ${i + 1}" t="inlineStr"><is><t>x</t></is></c></row>`,
+    ).join('');
+    const wb = zip([
+      {
+        name: 'xl/workbook.xml',
+        data: Buffer.from(
+          `<workbook xmlns="${ns}" xmlns:r="${rel}"><sheets><sheet name="reservations" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+        ),
+      },
+      {
+        name: 'xl/_rels/workbook.xml.rels',
+        data: Buffer.from(
+          `<Relationships><Relationship Id="rId1" Type="${rel}/worksheet" Target="worksheets/sheet1.xml"/></Relationships>`,
+        ),
+      },
+      {
+        name: 'xl/worksheets/sheet1.xml',
+        data: Buffer.from(`<worksheet><sheetData>${rows}</sheetData></worksheet>`),
+      },
+    ]);
+    expect(wb.length).toBeLessThan(1000);
+    const res = await h.app.inject({
+      method: 'POST',
+      url: `/v1/migration/jobs/${id}/uploads/preview`,
+      headers: auth,
+      payload: { files: [{ name: 'export.xlsx', content: wb.toString('base64'), encoding: 'base64' }] },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ code: 'unreadable_spreadsheet' });
+    const again = await h.app.inject({ method: 'GET', url: `/v1/migration/jobs/${id}`, headers: auth });
+    expect(again.statusCode).toBe(200);
   });
 
   it('refuses a file containing a card number (problem+json, nothing stored) and isolates organizations', async () => {
