@@ -1,6 +1,6 @@
 # Agent run: Integration step: bind module ports
 
-- Started: 2026-11-07T16:16:26.294Z · last activity: 2026-11-08T05:32:19.415Z
+- Started: 2026-11-07T16:16:26.294Z · last activity: 2026-11-08T05:52:12.502Z
 - Turns: 1370 · tool uses: 1405 · output tokens: 1,249,556
 - Type: general-purpose
 
@@ -852,6 +852,70 @@ Merge main first.
 **Self-check v6**, as in round 5, plus a **landing table**: every operation that turns card authority into money on a ledger reference × the purpose and fact limit checked at landing (file:line) × the test. Also give the § 5.4 mutation rows for each new guard.
 
 Gates as before. Report done when they exit 0.
+
+Address this before completing your current task.
+````
+
+## Follow-up message (2026-11-08T05:52:12.502Z)
+
+````text
+The coordinator sent a message while you were working:
+Integration-step fix round 7. Re-review #7 says "merge after fixes" (P0 0, P1 2, P2 2, P3 5).
+
+Round 6 held:
+- the r6 PoCs are refused at the right lines;
+- the `purpose` label cannot steer captures;
+- deposit-per-stay is proven correct by the reviewer's two-segment test (R7-D1);
+- R2 and R3 were killed;
+- there are no front-desk regressions.
+
+Seven rounds have each closed named paths, and a sibling has remained each time. This round changes the shape of the fix and of the proof.
+
+**Read first, all on main:**
+- `docs/orchestration/reviews/review-integration-step-7.md` (including its § 5 suggestion);
+- the PoCs in `docs/orchestration/reviews/integration-step-poc/r7-*.test.ts.txt`;
+- `docs/adr/0015-authorization-across-module-ports.md` **Amendment 6**;
+- the "integration-step fix round 7" line in `docs/orchestration/pending-fixes.md`.
+
+Merge main first.
+
+1. **One balance per obligation (R7-P1-1, R7-P2-1).**
+   - Each deposit due, each penalty (no-show, cancellation) and each folio balance is one finance-owned balance with an owner.
+   - **Every** settlement method draws that same balance down under one lock: card charge or capture, cash, cheque, terminal, link, deposit forfeit, transfer, credit and write-off.
+   - A collection is limited by what is still owed on the ledger, net of everything applied by any method. It is never limited by a separate record of what was due.
+   - Regression tests:
+     - F1/F2: forfeit, then the penalty on the card, in both orders;
+     - F3: penalty credited off, then a forfeit;
+     - N1: penalty paid by cheque, then a `no_show` card charge.
+2. **Moved credits keep their counterpart's owner (R7-P1-2).** When money moves off a folio, the debit it leaves behind belongs to whoever the credit now benefits. Regression test: M1, Otto's cheque moved to Vera, then Otto's card charged.
+3. **R7-P2-2:** take the reviewer's R7-N2 test (`penaltyOn` following transfers). It kills M7.
+4. **The P3s:**
+   - the capture request hash includes `purpose`;
+   - a customer-initiated hold capture gets fact limits and a landing-table row;
+   - `recordPayment` with `authorizationId` checks the hold's property, booking and remaining amount;
+   - correct the overstated landing-table claims for forfeit and transfers;
+   - a DB-level test for the unknown-owner branch.
+5. **New: a seeded, model-based test of the money invariant.**
+   - Build a small reference model plus a generator that runs random sequences of **every** money operation against the real composition. Cover at least 2 guests × 2 folios × 2 cards with agreements; the operations are charge, hold, capture, increment, link payment, cash/cheque, deposit apply and forfeit, transfer, routing, refund, credit/write-off, no-show/cancellation penalties, and add_stay. Include a concurrent mode.
+   - After every step, assert three things:
+     - (a) no card has paid more than the obligations its agreement covers;
+     - (b) no obligation is collected more than once across all methods;
+     - (c) the ledger balances.
+   - Use a fixed seed list in CI (fast enough for `--concurrency=2`, ideally under 60 s), plus an env var for a longer local run. Run the long run yourself, and report how many sequences ran and any failing seeds. Keep failing seeds as regression tests.
+   - `fast-check` is fine as a dev dependency, or hand-roll a seeded PRNG.
+   - Mutation-check the generator: re-apply 3 of your earlier mutants (for example N7, R1 and R3). The generator alone must find each one.
+
+**Self-check v6:**
+- the input-source column;
+- the landing table, updated;
+- a § 5.4 row for each new guard;
+- the § 6 claim ledger.
+
+**Rules:**
+- Commit after every meaningful step.
+- Do not push.
+- Never amend or rewrite commits.
+- All gates must exit 0.
 
 Address this before completing your current task.
 ````

@@ -1,12 +1,12 @@
 {
  "by_model": {
   "claude-opus-5-5": {
-   "input": 25434,
-   "output": 17467676,
-   "cache_write_5m": 66984735,
+   "input": 25486,
+   "output": 17491161,
+   "cache_write_5m": 67101195,
    "cache_write_1h": 3860445,
-   "cache_read": 4904876074,
-   "messages": 12455
+   "cache_read": 4910406889,
+   "messages": 12480
   }
  },
  "by_day": {
@@ -19,12 +19,12 @@
    "messages": 11578
   },
   "2026-11-08": {
-   "input": 1800,
-   "output": 908172,
-   "cache_write_5m": 7659092,
+   "input": 1852,
+   "output": 931657,
+   "cache_write_5m": 7775552,
    "cache_write_1h": 383031,
-   "cache_read": 329544276,
-   "messages": 877
+   "cache_read": 335075091,
+   "messages": 902
   }
  }
 }

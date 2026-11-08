@@ -557,3 +557,15 @@ Each agent's brief and report are in `agents/`.
     full logs.
   - Usage so far: 12,455 API messages across 80 transcripts, all `claude-opus-5-5`. Output 17.5M tokens; cache reads
     4.9B; cache writes 67.0M (5-minute) and 3.9M (1-hour); uncached input 25K.
+- **05:51 — Integration-step re-review #7: merge after fixes** <!-- t: agent-a8e2726ae9165e6da @ 2026-11-08T05:51:21.224Z (Focused re-review #7: integration-step) --> (P0 0 · P1 2 · P2 2 · P3 5).
+  - Round 6 held: the purpose label cannot steer captures, deposit-per-stay was proven correct by the reviewer's own
+    two-segment test, and there are no front-desk regressions.
+  - Two more siblings:
+    - a deposit forfeit plus a card charge collected one penalty twice;
+    - a moved credit left an ownerless debit.
+  - Orchestrator decision, ADR-0015 Amendment 6:
+    - one finance-owned balance per obligation, drawn down by every settlement method under one lock;
+    - a seeded model-based test of the money invariant, so siblings are found by generation, not by hand. The
+      generator must itself find re-applied old mutants.
+  - Fix round 7 sent.
+  - Lesson: after seven rounds of enumerated fixes, the proof method changed to generative.
