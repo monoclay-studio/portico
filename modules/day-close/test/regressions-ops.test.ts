@@ -75,7 +75,11 @@ describe('P2-2: no occupied stay-night leaves Day Close’s sight (DCL-I04)', ()
     try {
       const run = await h.service.startRun(h.t.db, auditor, {
         propertyId: org.propertyId,
-        hooks: { beforeStep: (s) => (s === 'final_sweep' ? void (armed = true) : undefined) },
+        hooks: {
+          beforeStep: (s) => {
+            if (s === 'final_sweep') armed = true;
+          },
+        },
       });
       expect(run.runStatus).toBe('completed');
     } finally {
@@ -360,9 +364,9 @@ describe('P2-7: a close that does not happen is said out loud', () => {
         .where('type', '=', 'dayClose.close.overdue')
         .execute();
       expect(paged).toHaveLength(1);
-      expect((paged[0]?.payload as { notification: { roles: string[] } }).notification.roles).toContain(
-        'night_audit',
-      );
+      expect(paged[0]?.payload).toMatchObject({
+        notification: { roles: expect.arrayContaining(['night_audit']) },
+      });
     } finally {
       h.ports.platform.hasEntitlement = original;
     }
