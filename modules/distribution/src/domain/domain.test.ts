@@ -390,6 +390,12 @@ describe('revisions — ordering, parking and translation', () => {
       expect(orderWithinBooking(c2, [n2, c2])).toMatchObject({ laterApplied: null, earlierUnsettled: [] });
     });
 
+    it('a change and a cancellation the hub cannot separate: the cancellation is last (lifecycle), whatever arrives first', () => {
+      const c = cancel({ hubMicros: 5, state: 'applied', arrival: 1 });
+      const m = modify({ hubMicros: 5, arrival: 2 });
+      expect(orderWithinBooking(m, [c, m])).toMatchObject({ laterApplied: 'c', tiedByArrival: [] });
+    });
+
     it('a change never waits behind an EARLIER change parked as an orphan (it parks itself, visibly)', () => {
       const m1 = r('m1', { hubMicros: 1, state: 'parked', parkReason: 'orphan', arrival: 1 });
       const m2 = r('m2', { hubMicros: 2, arrival: 2 });

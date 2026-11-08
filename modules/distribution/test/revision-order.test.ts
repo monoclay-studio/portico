@@ -143,6 +143,20 @@ describe('order within a booking (P1-2)', () => {
     expect((await stateOf(org, c, create.revisionId)).note).toContain('ordered by meaning');
   });
 
+  it('a change carrying its cancellation’s timestamp and arriving after it is stale: the booking stays cancelled', async () => {
+    const { org, c } = await ready();
+    const id = `BK-${newId()}`;
+    await store(org, c, hubRev(c, id, { status: 'new', insertedAt: '2026-11-07T06:00:00Z' }));
+    await processAll(org, c);
+    await store(org, c, hubRev(c, id, { status: 'cancelled', insertedAt: '2026-11-07T06:00:30Z' }));
+    await processAll(org, c);
+    const late = hubRev(c, id, { status: 'modified', rooms: rooms(4), insertedAt: '2026-11-07T06:00:30Z' });
+    await store(org, c, late);
+    await processAll(org, c);
+    expect((await stateOf(org, c, late.revisionId)).status.revision).toBe('stale');
+    expect(await booking(org, id)).toEqual([{ status: 'cancelled', nights: 3 }]);
+  });
+
   it('equal timestamps, cancellation delivered first: the creation applies, then the cancellation', async () => {
     const { org, c } = await ready();
     const id = `BK-${newId()}`;
