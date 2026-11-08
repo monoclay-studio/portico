@@ -1,13 +1,234 @@
 # Steward review — day-close (night audit / business-date close)
 
+## Verdict: **merge after fixes**
+
+Blocking before merge: **DCL-P0-1, DCL-P0-2, DCL-P1-1**. Strongly recommended before merge: **P2-1** (FR-3 asks the
+kernel to adopt a DST correction that is wrong west of UTC), **P2-6** (guest names written into an append-only
+table cannot be removed later), **P2-9** (the gate is flaky under default concurrency). The rest are tracked
+follow-ups. Re-review the fix round (playbook "focused re-review"), because both P0 fixes change how lines are
+identified and granted.
+
+The engine itself is sound: the lease/heartbeat fencing, the one-transaction advance, the integrity gate and
+tenant/property isolation held under every attack I ran (§ 3). The defects are in **what gets posted when the stay
+changes after a night closed**: deferred lines, the pre-grant and the catch-up all trust an earlier picture of
+the stay.
+
 | | |
 |---|---|
-| **Verdict** | _(in progress — written incrementally)_ |
-| **Branch / commit reviewed** | `feat/day-close` @ `cb0fbf33d31118be1e3c8b979713b6d38f7047e4` |
-| **Scratch copy** | detached worktree of `cb0fbf3`, merged with `main` @ `2df56d1` (local merge `d2726cc`) |
-| **Playbook** | steward-reviewer v2.1 (launch brief v2) |
+| **Branch / commit reviewed** | `feat/day-close` @ `cb0fbf33d31118be1e3c8b979713b6d38f7047e4` (unchanged at the end of the review) |
+| **Scratch copy** | detached worktree of `cb0fbf3` merged with `main` @ `2df56d1` (local merge `d2726cc`, clean). `main` moved to `0b108b6` during the review (docs only), so no re-merge |
+| **Playbook** | steward-reviewer v2.1 (launch brief v2), plus the queued v3 items the brief asked for (gates with `--force`, exit codes, default-concurrency run; mutation spot-check) |
+| **Counts** | **P0 2 · P1 1 · P2 14 · P3 12** |
+| **Patterns** | 61 in groups A–E: **44 applicable** (16 probed, 26 code-read, 2 applied as review steps: AP-45, AP-54); **0 applicable left unprobed**; 17 not applicable (reasons in § 2). Group F not applicable (no UI review) |
+| **Mutants** | Builder's **M2** (heartbeat lease-owner check) **killed**, **M16** (advance completion in the same transaction) **killed**; my **R1** (seal check in the pre-grant) **survived** → P2-8 |
+| **PoCs** | `docs/orchestration/reviews/day-close-poc/*.test.ts.txt` (§ 9) |
 
-## Findings (appended as confirmed)
+### Top findings
+
+1. **P0-1** — a cancelled seaplane (stay extended after the last night closed) charges the departure transfer **twice**; a shortened stay **never** charges it (deferred lines and posted nights are not reconciled with re-sealed terms).
+2. **P0-2** — the next night's allowance is pre-granted before the night exists: an early departure is billed USD 128.70 for a night not stayed (forfeited to breakage); an occupancy correction makes the night unpostable and the only recovery skips the room charge.
+3. **P1-1** — a night overridden "to be posted by hand" (the module's own advice) is posted again by the next close's catch-up: two room charges.
+4. **P2-1** — the FR-3 DST fix schedules (and allows) a close an hour **early** in every zone west of UTC.
+5. **P2-2 / P2-3** — a guest checked in after the sweep and gone before the next close is never charged and nothing says so; the day facts are frozen before the sweep's postings (ADR halved in the probe) and the annex calls ordinary postings "restatements".
+
+---
+
+## 2. Coverage declaration
+
+### Checklist (launch brief items 1–15)
+
+| # | Item | Status |
+|---|---|---|
+| 1 | Tenant isolation | **probed — clean.** `R-RLS`: 11/11 `day_close` tables have `tenant_id`, RLS enabled **and forced**, one policy; another tenant's raw `SELECT` on each table returns 0 rows. No cross-schema FKs (references only) |
+| 2 | Authorization | **probed — clean** for scope (`R-SCOPE`: 15 service entry points refuse a person with `dayClose.*` at property A acting on property B; portfolio shows A only). **Finding P2-12** (privilege equivalence), **P3-7** (composition `markNoShow` check untested) |
+| 3 | Money & finance | **probed — findings P0-1, P0-2, P1-1, P2-3, P2-10, P2-11, P2-13** |
+| 4 | Idempotency & concurrency | **probed — clean** for leases and the advance (`R-LEASE`, builder M2/M16 killed, concurrent starts/resumes tested); **finding P0-2** (a key re-sent with changed inputs), **P3-1** (version churn vs `If-Match`) |
+| 5 | Events & audit | **probed — finding P3-1** (audit row every minute), **P3-8** (payload schemas not exported); events once per date verified by builder tests |
+| 6 | Contracts | **code-read — clean** (typecheck against real providers; documented subsets FR-2/FR-4); **P3-3** (record route); cross-module notes § 8 |
+| 7 | Data authority & environment safety | **code-read — clean** (start and preflight refuse external `reservations`/`charges`; finance asserts `charges`; notification mode from `assertExternalEffectAllowed`; builder tests both) |
+| 8 | Errors & UX contract | **code-read — findings** P0-2 (409 ⇒ "retryable" for a deterministic conflict), P1-1 (harmful recovery advice "post the night by hand"), P3-6 |
+| 9 | Spec coverage | **code-read — findings P2-5** (MUST "schedule ≥ earliest start"), **P2-13** (S10), **P3-11** (R01 sources, cancellations) — § 4 |
+| 10 | Scenario claims | **assessed — P2-10** (S19 bakes in the post-check-out transfer); S09/S04/E07 hold at module level (§ 5) |
+| 11 | Honest readiness | **probed — findings P2-2, P2-6, P2-14, P3-6** (overclaims); levels never exceed R3 |
+| 12 | Code quality | **code-read** — lint clean, no `any`, no default exports, no clock reads in `src/domain/`; dead code P2-11 (`levy_not_posted`), P3-12 |
+| 13 | One-product experience | **code-read** — run view carries status, allowed actions with reasons, issues, owner, links; **P3-3** (report record route does not exist) |
+| 14 | Parity gate | **probed — P2-14** (gate exit 1, 11 P0 rows; 2 `tested` rows overclaim) |
+| 15 | Cross-module coherence | **code-read** — § 8 (`actorKey` duplicated in 10 modules; rates line identity; finance late-posting stamp) |
+
+### Patterns (groups A–E)
+
+| Pattern | Status |
+|---|---|
+| AP-01 cross-property reference | probed — clean (`R-SCOPE`; `postStayNight` refuses another property's stay; composition `markNoShow` check code-read, P3-7) |
+| AP-02 cross-tenant by id | probed — clean (`R-RLS`) |
+| AP-03 claimable external id | not applicable — Day Close holds no external identifiers |
+| AP-04 client-declared trust attribute | code-read — clean (`trigger` from the actor; `businessDate` must equal current; override keys validated) |
+| AP-05 ungated secondary endpoint | probed — clean (`R-SCOPE`; search provider filters by `propertyScope`) |
+| AP-06 permission not registered | code-read — clean (8 keys in the manifest; builder's catalogue test green) |
+| AP-07 org controls a global credential | not applicable — no credentials |
+| AP-08 reverse order | probed — P3-9 (a manual run created first pre-empts auto-continue); P0-1 attacked both orders (extend / shorten after the close) |
+| AP-09 privilege equivalence | code-read — **P2-12** (`dayClose.policy.manage` ⊇ advance via the schedule; `dayClose.run.read` ⊇ finance payer names) |
+| AP-10 separation of duties | not applicable — the spec requires none for overrides (overrides need a sensitive permission and a reason) |
+| AP-11 step-up windows | not applicable — identity's concern; sensitive flags set |
+| AP-12 rate limits | not applicable — no rate-limited surface |
+| AP-13 XFF | not applicable |
+| AP-14 SSRF | not applicable — no outbound HTTP |
+| AP-15 secrets | code-read — clean (none stored or logged) |
+| AP-16 shared device | not applicable — no UI |
+| AP-17 data after erasure | probed — **P2-6** (`R-PII`) |
+| AP-18 privacy via secondary path | code-read — P2-12 (readiness passes finance prose to `dayClose.run.read`) |
+| AP-19 simulator in live | code-read — clean (notification mode; builder demo test) |
+| AP-60 control fact on one path | probed — **P1-1** (overrides not honoured by the catch-up) |
+| AP-53 delegated effect parameters | code-read — clean (stays from reservations' property-scoped lists; amounts from sealed terms; fee = reservations' penalty); see P2-5 for *when* |
+| AP-20 over-correction race | not applicable — no remaining-amount corrections |
+| AP-21 retry duplicates | probed — **P0-1, P1-1** (different keys); same-key retries clean (chaos, M16) |
+| AP-22 agreed terms not honoured | probed — **P0-1** |
+| AP-23 money boundaries | code-read — clean (Decimal KPIs, builder boundary tests); zero amounts → P2-11 |
+| AP-24 tax base / time of supply | code-read — P2-10, P2-13; EC-DCL-016 untested (README admits) |
+| AP-25 limits | not applicable |
+| AP-26 uncertain shown as definite | code-read — clean (collection outcome recorded as given; the run never claims "paid") |
+| AP-27 net-of-fee settlement | not applicable |
+| AP-28 collected twice | code-read — clean (one path, key `noshow-fee:{stay}`; follow-up only when nothing was requested) |
+| AP-29 time semantics | probed — **P2-1, P2-5**; `R-TZ` (two time zones) clean |
+| AP-30 / AP-31 / AP-32 / AP-33 event consumers, offline writes | not applicable — Day Close consumes no events and has no offline client (aggregate versions are set) |
+| AP-34 replay after resume | probed — **P0-2**; `R-LEASE` clean |
+| AP-35 unknown value fails open | code-read — P3-4 (unknown policy codes accepted); unknown tax-inclusion mode refused ✓ |
+| AP-36 read before lock | code-read — clean (claim, cancel, override lock then read; start relies on unique indexes) |
+| AP-37 external effect inside the tx | code-read — clean (outbox events; collection/export are provider requests) |
+| AP-38 data authority bypass | code-read — clean (builder tests both domains) |
+| AP-39 concurrent duplicate insert | code-read — clean (issue upserts serialized by the run row lock; `ON CONFLICT DO NOTHING` on runs, facts, reports) |
+| AP-56 transition races in-flight writers | probed — **P2-4** (the advance vs postings in flight, FR-1) |
+| AP-59 external copy keeps acting | not applicable today — collection and journal export are stubs (noted in P2-4 for the export) |
+| AP-40 port vs provider | code-read — clean (typecheck in composition) |
+| AP-41 lenient fake | code-read — P3-10 |
+| AP-42 copied enums | code-read — clean (documented subsets; kernel-derived `module_not_available`) |
+| AP-43 payload drift | code-read — P3-8 |
+| AP-44 save weaker than use | probed — **P2-5**, P3-4 |
+| AP-45 sibling paths | applied to every finding |
+| AP-46 failure path commits partial state | code-read — P3-2; item failures roll back effects ✓ |
+| AP-47 weaponized refusal | code-read — clean (no third party can create a blocker; `policy_invalid` is fixable by the property's policy manager) |
+| AP-48 effective-dated bounds | not applicable |
+| AP-54 load-bearing | applied (P0-1 ↔ P1-1; P2-4 ↔ P2-3; P2-10 ↔ P0-1) |
+| AP-57 premise writers | code-read — P0-1 (deferred-line premise), P1-1 (`night_postings` premise) |
+| AP-58 lifecycle closure | probed — P0-2 (pre-grant not undone by a shortened stay), P0-1 (extension) |
+| AP-50 claim without asserting test | probed — P2-2, P2-6, P2-14, P3-6 |
+| AP-51 scenario only against fakes | code-read — clean (README is explicit: reservations fake; composed runs blocked-by-binding) |
+| AP-52 gate integrity | probed — **P2-9** |
+| AP-61 dead-man's switch | code-read — **P2-7** |
+| AP-62 recorded default ≠ code | code-read — P2-1 (FR-3 "corrected locally"), P3-4 |
+| AP-55 test proves nothing | probed — mutation: R1 survived (P2-8); M2, M16 killed |
+
+---
+
+## 1. Command results (scratch copy, exit codes from files, `PORTICO_TEST_DB_PREFIX=review_dayclose`)
+
+| Command | Result |
+|---|---|
+| `pnpm install --frozen-lockfile` | exit 0 |
+| `pnpm lint` (`biome check . --error-on-warnings` + boundaries) | exit 0 |
+| `pnpm turbo run typecheck --force` | exit 0 |
+| `pnpm turbo run test --force --concurrency=2` | **exit 0** — 17/17 tasks, 0 cached, 5 m 58 s; day-close 11 files / 87 tests, api 18 / 71 |
+| `pnpm turbo run test --force` (default concurrency), run 1 | **exit 1** — day-close: S09 "resumes at the remaining 45…" and "a day with nothing blocking…" **timed out at 60 s**; api: the tracked demo-seed flake (`rates.test.ts` › "prices every demo property…", 30 s). Machine: 4 cores, load average ≈ 12 (other reviews running) |
+| same, run 2 | exit 0 — but S09 took **43.2 s** of its 60 s (builder: 9.4 s; alone: within a 20 s suite) |
+| `pnpm turbo run test --force --filter @portico/day-close --filter @portico/api` (default concurrency) | exit 0 |
+| day-close alone (`vitest run`) ×3 | 87/87 each (one run reported a missing file because I deleted a probe mid-run — my artefact) |
+| `node tools/parity-report.mjs --gate day-close` | **exit 1** — 11 P0 rows not tested (P2-14) |
+
+Flake rate (default concurrency, full workspace): **1 of 2 runs failed**, with **two new day-close timeouts** besides
+the tracked api demo-seed flake → P2-9.
+
+### Mutation spot-check (g)
+
+| Mutant | Change | Result |
+|---|---|---|
+| **M2** (builder) | `repo.ts:82` — heartbeat without `.where('lease_owner','=',owner)` | **killed** — `concurrency` › "a stale executor that wakes up after a take-over…" |
+| **M16** (builder) | `steps/index.ts:440-452` — advance-step completion moved out of the advance transaction (`persisted: false`) | **killed** — `chaos-every-step` › "day 22: crash afterItem advance", "day 23…", and the global no-duplicates check |
+| **R1** (mine; riskiest unguarded money guard I found) | `steps/postings.ts:248` — seal check removed from the pre-grant | **survived** — 87/87 green → **P2-8** |
+
+---
+
+## 3. What I attacked and what held (focus areas)
+
+- **(a) Zero duplicates after interruption.** *Held:* an executor paused **inside** an item transaction past its
+  lease (`R-LEASE`): the take-over waits on the run row lock, sees the committed item, the paused executor gets
+  `LeaseLostError`, each `room:` key once. Two starts, two resumes, stale executor, kill -9 in an item and in the
+  advance, 24 chaos points (builder tests, re-run green). Advance + completion in one transaction (code + M16).
+  *Broke:* retries with **changed inputs** — P0-2 (pre-grant conflict), P0-1 (re-allocated lines), P1-1 (override +
+  catch-up).
+- **(b) Nobody logged out.** *Held:* bar postings and readiness reads mid-run (builder test); no identity port, no
+  global lock (code). *Broke:* check-in after the sweep (P2-2); the late charge for D after the advance never
+  reaches D's report (P2-13); FR-1 residual is bounded but not visible (P2-4); frozen facts miss the last postings
+  (P2-3).
+- **(c) Business date, DST, time zones.** *Held:* two properties (Malé, New York) fire at their own 02:00 and
+  advance independently (`R-TZ`). *Broke:* FR-3's local DST fix west of UTC (P2-1); a daytime close is allowed by
+  default (P2-5).
+- **(d) Integrity never overridable.** *Held* (`R-INTEGRITY`): an organization-level `dayClose.policy` written
+  straight through `platform.setPolicy` demoting `integrity_failed` / `folio_ledger_mismatch` / `policy_invalid`
+  → defaults + non-overridable `policy_invalid` blocker, override refused (`integrity_not_overridable`), date
+  unchanged; after an integrity failure: `item:integrity:*` and `item:advance:*` overrides → `nothing_to_override`,
+  cancel → `run_not_cancellable`, a new Start returns the same run, resolve → refused (builder test). The DB trigger
+  backs DCL-I02. *Honesty:* the "alarm to finance" reaches nobody in finance on main (P3-6).
+- **(e) Money.** Room and tax postings from sealed terms with rule versions (S19, my probes show service charge,
+  TGST, Green Tax lines). No-show fees: the only collection path is `payments.collectAgreedNoShowFee` (code); on main
+  it is a stub and the follow-up "no-show fee to collect" is raised (builder test; code-read of the `DomainError`
+  branch). Seal tampering refused in the posting step (builder) but **untested in the pre-grant** (P2-8).
+  *Broke:* P0-1, P0-2, P1-1, P2-10, P2-11.
+- **(f) Security.** RLS 11/11 forced; 15 entry points × property scope; portfolio scoped; run access by id hidden
+  across properties. `markNoShow` composition check untested (P3-7). PII into append-only report (P2-6).
+
+---
+
+## 4. Spec coverage summary (MUST items)
+
+| Spec | Status |
+|---|---|
+| DCL-R01 readiness | built; sources partly missing (P3-11) |
+| DCL-R02 steps 1–9 | built; payments housekeeping honestly skipped (stub); step 7 lacks cancellations, departures, nationality (P3-11, README) |
+| DCL-R03 resume | built and well tested |
+| DCL-R04 non-blocking / cut-over | built; I04 hole (P2-2); FR-1 detection weak (P2-4); late charges invisible in D's report (P2-13) |
+| DCL-R05 scheduler | built; "≥ earliest start" not enforced (P2-5); DST west of UTC (P2-1); no dead-man's switch (P2-7) |
+| DCL-R06 one active run | built and tested |
+| DCL-R07 immutable report + annex | built; annex noisy (P2-3) and blind to late postings (P2-13); PII in the pack (P2-6) |
+| DCL-R08 / R09 (SHOULD) | built as data and notification requests; delivery needs comms (R1, honest) |
+| DCL-I01 | holds for same-key retries; violated in intent by P0-1 / P1-1 (different keys) |
+| DCL-I02, I03, I05 | hold (I03 freezes wrong numbers, P2-3) |
+| DCL-I04 | does not hold for departed stays (P2-2) |
+
+## 5. Scenario-claim assessment
+
+- **S09** (`scenario-s09…`): genuinely demonstrates 67/112 progress, exactly-once resume (90 finance calls),
+  balanced books mid-run and at the end, audit of the recovery. Module level, reservations fake (honest).
+- **S04** (Day Close part): routing as previewed — holds.
+- **S19** (Day Close part): postings, taxes and breakage hold; but the test **asserts as correct** two behaviours I
+  rate as defects — the pre-grant (P0-2) and the departure transfer posted after check-out (P2-10).
+- **E07**: holds (24 crash points; kill -9).
+
+## 6. The builder's claims, verified
+
+| Claim (builder report, verbatim or close) | Verdict |
+|---|---|
+| "87 module tests in 11 files and 2 HTTP tests" | **true** (gate logs) |
+| "Resume sends exactly 90 calls to finance (45 × 2)…books balance mid-run and at the end" | **true** (asserted in S09; re-run green) |
+| "Real `kill -9`…Chaos test: 24 crash points…No ledger key appears twice" | **true** for same-key effects; **not** for re-allocated lines (P0-1) |
+| "Each item's progress commits in the same transaction as its effects…A dead executor's lease must expire before anyone else can take over" | **true** (`R-LEASE`, M2 killed) |
+| "The advance commits together with its step completion" | **true** (M16 killed) |
+| "Integrity codes are never demoted or overridden, and an unreadable policy fails closed" | **true** (`R-INTEGRITY`) |
+| "RLS on all 11 tables; cross-organization reads refused" | **true** (`R-RLS`) |
+| "every route and service function checks a permission" | **true** (`R-SCOPE`) |
+| "Nights missed because a guest checked in late are caught up…never silently missed" (README DCL-I04) | **false** for a guest who leaves before the next close (P2-2) |
+| "Allowances are…pre-granted for the next night after the advance" | true — and the source of P0-2 |
+| "Lines whose service date is later than the night are deferred to the close that reaches that date" | true — and the source of P0-1 / P2-10 |
+| FR-3: "returns 02:30 instead of 02:00 in a DST gap (fixed locally)" | **false west of UTC** (P2-1) |
+| Self-check item 29 "no guest personal data stored, ids only" | **false** (P2-6) |
+| "The day-close tests pass under both concurrency settings" | **false under load** (P2-9) |
+| "A failure…raises a blocking alarm" (to finance) | partly — finance cannot see it on main (P3-6) |
+| Mutation proof "All are red" (22 mutants) | M2, M16 re-run: **red** ✓. My R1 on a sibling guard survived (P2-8) |
+| "The composition `markNoShow` property check is code only and untested" | **true** (honest; P3-7) |
+| "P0 rows still open dropped from 57 to 11" | **true** (gate output) |
+
+---
+
+## 7. Findings
 
 ### DCL-P0-1 — A package line that re-pricing moves to another night is charged twice or never (deferred lines and posted nights are never reconciled with re-sealed terms)
 
@@ -322,4 +543,33 @@
 | P3-8 | `src/events.ts` | Event payload Zod schemas not exported (builder self-check item 22 "no") | Export them for consumers (CR-14/15) |
 | P3-9 | `scheduler.ts:71-77` | Reverse order (AP-08): a manual run created first (e.g. `execute:false`) pre-empts the schedule's auto-continue; the guesthouse auto-close silently becomes a manual run | Let the schedule adopt an active run for its date (set `auto_continue`) or say so in the run view |
 | P3-10 | `test/harness.ts:172-173` | The reservations fake silently drops an in-house stay whose terms do not cover the night (AP-41); the real provider would return it and Day Close would raise `night_not_in_terms` | Return it and let the test see the refusal |
+| P3-11 | `service/readiness.ts:221-344`; `steps/index.ts:339-371` | DCL-R01 [MUST] sources not aggregated and not in Known gaps: incomplete check-ins/outs, failed collection items, unresolved relocations/inventory conflicts, unacknowledged handovers; DCL-R02.7 facts omit **cancellations** (departures and nationality are documented as missing) | List them in Known gaps with the owning contract request, or add the sources |
+| P3-12 | `steps/index.ts:104-106` | The no-show step honours an override of `arrival_transfer_delayed`, but that item is a warning and `overrideItem` refuses it (`runs.ts:286`): dead branch | Remove it or make the item overridable on purpose |
 
+---
+
+## 8. Cross-module notes for the orchestrator
+
+| To | Note | From |
+|---|---|---|
+| rates | Plan-line identity for arrival/departure-rhythm lines must be the occurrence, not the allocated night (`terms.ts:86-89`); otherwise any re-pricing moves the key | P0-1 |
+| finance | (a) `postCharge` with `serviceDate < businessDate` should stamp `relatesToBusinessDate` (or `dailyRevenue` should list late postings by service date) — S10; (b) the check-out consumer forfeits a pre-granted *future-night* allowance to breakage — it should reverse it; (c) CR-9 provider surface for integrity/TB/revenue | P2-13, P0-2 |
+| kernel | FR-3 must adopt the forward-search rule, not Day Close's backward correction; the kernel doc says "earlier" for an overlap but returns the later instant (London) | P2-1 |
+| reservations | CR-2 is load-bearing for DCL-I04; CR-4/CR-5 interact with P0-1/P0-2 (post/grant with occurrence keys) | P2-2 |
+| identity | CR-13: without `dayClose.run.read` on the finance template, the integrity alarm owned by finance is invisible | P3-6 |
+| platform | FR-1 `lockBusinessDate` (still the real fix for P2-4) | P2-4 |
+| shared code | `actorKey` is re-implemented in 10 modules (`day-close/src/service/context.ts:51`, finance, rates, reservations, guests, platform, integration, inventory, operations, payments) — a kernel helper | checklist 15 |
+
+## 9. Evidence and clean-up
+
+- PoCs (each was a `zz-review-*.test.ts` in `modules/day-close/test/` of the scratch copy, run against the real
+  platform, rates and finance with the module's harness):
+  - `day-close-poc/zz-review-money.test.ts.txt` — `R-PREGRANT` (2 tests), `R-DEFER`, `R-CATCHUP`
+  - `day-close-poc/zz-review-ops.test.ts.txt` — `R-DST` (fails by design: asserts the correct instant), `R-TZ`
+    (clean), `R-GAP`, `R-STATS`, `R-DAYTIME`, `R-CHURN`, `R-LEASE` (clean)
+  - `day-close-poc/zz-review-security.test.ts.txt` — `R-RLS`, `R-SCOPE`, `R-INTEGRITY` (all clean)
+  - `day-close-poc/zz-review-pii.test.ts.txt` — `R-PII`
+  - `day-close-poc/zz-review-late.test.ts.txt` — `R-LATE`
+  - `day-close-poc/zz-review-dst-standalone.mjs.txt` — the DST computation for London, New York, Los Angeles,
+    Santiago, Sydney without the workspace
+- Nothing committed. The scratch worktree and every `review_dayclose*` database were removed at the end (§ below).
