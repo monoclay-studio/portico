@@ -541,3 +541,31 @@ Each agent's brief and report are in `agents/`.
   - Fix round 1 went to the migration builder: one pure kernel card-number detector, a hostile-file-safe XLSX reader,
     and a fingerprinted rehearsal certificate. Payments switches to the kernel detector after both merge.
   - A focused re-review follows.
+- **05:48 — Day-close steward review: merge after fixes** <!-- t: agent-ade407b636a44403d @ 2026-11-08T05:48:16.547Z (Steward review: day-close) --> (P0 2 · P1 1 · P2 14 · P3 12).
+  - The engine held under every attack: lease fencing, including an executor paused inside a transaction; the advance
+    atomic; integrity never overridable; RLS; property scope; two time zones.
+  - The defects are in what is posted when a stay changes after a night closed:
+    - a re-price double-charged or dropped a departure transfer (root cause shared with rates' line key);
+    - an allowance was pre-granted for a night that may never exist;
+    - catch-up ignored manual overrides.
+  - The DST fix is wrong west of UTC.
+  - The reviewer's own mutant (seal check in the pre-grant) survived.
+  - Fix round 1 went to the day-close builder with self-check v6.
+- **05:48 — Owner: add token usage to the chronicle** <!-- t: owner:4f98af2a @ 2026-11-08T05:48:51.376Z --> (for the owner's write-up).
+- **05:50 — `usage.json` added** <!-- t: now @ 2026-11-08T05:50:42Z -->. `extract.py` now reads every project folder of the session.
+  - This recovered the first container's full agent logs, closing the README's "known gap": all 61 agent runs now have
+    full logs.
+  - Usage so far: 12,455 API messages across 80 transcripts, all `claude-opus-5-5`. Output 17.5M tokens; cache reads
+    4.9B; cache writes 67.0M (5-minute) and 3.9M (1-hour); uncached input 25K.
+- **05:51 — Integration-step re-review #7: merge after fixes** <!-- t: agent-a8e2726ae9165e6da @ 2026-11-08T05:51:21.224Z (Focused re-review #7: integration-step) --> (P0 0 · P1 2 · P2 2 · P3 5).
+  - Round 6 held: the purpose label cannot steer captures, deposit-per-stay was proven correct by the reviewer's own
+    two-segment test, and there are no front-desk regressions.
+  - Two more siblings:
+    - a deposit forfeit plus a card charge collected one penalty twice;
+    - a moved credit left an ownerless debit.
+  - Orchestrator decision, ADR-0015 Amendment 6:
+    - one finance-owned balance per obligation, drawn down by every settlement method under one lock;
+    - a seeded model-based test of the money invariant, so siblings are found by generation, not by hand. The
+      generator must itself find re-applied old mutants.
+  - Fix round 7 sent.
+  - Lesson: after seven rounds of enumerated fixes, the proof method changed to generative.

@@ -1,7 +1,7 @@
 # Agent run: Build distribution + Channex adapter
 
-- Started: 2026-11-07T21:14:50.867Z · last activity: 2026-11-08T05:46:15.845Z
-- Turns: 268 · tool uses: 277 · output tokens: 477,071
+- Started: 2026-11-07T21:14:50.867Z · last activity: 2026-11-08T05:51:59.942Z
+- Turns: 280 · tool uses: 290 · output tokens: 498,761
 - Type: general-purpose
 
 ## Brief (2026-11-07T21:14:50.867Z)
@@ -148,6 +148,127 @@ Merge main into `feat/distribution-channex` first.
 - Gates: `pnpm lint`, `pnpm turbo run typecheck --force`, `pnpm turbo run test --force --concurrency=2`, all exit 0.
 
 Address this before completing your current task.
+````
+
+## Follow-up message (2026-11-08T05:51:16.933Z)
+
+````text
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+<system-reminder>
+<tools-used-before-summary>Bash, Edit, Monitor, SubagentHandback, TaskStop, ToolSearch, WebFetch, WebSearch, Write</tools-used-before-summary>
+</system-reminder>
+Summary:
+1. Primary Request and Intent:
+   - Original task (completed and handed back once): as module owner for **distribution** in Portico (TypeScript modular monolith at /home/user/portico; worktree /home/user/wt/distribution, branch feat/distribution-channex), make Portico **Channex-ready** per owner requirements verbatim: (1) "ARI Engine: Your PMS must actively track and batch availability, rate, and restriction (ARI) changes (no heavy database polling loops)." (2) "Outbox & Queue: A stable queue system that batches updates into Channex API calls while respecting their 20 ARI/minute rate limits." (3) "Webhook Endpoint: A live endpoint in your PMS configured to receive, parse, and durably save booking delivery revisions." (4) "Acknowledge Flow: A functioning mechanism that sends back booking confirmations/acknowledgments to Channex once received." Simulator-first, stop at R3, report self-check tables, unverified Channex facts, R4 staging plan.
+   - **Current request (coordinator, "Distribution fix round 1")**: merge main first; then:
+     - Must fix before merge: **P1-1** polling loop (revoked key E04 or external system of record + one pending change → org re-runs every 1 s forever, `jobs.ts:118-128`; exception rewritten every pass; work that cannot progress must be parked until blocking state changes (key re-verified, authority returns); exception written once per state change; probes A1/A2 → regression tests). **P1-2** revision ordering (stop using Date.parse ms/local-time, hash tie-break, arrival fallback; order on hub's own sequence where it exists, else timezone-safe timestamps with deterministic causal tie-break; a modification with the creation's timestamp must be applied, never acked `stale` (A3); a cancellation arriving first must never strand the creation (A4); mark Channex ordering assumptions unverified in wire.ts and add to R4 checklist). **P2-1** test that fails when the per-booking ordered wait (`inbound.ts:680`) is disabled; correct parity row PAR-DST-023 (also sibling guard in Apply as new). **G-1** zero lint warnings (main runs `--error-on-warnings`).
+     - Then P2s: **P2-2** budget independent of worker clocks/latency jitter (DB time + safety margin; hub never sees > limit in any 60 s); **P2-3/P2-4** unrecognised hub answers fail closed (warning with no index, 200 carrying `errors`), simulator stops mirroring the adapter's 7 unverified assumptions, move 4 wire assumptions from client.ts into wire.ts; **P2-5** webhook rate limit per endpoint not per IP, unauthenticated posts not stored permanently; **P2-6** live tenant cannot claim a production hub property before proving access; **P2-7** erasure path for guest data in stored revisions (coordinate with guests' erasure contract; if needs guests port, declare and bind strict fake); **P2-8** unparseable change event raises an exception, never silent drop.
+     - Then cheap P3s (P3-1 old webhook registrations/concurrent verify; P3-2 since-T truncation/comparison; P3-3 readiness register; P3-4 Dismiss only parked/failed/rejected; P3-5 search filter before limit; P3-6 permission inside pullFeed/recoverSince; P3-7 nightly resync anchored to property-local quiet hour; P3-8 dead-man signal; P3-9 `owner` on records).
+     - Self-check **v6** with tables: § 5.1 state machines for a revision and a connection's health with external holders (the hub); pasted writer searches; control-fact grid with input-source column; § 5.4 mutation table for every P1/P2 guard (guard removed → named test fails → restored); § 6 claim ledger over README, spec and touched parity rows.
+     - How to work: commit after every meaningful step; do not push; never amend or rewrite commits; gates `pnpm lint`, `pnpm turbo run typecheck --force`, `pnpm turbo run test --force --concurrency=2`, all exit 0. Final report must be delivered via **SubagentHandback** (plain text at end is not delivered).
+   - Security/operational constraints (preserve): Never push; never amend/reset/rebase; never call the real Channex; never activate paid contracts, live guest transactions, live hotel/channel connections, production keys; no secrets in code/tests/logs; PII never logged; commits end with:
+     ```
+     Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+     Claude-Session: https://claude.ai/code/session_01XDtqZDkxkzHxUrbV9kDsKR
+     ```
+     Use `git -c commit.gpgsign=false commit`. Postgres postgres://postgres@127.0.0.1:5432/postgres, PORTICO_TEST_DB_PREFIX=w2_dist. Never run Biome on *.md. Do not kill processes outside own tasks (a `pkill -f vitest/turbo` was denied by the auto-mode classifier as interfering with other workloads — other agents share the machine). Use scratchpad /tmp/claude-0/-home-user-portico/4f98af2a-3564-5e4b-aedc-2d94c911507d/scratchpad for temp files.
+
+2. Key Technical Concepts:
+   - Modular monolith; module boundaries enforced by tools/check-boundaries.mjs (modules/<m>/src may not import other @portico modules; tests may); ports bound in apps/api/src/composition.ts.
+   - Postgres RLS (core.enable_tenant_isolation forced), core.make_append_only, SECURITY DEFINER routing functions (route_webhook, claim_due_tenants), migrateAfter ['platform'].
+   - Transactional outbox consumers (TxEventSubscription), ScheduledJob `distribution.dueWork` (2 s) with tenant_schedule due index (scheduleTenant pulls earlier with least()).
+   - ARI dirty set (ranges only, values read at send time), one open message per (connection, kind) (partial unique index), sliding-window budget (each token returns 60 s after use) reserved under row lock, classification (payload/transient/rate_limited/auth), backoff 5/10/20/40 s then 60 s, urgent after 30 min, lease token for late answers, channel_state upsert with seq guard, lock order connection → ARI advisory lock → message → budget, health refresh after commit.
+   - Inbound: immutable inbound_revisions keyed (tenant, connection, channel_booking_id, revision_id), revision_processing state machine (received/applied/duplicate/stale/parked/rejected/failed), ack_state (not_due/pending/sending/acked/failed) with CHECK `ack_state = 'not_due' or state in (applied, duplicate, stale, rejected)`, per-property advisory lock, orphan parking + 15-min escalation, unmapped parking with provisional holds, ack claim in later tx, feed pull, recoverSince, markCredentialsInvalid for all hub paths.
+   - Environment safety: hubModeFor (assertExternalEffectAllowed 'channel.publish' + target match), liveScope port stub refusing live.
+   - Channex wire facts in one mapping file (wire.ts) with WIRE_FACTS statuses v2/unverified/owner; simulator state machine persisted in distribution.sim_hubs.
+   - Self-check v4/v5/v6 (invariant closure, state machines, external holders, derived writer lists, control-fact grid, mutation per guard, claim ledger).
+
+3. Files and Code Sections (all under /home/user/wt/distribution unless absolute):
+   - modules/distribution/migrations/0001_distribution.sql — schema (connections incl. webhook_secret_hash/ref, webhook_registered_at, inbound_gap_at; room/rate mappings; ari_dirty; ari_messages with seq identity, oldest_change_at, status check incl. superseded; ari_budget (sends timestamptz[], paused_until); channel_state (unique nulls not distinct); resync_runs; stop_sells; inbound_revisions (revision_order bigint, append-only); revision_processing (CHECK above); inbound_deliveries (append-only, outcomes stored/duplicate/conflict/notification/unauthenticated/property_mismatch/unparseable); exchange_log; exceptions; discrepancies; sim_hubs; tenant_schedule (RLS enabled not forced); webhook_directory (+ production unique index, trigger sync, revoked from app); route_webhook, claim_due_tenants(p_now, p_limit, p_lease)). Not yet merged to main, so it can still be edited (plan for P1-2 columns).
+   - src/manifest.ts (P permissions: distribution.channel.read, connection.manage ⚑, mapping.manage, ari.resync, reservation.recover, discrepancy.resolve, stopSell.manage, simulator.control (org); RECORD types; migrateAfter ['platform']).
+   - src/contracts.ts (Zod: vocabularies incl. DISTRIBUTION_PROVENANCE satisfies Provenance[], severity/responsibleParty copies (FR-1), connectionSettings defaults: availabilityPerMinute 10, restrictionsPerMinute 10, horizonDays 400, freshnessTargetSeconds 120, maxCellsPerMessage 2000, stopSellProtection {enabled, threshold 2, cooldownMinutes 10}, amountsIncludeTax false, fallbackRatePlanId null, feedPullMinutes 15, fullResyncHours 24; inputs; views; event payload schemas).
+   - src/domain/{ranges,budget,delivery,ari,revisions,health}.ts + domain.test.ts. revisions.ts currently has `revisionOrderOf(revisionId, insertedAt, receivedAt)` = Date.parse ms*1000 + sha256 tie%1000 (the P1-2 defect), `decideProcessing`, `translateRevision`, `ChannelBookingPayload`, `HubRevision`. health.ts: computeHealth (failures within freshness target don't degrade). budget.ts: reserveSlot (pruneSends drops future stamps — P2-2 defect), maxInAnyWindow.
+   - src/adapters/hub.ts (HubAdapter, HubTransport, HubError, HubTransportError), src/adapters/channex/wire.ts (WIRE_FACTS, PATHS, bodies, parseAriSuccess (fails open — P2-3), toHubRevision, parseFeed, parseWebhook, webhookRegistration, WEBHOOK_TOKEN_HEADER 'x-portico-webhook-token', WEBHOOK_SIGNATURE_HEADER), client.ts (channexAdapter; holds retry-after parse, property title, pagination semantics, 404=no revision — to move to wire.ts per P2-4), simulator.ts (handleRequest, addRevision (revisionId idempotent option), webhookDeliveries, requestInstants), simulator-hub.ts (ChannexSimulatorHub run/createProperty/transport/addRevision/deliver/setSink), http-transport.ts (fixedHostHttpTransport).
+   - src/service/common.ts (DistributionDeps, DEFAULT_CONFIG callDeadlineMs 45000 leaseMs 60000, loadConnection, requireOnConnection, settingsOf, targetForEnvironment, provenanceOfTarget, hubModeFor, hubContext, scheduleTenant, recordExchange, lockPropertyInbound, lockAri).
+   - src/service/exceptions.ts (raiseException (increments occurrences each call — P1-1 needs once-per-state-change option), autoResolve, exceptionView, listExceptions, resolveException, raiseDiscrepancy, autoResolveDiscrepancies, markCredentialsInvalid).
+   - src/service/ari-dirty.ts, ari-values.ts, ari-dispatch.ts (claim/record/dispatchKind, reserveBudget, nextBudgetSlot, upsertChannelState exported, publicationBlockedBy: blocks all ARI when availability external, restrictions when rates external), health.ts (gatherFacts, refreshHealth, nextHealthDue, getHealth, propertyHealth), stop-sell.ts, mappings.ts (no connection FOR UPDATE), inbound.ts (storeRevision, processInbound, processOne, earlierUnsettled at ~line 680 counts received/failed/parked, escalateParked, dispatchAcks, pullFeed (logs property_mismatch), recoverSince (guarded hub calls → markCredentialsInvalid + DomainError 502 'hub_request_failed'), resolveRevision (retry refused for dismissed: requires ack_state not_due), listRevisions/getRevision), webhooks.ts (receiveWebhook, header/hmac verifiers), connections.ts (create/verify/activate/pause/resume/disconnect/updateSettings/rotateCredential/rotateWebhookToken/requestResync/resyncConnection/onAuthorityChanged), calendar.ts, discrepancies.ts, messages.ts, simulator-control.ts (redacted read; idempotent simulated booking via sha256 revisionId), jobs.ts (connectionWork, nextDue, runTenantWork, distributionJobs, distributionSubscriptions — parse failures `if (!p.success) return;` = P2-8).
+   - src/routes.ts (all HTTP routes; public webhook POST /v1/distribution/webhooks/channex/:endpointId with rateLimit max 600 per IP — P2-5), src/search.ts (limit before permission filter — P3-5), src/seed.ts, src/module.ts (createDistribution binds sink), src/index.ts, src/services.ts, src/tables.ts.
+   - modules/distribution/test/: harness.ts (startHarness, setupOrg, connect, tick, runFor, simState, maxPerMinute, sys, bindPorts), fakes/reservations.ts (+ sql), ari-engine, inbound, lifecycle, isolation-permissions, delivery-edges, regressions, scenario-s02-channel-ingestion, scenario-s20-hub-outage, compat/contracts tests. Last full gate: distribution 11 files, 91 passed + 2 todo.
+   - apps/api/src/composition.ts (distribution wiring), apps/api/package.json, apps/api/test/distribution.test.ts.
+   - modules/identity/src/domain/role-templates.ts (reservations_agent += distribution.channel.read, distribution.reservation.recover).
+   - modules/distribution/README.md, FOUNDATION_REQUESTS.md (FR-1..FR-6), docs/parity/distribution.md (v2; PAR-DST-023 marked tested — must be downgraded per P2-1 until test exists).
+   - Review docs: docs/orchestration/reviews/review-distribution.md; probes docs/orchestration/reviews/distribution-poc/zz-review-{a,b,c}.test.ts.txt (A1/A2 polling, A3/A4 ordering, A5 clock skew; B1–B8; C1/C2).
+   - Mutation script: /tmp/claude-0/-home-user-portico/4f98af2a-3564-5e4b-aedc-2d94c911507d/scratchpad/mut/run.py (list M of (name, edits(file, old, new), test, filter); runs vitest -t, then `git checkout --` files; usage `python3 run.py M3 M15`). Note M3 pattern now outdated after G-1 rewrite: lease check is now `if (msg?.status !== 'sending' || msg.lease_token !== c.token) {`.
+
+4. Errors and fixes (earlier build, abbreviated):
+   - Migration order (platform schema missing) → migrateAfter ['platform'].
+   - Protection flapping on a single 5xx → failures within freshness target don't degrade health.
+   - Credentials refusal on feed path didn't raise exception → markCredentialsInvalid helper used on all hub paths (later also recoverSince).
+   - Restrictions published while availability external → block all ARI.
+   - booking.recovered not emitted for woken revisions → use parked_since.
+   - Lock-order deadlock risk → record() locks connection first; health refresh after commit; mappings no connection lock.
+   - Simulator booking not idempotent → deterministic revisionId.
+   - Retry of dismissed revision hit CHECK → retry requires ack_state not_due.
+   - Fix-round G-1: 7 warnings fixed (domain.test.ts firstRoom() helper replacing `rev().rooms[0]!`; calendar.ts chunk end via `[chunkEnd, window.to].sort()[0]`; optional chains in search.ts, ari-dispatch.ts, inbound.ts) — committed c2fd128.
+   - pkill denied (don't interfere with other agents); TaskStop used for own background job instead.
+
+5. Problem Solving — plans worked out for the fix round:
+   - **P1-1 plan**: add `hubBlocker(tx, deps, conn)` (credential invalid, missing credential_ref, hubModeFor mismatch, liveScope refusal, not running) and reuse publicationBlockedBy per kind; in `nextDue` push hub-dependent instants (feed pull, ack due/lease, ARI open message/budget/dirty) only when not blocked; push health freshness wakes only when in the future; keep apply/parked/full-sync instants; floor stays now+1 s. Add `raiseException` option to write only if no open exception (once per state change) for publication_blocked, publication_refused, credentials_invalid. Unblocking transitions schedule: rotateCredential (scheduleTenant + next_feed_pull_at now), verify success (next_feed_pull_at now + schedule), onAuthorityChanged back → requestResync. Health facts: hub refusal → 'blocked'. Regression tests from A1/A2 inverted: gaps ≥ 60 s over 10 passes, exception occurrences === 1, one wake after verify / authority back and pending change published.
+   - **P1-2 plan**: add to inbound_revisions `hub_micros bigint` (parse full fraction to µs, TZ-less → UTC), optional `hub_sequence` (unverified attribute, e.g. revision_number), `lifecycle_rank smallint` (new 0 < modified 1 < cancelled 2), `arrival_seq bigint identity`; comparator: hub_sequence if both present → hub_micros if both present and differ → rank → arrival; earlierUnsettled computed in TS over the booking's revisions, excluding parked orphans; distribution decides staleness itself (a revision earlier than an already-applied one → stale, not sent to reservations, ack); pass reservations a per-booking monotonic `reservations_revision` = max applied + 1; equal (ts, rank) modifications → apply by arrival + routine discrepancy; apply_as_new same rules; mark ordering fields unverified in wire.ts + R4 checklist; simulator timestamp modes.
+   - **P2-1 plan**: test where create fails with retryable 503 (state failed), modification arrives → must stay `received` waiting (not parked, no reservations call), then create retried → both applied; mutant disabling wait turns it red (mod becomes parked). Apply-as-new sibling: orphan r2 parked first, then r1 arrives and fails → apply_as_new on r2 refused. Downgrade/fix PAR-DST-023.
+   - **P2-2 plan**: shared budget clock (default DB `clock_timestamp()` inside locked statement; test harness injects app clock for simulated-time tests; A5 regression on DB clock), keep future stamps, monotonic stamps, re-stamp slot at completion in record(), margin setting (e.g., budgetMarginSeconds 2, window 62 s); B5 pure regression.
+   - **P2-3 plan**: parseAriSuccess unrecognized when warning lacks index, `errors` present, or unrecognized 2xx; record() → new status `pending_verification` (migration check), cells not written to channel_state, urgent exception (responsible monoclay), no auto-retry, calendar shows unconfirmed; optionally availability read-back (GET /availability V2 shape).
+   - **P2-4 plan**: move client.ts assumptions into wire.ts with WIRE_FACTS; simulator modes (timestamps equal/second/absent/tzless; refusal shape no_index/errors_200; webhook payload subset; multi-page bookings; ack-twice 404; exclusive date_to; fixed-minute limit counting 429s) with truthful-behaviour tests.
+   - P2-5: key limit on endpointId (token check first, exempt valid), unauthenticated attempts as per-connection counter (unauthenticated_count, last_unauthenticated_at) not append-only rows. P2-6: directory row active only after verify succeeded (credential_state valid); unverified claim never blocks verified owner; rotateCredential re-verifies same property. P2-7: definer redaction function / erasure path keeping ids+hashes (+ retention), guests port strict fake if needed. P2-8: parse failure → urgent `change_event_unreadable` exception + mark connections fully dirty for the kind (only if publishing connections exist).
+
+6. All user messages:
+   - Initial task message (module owner for distribution, Channex readiness; full instructions incl. read-first list, build steps 1–7, gates `pnpm lint && pnpm turbo run typecheck --force && pnpm turbo run test --force --concurrency=2`, reply contents, "A steward review will follow.").
+   - System enforcement: "[handback-send-enforce] Your report has not been delivered. Call SubagentHandback({message: <your full report>}) now; the call ends your run." (I then called SubagentHandback; delivered.)
+   - Coordinator message "Distribution fix round 1" (full content summarized in section 1; ends "Address this before completing your current task."), including: "Commit after every meaningful step. Do not push. Never amend or rewrite commits. Gates: `pnpm lint`, `pnpm turbo run typecheck --force`, `pnpm turbo run test --force --concurrency=2`, all exit 0."
+
+7. Pending Tasks:
+   - P1-1 (in progress), P1-2, P2-1 (+PAR-DST-023 correction), then P2-2, P2-3, P2-4, P2-5, P2-6, P2-7, P2-8, cheap P3s (P3-1…P3-9 as feasible), README/parity/WIRE_FACTS/R4 checklist updates, readiness register (P3-3).
+   - Re-run mutation proofs for every P1/P2 guard (update run.py patterns), self-check v6 tables (§3, §5.1 state machines with hub as external holder, pasted writer searches, control-fact grid with input-source column, §5.4 mutation table, §6 claim ledger).
+   - Gate block on merged tree (merge main again first): pnpm install --frozen-lockfile, pnpm lint, pnpm turbo run typecheck --force, pnpm turbo run test --force --concurrency=2 — all exit 0 (run in background with logs; read exit codes, never pipe).
+   - Final report via SubagentHandback.
+
+8. Current Work:
+   - Merged main (merge commit 83d5b5a), committed G-1 as c2fd128 "fix(distribution): G-1 zero lint warnings under --error-on-warnings".
+   - Was starting **P1-1** by viewing `nextDue` in modules/distribution/src/service/jobs.ts (lines ~99–150):
+     ```ts
+     async function nextDue(tx, conns: ConnectionRow[]): Promise<Date> {
+       const candidates: Date[] = [new Date(tx.now.getTime() + 15 * 60_000)];
+       const push = (d) => { if (d) candidates.push(new Date(d)); };
+       for (const c of conns) {
+         if (c.status === 'disconnected' || c.status === 'setup') continue;
+         push(c.next_feed_pull_at);
+         if (c.status === 'active') push(c.next_full_sync_at);
+         push(await nextHealthDue(tx, c));
+         if (c.status === 'active') {
+           for (const kind of ARI_KINDS) {
+             const open = ...status in ['queued','sending','failed_transient'];
+             if (open) push(open.status === 'sending' ? open.lease_until : open.next_attempt_at);
+             const dirty = ...min(first_dirty_at);
+             if (dirty?.at && !open) push(await nextBudgetSlot(tx, c, kind));
+             if (dirty?.at) push(new Date(new Date(dirty.at).getTime() + settingsOf(c).freshnessTargetSeconds * 1000 + 1000));
+           }
+         }
+         const rp = ... min(next_attempt_at) filter received/failed as apply, min(ack_next_at) filter pending/failed as ack, min(ack_lease_until) filter sending as lease, min(parked_since) filter orphan not escalated as parked;
+         push(rp?.apply); push(rp?.ack); push(rp?.lease);
+         if (rp?.parked) push(parked + PARK_ESCALATION_MS);
+       }
+       const min = Math.min(...candidates.map((d) => d.getTime()));
+       return new Date(Math.max(tx.now.getTime() + 1000, min));
+     }
+     ```
+     nextDue currently takes only (tx, conns); it will need `deps` to evaluate hub/publication blockers.
+
+9. Optional Next Step:
+   Implement P1-1 per the plan: add blocker helpers (hubBlocker + exported publicationBlockedBy), pass `deps` into `nextDue`, exclude hub-dependent instants for blocked connections/kinds, push freshness wakes only if in the future, add `raiseException` "only if new" option for publication_blocked/publication_refused/credentials_invalid, make rotateCredential/verify schedule the tenant and set next_feed_pull_at, then write regression tests from probes A1/A2 inverted ("next due ≥ 60 s while blocked; exception occurrences 1; one wake when the key is re-verified / authority returns") and commit. This follows the coordinator's instruction: "**P1-1, a polling loop.** ... Work that cannot progress must be parked until the blocking state changes: the key is re-verified, or authority returns. The exception is written once per state change. Turn the probes A1/A2 into regression tests." Then proceed to P1-2, P2-1, the P2s, P3s, mutation table, self-check v6, gates, and SubagentHandback.
+
+If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /root/.claude/projects/-home-user-portico/4f98af2a-3564-5e4b-aedc-2d94c911507d/subagents/agent-a7e54633dbf24e059.jsonl
+Continue the conversation from where it left off without asking the user any further questions. Resume directly — do not acknowledge the summary, do not recap what was happening, do not preface with "I'll continue" or similar. Pick up the last task as if the break never happened.
 ````
 
 ## Report (2026-11-07T22:33:51.080Z)

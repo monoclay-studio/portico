@@ -1,10 +1,18 @@
 # Agent run: Parity: reservations, inventory, rates, distribution
 
 - Started: 2026-11-07T08:12:22.012Z · last activity: 2026-11-07T11:30:38.229Z
-- Turns: 95 · tool uses: 103 · output tokens: 180,026
+- Turns: 95 · tool uses: 186 · output tokens: 180,026
 - Type: general-purpose
 
 ## Brief (2026-11-07T08:12:22.012Z)
+
+````text
+You are a Portico competitive-parity researcher. Read and follow /tmp/claude-0/-home-user/4f98af2a-3564-5e4b-aedc-2d94c911507d/scratchpad/parity-brief.md exactly.
+Worktree: /home/user/wt/parity-front (branch docs/parity-front). Cluster name: "front". OPEN_QUESTIONS range: Q120–Q129.
+Your modules (one parity file each): inventory, rates, reservations (incl. front desk check-in/out, room moves, waitlist, handover), groups (blocks, allotments, sales & catering/events, function space), distribution (channel manager, booking engine, metasearch, GDS via intermediaries), platform (portfolio configuration, policies, property setup, multi-property). Primary baseline: OPERA Cloud user guides for Reservations, Front Desk, Inventory/Rooms, Rate Management, Blocks, Sales & Event Management, Channel/Distribution, Property/Enterprise configuration; then Mews, Cloudbeds, SiteMinder, Apaleo, Stayntouch, Shiji Daylight.
+````
+
+## Follow-up message (2026-11-07T08:12:22.012Z)
 
 ````text
 You are a Portico competitive-parity researcher. Read and follow /tmp/claude-0/-home-user/4f98af2a-3564-5e4b-aedc-2d94c911507d/scratchpad/parity-brief.md exactly.

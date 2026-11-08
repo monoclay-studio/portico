@@ -1,7 +1,7 @@
 # Agent run: Build day-close module
 
-- Started: 2026-11-07T21:38:00.135Z · last activity: 2026-11-07T22:52:40.746Z
-- Turns: 279 · tool uses: 288 · output tokens: 383,994
+- Started: 2026-11-07T21:38:00.135Z · last activity: 2026-11-08T05:49:42.939Z
+- Turns: 285 · tool uses: 295 · output tokens: 385,262
 - Type: general-purpose
 
 ## Brief (2026-11-07T21:38:00.135Z)
@@ -62,6 +62,71 @@ Reply with:
 - the stubs still bound.
 
 A steward review will follow.
+````
+
+## Follow-up message (2026-11-08T05:48:55.198Z)
+
+````text
+The coordinator sent a message while you were working:
+Day-close fix round 1. The steward review says "merge after fixes" (P0 2, P1 1, P2 14, P3 12).
+
+The engine held under every attack:
+- lease and heartbeat fencing, including an executor paused inside an item transaction past its lease;
+- the advance and its step completion in one transaction;
+- the integrity gate, which could not be demoted or overridden;
+- forced RLS on all 11 tables and property scope on all 15 entry points;
+- two time zones each closing at their own 02:00.
+
+Your M2 and M16 mutants were confirmed killed. Thank you.
+
+The defects are all in what gets posted when a stay changes after one of its nights has closed.
+
+**Read first, all on main:**
+- `docs/orchestration/reviews/review-day-close.md`
+- the probes in `docs/orchestration/reviews/day-close-poc/zz-review-*.txt`
+- the "day-close fix round 1" and "rates (day-close review P0-1 root cause)" lines in `docs/orchestration/pending-fixes.md`
+
+Merge main into `feat/day-close` first.
+
+1. **P0-1: re-priced package lines are not reconciled.**
+   - A re-price that moves a package line to another night is never matched against lines already posted or deferred. An extension double-charged the USD 750 departure transfer, and a shortening never charged it.
+   - Reconcile by a **stable line identity that does not include the allocated night**: the package component plus its service-date rule from the sealed terms.
+   - If rates must expose that identity, make a minimal, additive change to its posting-plan output and list it in your report. Never change existing keys or contracts in a breaking way, because `feat/integration-step` also touches rates.
+   - Turn the reviewer's money probes into regression tests.
+2. **P0-2: allowances and the night's postings.**
+   - Never grant the next night's allowance before that night exists. An early departure must never bill or forfeit an allowance for a night outside the stay.
+   - An occupancy correction must never hit finance's `idempotency_conflict` and roll back the whole night, room charge included.
+   - That failure must not be marked retryable.
+3. **P1-1:** catch-up respects overrides. A night that was overridden and posted by hand must never be posted again.
+4. **P2-1:** your FR-3 DST fix is wrong west of UTC (New York gives 01:30 EST, an hour early), and the earliest-start guard is wrong the same way. Fix both and test several zones east and west. FR-3 asks the kernel to copy this logic, so it must be right.
+5. **P2-2/P2-3:**
+   - A stay checked in after the pre-advance sweep that leaves before the next close is charged at that next close, or flagged. Today it is silently never charged, so the DCL-I04 claim is false.
+   - Day facts are computed after the sweep posts.
+   - The annex labels these postings correctly, not as restatements.
+6. **P2-6:** no guest names in the append-only day report. Use ids and resolve names at read time, so erasure works.
+7. **P2-9:** S09 and the 40-stay test must be stable under default concurrency on a loaded machine (they timed out at 60 s, and S09 took 43 s in the passing run). Find the slow part rather than only raising budgets.
+8. **The other P2s:**
+   - P2-4: an in-flight posting across the advance raises a follow-up.
+   - P2-5: enforce the spec's earliest start (no 10:00 close no-showing the afternoon's arrivals).
+   - P2-7: an alarm when no close runs.
+   - P2-10: the departure transfer is posted before or at check-out.
+   - P2-11: raise `levy_not_posted`.
+   - P2-12: `dayClose.policy.manage` cannot indirectly advance the date with system authority.
+   - P2-13: late charges for D reach D's report or a clearly labelled annex.
+   - P2-14: correct the 2 overclaiming parity rows.
+9. **The reviewer's surviving mutant R1:** the seal check in the pre-grant (`postings.ts:248`) needs a test that fails without it.
+10. **Cheap P3s.**
+
+**Self-check v6** (`docs/quality/playbooks/module-builder-self-check.md`). Include the tables:
+- § 5.1 state machines for a stay-night's posting lifecycle and for allowances, with external writers (reservations re-pricing, finance corrections);
+- pasted writer searches;
+- the control-fact grid with an input-source column;
+- the § 5.4 mutation table for every P0/P1/P2 guard;
+- the § 6 claim ledger. The review lists five claims as false; each must end up true and backed by a test, or be rewritten.
+
+Commit after every meaningful step. Do not push. Never amend or rewrite commits. Gates: `pnpm lint`, `pnpm turbo run typecheck --force` and `pnpm turbo run test --force --concurrency=2` must all exit 0. A focused re-review follows.
+
+Address this before completing your current task.
 ````
 
 ## Report (2026-11-07T22:52:40.658Z)

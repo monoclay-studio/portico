@@ -1,10 +1,36 @@
 # Agent run: Identity and platform enterprise features
 
 - Started: 2026-11-07T07:38:12.649Z · last activity: 2026-11-07T18:29:44.188Z
-- Turns: 769 · tool uses: 838 · output tokens: 1,087,899
+- Turns: 769 · tool uses: 984 · output tokens: 1,087,899
 - Type: general-purpose
 
 ## Brief (2026-11-07T07:38:12.649Z)
+
+````text
+You are the engineer for Portico's enterprise identity & platform features. First read the shared playbook at /tmp/claude-0/-home-user/4f98af2a-3564-5e4b-aedc-2d94c911507d/scratchpad/wave1-playbook.md and follow it, with this difference: your write scope is `modules/identity/` and `modules/platform/` (both already exist on main and are yours to extend — keep every existing test passing and do not break their public functions; add new migrations as 0002_*.sql etc., never edit 0001), plus wiring in apps/api/src/composition.ts and apps/api/src/provisioning.ts, plus new tests in apps/api/test/.
+
+Your worktree: /home/user/wt/identity-plus (branch feat/identity-platform-enterprise). Test DB prefix: PORTICO_TEST_DB_PREFIX=w1_idplus. Specs: /home/user/wt/product/docs/specs/identity.md and platform.md. Also read docs/product/operational-readiness-brief.md §12–§13 (privacy, security, enterprise administration), docs/product/adoption-integration-brief.md §3 and §11 (trial environments, enterprise rollout), docs/readiness/security-privacy-readiness.md, ADR-0002/0010/0012/0014.
+
+IDENTITY — build and test:
+1. MFA: TOTP enrolment (RFC 6238, secret field-encrypted, QR provisioning URI), verification with replay protection (used time-step), recovery codes (hashed, single use), WebAuthn as a documented LATER item. Organization policy: MFA required for roles holding any `sensitive` permission (from module manifests) and for org admins; step-up: sessions record mfa_verified_at; sensitive permissions require a recent MFA verification (configurable window) — enforce centrally in the authorizer so modules don't have to (e.g. the authorizer returns false for sensitive permissions when step-up is missing, and the HTTP layer returns a distinct `mfa_required` problem). Design the cleanest way and document it.
+2. Enterprise SSO: per-organization OIDC configuration (issuer, client id, client secret via a SecretStore port, allowed email domains, role mapping from IdP groups/claims to Portico roles with scopes), authorization-code + PKCE login flow endpoints, JIT provisioning of memberships, enforcement option "SSO required" (password login disabled for that org's members). Test with a local fake IdP (sign tokens with `jose` keys generated in the test). SAML: document as LATER with the same role-mapping model. SCIM: provisioning endpoints (Users, Groups) — at least create/update/deactivate users with tests.
+3. Custom roles: CRUD for organization roles built from the permission catalog (validate keys/wildcards against registered permissions), with sensitive permissions flagged; system role templates remain immutable but clonable.
+4. Staff lifecycle: invite (token with expiry, email via a Notifier port honoring environment safety — simulated outside live), password reset, transfer between properties (revoke old scoped assignments + grant new, audited), time-limited assignments (ends_at enforced), session list & revoke (self and admin), suspension (exists) and removal (memberships removed; audit retained).
+5. Support access (readiness brief §13): Monoclay operator access to a customer organization only through a time-boxed, reason-recorded "support session" that the customer can see (and optionally must approve — org policy), with a distinct actor kind/impersonation marker on every audit record. Operator authentication for the internal console: separate operator principals (not tenant users) — design minimal but secure (e.g. operator API tokens from env for now, documented as to-be-replaced by AWS IAM Identity Center/SSO).
+6. Break-glass emergency access: time-boxed elevation with mandatory reason, immediate alert event, automatic expiry, post-incident review flag.
+7. Suspicious activity signals: repeated failed logins across accounts from one IP, sign-in from new country (placeholder geo), mass export attempts — emit `identity.security.alert` events (detection rules simple, documented).
+
+PLATFORM — build and test:
+8. Owners & ownership (brief §2 "individual owners where ownership arrangements require separate accounting"): owner entities (person/company, payout details reference — no bank data in plaintext), ownership shares of units by unit id (unit ids from inventory referenced by id only; no FK), effective dating; owner statements are LATER (finance) — expose the data.
+9. Outlets: CRUD (restaurant, bar, spa, dive center, boutique, transfer desk, minibar, in-room dining…), legal entity, default charge code ref (by key), opening hours, room-charge eligibility flag.
+10. Configuration templates & bulk setup (adoption brief §11): export a property's platform configuration (and a registry where other modules can contribute their config sections later) as a versioned "configuration bundle"; apply a bundle to one or many properties with a dry-run validation report first (what would change, conflicts, local overrides preserved); rollout groups (named sets of properties with stage: pilot/wave1/wave2…) and an approval control (separation of duties: the person who prepares a portfolio-wide change cannot approve it — configurable).
+11. Environments & trial lifecycle (adoption brief §3): create a `trial` organization linked to a live (or prospective) organization; reset trial (delete operational data, keep config), export trial data, delete trial (respecting retention obligations — document), and "carry forward" selected configuration from trial to production via configuration bundles with validation. Provenance: trial org data is labeled `copied` where it came from an import.
+12. Property activation stages: setup → pilot → active requires an explicit, audited approval by a different user with `platform.property.activate` (sensitive); pilot scope settings (which modules/workflows are live in the pilot).
+
+Also: expand the permission catalog endpoint (GET /v1/permissions) for role editors, and add HTTP routes + Zod contracts for everything above. Update modules/identity/README.md and modules/platform/README.md (create them) per the playbook deliverables, with honest readiness levels (SSO tested only against a fake IdP = R3; nothing is integrated with a real IdP).
+````
+
+## Follow-up message (2026-11-07T07:38:12.649Z)
 
 ````text
 You are the engineer for Portico's enterprise identity & platform features. First read the shared playbook at /tmp/claude-0/-home-user/4f98af2a-3564-5e4b-aedc-2d94c911507d/scratchpad/wave1-playbook.md and follow it, with this difference: your write scope is `modules/identity/` and `modules/platform/` (both already exist on main and are yours to extend — keep every existing test passing and do not break their public functions; add new migrations as 0002_*.sql etc., never edit 0001), plus wiring in apps/api/src/composition.ts and apps/api/src/provisioning.ts, plus new tests in apps/api/test/.

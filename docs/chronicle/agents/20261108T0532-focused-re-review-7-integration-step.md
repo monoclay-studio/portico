@@ -1,7 +1,7 @@
 # Agent run: Focused re-review #7: integration-step
 
-- Started: 2026-11-08T05:32:52.058Z · last activity: 2026-11-08T05:47:15.660Z
-- Turns: 67 · tool uses: 71 · output tokens: 68,631
+- Started: 2026-11-08T05:32:52.058Z · last activity: 2026-11-08T05:51:21.380Z
+- Turns: 77 · tool uses: 81 · output tokens: 83,085
 - Type: general-purpose
 
 ## Brief (2026-11-08T05:32:52.058Z)
@@ -49,5 +49,53 @@ UI REVIEW?:        no
 - **Report:** start with the verdict (merge / merge after fixes / do not merge), then counts by severity, then the coverage declaration. Each finding needs an ID (R7-…), file:line and a reproducing test.
 - **Cleanup:** remove the scratch copy and the `review_intstep7*` databases.
 - **Final reply:** verdict, counts, top findings, mutant results and the file list.
+````
+
+## Report (2026-11-08T05:51:21.224Z)
+
+````text
+**Verdict: merge after fixes.** Counts: P0 0 · P1 2 · P2 2 · P3 5.
+
+I reviewed `feat/integration-step` @ `932e7c1`, with `main` @ `1e1be80` merged into a scratch copy. The branch did not move during the run and the worktree was not modified. I committed nothing.
+
+**What held**
+- **(a) r6 PoCs, inverted:** all three FINDING tests are now refused at the right line. R6-A is refused at the capture (`:277`, `mandate_purpose_not_covered`). R6-B is refused at the card charge (`:354`, `mandate_reference_not_covered`). R6-D is refused at the `no_show` charge (`:440`, `no_show_penalty_exceeded`). The R6-C corporate-card check still passes.
+- **(g) Gates:** all exit 0. Install, lint (864 files, module boundaries OK), `turbo typecheck --force` (18/18, 0 cached) and `turbo test --force --concurrency=2` (16/16, 0 cached). Test counts match the builder's: api 173 (+29 todo), payments 161, finance 92, reservations 154.
+- **(f) Front-desk flows:** no regressions. These still work:
+  - walk-in paid on the hotel's own terminal (`external_terminal`)
+  - corporate card via the master folio
+  - deposit by link, then checkout settled by the card on file
+  - no-show fee after the night audit (penalty + 1 is refused, the penalty itself is accepted)
+- **(b) Captures:** the new `purpose` label cannot steer the derived purpose. A `deposit` label on a folio is refused. A `no_show` label on a booking is refused. Two partial `no_show` captures cannot exceed the penalty.
+- **(e) Deposit per stay:** the fix is correct. R7-D1 uses a 4-night stay whose rate plan changes from night 3, giving two segments on two snapshots. The deposit owed comes out at 207,013 = 51,633 + 155,380, matching two reference bookings. The old per-snapshot sum would have been 258,646. This is the distinguishing test the builder said was missing.
+
+**Top findings**
+1. **R7-P1-1** — `payments/src/service/consent.ts:430-457` and `finance/src/service/deposits.ts:739-747`. A card-funded deposit is forfeited on the recorded penalty alone, and a forfeit does not count as money already collected. The cancellation penalty is also posted on the folio, so the cardholder can be charged twice for one penalty.
+   - F1: forfeit first, then the full penalty charged to the card as `no_show` — both accepted.
+   - F2: the reverse order — also accepted.
+   - F3: the penalty credited off as goodwill, then the deposit still forfeited.
+   - The front-desk role can do all of this, because forfeit needs only `finance.posting.create`.
+2. **R7-P1-2** — `finance/src/service/provenance.ts:118-121` and `postings.ts:1384-1408`. When money moves off a folio, the debit it leaves behind has no foreign owner. PoC M1: Otto's cheque is moved onto Vera's folio, then Otto's card is charged for the balance the cheque had paid. Re-review #6's fix text ("its debit counterpart is still debt") was only half implemented.
+3. **R7-P2-1** — `payments/src/service/purpose.ts:151-154`. The no-show limit ignores payments not labelled `no_show`. PoC N1: the penalty is paid by cheque, then an ordinary bill is taken from the card as `no_show`.
+4. **R7-P2-2** — `provenance.ts:283`. My mutant M7 survived: if `penaltyOn` stops following transfers, nothing in api, finance or payments fails (426 tests). My R7-N2 test kills it.
+5. **R7-P3-1…5:**
+   - The capture request hash leaves out the new `purpose` label.
+   - A customer-initiated hold is captured with no fact limit. It is not reachable today and is missing from the landing table.
+   - `recordPayment` with `authorizationId` does not check the hold's property, booking or remaining amount.
+   - The landing-table claims for forfeit and transfers overstate what is checked.
+   - The unknown-owner branch is unreachable and untested; I suggest a DB-level test.
+
+I suggested an Amendment 6 in § 5 of the report: (1) the debit a credit leaves behind belongs to whoever the credit now benefits; (2) a penalty is one balance, and every way of collecting it draws it down under one lock.
+
+**Mutant results:** builder R2 (capture fact limit) killed. Builder R3 (refund with no owner) killed, 2 tests red. My M7 survived (that is R7-P2-2).
+
+**Not reached:** concurrency probes such as two forfeits at once (AP-56), and routing of a penalty or of a moved credit (code-read only).
+
+**Cleanup:** the scratch copy is removed and no `review_intstep7*` databases remain. The orchestrator had already committed my in-progress report to `main` (402f753, "wip re-review #7"), so the final version shows as modified, not new.
+
+Files are in `/home/user/portico/docs/orchestration/reviews/`:
+- `review-integration-step-7.md`
+- `integration-step-poc/r7-fix-attacks.test.ts.txt` — 5 FINDING tests (F1, F2, F3, N1, M1) that pass on `932e7c1`, plus CLEAN/PROBE tests N2, C1 and D1
+- `integration-step-poc/r7-desk-regressions.test.ts.txt` — the three front-desk regression checks
 ````
 

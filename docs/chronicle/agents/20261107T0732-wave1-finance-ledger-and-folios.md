@@ -1,10 +1,39 @@
 # Agent run: Wave1: finance ledger and folios
 
 - Started: 2026-11-07T07:32:35.571Z · last activity: 2026-11-07T12:21:52.466Z
-- Turns: 413 · tool uses: 447 · output tokens: 662,149
+- Turns: 413 · tool uses: 614 · output tokens: 662,149
 - Type: general-purpose
 
 ## Brief (2026-11-07T07:32:35.571Z)
+
+````text
+You are the engineer for Portico's **finance** module (wave 1) — the double-entry ledger, folios, billing rules, deposits, receivables, fiscal documents and cashiering. Money correctness is non-negotiable (CLAUDE.md §5, ADR-0008, brief §9–10). First read the shared playbook at /tmp/claude-0/-home-user/4f98af2a-3564-5e4b-aedc-2d94c911507d/scratchpad/wave1-playbook.md and follow it exactly.
+
+Your worktree: /home/user/wt/finance (branch feat/finance-core). Test DB prefix: PORTICO_TEST_DB_PREFIX=w1_finance. Module path: modules/finance (package @portico/finance, schema `finance`). Spec: /home/user/wt/product/docs/specs/finance.md (may still be in progress — re-check later).
+
+Build (provider contract in docs/architecture/domain-map.md § finance):
+- Chart of accounts per legal entity (USALI-inspired defaults: room revenue, F&B, other operated departments, service charge payable, TGST payable, green tax payable, deposits held (liability), guest ledger (receivable), city ledger/AR, cash, card clearing per provider, payout clearing, bank, FX gains/losses, rounding), configurable mapping from charge codes.
+- Journal: entries + lines, balanced (deferred constraint trigger: sum per entry per currency = 0), append-only (core.make_append_only), each entry with business date, service date, revenue date, occurred_at, source ref, idempotency key UNIQUE, reversal link. Corrections only via reversing/adjusting entries.
+- Folios (payer-specific; attached to stay, booking, group, company account or house account), postings (charge, payment, refund, adjustment, transfer, allowance usage) as projections of journal entries; folio balance; status (open, settled, closed, reopened-for-late-charges).
+- Charge codes & revenue categories; tax lines via a TaxPort (rates.computeTaxes — port with fake in tests); inclusive/exclusive taxes; service charge.
+- Billing rules (routing): route postings by charge-code group, date range, payer, and limits (e.g. company pays room+breakfast up to USD 300/night, guest pays the rest and incidentals). Use deterministic SPECIFICITY-based resolution (most specific matching rule wins; ties are configuration errors detected at save time) — NOT a user-ranked priority list (legal caution: research doc 01 flags an Agilysys patent application on ranked folio routing; record this in your README for legal review). Provide previewRouting(stay, hypothetical charges) so staff see where charges will land before saving rules.
+- Transfers between folios (traceable, both sides), splits, partial payments, split tenders.
+- Deposits: recordDeposit → liability; applyDeposits at check-in → moves to guest ledger; refunds of deposits; forfeiture to revenue by policy (explicit entry).
+- Allowances: consumption postings against package allowances with remaining balance; unused-remainder policy hook.
+- Late charges after departure (scenario s10): posting to a departed stay re-opens/creates a late-charge folio, flags for payment collection (PaymentsPort for card on file — port only), visible in an exceptions list.
+- Invoices & credit notes: fiscal document ledger per legal entity with gapless numbering per series (no gaps even under concurrency — use a counter row lock), immutable PDF/JSON payload snapshot, hash chain (each doc hashes previous), credit notes reference originals; idempotent issuance.
+- Receivables: company/agency AR accounts, credit limits (block or warn), invoice → AR transfer, payments/allocations, aging buckets as of a date.
+- Cashier sessions: open/close with counts, cash movements, variance, per-payment-method reconciliation summary.
+- FX: rates table (source, date, rate), explicit conversion on posting in foreign currency, settlement differences to FX account.
+- Business date stamping from platform; unbalanced/unposted checks API for Day Close (getUnbalancedItems), trial balance, daily revenue summary.
+- Provider functions used by payments (recordPayment, recordRefund, recordPayout) must be idempotent by key and never create revenue from payouts.
+- Data authority: `charges` and `accounting` domains (assertWritable).
+- HTTP routes for folios, postings (with idempotency), billing rules + preview, transfers, invoices/credit notes, AR, cashier, FX, trial balance. Permissions e.g. finance.folio.read, finance.posting.create, finance.posting.correct (sensitive), finance.billingRule.manage, finance.invoice.issue, finance.ar.manage, finance.cashier.operate, finance.fx.manage, finance.report.read.
+
+Scenario tests: s04 (company pays accommodation, guests incidentals), s09 ledger part (re-posting the same night with the same key is a no-op), s10 late restaurant charge after checkout, s19 bill combining package, allowance, different taxes and partial payments — totals reconcile across folio, journal and trial balance; s18 groundwork (opening balance import entry type with reconciliation report vs provided closing balance). Plus: journal always balanced (random-sequence test), append-only enforced, gapless invoice numbering under concurrency, isolation/permissions.
+````
+
+## Follow-up message (2026-11-07T07:32:35.571Z)
 
 ````text
 You are the engineer for Portico's **finance** module (wave 1) — the double-entry ledger, folios, billing rules, deposits, receivables, fiscal documents and cashiering. Money correctness is non-negotiable (CLAUDE.md §5, ADR-0008, brief §9–10). First read the shared playbook at /tmp/claude-0/-home-user/4f98af2a-3564-5e4b-aedc-2d94c911507d/scratchpad/wave1-playbook.md and follow it exactly.

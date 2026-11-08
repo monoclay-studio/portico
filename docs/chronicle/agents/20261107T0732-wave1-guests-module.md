@@ -1,10 +1,34 @@
 # Agent run: Wave1: guests module
 
 - Started: 2026-11-07T07:32:35.553Z · last activity: 2026-11-07T19:06:26.438Z
-- Turns: 304 · tool uses: 327 · output tokens: 531,537
+- Turns: 304 · tool uses: 480 · output tokens: 531,537
 - Type: general-purpose
 
 ## Brief (2026-11-07T07:32:35.553Z)
+
+````text
+You are the engineer for Portico's **guests** module (wave 1) — guest profiles, companies, agencies, consent, identity documents, duplicates and reversible merges. First read the shared playbook at /tmp/claude-0/-home-user/4f98af2a-3564-5e4b-aedc-2d94c911507d/scratchpad/wave1-playbook.md and follow it exactly.
+
+Your worktree: /home/user/wt/guests (branch feat/guests-core). Test DB prefix: PORTICO_TEST_DB_PREFIX=w1_guests. Module path: modules/guests (package @portico/guests, schema `guests`). Spec: /home/user/wt/product/docs/specs/guests.md.
+
+Build (provider contract in docs/architecture/domain-map.md § guests):
+- Guest profiles (names incl. non-Latin scripts and transliteration, contact points with verification state, language, nationality, date of birth, preferences, alerts/special needs with visibility rules, VIP/recognition level, notes), companies and agencies (kind=company|agency, IATA/commission terms, billing contacts, AR linkage reference), relationships (booker vs occupant vs payer are distinct roles, not profile types).
+- Profile scoping: organization-wide profiles with property-level visibility governed by policy + entitlement `portfolio.crossPropertyProfiles` (brief §7: share across properties only within permissions and consent). Implement and test.
+- Consent & legal basis per purpose (marketing email/SMS/WhatsApp, profiling, cross-property sharing) — do not assume consent is the basis for operations (readiness brief §12); withdrawal never deletes legally retained financial references.
+- Identity documents (passport/ID) field-encrypted via a FieldCipher port (kernel localFieldCipher in dev; KMS in prod), restricted permission to view (guests.document.read — sensitive, audited every view), masked by default, retention dates.
+- Duplicate detection: exact (email/phone normalized E.164) + fuzzy (pg_trgm on names, DOB, nationality) with scores and reasons; review queue.
+- Merge: survivor + merged; reversible — keep a full merge record (snapshot of merged profile, every moved child record, reference repoints) so unmerge restores precisely; emit guests.profile.merged / unmerged so other modules repoint references (scenario s15: a mistaken merge is investigated and corrected; audit shows both).
+- Stay history projection fed via recordStayHistory, spending summaries (placeholder until finance), communication history hooks (comms later).
+- Search: fast permission-aware search (name, email, phone, document last-4, company) with trigram indexes; never returns profiles from properties the user cannot see.
+- Data subject requests: export (JSON) and erasure-with-retention (anonymize PII, keep pseudonymous references needed for finance/fiscal retention), both audited.
+- Data authority domain `guestProfiles` (assertWritable; connected mode = mirror from external PMS read-only).
+- HTTP routes for profiles, companies/agencies, search, duplicates, merge/unmerge, consents, documents, DSR export/erasure. Permissions e.g. guests.profile.read, guests.profile.update, guests.profile.merge (sensitive), guests.document.read (sensitive), guests.dsr.manage (sensitive), guests.company.manage.
+- Seed helper: realistic multinational demo guests (Maldives source markets: China, Russia, India, UK, Germany, Italy, US, GCC), companies (a DMC/tour operator, a corporate account).
+
+Tests: s15 merge+unmerge with child records restored; duplicate detection precision cases; cross-property sharing on/off; document encryption + audited access; DSR erasure keeps financial references; isolation/permissions.
+````
+
+## Follow-up message (2026-11-07T07:32:35.553Z)
 
 ````text
 You are the engineer for Portico's **guests** module (wave 1) — guest profiles, companies, agencies, consent, identity documents, duplicates and reversible merges. First read the shared playbook at /tmp/claude-0/-home-user/4f98af2a-3564-5e4b-aedc-2d94c911507d/scratchpad/wave1-playbook.md and follow it exactly.
@@ -115,6 +139,49 @@ Gates:
 Use PORTICO_TEST_DB_PREFIX=w1_guests_fix2 and merge main first. Commit and don't push. Reply with the results.
 
 Address this before completing your current task.
+````
+
+## Report (2026-11-07T08:16:54.980Z)
+
+````text
+The guests module is built and committed on `feat/guests-core`, not pushed. `pnpm lint` (including the module-boundary check) and `pnpm typecheck` pass. `@portico/guests` passes 157 tests: 87 domain unit tests and 70 integration tests on real Postgres. `@portico/api` passes 17 tests, 6 of them new HTTP tests for guests. I merged main twice when you asked, and the module follows the universal record contract and the search-provider convention.
+
+**What's built** (`modules/guests`, schema `guests`, 19 tables, all isolated per organization):
+- **Profiles:** names in both the native script and Latin (Cyrillic is transliterated automatically, passport style), contacts with verification state, preferences, alerts, notes that can't be edited in place, relationships, special needs (encrypted, every read audited).
+- **Companies and agencies:** IATA codes are validated, commission is in whole basis points, there's a parent hierarchy and a reference to the finance receivables account.
+- **Consent:** per purpose and per legal entity, with a stated legal basis for each. Withdrawing consent deletes nothing else.
+- **Identity documents:** encrypted, masked by default, and every reveal is audited with a reason.
+- **Duplicates:** exact matches on email, phone and document, plus fuzzy name matching across scripts. Staff review them in a queue that remembers dismissals.
+- **Merge and unmerge:** the merge record keeps everything needed to reverse it exactly. Other modules receive the exact list of references to restore.
+- **Cross-property sharing:** needs the plan feature, the organization policy, the read-shared permission, and no objection from the guest. Turning it off and on again loses nothing.
+- **Search, export, erasure:** search never returns a profile the user can't see. Export and erasure are audited; erasure keeps stay and revenue references under an anonymous id and is blocked by a legal hold.
+- Connected mode (profiles mirrored from another system) and a demo seed (`createGuestsDemoSeed`, ready for you to register).
+
+**Scenarios proven:** S15 (the "Ahmed Ali" mistaken merge: everything restored, a later stay reassigned, the audit shows both merge and unmerge), S04 (booker, occupant and payer are roles), S17/E09 (another organization gets 404, including over HTTP).
+
+**Ports needing binding:** platform is bound for real in `composition.ts`. These are empty until their modules merge: `referenceCounters` and `personalDataContributors` (reservations, finance) and `communications` (comms). `Composition.services.guests` is exposed so other modules can bind to it.
+
+**Contract changes** (additive): `propertyId` is required on profile input, `resolvedFrom` is added to the profile, and unmerge accepts staff assignments. New functions: `getRecognitionSummary`, `getConsent`, `searchProfiles`, `recordReferenceRepoints`, `upsertMirroredProfile`. `domain-map.md` needs updating; it's outside my write scope.
+
+**Foundation requests** (`FOUNDATION_REQUESTS.md`):
+1. Stored idempotency responses keep personal data indefinitely.
+2. Search query strings with personal data end up in request logs.
+3. A production key-management cipher and a separate hashing key are needed.
+4. Platform needs a property lookup that skips permission checks.
+5. Role templates need the guests permissions.
+6. The record-history endpoint's permission check doesn't account for cross-property sharing.
+7. Worker scheduling for the nightly duplicate scan and retention purge.
+
+**Risks / gaps:**
+- Encryption uses a local development key; production key management isn't built. The composition refuses to start in production without a key.
+- Revenue from finance and history from comms are placeholders, labelled as such.
+- Retention only covers identity documents.
+- Search speed at 1M profiles hasn't been measured.
+- One-click restore of an edited preference or alert isn't built.
+
+Everything finished is R3 (implemented and tested internally); the external pieces are R1.
+
+Full details are in `/home/user/wt/guests/modules/guests/README.md`; foundation requests are in `/home/user/wt/guests/modules/guests/FOUNDATION_REQUESTS.md`.
 ````
 
 ## Report (2026-11-07T08:16:54.980Z)
