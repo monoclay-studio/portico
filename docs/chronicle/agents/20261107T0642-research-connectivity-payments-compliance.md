@@ -1,10 +1,10 @@
 # Agent run: Research connectivity, payments, compliance
 
-- Started: 2026-11-07T06:42:05.409Z · last activity: 2026-11-07T06:53:46.297Z
-- Turns: 0 · tool uses: 0 · output tokens: 0
+- Started: 2026-11-07T06:42:05.892Z · last activity: 2026-11-07T06:53:46.300Z
+- Turns: 24 · tool uses: 62 · output tokens: 62,820
 - Type: general-purpose
 
-## Brief (2026-11-07T06:42:05.409Z)
+## Brief (2026-11-07T06:42:05.892Z)
 
 ````text
 You are doing cross-cutting market and regulatory research for a new cloud hospitality property-management platform (working company name "Monoclay", the software vendor). Hotels using it collect payments from guests; Monoclay must NOT automatically be merchant of record for hotel stays. Research using web search and fetching official docs:
@@ -36,7 +36,7 @@ Write a thorough, well-structured markdown report to /home/user/research/04-conn
 Your final reply to me should be a ~400-word summary of the most important findings plus the file path. Do not ask me questions; use judgment.
 ````
 
-## Report (2026-11-07T06:53:46.297Z)
+## Report (2026-11-07T06:53:46.092Z)
 
 ````text
 I've written the report to `/home/user/research/04-connectivity-payments-compliance.md` (about 9,300 words counting URLs). Every claim is tagged: [V] for confirmed against an official source, [V2] for secondary sources only, [I] for my own inference. Two limits on what I could check: this environment's network blocked direct page reads from developers.booking.com, channex.io and partner.expediagroup.com, so those were read through search excerpts. Then the shared search budget ran out. That left Spain's guest-registration decree, vendor market share, sales cycles, Checkout.com, Adyen's exact merchant-of-record wording and Stripe's list pricing as [I], listed in the report's "open items" appendix.

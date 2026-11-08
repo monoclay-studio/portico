@@ -1,0 +1,257 @@
+/**
+ * Steward review probes (time zones, DST, cut-over, stats, scheduler churn, leases). Throwaway evidence.
+ */
+import { sql } from '@portico/db';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { dayCloseJobs } from '../src';
+import { LeaseLostError } from '../src/domain/errors';
+import { earliestStart, scheduledInstant } from '../src/domain/schedule';
+import {
+  addStay,
+  businessDate,
+  checkIn,
+  checkOut,
+  D,
+  entriesByKey,
+  type Harness,
+  NIGHT,
+  nightAudit,
+  type Org,
+  setupOrg,
+  startHarness,
+} from './harness';
+
+let h: Harness;
+beforeAll(async () => {
+  h = await startHarness();
+});
+afterAll(async () => h?.close());
+
+const DAY = 86_400_000;
+const nightOf = (offset: number) => new Date(new Date(NIGHT).getTime() + offset * DAY).toISOString();
+const job = () => dayCloseJobs(h.service)[0] as ReturnType<typeof dayCloseJobs>[number];
+const tick = (iso: string) => {
+  h.clock.set(iso);
+  return job().run(h.t.db, h.clock.now());
+};
+
+async function setPolicy(org: Org, policy: Record<string, unknown>) {
+  await org.run(async (tx) => {
+    const p = await h.service.getPolicy(tx, org.propertyId);
+    await h.service.updatePolicy(tx, org.propertyId, { policy, reason: 'review probe' }, p.version);
+  });
+}
+
+describe('R-DST: the local DST correction (FR-3)', () => {
+  it('Europe/London (east of UTC): the next valid minute — correct', () => {
+    expect(scheduledInstant('2027-03-27', '01:30', 'Europe/London').toISOString()).toBe('2027-03-28T01:00:00.000Z');
+  });
+  it('America/New_York (west of UTC): 02:30 on the spring-forward night must be 03:00 EDT (07:00Z)', () => {
+    const t = scheduledInstant('2027-03-13', '02:30', 'America/New_York');
+    console.log('R-DST New York 02:30 ->', t.toISOString());
+    expect(t.toISOString()).toBe('2027-03-14T07:00:00.000Z');
+  });
+  it('earliest start uses the same rule: an earliest start of 02:30 lets a run start an hour early', () => {
+    const t = earliestStart('2027-03-13', '02:30', 'America/New_York');
+    expect(t?.toISOString()).toBe('2027-03-14T07:00:00.000Z');
+  });
+});
+
+describe('R-TZ: two properties in different time zones', () => {
+  it('each schedule fires at its own local 02:00 and the portfolio lag is per time zone', async () => {
+    const mle = await setupOrg(h);
+    const nyc = await setupOrg(h);
+    await sql`update platform.properties set timezone = 'America/New_York' where id = ${nyc.propertyId}`.execute(
+      h.t.admin.kysely,
+    );
+    for (const org of [mle, nyc]) {
+      await addStay(h, org, { arrival: '2026-11-06', departure: '2026-11-10' });
+      await setPolicy(org, { schedule: { enabled: true, localTime: '02:00', autoContinue: true } });
+    }
+    const due = await h.t.admin.kysely
+      .selectFrom('day_close.schedules')
+      .select(['tenant_id', 'next_due_at', 'timezone'])
+      .where('tenant_id', 'in', [mle.tenantId, nyc.tenantId])
+      .execute();
+    const at = (t: string) => (due.find((d) => d.tenant_id === t)?.next_due_at as Date).toISOString();
+    expect(at(mle.tenantId)).toBe('2026-11-07T21:00:00.000Z'); // 02:00 MVT on 8 Nov
+    expect(at(nyc.tenantId)).toBe('2026-11-08T07:00:00.000Z'); // 02:00 EST on 8 Nov
+    await tick('2026-11-07T21:00:30.000Z');
+    expect(await businessDate(mle)).toBe('2026-11-08');
+    expect(await businessDate(nyc)).toBe(D);
+    await tick('2026-11-08T07:00:30.000Z');
+    expect(await businessDate(nyc)).toBe('2026-11-08');
+  });
+});
+
+describe('R-GAP: a check-in after the pre-advance sweep and before the advance', () => {
+  it('a one-night guest checked in in that window is never charged and nothing says so', async () => {
+    const org = await setupOrg(h);
+    await addStay(h, org, { arrival: '2026-11-06', departure: '2026-11-10' });
+    const late = await addStay(h, org, {
+      arrival: D,
+      departure: '2026-11-08',
+      status: 'expected',
+      transfer: { mode: 'seaplane', scheduledAt: '2026-11-07T10:00:00Z', estimatedAt: '2026-11-07T20:30:00Z' },
+    });
+    const auditor = nightAudit(h, org);
+    const original = h.ports.platform.listDepartments;
+    let armed = false;
+    h.ports.platform.listDepartments = async (tx, propertyId) => {
+      if (armed) {
+        armed = false;
+        await checkIn(org, late.stayId); // the seaplane lands; front desk checks the guest in (own transaction)
+      }
+      return original(tx, propertyId);
+    };
+    let run: Awaited<ReturnType<typeof h.service.startRun>>;
+    try {
+      run = await h.service.startRun(h.t.db, auditor, {
+        propertyId: org.propertyId,
+        hooks: {
+          beforeStep: (s) => {
+            if (s === 'advance') armed = true; // fires during the pre-advance readiness re-check (after the sweep)
+          },
+        },
+      });
+    } finally {
+      h.ports.platform.listDepartments = original;
+    }
+    expect(run.runStatus).toBe('completed');
+    expect(await entriesByKey(h, org.tenantId, `room:${late.stayId}`)).toEqual([]);
+    // Next morning the guest leaves (departure 8 Nov) before the next close.
+    await checkOut(org, late.stayId);
+    const ready = await org.run((tx) => h.service.getReadiness(tx, org.propertyId), auditor);
+    const all = [...ready.blocking, ...ready.warnings, ...ready.info];
+    console.log('R-GAP readiness codes', JSON.stringify(all.map((i) => i.code)));
+    expect(all.filter((i) => i.ref?.id === late.stayId)).toEqual([]);
+    h.clock.set(nightOf(1));
+    const next = await h.service.startRun(h.t.db, auditor, { propertyId: org.propertyId });
+    expect(next.runStatus).toBe('completed');
+    // The night of 7 Nov was occupied and is never posted; no follow-up exists anywhere.
+    expect(await entriesByKey(h, org.tenantId, `room:${late.stayId}`)).toEqual([]);
+    const issues = await org.run((tx) => h.service.listIssues(tx, org.propertyId, 'open'), auditor);
+    expect(issues.filter((i) => i.ref?.id === late.stayId)).toEqual([]);
+  });
+});
+
+describe('R-STATS: the frozen facts and the pre-advance sweep', () => {
+  it('a stay swept before the advance is counted as sold but its room revenue is missing from the frozen facts', async () => {
+    const org = await setupOrg(h);
+    await addStay(h, org, { arrival: '2026-11-06', departure: '2026-11-10' });
+    const late = await addStay(h, org, {
+      arrival: D,
+      departure: '2026-11-10',
+      status: 'expected',
+      transfer: { mode: 'seaplane', scheduledAt: '2026-11-07T10:00:00Z', estimatedAt: '2026-11-07T20:30:00Z' },
+    });
+    const auditor = nightAudit(h, org);
+    const run = await h.service.startRun(h.t.db, auditor, {
+      propertyId: org.propertyId,
+      hooks: {
+        afterStep: async (s) => {
+          if (s === 'room_and_package_postings') await checkIn(org, late.stayId);
+        },
+      },
+    });
+    expect(run.runStatus).toBe('completed');
+    expect(await entriesByKey(h, org.tenantId, `room:${late.stayId}:${D}`)).toHaveLength(1);
+    const facts = await org.run((tx) => h.service.getFacts(tx, org.propertyId, D), auditor);
+    const report = await org.run((tx) => h.service.getReport(tx, org.propertyId, D), auditor);
+    console.log(
+      'R-STATS facts',
+      JSON.stringify({ sold: facts.rooms.sold, roomRevenue: facts.roomRevenue, adr: facts.adr }),
+      'annex',
+      JSON.stringify(report.restatementsSince),
+    );
+    expect(facts.rooms.sold).toBe(2);
+    // Room revenue frozen at step 7 holds one night; the ledger for D holds two; the annex calls the
+    // difference a restatement although nothing was corrected.
+    expect(report.restatementsSince.revenueDelta.find((d) => d.chargeCode === 'ROOM')).toBeDefined();
+  });
+});
+
+describe('R-DAYTIME: the default policy lets a close run at 10:00 on the business date', () => {
+  it('a 10:00 close no-shows the afternoon arrival and posts its fee; the date moves at 10:00', async () => {
+    const org = await setupOrg(h);
+    await addStay(h, org, { arrival: '2026-11-06', departure: '2026-11-10' });
+    const arriving = await addStay(h, org, { arrival: D, departure: '2026-11-10', status: 'expected', plan: 'BAR-NR' });
+    h.clock.set('2026-11-07T05:00:00.000Z'); // 10:00 in Malé on 7 Nov
+    const run = await h.service.startRun(h.t.db, org.auditor, { propertyId: org.propertyId });
+    console.log('R-DAYTIME', run.runStatus, JSON.stringify(run.failure));
+    expect(run.runStatus).toBe('completed');
+    expect(await businessDate(org)).toBe('2026-11-08');
+    const fee = await entriesByKey(h, org.tenantId, `penalty:no_show:${arriving.stayId}`);
+    console.log('R-DAYTIME fee entries', JSON.stringify(fee));
+    expect(fee).toHaveLength(1);
+  });
+});
+
+describe('R-CHURN: a blocked auto-close', () => {
+  it('writes an audit row and a new run version every minute; a run stuck past the next due time re-fires every minute', async () => {
+    const org = await setupOrg(h);
+    await addStay(h, org, { arrival: '2026-11-06', departure: '2026-11-09' });
+    await addStay(h, org, { arrival: '2026-11-05', departure: D }); // overstay: blocks
+    await setPolicy(org, { schedule: { enabled: true, localTime: '02:00', autoContinue: true } });
+    await tick('2026-11-07T21:00:30.000Z');
+    for (let m = 1; m <= 5; m++) await tick(`2026-11-07T21:0${m}:30.000Z`);
+    const audits = await sql<{ n: number }>`select count(*)::int as n from core.audit_log
+      where tenant_id = ${org.tenantId} and action = 'dayClose.run.blocked'`.execute(h.t.admin.kysely);
+    const run = await h.t.admin.kysely
+      .selectFrom('day_close.runs')
+      .select(['version', 'status'])
+      .where('tenant_id', '=', org.tenantId)
+      .executeTakeFirstOrThrow();
+    console.log('R-CHURN after 6 ticks: blocked audits', audits.rows[0]?.n, 'run version', run.version, run.status);
+    // 25 hours later the run is still blocked: the schedule is due again for the same date.
+    for (let m = 0; m < 4; m++) await tick(`2026-11-08T22:0${m}:30.000Z`);
+    const fired = await sql<{ n: number }>`select count(*)::int as n from day_close.schedule_log
+      where tenant_id = ${org.tenantId} and event = 'fired'`.execute(h.t.admin.kysely);
+    const sched = await h.t.admin.kysely
+      .selectFrom('day_close.schedules')
+      .select(['next_due_at', 'version'])
+      .where('tenant_id', '=', org.tenantId)
+      .executeTakeFirstOrThrow();
+    console.log('R-CHURN fired log rows', fired.rows[0]?.n, 'schedule', JSON.stringify(sched));
+    expect(audits.rows[0]?.n).toBeGreaterThanOrEqual(6);
+  });
+});
+
+describe('R-LEASE: an executor paused INSIDE an item transaction past its lease (slow transaction / GC pause)', () => {
+  it('the take-over waits for the row lock, sees the committed item and never redoes it', async () => {
+    const org = await setupOrg(h);
+    for (let i = 0; i < 4; i++) await addStay(h, org, { arrival: '2026-11-06', departure: '2026-11-09' });
+    const auditor = nightAudit(h, org);
+    let release!: () => void;
+    const paused = new Promise<void>((r) => {
+      release = r;
+    });
+    let reached!: () => void;
+    const atPause = new Promise<void>((r) => {
+      reached = r;
+    });
+    const a = h.service.startRun(h.t.db, auditor, {
+      propertyId: org.propertyId,
+      hooks: {
+        insideItem: async (s, i) => {
+          if (s === 'room_and_package_postings' && i === 2) {
+            reached();
+            await paused; // holds the item transaction (and the run row lock) open
+          }
+        },
+      },
+    });
+    await atPause;
+    h.clock.advance(5 * 60_000); // lease long expired
+    const [run] = await org.run((tx) => h.service.listRuns(tx, org.propertyId, { limit: 1 }), auditor);
+    const b = h.service.resumeRun(h.t.db, org.auditor, run?.id as string, run?.version as number);
+    await new Promise((r) => setTimeout(r, 300)); // b is now blocked on the run row lock
+    release();
+    const [ra, rb] = await Promise.allSettled([a, b]);
+    console.log('R-LEASE', ra.status, ra.status === 'rejected' ? (ra.reason as Error).name : '', rb.status);
+    expect(rb.status).toBe('fulfilled');
+    if (ra.status === 'rejected') expect(ra.reason).toBeInstanceOf(LeaseLostError);
+    expect((await entriesByKey(h, org.tenantId, 'room:')).map((r) => r.n)).toEqual([1, 1, 1, 1]);
+    expect(await businessDate(org)).toBe('2026-11-08');
+  });
+});

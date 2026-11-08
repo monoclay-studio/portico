@@ -1,0 +1,44 @@
+/**
+ * Steward review probes, set C (throwaway evidence; never committed).
+ *  C1  AP-02: every table of the distribution schema has RLS enabled AND forced, except the two documented ones;
+ *      the webhook directory is not readable by the application role.
+ *  C2  AP-15: the hub API key and webhook token never appear in idempotency rows, audit, outbox or exchange log.
+ */
+import { sql } from '@portico/db';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { connect, type Harness, runFor, setupOrg, startHarness } from './harness';
+
+let h: Harness;
+beforeAll(async () => {
+  h = await startHarness();
+});
+afterAll(async () => h?.close());
+
+describe('C — isolation and secrets', () => {
+  it('C1: RLS enabled and forced on every distribution table (documented exceptions only)', async () => {
+    const { rows } = await sql<{ relname: string; rls: boolean; forced: boolean }>`
+      select c.relname, c.relrowsecurity as rls, c.relforcerowsecurity as forced
+        from pg_class c join pg_namespace n on n.oid = c.relnamespace
+       where n.nspname = 'distribution' and c.relkind = 'r' order by 1`.execute(h.t.admin.kysely);
+    const bad = rows.filter((r) => !(r.rls && r.forced)).map((r) => `${r.relname}(rls=${r.rls},forced=${r.forced})`);
+    console.log('C1 tables:', rows.length, 'not forced:', bad.join(', '));
+    expect(bad.sort()).toEqual(['tenant_schedule(rls=true,forced=false)', 'webhook_directory(rls=false,forced=false)']);
+    const priv = await sql<{ can: boolean }>`select has_table_privilege('portico_app', 'distribution.webhook_directory', 'select') as can`.execute(
+      h.t.admin.kysely,
+    );
+    expect(priv.rows[0]?.can).toBe(false);
+  });
+
+  it('C2: the webhook token and the hub key never land in core stores or distribution logs', async () => {
+    const org = await setupOrg(h);
+    const c = await connect(org);
+    await runFor(org, 3_000);
+    const { rows } = await sql<{ n: number }>`
+      select (select count(*) from core.audit_log where tenant_id = ${org.tenantId}::uuid and (before::text like ${`%${c.webhookToken}%`} or after::text like ${`%${c.webhookToken}%`}))
+           + (select count(*) from core.outbox where tenant_id = ${org.tenantId}::uuid and payload::text like ${`%${c.webhookToken}%`})
+           + (select count(*) from distribution.exchange_log where tenant_id = ${org.tenantId}::uuid and detail::text like ${`%${c.webhookToken}%`})
+           + (select count(*) from distribution.connections where tenant_id = ${org.tenantId}::uuid and settings::text like ${`%${c.webhookToken}%`})
+           as n`.execute(h.t.admin.kysely);
+    expect(Number(rows[0]?.n)).toBe(0);
+  });
+});

@@ -486,3 +486,86 @@ Each agent's brief and report are in `agents/`.
   - Built and waiting: distribution, day-close and migration reviews; integration-step fix round 6.
   - Lesson for quality round 4: six review rounds on one consent model. Each fix closed the named path, and the next
     review found the sibling. Amendments 4 and 5 now state the class as rules.
+- **05:04 — Owner: "let's keep going"** <!-- t: owner:4f98af2a @ 2026-11-08T05:04:29.835Z -->. Work resumed from the pause, using the remaining weekly allowance (≈ 6% at 01:10) on the
+  critical path.
+  - Integration-step fix round 6 was sent at once (ADR-0015 Amendment 5; lean, a commit after every step).
+  - The usage-check chain was re-enabled. Each check pushes the branch so a hard stop loses at most one step, and runs
+    `checkpoint.sh` at 97%.
+  - The UX heartbeat stays off (no UX rounds at this usage level).
+  - The 2026-11-11 17:03 resume task stays as the fallback.
+- **05:17 — Extra usage in use; the three steward reviews launched** <!-- t: now @ 2026-11-08T05:17:16Z -->.
+  - The 05:08 rate-limit event shows seven-day at 100% (`rejected`), with overage allowed and in use (it resets
+    12-01). Work continues on billed extra usage per the owner's "let's keep going". The owner was told.
+  - Launched in parallel with fix round 6, each steward v2.1 with an incremental report and a "verify the proof" mutant
+    step: distribution + Channex (`a8bd950`), day-close (`cb0fbf3`) and migration (`45be8b9`).
+  - Fix round 6 progress: the R6-P1-1, R6-P1-2 and R6-P2-1 fixes are committed and pushed (`898a85e`, `50016a3`,
+    `4822639`).
+- **05:32 — Integration-step fix round 6 done** <!-- t: agent-a29fdf2e9c7d0e9dc @ 2026-11-08T05:32:19.238Z (Integration step: bind module ports) -->; head `932e7c1`, pushed. Each fix was committed with its test.
+  - A capture is judged on the purpose where the money lands. The fact limits apply at capture under the collection
+    lock, and a hold's purpose never carries through.
+  - Finance provenance gives every non-zero posting an owner; an unknown origin fails closed.
+  - The no-show limit follows the ledger penalty.
+  - A forfeit of card money needs a recorded penalty.
+  - Deposit owed is summed per stay.
+  - The landing table covers 8 operations. Mutants R1–R6 were all killed; R2 survived at first and got a new test.
+  - Two stated proof gaps: the unknown-origin branch is unreachable today, and no test distinguishes deposit-per-stay.
+- **05:33 — Focused re-review #7 launched** <!-- t: now @ 2026-11-08T05:33:04Z -->. It must close the builder's proof gap on deposit-per-stay with a test.
+- **05:37 — Owner: finish the current wave on extra usage, add nothing more, then stop until the Wednesday reset** <!-- t: owner:4f98af2a @ 2026-11-08T05:37:56.652Z -->.
+  - Scope of "this wave":
+    - integration-step: re-review #7 → fix → merge;
+    - distribution + Channex, day-close and migration: steward review → fix rounds → re-check → merge;
+    - whatever is needed to finish those, such as an extra fix round or re-review.
+  - Out of scope until the reset (2026-11-11 17:00 UTC, Wednesday): new modules, UX rounds, the quality steward round,
+    the partner platform, and the backoffice real-data round.
+  - When the wave is done: checkpoint, then pause. The 17:03 Wednesday resume task picks up the STATUS order.
+- **05:38 — Owner: "don't let it effect your current work though. AT ALL"** <!-- t: owner:4f98af2a @ 2026-11-08T05:38:33.867Z -->. The scope limit never lowers the rigor of the current wave: full reviews,
+  full fix rounds with self-check v6, re-reviews until clean, and the full merge procedure.
+- **05:44 — Distribution steward review: merge after fixes** <!-- t: agent-a45cae866e44c3c5b @ 2026-11-08T05:44:39.770Z (Steward review: distribution + Channex) --> (P0 0 · P1 2 · P2 9 · P3 9).
+  - Held under attack: the budget under real concurrency, a 429 storm, durable storage before the 200, ack after
+    commit, environment safety and live refusal, isolation, secrets.
+  - **P1-1:** a revoked key or external authority made the org re-run its work every second forever. That breaks the
+    owner's "no polling loops" requirement.
+  - **P1-2:** revision ordering on `Date.parse` and arrival time could lose a modification or strand a creation.
+  - The reviewer's own mutant survived: the per-booking ordered wait was untested.
+  - Fix round 1 went to the distribution builder with self-check v6.
+- **05:46 — Migration steward review: do not merge** <!-- t: agent-a0853e1c7d151d830 @ 2026-11-08T05:46:35.240Z (Steward review: migration) --> (P0 1 · P1 8 · P2 9 · P3 12).
+  - **P0:** the card-number check misses ordinary spellings (spaced, dotted, full-width digits, numbers inside text,
+    header cells), so such files are stored. Payments' `pci.ts` on main has the same flaw.
+  - **P1s:**
+    - a 939-byte workbook crashes the API with out-of-memory;
+    - the cutover accepted a rehearsal of different data;
+    - reconciliation ran one way only;
+    - the post-switch sweep imports re-keyed records as duplicates;
+    - the purge misses the trial copy.
+  - The builder's M1 and M2 mutants were killed. The reviewer's M3 (simulator refused in live at extraction) survived.
+  - Fix round 1 went to the migration builder: one pure kernel card-number detector, a hostile-file-safe XLSX reader,
+    and a fingerprinted rehearsal certificate. Payments switches to the kernel detector after both merge.
+  - A focused re-review follows.
+- **05:48 — Day-close steward review: merge after fixes** <!-- t: agent-ade407b636a44403d @ 2026-11-08T05:48:16.547Z (Steward review: day-close) --> (P0 2 · P1 1 · P2 14 · P3 12).
+  - The engine held under every attack: lease fencing, including an executor paused inside a transaction; the advance
+    atomic; integrity never overridable; RLS; property scope; two time zones.
+  - The defects are in what is posted when a stay changes after a night closed:
+    - a re-price double-charged or dropped a departure transfer (root cause shared with rates' line key);
+    - an allowance was pre-granted for a night that may never exist;
+    - catch-up ignored manual overrides.
+  - The DST fix is wrong west of UTC.
+  - The reviewer's own mutant (seal check in the pre-grant) survived.
+  - Fix round 1 went to the day-close builder with self-check v6.
+- **05:48 — Owner: add token usage to the chronicle** <!-- t: owner:4f98af2a @ 2026-11-08T05:48:51.376Z --> (for the owner's write-up).
+- **05:50 — `usage.json` added** <!-- t: now @ 2026-11-08T05:50:42Z -->. `extract.py` now reads every project folder of the session.
+  - This recovered the first container's full agent logs, closing the README's "known gap": all 61 agent runs now have
+    full logs.
+  - Usage so far: 12,455 API messages across 80 transcripts, all `claude-opus-5-5`. Output 17.5M tokens; cache reads
+    4.9B; cache writes 67.0M (5-minute) and 3.9M (1-hour); uncached input 25K.
+- **05:51 — Integration-step re-review #7: merge after fixes** <!-- t: agent-a8e2726ae9165e6da @ 2026-11-08T05:51:21.224Z (Focused re-review #7: integration-step) --> (P0 0 · P1 2 · P2 2 · P3 5).
+  - Round 6 held: the purpose label cannot steer captures, deposit-per-stay was proven correct by the reviewer's own
+    two-segment test, and there are no front-desk regressions.
+  - Two more siblings:
+    - a deposit forfeit plus a card charge collected one penalty twice;
+    - a moved credit left an ownerless debit.
+  - Orchestrator decision, ADR-0015 Amendment 6:
+    - one finance-owned balance per obligation, drawn down by every settlement method under one lock;
+    - a seeded model-based test of the money invariant, so siblings are found by generation, not by hand. The
+      generator must itself find re-applied old mutants.
+  - Fix round 7 sent.
+  - Lesson: after seven rounds of enumerated fixes, the proof method changed to generative.

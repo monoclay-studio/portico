@@ -1,7 +1,7 @@
 # Agent run: Integration step: bind module ports
 
-- Started: 2026-11-07T16:16:26.294Z · last activity: 2026-11-08T00:50:31.993Z
-- Turns: 1313 · tool uses: 1348 · output tokens: 1,196,121
+- Started: 2026-11-07T16:16:26.294Z · last activity: 2026-11-08T05:52:12.502Z
+- Turns: 1370 · tool uses: 1405 · output tokens: 1,249,556
 - Type: general-purpose
 
 ## Brief (2026-11-07T16:16:26.294Z)
@@ -816,6 +816,110 @@ Gates as before (lint `--error-on-warnings`). Commit after every meaningful step
 Address this before completing your current task.
 ````
 
+## Follow-up message (2026-11-08T05:05:06.082Z)
+
+````text
+The coordinator sent a message while you were working:
+Integration-step fix round 6. Re-review #6 says "merge after fixes" (P0 0, P1 2, P2 1, P3 3).
+
+Round 5 held:
+- the r5 attacks are refused;
+- N7/N8 confirmed killed;
+- **no front-desk regressions** (walk-in terminal, corporate card via master folio, deposit link, no-show after night audit).
+
+**Budget warning:** the account's weekly allowance is at about 94% with no overage, and work may stop hard at any moment. So:
+- Work lean.
+- **Commit after every meaningful step** (each fix with its test), so a stop loses almost nothing.
+- Fix the P1s first, then P2, then P3.
+- Don't push, and never amend or rewrite commits.
+
+Read first, all on main:
+- `docs/orchestration/reviews/review-integration-step-6.md`, plus the PoC `docs/orchestration/reviews/integration-step-poc/r6-fix-attacks.test.ts.txt`
+- `docs/adr/0015-authorization-across-module-ports.md` **Amendment 5**
+- the "integration-step fix round 6" line in `docs/orchestration/pending-fixes.md`
+
+Merge main first.
+
+1. **R6-P1-1:** consent is judged on the purpose of the money **where it lands**. This applies to every operation that turns card authority into money on a ledger reference: charge, capture, increment, recorded payment, link payment, deposit application, forfeit. Fact limits apply at landing, under the collection lock. A hold's stated purpose never carries through to its capture. Regression test: the reviewer's R6-A (balance refused, then hold + capture of the same amount).
+2. **R6-P1-2:** finance provenance never returns `none` for a non-zero posting. Refund, reversal, correction, allowance, forfeit and receivables transfer each have an owner and direction, and the coverage checks run for each. Regression test: R6-B (Otto's refunded spa moved to Vera's folio, then Vera's card charged).
+3. **R6-P2-1:** the no-show fee rests on the ledger penalty: posted − credited − already collected. Regression test: R6-D.
+4. **P3s:**
+   - `forfeitDeposit` needs a recorded penalty for card-funded deposits, and joins the money-moving writer list.
+   - The deposit owed is summed per stay, not per terms snapshot.
+   - Correct the two overstated claim-ledger lines.
+   - Add an api test for card money still in flight; the reviewer's R6-M1 mutant is killed only by the module suite today.
+
+**Self-check v6**, as in round 5, plus a **landing table**: every operation that turns card authority into money on a ledger reference × the purpose and fact limit checked at landing (file:line) × the test. Also give the § 5.4 mutation rows for each new guard.
+
+Gates as before. Report done when they exit 0.
+
+Address this before completing your current task.
+````
+
+## Follow-up message (2026-11-08T05:52:12.502Z)
+
+````text
+The coordinator sent a message while you were working:
+Integration-step fix round 7. Re-review #7 says "merge after fixes" (P0 0, P1 2, P2 2, P3 5).
+
+Round 6 held:
+- the r6 PoCs are refused at the right lines;
+- the `purpose` label cannot steer captures;
+- deposit-per-stay is proven correct by the reviewer's two-segment test (R7-D1);
+- R2 and R3 were killed;
+- there are no front-desk regressions.
+
+Seven rounds have each closed named paths, and a sibling has remained each time. This round changes the shape of the fix and of the proof.
+
+**Read first, all on main:**
+- `docs/orchestration/reviews/review-integration-step-7.md` (including its § 5 suggestion);
+- the PoCs in `docs/orchestration/reviews/integration-step-poc/r7-*.test.ts.txt`;
+- `docs/adr/0015-authorization-across-module-ports.md` **Amendment 6**;
+- the "integration-step fix round 7" line in `docs/orchestration/pending-fixes.md`.
+
+Merge main first.
+
+1. **One balance per obligation (R7-P1-1, R7-P2-1).**
+   - Each deposit due, each penalty (no-show, cancellation) and each folio balance is one finance-owned balance with an owner.
+   - **Every** settlement method draws that same balance down under one lock: card charge or capture, cash, cheque, terminal, link, deposit forfeit, transfer, credit and write-off.
+   - A collection is limited by what is still owed on the ledger, net of everything applied by any method. It is never limited by a separate record of what was due.
+   - Regression tests:
+     - F1/F2: forfeit, then the penalty on the card, in both orders;
+     - F3: penalty credited off, then a forfeit;
+     - N1: penalty paid by cheque, then a `no_show` card charge.
+2. **Moved credits keep their counterpart's owner (R7-P1-2).** When money moves off a folio, the debit it leaves behind belongs to whoever the credit now benefits. Regression test: M1, Otto's cheque moved to Vera, then Otto's card charged.
+3. **R7-P2-2:** take the reviewer's R7-N2 test (`penaltyOn` following transfers). It kills M7.
+4. **The P3s:**
+   - the capture request hash includes `purpose`;
+   - a customer-initiated hold capture gets fact limits and a landing-table row;
+   - `recordPayment` with `authorizationId` checks the hold's property, booking and remaining amount;
+   - correct the overstated landing-table claims for forfeit and transfers;
+   - a DB-level test for the unknown-owner branch.
+5. **New: a seeded, model-based test of the money invariant.**
+   - Build a small reference model plus a generator that runs random sequences of **every** money operation against the real composition. Cover at least 2 guests × 2 folios × 2 cards with agreements; the operations are charge, hold, capture, increment, link payment, cash/cheque, deposit apply and forfeit, transfer, routing, refund, credit/write-off, no-show/cancellation penalties, and add_stay. Include a concurrent mode.
+   - After every step, assert three things:
+     - (a) no card has paid more than the obligations its agreement covers;
+     - (b) no obligation is collected more than once across all methods;
+     - (c) the ledger balances.
+   - Use a fixed seed list in CI (fast enough for `--concurrency=2`, ideally under 60 s), plus an env var for a longer local run. Run the long run yourself, and report how many sequences ran and any failing seeds. Keep failing seeds as regression tests.
+   - `fast-check` is fine as a dev dependency, or hand-roll a seeded PRNG.
+   - Mutation-check the generator: re-apply 3 of your earlier mutants (for example N7, R1 and R3). The generator alone must find each one.
+
+**Self-check v6:**
+- the input-source column;
+- the landing table, updated;
+- a § 5.4 row for each new guard;
+- the § 6 claim ledger.
+
+**Rules:**
+- Commit after every meaningful step.
+- Do not push.
+- Never amend or rewrite commits.
+- All gates must exit 0.
+
+Address this before completing your current task.
+````
+
 ## Report (2026-11-07T17:04:17.381Z)
 
 ````text
@@ -1545,5 +1649,105 @@ Claims checked over the changed lines of `modules/payments/README.md` and the ro
 - `/home/user/wt/integration-step/docs/architecture/domain-map.md`
 - `/home/user/wt/integration-step/modules/payments/README.md`
 - `/home/user/wt/integration-step/docs/orchestration/pending-fixes.md`
+````
+
+## Report (2026-11-08T05:32:19.238Z)
+
+````text
+## Integration-step fix round 6: report
+
+Round 6 is done at `932e7c1`: both P1s, the P2 and all P3 items are fixed or corrected, and all four gates exit 0. One P3 change (deposit per stay) has no test that fails without it; see "Proof gaps" below. I committed locally after each fix with its test, pushed nothing and amended nothing.
+
+- **Gates** (`PORTICO_TEST_DB_PREFIX=w1_intstep_fix6`, output redirected to log files): install 0 · lint (`--error-on-warnings`) 0 · typecheck (`--force`) 0 · test (`--force --concurrency=2`) 0, 16/16 tasks. Counts: api 173 (+29 todo), payments 161, finance 92, reservations 154; every other package passes.
+- **State:** tree clean, no leftover databases.
+- **Postgres went down mid-round.** I restarted it with `pnpm db:up`; nothing was lost.
+- **Merge of main:** `598a2eb`. The only conflict was a line in `pending-fixes.md`; I kept round 5's lines and added round 6's.
+
+### Commits (each fix with its test)
+| Commit | Finding |
+|---|---|
+| `898a85e` | R6-P1-1: a capture is judged on the purpose of the money where it lands |
+| `50016a3` | R6-P1-2: every non-zero posting has an owner in finance's provenance |
+| `4822639` | R6-P2-1: a no-show fee rests on the penalty as it stands on the ledger |
+| `787e461` | R6-P3-1: a card-funded deposit is forfeited only up to a recorded penalty |
+| `6a62a26` | R6-P3-2: the deposit owed is summed per stay |
+| `06db452` | R6-P3-4: api test for card money still in flight (kills the reviewer's R6-M1 mutant) |
+| `e7e17dc` | Test: the fact limit applies when a capture lands (kills mutant R2) |
+| `932e7c1` | R6-P3-3: claims corrected in the README, domain map and pending-fixes |
+
+### What changed
+**R6-P1-1 (capture):**
+- `capture` now works out the purpose from where the money lands, using `derivePurpose`: a booking means deposit, a folio means balance. A no-show purpose needs a recorded penalty. A new optional `captureInput.purpose` label exists so staff can ask for `no_show`.
+- Consent checks that derived purpose. Holds are still judged as holds (guarantee or incidentals); a hold's `guarantee` never carries over to its capture.
+- The fact limits (`assertWithinFact`) and the destination re-check now run for captures under the collection lock.
+- The stored purpose and its basis are the derived ones.
+
+**R6-P1-2 (refund postings):** `provenance.ts` never returns "none" any more.
+- A refund, reversal, correction, allowance, forfeit or receivables transfer counts as debt of the owner of the folio it was first posted on, or of the billing rule that routed it.
+- Cash or tender payments count as money with no cardholder agreement behind it.
+- Anything whose origin can't be established is treated as an unknown owner, and is refused wherever card money is.
+
+**R6-P2-1 (no-show fee):**
+- New `LedgerPort.penaltyOwedOn`: finance follows the `penalty:no_show:<stay>` and `penalty:cancellation:<stay>` postings, with their taxes, through corrections and transfers.
+- The no-show limit is the smaller of the recorded and ledger penalty, minus what was already collected, and never more than the folio owes now.
+
+**R6-P3-1 (forfeit):** `forfeitDeposit` asks payments first (`cardDepositForfeitProblem`). When the deposit includes card money, it can be kept only up to the penalties reservations recorded for the booking's stays.
+
+**R6-P3-2 (deposit owed):** summed per stay; a stay with several segments shares its agreement's deposit by the nights each segment keeps.
+
+### Regression tests (`apps/api/test/review-regressions-r6.test.ts`)
+- **PoC R6-A flipped:** a balance refused as a charge is also refused as hold plus capture, including a capture onto the booking. A no-show capture is refused until the night audit records the no-show, then accepted as `no_show`.
+- **Sibling:** a hold bigger than the deposit owed is captured onto the booking only up to the agreed deposit (`deposit_not_due` above it).
+- **PoC R6-B flipped:** refund moved first, then Vera's card is refused. Reverse order (card first): the refund is not moved onto the paid folio.
+- **PoC R6-D flipped:** after a partial credit only the rest of the penalty can be taken; after a full credit, nothing.
+- **R6-P3-1:** forfeit refused without a penalty, accepted after the cancellation records one.
+- **R6-P3-4:** a card payment pending verification on Vera's folio blocks moving Otto's charge onto it.
+
+### Landing table: operations that turn card authority into money on a ledger reference
+| Operation | Purpose and fact limit checked at landing | Test |
+|---|---|---|
+| charge | `collect.ts` `derivePurpose` → consent → `assertWithinFact` and destination re-check under the lock (round 5) | r5 suite |
+| capture | `collect.ts:608` (consent on the derived purpose), `:649` (fact limit under the lock) | R6-A; capture fact-limit sibling |
+| increment | No money lands: judged as a hold (running total, hold purposes). Landing is checked when it is captured | R4-C; increment-in-flight tests |
+| recorded payment (incl. completing a terminal hold) | Purpose derived for the ownership guard; cash or terminal money, so no cardholder agreement applies | r5 module "recorded no_show refused" |
+| link payment | The guest's own new consent; purpose comes from the request; ownership guard applies | r3/r4 link tests |
+| deposit application | Finance `assertMoneyMayLand` (coverage of the destination and all its debt) under the collection lock | R5-D both orders |
+| forfeit | `deposits.ts:746`: `cardDepositForfeitProblem` (recorded penalty) | R6-P3-1 test |
+| transfer / routing of money or debt | `postings.ts` / `billing-rules.ts`: coverage for every classified root, unknown owners fail closed | R6-B both orders; R5 transfer and routing tests |
+
+### § 5.4 Mutation rows for the new guards
+| Mutant | Guard removed | Test that went red |
+|---|---|---|
+| R1 | capture judged on `guarantee` | R6-A |
+| R2 | capture fact limit at landing | capture-onto-booking sibling (added after R2 first survived) |
+| R3 | refund back to "no owner" | R6-B ×2 |
+| R4 | no-show limit on the record alone | R6-D |
+| R5 | forfeit check | R6-P3-1 test |
+| R6-M1 (reviewer) | card money found by its folio reference | api in-flight test (new) and the module origins test |
+
+All 6 killed; the source was restored and the tree was clean after each.
+
+### Proof gaps
+- **Unknown-origin fail-closed branch:** no public writer produces a posting whose origin cannot be established, so this branch has no test and no mutant row. Its behaviour is visible in the code.
+- **Deposit per stay (R6-P3-2):** fixed in code, but every scenario booking has one terms snapshot per stay, so no test distinguishes the new sum from the old one.
+
+### Claims corrected (R6-P3-3)
+- **README "purposes are derived":** now says "where the money lands", for charges and captures alike.
+- **Ledger penalty and forfeit:** both are now in the README.
+- **Transfers check "money and debt both":** true only now that every non-zero posting has an owner.
+- **Captures "consent plus the re-check":** now also derive the purpose and apply the fact limit.
+- **Domain map:** round-6 section added.
+
+### Files
+- `/home/user/wt/integration-step/modules/payments/src/service/collect.ts`
+- `/home/user/wt/integration-step/modules/payments/src/service/consent.ts`
+- `/home/user/wt/integration-step/modules/payments/src/service/purpose.ts`
+- `/home/user/wt/integration-step/modules/payments/src/contracts.ts`
+- `/home/user/wt/integration-step/modules/finance/src/service/provenance.ts`
+- `/home/user/wt/integration-step/modules/finance/src/service/deposits.ts`
+- `/home/user/wt/integration-step/modules/reservations/src/service/provider.ts`
+- `/home/user/wt/integration-step/apps/api/test/review-regressions-r6.test.ts`
+- `/home/user/wt/integration-step/docs/architecture/domain-map.md`
+- `/home/user/wt/integration-step/modules/payments/README.md`
 ````
 

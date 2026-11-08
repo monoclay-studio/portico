@@ -192,6 +192,32 @@
   - **First action on resume:** send integration-step fix round 6 (pending-fixes line; ADR-0015 Amendment 5). In
     parallel, the steward reviews of distribution, day-close and migration.
 
+- **2026-11-08 05:05 UTC — RESUMED on the owner's direction ("let's keep going").**
+  - Integration-step fix round 6 was sent to the integration-step author (lean, a commit after every step).
+  - The usage-check chain was re-enabled (each check pushes `feat/integration-step`; `checkpoint.sh` at 97%; stop at 99%).
+  - The UX heartbeat stays disabled.
+  - If the weekly allowance runs out, the 2026-11-11 17:03 resume task continues from this log.
+
+- **2026-11-08 05:2x UTC — extra (overage) usage in use** (seven-day 100%, overage allowed until 12-01; owner told).
+  - Running:
+    - integration-step fix round 6 (P1/P2 fixes pushed at 4822639);
+    - steward reviews of distribution, day-close and migration (reports in `docs/orchestration/reviews/review-{distribution,day-close,migration}.md`, written incrementally).
+  - Next:
+    - re-review #7 after fix round 6;
+    - fix rounds for the three modules after their reviews;
+    - then the STATUS 22:55 order item 4 onward.
+
+- **2026-11-08 05:4x UTC — OWNER DIRECTION:** "let's do this current wave of tasks you are on right now. feel free to
+  introduce anything new to finish it. don't add any more on extra usage. finish when done until wednesday reset".
+  - **Scope on extra usage:** integration-step (re-review #7 → fix if needed → merge); distribution, day-close and
+    migration (reviews running → fix rounds → focused re-checks → merge). Anything required to finish them is allowed.
+  - **Not before the Wednesday reset (2026-11-11 17:00 UTC):** new modules, UX rounds, the quality steward round 4,
+    M15, and the backoffice real-data round.
+  - **When the wave is done:** `tools/checkpoint.sh`, disable the usage-check chain, and leave the 17:03 Wednesday
+    resume task to continue the order above.
+  - **Owner, 05:4x:** "don't let it effect your current work though. AT ALL". The scope limit never reduces the rigor
+    of this wave: full reviews, full fix rounds with self-check v6, re-reviews until clean, and the full merge procedure.
+
 ## 1. Owner, product and how to work with the owner
 
 - Owner: founder of **Monoclay LLC** (Delaware, Stripe Atlas), based in the Maldives. Product: **Portico** (final name).

@@ -1,0 +1,37 @@
+/** Steward review probe: a late charge with service date D posted after D's close (S10 supporting). */
+import { withTenantTx } from '@portico/db';
+import { money, newId } from '@portico/kernel';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { addStay, D, type Harness, nightAudit, setupOrg, startHarness } from './harness';
+
+let h: Harness;
+beforeAll(async () => {
+  h = await startHarness();
+});
+afterAll(async () => h?.close());
+
+describe('R-LATE', () => {
+  it("a restaurant charge for D posted after D's close does not appear in D's report annex", async () => {
+    const org = await setupOrg(h);
+    const s = await addStay(h, org, { arrival: '2026-11-06', departure: '2026-11-10' });
+    const auditor = nightAudit(h, org);
+    expect((await h.service.startRun(h.t.db, auditor, { propertyId: org.propertyId })).runStatus).toBe('completed');
+    const desk = org.as(['finance.posting.create', 'finance.folio.read'], [org.propertyId], 'Restaurant');
+    const late = await withTenantTx(h.t.db, desk, (tx) =>
+      h.finance.postCharge(tx, {
+        propertyId: org.propertyId,
+        target: { type: 'stay', id: s.stayId },
+        chargeCode: 'FB_ALACARTE',
+        amount: money(12_000, 'USD'),
+        serviceDate: D,
+        description: 'Dinner 22:40 (check found after the close)',
+        sourceRef: { type: 'pos_check', id: newId() },
+        idempotencyKey: `pos:late:${s.stayId}`,
+        reason: 'Restaurant check handed in after Day Close',
+      }),
+    );
+    const report = await org.run((tx) => h.service.getReport(tx, org.propertyId, D), auditor);
+    console.log('R-LATE entry', late.entryId, 'annex', JSON.stringify(report.restatementsSince));
+    expect(report.restatementsSince.changed).toBe(false);
+  });
+});

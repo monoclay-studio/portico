@@ -1,0 +1,264 @@
+/**
+ * Steward review PoCs (integration, real Postgres, real platform/inventory/guests/finance, strict fakes where the
+ * builder uses them). Each `it` asserts the DEFECT on 45be8b9; the fix inverts it.
+ */
+import { sql, withTenantTx } from '@portico/db';
+import { type DomainEvent, newId } from '@portico/kernel';
+import { platform } from '@portico/platform';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { migration, migrationHousekeeping, sampleGuesthouseFiles } from '../src';
+import { sampleGuesthousePack } from '../src/sources/templates';
+import { db } from '../src/service/context';
+import { countOpenBlocking } from '../src/service/state';
+import { LEAD, productionInSync } from './flows';
+import { ALL_MIGRATION, asSystem, type Harness, setupLiveWithTrial, startHarness } from './harness';
+
+let h: Harness;
+beforeAll(async () => {
+  h = await startHarness();
+});
+afterAll(async () => h?.close());
+
+const BD = '2026-12-01';
+const pack = () => sampleGuesthousePack(BD);
+
+describe('R-P1-2 the production gate accepts a rehearsal certificate for DIFFERENT data (file sources)', () => {
+  it('an export uploaded while in sync is never rehearsed, yet freeze passes and the cutover imports it', async () => {
+    const f = await productionInSync(h);
+    // The hotel uploads its latest export before the freeze (the documented "re-upload" delta for files):
+    // CN1003 now costs 999.00 instead of 180.00 and a new booking CN1099 appears. Same codes → same plan.
+    const p = pack();
+    const reservations = p.reservations.map((r) =>
+      r[0] === 'CN1003' ? r.map((v, i) => (i === 12 ? '999.00' : i === 17 ? '1035.60' : v)) : r,
+    );
+    const cn1003 = reservations.find((r) => r[0] === 'CN1003') as string[];
+    reservations.push(cn1003.map((v, i) => (i === 0 ? 'CN1099' : v)));
+    const up = await migration.uploadFiles(h.t.db, h.deps, f.lead, f.jobId, {
+      files: sampleGuesthouseFiles(BD, { reservations }),
+    });
+    expect(up.stored).toBe(true);
+    expect(up.delta).toMatchObject({ added: 1, changed: 1 });
+    const r = await migration.runPipeline(h.t.db, h.deps, f.lead, f.jobId, { start: 'freeze' });
+    expect(r.executed.map((e) => `${e.step}:${e.status}`)).toEqual([
+      'freeze:succeeded',
+      'cutover:succeeded',
+      'verify:succeeded',
+      'rollback_window:waiting',
+    ]);
+    // The trial (the only rehearsal) still holds 8 bookings and the OLD price: the cut-over data was never rehearsed.
+    const trialCount = await withTenantTx(h.t.db, f.trial.admin, (tx) =>
+      h.reservations.count(tx, f.trial.propertyId),
+    );
+    expect(trialCount).toBe(8);
+    expect(await f.live.run((tx) => h.reservations.count(tx, f.live.propertyId))).toBe(9);
+    // The certificate carried an extract fingerprint that nobody compared.
+    const job = await f.live.run((tx) => migration.getJob(tx, f.jobId));
+    expect((job.certificate as { extractFingerprint?: string }).extractFingerprint).toBeTruthy();
+  });
+});
+
+describe('R-P1-4 a record excluded by decision blocks the cutover forever ("final capture has blocking problems")', () => {
+  it('lead excludes a blocking booking as documented; every later freeze is refused for that same record', async () => {
+    const p = pack();
+    // CN1009: "confirmed" but its stay ended before the business date → future_stay_in_past (blocking, non-financial).
+    const stale = (p.reservations.find((r) => r[0] === 'CN1003') as string[]).map((v, i) =>
+      i === 0 ? 'CN1009' : i === 2 ? '2026-11-20' : i === 3 ? '2026-11-22' : v,
+    );
+    const files = sampleGuesthouseFiles(BD, { reservations: [...p.reservations, stale] });
+    const { live, trial } = await setupLiveWithTrial(h);
+    const lead = live.user('Lead', LEAD);
+    const gm = live.user('GM', ALL_MIGRATION);
+    const finance = live.user('Finance', ['migration.job.read', 'migration.mapping.review', 'migration.finance.signoff']);
+    const job = await live.run(
+      (tx) =>
+        migration.createJob(tx, h.deps, {
+          propertyId: live.propertyId,
+          sourceAdapter: 'portico.pack.v1',
+          sourceSystem: 'Coral Nest spreadsheets',
+          rehearsal: { trialOrganizationId: trial.tenantId, trialPropertyId: trial.propertyId },
+        }),
+      lead,
+    );
+    await migration.uploadFiles(h.t.db, h.deps, lead, job.id, { files });
+    await migration.runPipeline(h.t.db, h.deps, lead, job.id);
+    await live.run(
+      (tx) => migration.reviewMapping(tx, h.deps, job.id, { taxAccounts: [{ sourceCode: 'TGST', accountKey: 'tgst' }] }),
+      finance,
+    );
+    await migration.runPipeline(h.t.db, h.deps, lead, job.id);
+    const ex = await live.run((tx) => migration.listExceptions(tx, job.id, { status: 'open', limit: 100 }), lead);
+    const blocking = ex.filter((e) => e.severity === 'blocking');
+    expect(blocking.map((e) => `${e.sourceKey}:${e.code}`)).toEqual(['CN1009:future_stay_in_past']);
+    const target = blocking[0];
+    if (!target) throw new Error('no exception');
+    await live.run(
+      (tx) => migration.resolveException(tx, target.id, { outcome: 'excluded', resolution: 'Old test booking, not real' }),
+      lead,
+    );
+    await migration.runPipeline(h.t.db, h.deps, lead, job.id);
+    const done = (key: string, evidence: Record<string, string>, ctx = gm) =>
+      live.run((tx) => migration.completeChecklistItem(tx, job.id, key, { status: 'done', evidence }), ctx);
+    await done('data_authorization', { reference: 'DPA-1' });
+    await done('card_transfer', { decision: 're_collect' }, finance);
+    await done('opening_balances', { note: 'agreed' }, finance);
+    await done('channel_switch', { note: 'order agreed' });
+    await done('staff_acceptance', { note: 'checked' });
+    await live.run((tx) => migration.authorizeProduction(tx, job.id, { evidenceRef: 'DPA-1', validHours: 72 }), gm);
+    await migration.runPipeline(h.t.db, h.deps, lead, job.id);
+    await live.run(
+      (tx) => migration.planCutover(tx, h.deps, job.id, { plannedStartAt: '2026-12-01T22:00:00Z', freezeMinutes: 15 }),
+      lead,
+    );
+    await live.run((tx) => migration.approveCutover(tx, h.deps, job.id), gm);
+    await migration.runPipeline(h.t.db, h.deps, lead, job.id);
+    expect((await live.run((tx) => migration.getJob(tx, job.id))).state).toBe('in_sync');
+    expect(await live.run((tx) => countOpenBlocking(tx, job.id))).toBe(0);
+    const r = await migration.runPipeline(h.t.db, h.deps, lead, job.id, { start: 'freeze' });
+    expect(r.executed[0]).toMatchObject({ step: 'freeze', status: 'waiting' });
+    expect(r.executed[0]?.detail).toMatch(/1 record\(s\) in the final capture have blocking problems\. Resolve them or exclude them by decision/);
+  });
+});
+
+describe('R-P1-5 post-switch sweep: a re-keyed export creates duplicate bookings in LIVE (no normalisation, no quality checks)', () => {
+  it('CN1003 → "cn1003" and CN1001 re-keyed with the SAME channel booking id are imported again', async () => {
+    const f = await productionInSync(h);
+    await migration.runPipeline(h.t.db, h.deps, f.lead, f.jobId, { start: 'freeze' });
+    expect((await f.live.run((tx) => migration.getJob(tx, f.jobId))).state).toBe('rollback_window');
+    expect(await f.live.run((tx) => h.reservations.count(tx, f.live.propertyId))).toBe(8);
+    const p = pack();
+    const reservations = p.reservations.map((r) =>
+      r[0] === 'CN1003' ? ['cn1003', ...r.slice(1)] : r[0] === 'CN1001' ? ['CN1001-R', ...r.slice(1)] : r,
+    );
+    // A guest added in the old system after the final capture (the sweep's legitimate case).
+    reservations.push((p.reservations.find((r) => r[0] === 'CN1005') as string[]).map((v, i) => (i === 0 ? 'CN1100' : i === 6 ? 'G007' : v)));
+    const guests = [...p.guests, ['G007', 'Nadia', 'Kareem', 'nadia.k@example.test', '', 'MV', '', 'en', '']];
+    await migration.uploadFiles(h.t.db, h.deps, f.lead, f.jobId, {
+      files: sampleGuesthouseFiles(BD, { reservations, guests }),
+    });
+    const sweepCtx = f.live.user('Lead', LEAD);
+    const s = await migration.sweep(h.t.db, h.deps, sweepCtx, f.jobId);
+    expect(s.imported).toBeGreaterThanOrEqual(3); // cn1003, CN1001-R, CN1100 (+ guest G007)
+    expect(await f.live.run((tx) => h.reservations.count(tx, f.live.propertyId))).toBe(11);
+    // Two live bookings now carry Booking.com reservation BDC-4471002 (the FIDI failure mode the quality check exists for).
+    const bdc = await f.live.run((tx) =>
+      sql<{ n: string }>`select count(*)::text as n from fake_providers.bookings
+        where property_id = ${f.live.propertyId} and terms->>'currency' = 'USD'
+          and source_key in ('CN1001', 'CN1001-R')`.execute(tx.db),
+    );
+    expect(bdc.rows[0]?.n).toBe('2');
+
+    // R-P2: the sweep's OWN imports are journaled as post-cutover activity (the sweep holds no lease, so its
+    // correlation id is not in run_correlations) — a rollback would ask staff to re-enter G007 in the old system.
+    const own = await f.live.run((tx) =>
+      sql<{ id: string; type: string; aggregate_type: string; aggregate_id: string; occurred_at: Date; property_id: string | null; payload: unknown }>`
+        select id, type, aggregate_type, aggregate_id, occurred_at, property_id, payload from core.outbox
+         where correlation_id = ${sweepCtx.correlationId} and type like 'guests.profile.%'`.execute(tx.db),
+    );
+    expect(own.rows.length).toBeGreaterThan(0);
+    const e = own.rows[0] as (typeof own.rows)[number];
+    const event: DomainEvent = {
+      id: e.id,
+      type: e.type,
+      tenantId: f.live.tenantId,
+      propertyId: e.property_id ?? f.live.propertyId,
+      aggregate: { type: e.aggregate_type, id: e.aggregate_id },
+      aggregateVersion: 1,
+      occurredAt: e.occurred_at.toISOString(),
+      actor: { kind: 'user', userId: newId() },
+      correlationId: sweepCtx.correlationId,
+      version: 1,
+      payload: e.payload as Record<string, unknown>,
+    };
+    expect(await f.live.run((tx) => migration.journalEvent(asSystem(tx), event))).toBe(true);
+
+    // R-P1-7: once this migration completes, a SECOND production migration of the same property from another
+    // adapter is accepted; its ledger namespace (and the reservations provider key) differ, so nothing dedupes it.
+    await f.live.run((tx) =>
+      db(tx).updateTable('migration.jobs').set({ rollback_window_ends_at: new Date(Date.now() - 60_000) }).where('id', '=', f.jobId).execute(),
+    );
+    await migrationHousekeeping(h.t.db);
+    expect((await f.live.run((tx) => migration.getJob(tx, f.jobId))).state).toBe('completed');
+    const second = await f.live.run(
+      (tx) =>
+        migration.createJob(tx, h.deps, {
+          propertyId: f.live.propertyId,
+          sourceAdapter: 'littlehotelier.csv',
+          sourceSystem: 'Little Hotelier (same hotel)',
+          rehearsal: { trialOrganizationId: f.trial.tenantId, trialPropertyId: f.trial.propertyId },
+        }),
+      f.lead,
+    );
+    expect(second.purpose).toBe('production');
+    expect(migration.ledgerNamespace(second)).not.toBe(migration.ledgerNamespace({ sourceAdapter: 'portico.pack.v1', sourceRef: null }));
+  });
+});
+
+describe('R-P1-6 the 30-day purge never reaches the rehearsal copy in the trial organization', () => {
+  it('live job cancelled and purged; the trial job keeps every guest name forever (its state never ends)', async () => {
+    const f = await productionInSync(h, { stopAt: 'signoff' });
+    await f.live.run((tx) => migration.cancelJob(tx, h.deps, f.jobId, 'Hotel postponed the move'), f.lead);
+    // 31 days later
+    await f.live.run((tx) =>
+      db(tx).updateTable('migration.jobs').set({ updated_at: new Date(Date.now() - 31 * 86_400_000) }).where('id', '=', f.jobId).execute(),
+    );
+    await withTenantTx(h.t.db, f.trial.admin, (tx) =>
+      db(tx).updateTable('migration.jobs').set({ updated_at: new Date(Date.now() - 31 * 86_400_000) }).execute(),
+    );
+    const out = await migrationHousekeeping(h.t.db);
+    expect(out.purged).toBeGreaterThanOrEqual(1);
+    const liveLeft = await f.live.run((tx) =>
+      sql<{ n: string }>`select count(*)::text as n from migration.source_records where job_id = ${f.jobId} and payload::text like '%Rasheed%'`.execute(tx.db),
+    );
+    expect(liveLeft.rows[0]?.n).toBe('0');
+    const trialLeft = await withTenantTx(h.t.db, f.trial.admin, async (tx) => ({
+      jobs: await db(tx).selectFrom('migration.jobs').select(['state', 'purged_at']).execute(),
+      records: (
+        await sql<{ n: string }>`select count(*)::text as n from migration.source_records where payload::text like '%Rasheed%'`.execute(tx.db)
+      ).rows[0]?.n,
+      payloads: (
+        await sql<{ n: string }>`select count(*)::text as n from migration.extract_payloads where content::text like '%aisha.rasheed@example.test%'`.execute(tx.db)
+      ).rows[0]?.n,
+    }));
+    expect(trialLeft.jobs).toEqual([{ state: 'rehearsed', purged_at: null }]);
+    expect(Number(trialLeft.records)).toBeGreaterThan(0);
+    expect(Number(trialLeft.payloads)).toBeGreaterThan(0);
+  });
+});
+
+describe('R-P2 the gate is evaluated once: a revocation after the freeze does not stop the switch', () => {
+  it('freeze passes, the authorizer revokes, the next run still switches the system of record', async () => {
+    const f = await productionInSync(h);
+    const r1 = await migration.runPipeline(h.t.db, h.deps, f.lead, f.jobId, { start: 'freeze', maxSteps: 1 });
+    expect(r1.executed.map((e) => `${e.step}:${e.status}`)).toEqual(['freeze:succeeded']);
+    await f.live.run((tx) => migration.revokeAuthorization(tx, f.jobId, 'Stop: the owner withdrew consent'), f.gm);
+    const r2 = await migration.runPipeline(h.t.db, h.deps, f.lead, f.jobId);
+    expect(r2.executed[0]).toMatchObject({ step: 'cutover', status: 'succeeded' });
+    expect(
+      await f.live.run((tx) => platform.getDataAuthority(asSystem(tx), f.live.propertyId, 'reservations')),
+    ).toMatchObject({ authority: 'portico' });
+  });
+});
+
+describe('R-P1-8 after the switch, a non-finance role posts opening deposits into the live ledger through the sweep', () => {
+  it('the migration lead (no migration.finance.signoff) uploads a new deposit row and sweeps: finance holds it', async () => {
+    const f = await productionInSync(h);
+    await migration.runPipeline(h.t.db, h.deps, f.lead, f.jobId, { start: 'freeze' });
+    expect((await f.live.run((tx) => migration.getJob(tx, f.jobId))).state).toBe('rollback_window');
+    const p = pack();
+    // A "late" deposit of USD 5,000.00 on CN1003 (a tentative booking that never had one); no tax declared.
+    const deposits = [...p.deposits, ['CN1003', '5000.00', 'USD', '', '', BD]];
+    await migration.uploadFiles(h.t.db, h.deps, f.lead, f.jobId, {
+      files: sampleGuesthouseFiles(BD, { deposits }),
+    });
+    const lead = f.live.user('Lead', LEAD);
+    expect(LEAD).not.toContain('migration.finance.signoff');
+    await migration.sweep(h.t.db, h.deps, lead, f.jobId);
+    const held = await f.live.run(async (tx) => {
+      const ledger = await migration.loadLedger(tx, await migration.getJob(tx, f.jobId));
+      const b = ledger.get('reservation:CN1003')?.targetId as string;
+      return { state: ledger.get('deposit:CN1003')?.state, deposit: await h.finance.getDeposits(asSystem(tx), b) };
+    }, f.lead);
+    expect(held.state).toBe('imported');
+    expect(held.deposit?.balance.amountMinor).toBe(500000);
+  });
+});
