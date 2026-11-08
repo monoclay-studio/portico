@@ -756,6 +756,9 @@ export async function forfeitDeposit(
     owed.push({ folioId: c.folioId, minor: await penaltyOn(tx, c.folioId, c.stayId) });
   const total = owed.reduce((n, o) => n + o.minor, 0);
   if (total > 0) {
+    // Found by the money-invariant generator: a penalty owed with no deposit held is refused plainly, not a crash.
+    const held = await depositHeldMinor(tx, input.bookingId);
+    if (held <= 0) throw new BusinessRuleError('no_deposit', 'No deposit is held for this booking.');
     if (amountMinor > total) {
       throw new BusinessRuleError(
         'forfeit_exceeds_penalty_owed',

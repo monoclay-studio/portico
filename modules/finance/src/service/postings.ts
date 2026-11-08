@@ -1386,6 +1386,17 @@ export async function transferPostings(
       });
     }
   } else {
+    // Found by the money-invariant generator (re-review #7 item 5): a balance transfer moves what the folio OWES, read
+    // under its lock. More than that would create debt on the destination that nobody incurred (the source's credit
+    // growing by the same amount); a credit is moved by transferring the payment itself.
+    const owes = await folioBalance(tx, from.id);
+    if ((input.amountMinor as number) > owes) {
+      throw new BusinessRuleError(
+        'transfer_exceeds_balance',
+        `Folio of ${from.payer_name} owes ${Math.max(0, owes)} (minor units) now; a balance transfer moves at most what it owes. To move a credit, transfer the payment itself.`,
+        { owedMinor: Math.max(0, owes) },
+      );
+    }
     pairs.push({ amount: input.amountMinor as number, original: null, description: 'Balance transfer' });
   }
   // Re-review #5 R5-P1-2 (ADR-0015 Amendment 4 rule 2): card money and the debt it may pay meet only where the
