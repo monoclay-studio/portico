@@ -18,12 +18,14 @@ import {
   contentHash,
   DATA_CLASSES,
   type DataClass,
+  FINANCIAL_CLASSES,
   type SourceRecord,
 } from '../domain/records';
 import { findCardNumbers, findCardNumbersInValue, hasCardNumber } from '../domain/sensitive';
 import { sourceAdapter } from '../sources/adapters';
 import { CardDataInFileError, readPack, type TableReview, type UploadedFile } from '../sources/files';
 import { recordsFromSimulator } from '../sources/simulator';
+import { reopenOpeningBalances } from './checklist';
 import { actorKey, assertOpen, db, type Job, loadJobFor, type MigrationDeps, saveJob } from './context';
 
 export type ExtractKind = 'initial' | 'delta' | 'sync' | 'final' | 'sweep';
@@ -166,9 +168,33 @@ export async function applyToSourceState(
     .where('missing_since', 'is', null)
     .where('data_class', 'in', classes.length ? [...classes] : ['__none__'])
     .execute();
-  // One record per (class, key): the first occurrence; quality checks report conflicting duplicates.
+  // One record per (class, key). Rows that share a key with different content are never silently dropped: the
+  // kept record carries `duplicate_key_conflict` (blocking, listing every row), so nothing of that key is imported
+  // until a person decides. Identical repeated rows are one record.
+  const groups = new Map<string, SourceRecord[]>();
+  for (const r of records) groups.set(keyOf(r), [...(groups.get(keyOf(r)) ?? []), r]);
   const unique = new Map<string, SourceRecord>();
-  for (const r of records) if (!unique.has(keyOf(r))) unique.set(keyOf(r), r);
+  for (const [k, list] of groups) {
+    const first = list[0] as SourceRecord;
+    const distinct = new Set(list.map((r) => contentHash(r.payload ?? r.raw ?? null)));
+    if (distinct.size > 1 && !first.problems.some((p) => p.code === 'duplicate_key_conflict'))
+      unique.set(k, {
+        ...first,
+        problems: [
+          ...first.problems,
+          {
+            code: 'duplicate_key_conflict',
+            severity: 'blocking',
+            message: `${list.length} rows share this identifier with different content (${list
+              .map((r) => `${r.origin.file}${r.origin.row ? ` row ${r.origin.row}` : ''}`)
+              .join(
+                ', ',
+              )}). Decide which one is right: correct the identifier in the source, or exclude this record by decision.`,
+          },
+        ],
+      });
+    else unique.set(k, first);
+  }
   const next: SnapshotEntry[] = [];
   const rows = [...unique.values()].map((r) => {
     const hash = contentHash(r.payload ?? r.raw ?? null);
@@ -307,6 +333,10 @@ export async function storeExtract(
     .values({ tenant_id: tx.tenantId, job_id: job.id, seq, content: JSON.stringify(input.source) })
     .execute();
   let next = job;
+  const money = [...delta.added, ...delta.changed, ...delta.removed].filter((e) =>
+    FINANCIAL_CLASSES.has(e.dataClass),
+  ).length;
+  if (input.kind !== 'initial') await reopenOpeningBalances(tx, job, money);
   if (input.kind === 'sync' && job.steps.delta_sync === 'succeeded') {
     // Data read while in sync was never rehearsed: the delta sync runs again and rehearses it before any freeze.
     next = await saveJob(tx, job, { steps: { ...job.steps, delta_sync: 'pending' } });

@@ -13,11 +13,10 @@ import { observeSourceAccess, waitingChecklist } from './checklist';
 import { assertOpen, db, type Job, loadJob, loadJobFor, type MigrationDeps, saveJob } from './context';
 import { runCutoverStep, runDeltaSyncStep, runFreezeStep, runVerifyStep, runWindowStep } from './cutover';
 import { extractFromSimulator, loadExtracts, materialize } from './extract';
+import { acquireLease, releaseLease } from './lease';
 import { runMapStep, runValidateStep } from './plan';
 import { certify, evidenceStep, reconcileRehearsal, rehearseHere, rehearseInTrial } from './rehearse';
 import { loadSourceRecords } from './state';
-
-export const LEASE_MS = 10 * 60_000;
 
 export type StepOutcome =
   | { status: 'succeeded'; detail: string | null }
@@ -26,40 +25,6 @@ export type StepOutcome =
 
 export interface RunReport {
   executed: Array<{ step: StepKey; status: string; detail: string | null }>;
-}
-
-async function acquireLease(database: PorticoDatabase, ctx: RequestContext, jobId: string): Promise<Job> {
-  return withTenantTx(database, ctx, async (tx) => {
-    const job = await loadJobFor(tx, jobId, P.manage, { lock: true });
-    assertOpen(job);
-    if (job.runningUntil && job.runningUntil.getTime() > tx.now.getTime())
-      throw new ConflictError(
-        'migration_running',
-        'This migration is already running (started by another request). Wait for it to finish; its progress is on the migration page.',
-        { runningUntil: job.runningUntil.toISOString() },
-      );
-    await db(tx)
-      .updateTable('migration.jobs')
-      .set({
-        running_until: new Date(tx.now.getTime() + LEASE_MS),
-        running_by: ctx.correlationId,
-        run_correlations: sql`array_append(run_correlations, ${ctx.correlationId}::text)`,
-      })
-      .where('id', '=', jobId)
-      .execute();
-    return job;
-  });
-}
-
-async function releaseLease(database: PorticoDatabase, ctx: RequestContext, jobId: string) {
-  await withTenantTx(database, ctx, (tx) =>
-    db(tx)
-      .updateTable('migration.jobs')
-      .set({ running_until: null, running_by: null })
-      .where('id', '=', jobId)
-      .where('running_by', '=', ctx.correlationId)
-      .execute(),
-  );
 }
 
 async function setStep(

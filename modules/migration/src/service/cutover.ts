@@ -28,8 +28,8 @@ import {
 import { deltaSize } from '../domain/delta';
 import { pendingReview, planFingerprint } from '../domain/mapping';
 import { P } from '../manifest';
-import type { MigratedDomain } from '../ports';
-import { currentDataFingerprint } from './certificate';
+import { MIGRATION_PROCESS, type MigratedDomain } from '../ports';
+import { currentDataFingerprint, currentMoneyFingerprint } from './certificate';
 import { loadChecklist, markCutoverWindow } from './checklist';
 import {
   actorKey,
@@ -44,6 +44,7 @@ import {
 } from './context';
 import { extractFromSimulator } from './extract';
 import { importAll } from './importer';
+import { acquireLease, releaseLease } from './lease';
 import type { StepOutcome } from './pipeline';
 import { computePlan, runValidateStep } from './plan';
 import { buildReport } from './reconcile';
@@ -339,13 +340,23 @@ export async function runFreezeStep(
       });
       j = await saveJob(tx, j, { certificate: evidence ? { ...evidence } : null });
     }
+    const checklist = await loadChecklist(tx, j.id);
     const gate = evaluateCutoverGate({
       purpose: j.purpose,
       environment: tx.environment,
-      checklist: (await loadChecklist(tx, j.id)).map((c) => ({
+      checklist: checklist.map((c) => ({
         key: c.key as Parameters<typeof evaluateCutoverGate>[0]['checklist'][number]['key'],
         status: c.status,
       })),
+      money: {
+        confirmed:
+          ((
+            checklist.find((c) => c.key === 'opening_balances')?.evidence as {
+              moneyFingerprint?: string;
+            } | null
+          )?.moneyFingerprint as string | undefined) ?? null,
+        current: await currentMoneyFingerprint(tx, j),
+      },
       certificate: certificateFacts(j.certificate),
       planFingerprint: fingerprint,
       // Computed now, under the job lock: an upload that raced the re-rehearsal makes the certificate stale.
@@ -542,21 +553,28 @@ export async function sweep(
   ctx: RequestContext,
   jobId: string,
 ): Promise<{ imported: number; exceptions: number; reportSeq: number; exact: boolean }> {
-  const job = await withTenantTx(database, ctx, async (tx) => {
-    let j = await loadJobFor(tx, jobId, P.manage, { lock: true });
-    if (j.state !== 'switched' && j.state !== 'rollback_window')
-      throw new BusinessRuleError('not_switched', 'The post-cutover sweep runs after the switch.');
-    if (j.sourceAdapter === 'pms.simulator') j = (await extractFromSimulator(tx, deps, j, 'sweep')).job;
-    return j;
-  });
-  const s = await importAll(database, deps, ctx, job.id, { onlyNew: true });
-  const rep = await withTenantTx(database, ctx, async (tx) =>
-    buildReport(tx, deps, await loadJob(tx, job.id), 'sweep'),
-  );
-  return { imported: s.created, exceptions: s.exceptions, reportSeq: rep.seq, exact: rep.result.exact };
+  // One runner at a time: the sweep holds the same lease as a pipeline run.
+  await acquireLease(database, ctx, jobId);
+  try {
+    const job = await withTenantTx(database, ctx, async (tx) => {
+      let j = await loadJobFor(tx, jobId, P.manage, { lock: true });
+      if (j.state !== 'switched' && j.state !== 'rollback_window')
+        throw new BusinessRuleError('not_switched', 'The post-cutover sweep runs after the switch.');
+      if (j.sourceAdapter === 'pms.simulator') j = (await extractFromSimulator(tx, deps, j, 'sweep')).job;
+      // The same quality checks as before the switch, plus: a re-keyed copy of an imported record is never imported
+      // automatically (R-P1-5) and opening money waits for finance (R-P1-8).
+      await runValidateStep(tx, deps, j);
+      return j;
+    });
+    const s = await importAll(database, deps, ctx, job.id, { onlyNew: true });
+    const rep = await withTenantTx(database, ctx, async (tx) =>
+      buildReport(tx, deps, await loadJob(tx, job.id), 'sweep'),
+    );
+    return { imported: s.created, exceptions: s.exceptions, reportSeq: rep.seq, exact: rep.result.exact };
+  } finally {
+    await releaseLease(database, ctx, jobId);
+  }
 }
-
-// ───────────────────────────── rollback ─────────────────────────────
 
 export async function requestRollback(
   tx: TxContext,
@@ -709,8 +727,10 @@ export async function journalEvent(tx: TxContext, event: DomainEvent): Promise<b
   const at = new Date(event.occurredAt);
   if (at.getTime() < job.switched_at.getTime()) return false;
   if (job.rollback_window_ends_at && at.getTime() >= job.rollback_window_ends_at.getTime()) return false;
-  // The migration's own import is not post-cutover activity.
-  if (job.run_correlations.includes(event.correlationId)) return false;
+  // The migration's own writes (run, cutover, sweep) are not post-cutover activity. They are recognised by the
+  // server-issued actor every migration write carries — the providers are called as the system process
+  // `migration` — never by a request or correlation id a client can choose (R-P2-3).
+  if (event.actor.kind === 'system' && event.actor.process === MIGRATION_PROCESS) return false;
   const res = await db(tx)
     .insertInto('migration.cutover_journal')
     .values({

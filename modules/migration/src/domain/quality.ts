@@ -54,7 +54,9 @@ export function checkQuality(records: readonly SourceRecord[], ctx: QualityConte
         severity: 'blocking',
         message: `${list.length} rows share this identifier with different content (${list
           .map((r) => `${r.origin.file} row ${r.origin.row}`)
-          .join(', ')}). Keep one row in the export and upload it again.`,
+          .join(
+            ', ',
+          )}). Decide which one is right: correct the identifier in the source, or exclude this record by decision.`,
       });
   }
 
@@ -248,5 +250,64 @@ export function checkQuality(records: readonly SourceRecord[], ctx: QualityConte
           message: `Possible duplicate of ${keys.filter((x) => x !== k).join(', ')} (${reason}). Both are imported; merging is a reviewed, reversible decision after the migration.`,
         });
     }
+  return out;
+}
+
+/**
+ * R-P1-5: records not imported yet that may be a re-keyed copy of a record already in Portico (a re-saved export
+ * after the switch, a re-numbered booking). Never imported automatically: same channel booking id (a channel booking
+ * is one booking — exclude or correct, never import as is), or same guest, stay dates and unit type (could be a
+ * genuinely separate room booking — the reservations manager may import it as is). Rooms of one multi-room booking
+ * are never compared with each other.
+ */
+export function checkAgainstImported(
+  candidates: readonly SourceRecord[],
+  imported: readonly SourceRecord[],
+): QualityFindings {
+  const out: QualityFindings = new Map();
+  const channelKey = (p: ReservationRecord) =>
+    p.channel ? `${p.channel.code.trim().toLowerCase()}:${p.channel.bookingId.trim().toUpperCase()}` : null;
+  const stayKey = (p: ReservationRecord) =>
+    JSON.stringify([
+      p.guestKey ?? p.guestName.trim().toLowerCase().replace(/\s+/g, ' '),
+      p.arrival,
+      p.departure,
+      p.unitTypeCode,
+    ]);
+  const byChannel = new Map<string, SourceRecord>();
+  const byStay = new Map<string, SourceRecord>();
+  for (const r of imported) {
+    if (r.dataClass !== 'reservation' || !r.payload) continue;
+    const p = r.payload as ReservationRecord;
+    const c = channelKey(p);
+    if (c && !byChannel.has(c)) byChannel.set(c, r);
+    if (!byStay.has(stayKey(p))) byStay.set(stayKey(p), r);
+  }
+  const sameGroup = (a: SourceRecord, b: SourceRecord) => {
+    const ga = (a.payload as ReservationRecord | null)?.group?.ref;
+    return !!ga && ga === (b.payload as ReservationRecord | null)?.group?.ref;
+  };
+  for (const r of candidates) {
+    if (r.dataClass !== 'reservation' || !r.payload) continue;
+    const p = r.payload as ReservationRecord;
+    const id = recordId('reservation', r.key);
+    const c = channelKey(p);
+    const byC = c ? byChannel.get(c) : undefined;
+    if (byC && byC.key !== r.key && !sameGroup(byC, r)) {
+      add(out, id, {
+        code: 'rekeyed_channel_booking',
+        severity: 'blocking',
+        message: `Channel booking ${p.channel?.bookingId} is already in Portico as ${byC.key}. This row (${r.key}) is not imported: if the old system re-numbered the booking, exclude this row; if the identifiers are wrong, correct them in the source.`,
+      });
+      continue;
+    }
+    const byS = byStay.get(stayKey(p));
+    if (byS && byS.key !== r.key && !sameGroup(byS, r))
+      add(out, id, {
+        code: 'possible_duplicate_booking',
+        severity: 'blocking',
+        message: `Same guest, dates and unit type as ${byS.key}, already in Portico. It is not imported automatically: exclude it if it is the same booking, or import it as is if it is a separate booking.`,
+      });
+  }
   return out;
 }

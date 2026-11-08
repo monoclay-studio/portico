@@ -5,7 +5,7 @@
  */
 import type { TxContext } from '@portico/db';
 import { dataFingerprint } from '../domain/certificate';
-import type { ControlTotal, SourceRecord } from '../domain/records';
+import { type ControlTotal, type DataClass, FINANCIAL_CLASSES, type SourceRecord } from '../domain/records';
 import { db, type Job } from './context';
 import { decisionsOf } from './exceptions';
 import { currentControlTotals } from './importer';
@@ -21,19 +21,37 @@ async function decisionsFor(tx: TxContext, jobId: string) {
   }));
 }
 
-/** Fingerprint of what this job would import now (current source state + control totals + decisions). */
-export async function currentDataFingerprint(tx: TxContext, job: Job): Promise<string> {
+async function fingerprintParts(tx: TxContext, job: Job, money: boolean): Promise<string> {
   const rows = await db(tx)
     .selectFrom('migration.source_records')
     .select(['data_class', 'source_key', 'content_hash'])
     .where('job_id', '=', job.id)
     .where('missing_since', 'is', null)
     .execute();
+  const isMoney = (c: string) => FINANCIAL_CLASSES.has(c as DataClass);
   return dataFingerprint({
-    records: rows.map((r) => ({ dataClass: r.data_class, key: r.source_key, hash: r.content_hash })),
-    controlTotals: await currentControlTotals(tx, job),
-    decisions: await decisionsFor(tx, job.id),
+    records: rows
+      .filter((r) => isMoney(r.data_class) === money)
+      .map((r) => ({ dataClass: r.data_class, key: r.source_key, hash: r.content_hash })),
+    controlTotals: (await currentControlTotals(tx, job)).filter((t) => isMoney(t.dataClass) === money),
+    decisions: (await decisionsFor(tx, job.id)).filter((d) => isMoney(d.dataClass) === money),
   });
+}
+
+/**
+ * Fingerprint of what the rehearsal certificate binds (R-P1-2): the current source state, control totals and
+ * decisions of every class except opening money. Opening money (deposits, folio balances, receivables) is bound by
+ * finance's confirmation instead (`currentMoneyFingerprint`): it changes every day until the cutover, posted money is
+ * immutable in the trial copy (a rehearsal cannot re-post it), and the verify step reconciles it exactly after the
+ * switch.
+ */
+export async function currentDataFingerprint(tx: TxContext, job: Job): Promise<string> {
+  return fingerprintParts(tx, job, false);
+}
+
+/** Fingerprint of the opening money (records, control totals, finance decisions) finance confirms (R-P1-8). */
+export async function currentMoneyFingerprint(tx: TxContext, job: Job): Promise<string> {
+  return fingerprintParts(tx, job, true);
 }
 
 export interface RehearsalPayload {

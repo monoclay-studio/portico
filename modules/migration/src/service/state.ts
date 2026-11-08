@@ -39,6 +39,62 @@ export async function loadSourceRecords(tx: TxContext, jobId: string): Promise<S
   });
 }
 
+/** Current records of one class by key (problems + latest quality findings), read inside the caller's lock. */
+export async function loadSourceRecordsFor(
+  tx: TxContext,
+  jobId: string,
+  dataClass: DataClass,
+  keys: readonly string[],
+): Promise<Map<string, SourceRecord>> {
+  if (keys.length === 0) return new Map();
+  const rows = await db(tx)
+    .selectFrom('migration.source_records')
+    .select(['data_class', 'source_key', 'payload', 'raw', 'origin', 'problems', 'quality'])
+    .where('job_id', '=', jobId)
+    .where('data_class', '=', dataClass)
+    .where('source_key', 'in', [...keys])
+    .where('missing_since', 'is', null)
+    .execute();
+  return new Map(
+    rows.map((r) => {
+      const problems = [...((r.problems ?? []) as Problem[])];
+      for (const q of (r.quality ?? []) as Problem[])
+        if (!problems.some((p) => p.code === q.code)) problems.push(q);
+      return [
+        r.source_key,
+        {
+          dataClass: r.data_class as DataClass,
+          key: r.source_key,
+          payload: r.payload,
+          ...(r.raw ? { raw: r.raw as Record<string, string> } : {}),
+          origin: r.origin as SourceRecord['origin'],
+          problems,
+        } as SourceRecord,
+      ];
+    }),
+  );
+}
+
+/** Every record ever read for this job, including those missing from the latest extract (parsing problems only). */
+export async function loadAllParsedRecords(tx: TxContext, jobId: string): Promise<SourceRecord[]> {
+  const rows = await db(tx)
+    .selectFrom('migration.source_records')
+    .select(['data_class', 'source_key', 'payload', 'raw', 'origin', 'problems'])
+    .where('job_id', '=', jobId)
+    .execute();
+  return rows.map(
+    (r) =>
+      ({
+        dataClass: r.data_class as DataClass,
+        key: r.source_key,
+        payload: r.payload,
+        ...(r.raw ? { raw: r.raw as Record<string, string> } : {}),
+        origin: r.origin as SourceRecord['origin'],
+        problems: (r.problems ?? []) as Problem[],
+      }) as SourceRecord,
+  );
+}
+
 /** Parsing problems only (without the last validation's quality findings). */
 export async function loadParsedRecords(tx: TxContext, jobId: string): Promise<SourceRecord[]> {
   const rows = await db(tx)
@@ -174,6 +230,7 @@ export const OWNER_FOR: Record<DataClass, string> = {
 
 /** Problems on non-financial records whose decision is a money decision (finance owns and closes them). */
 export const FINANCIAL_CODES: ReadonlySet<string> = new Set([
+  'post_switch_money',
   'prepaid_without_deposit',
   'in_house_without_balance',
   'total_mismatch',
@@ -326,6 +383,10 @@ export async function exceptionDecisions(
 export const IMPORT_AS_IS_ALLOWED: ReadonlySet<string> = new Set([
   'prepaid_without_deposit',
   'in_house_without_balance',
+  // A separate booking that happens to match an imported one (the reservations manager decides).
+  'possible_duplicate_booking',
+  // Opening money read after the switch: finance confirms it (financial exception → finance sign-off only).
+  'post_switch_money',
 ]);
 
 /**

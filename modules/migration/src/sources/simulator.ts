@@ -5,7 +5,7 @@
 
 import { derivedGuestKey } from '../domain/pack';
 import type { BookingStatus, ReservationRecord, SourceRecord } from '../domain/records';
-import { unitKey } from '../domain/records';
+import { normalizeSourceKey, unitKey } from '../domain/records';
 import type { SimulatorSnapshot } from '../ports';
 
 const SIM_STATUS: Record<string, BookingStatus> = {
@@ -80,7 +80,7 @@ export function recordsFromSimulator(s: SimulatorSnapshot): SourceRecord[] {
       : null;
     out.push({
       dataClass: 'reservation',
-      key: r.reservationId,
+      key: normalizeSourceKey(r.reservationId),
       payload,
       ...(payload ? {} : { raw: { status: r.status } }),
       origin: { file, row: null },

@@ -335,6 +335,13 @@ export interface CardRecollectionPort {
 
 // ───────────────────────────── integration: the PMS simulator as a source (on main) ─────────────────────────────
 
+/**
+ * The system process every migration write runs as at the providers (composition binds the write ports with the
+ * actor `{ kind: 'system', process: MIGRATION_PROCESS }`). The cutover journal recognises the migration's own
+ * writes by this server-issued actor (R-P2-3).
+ */
+export const MIGRATION_PROCESS = 'migration';
+
 export interface SimulatorSnapshot {
   accountId: string;
   property: {

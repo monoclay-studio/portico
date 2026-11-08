@@ -28,14 +28,16 @@ import {
   type UnitRecord,
   type UnitTypeRecord,
 } from '../domain/records';
-import { ProviderUnavailableError } from '../ports';
+import { MIGRATION_PROCESS, ProviderUnavailableError } from '../ports';
 import { db, type Job, loadJob, loadJobFor, type MigrationDeps } from './context';
 import { loadExtracts, materialize } from './extract';
+import { renewLease } from './lease';
 import {
   exceptionDecisions,
   importability,
   ledgerNamespace,
   loadSourceRecords,
+  loadSourceRecordsFor,
   raiseException,
   setLedger,
 } from './state';
@@ -175,6 +177,16 @@ export function impliedUnitTypes(records: readonly SourceRecord[]): Array<Source
 }
 
 /**
+ * The migration's own writes run as the system process `migration` (with the person's grants unchanged), so every
+ * event and audit row they cause at the providers carries that server-issued actor: the cutover journal never counts
+ * the migration's imports as post-cutover staff activity, and no client-chosen request id can (R-P2-3). The run
+ * that caused them is linked by its correlation id and the run's own audit (who pressed run).
+ */
+export function asMigrationRun(ctx: RequestContext): RequestContext {
+  return { ...ctx, actor: { kind: 'system', process: MIGRATION_PROCESS } };
+}
+
+/**
  * Import the current source state into the target organization. `onlyNew` (post-cutover sweep) imports records
  * never imported before and raises an exception for records changed after the final capture instead of applying
  * them (a change in both systems is never silently overwritten).
@@ -204,20 +216,41 @@ export async function importAll(
       .filter((r) => r.dataClass === dataClass)
       .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
     if (dataClass === 'deposit' || dataClass === 'in_house_balance' || dataClass === 'ar_open_item') {
-      await withTenantTx(database, ctx, async (tx) => {
+      await withTenantTx(database, asMigrationRun(ctx), async (tx) => {
         const j = await loadJob(tx, jobId, { lock: true });
-        await importMoney(tx, deps, j, dataClass, list, summary, blockedClasses, opts);
+        await renewLease(tx, jobId, ctx.correlationId);
+        const fresh = await loadSourceRecordsFor(
+          tx,
+          jobId,
+          dataClass,
+          list.map((r) => r.key),
+        );
+        const now = list.flatMap((r) => {
+          const f = fresh.get(r.key);
+          return f ? [f] : [];
+        });
+        await importMoney(tx, deps, j, dataClass, now, summary, blockedClasses, opts);
       });
       continue;
     }
     for (let i = 0; i < list.length; i += CHUNK) {
       const chunk = list.slice(i, i + CHUNK);
-      await withTenantTx(database, ctx, async (tx) => {
+      await withTenantTx(database, asMigrationRun(ctx), async (tx) => {
         // The job row lock serializes every importer of this job (concurrent `run`, delta sync, sweep).
         const j = await loadJob(tx, jobId, { lock: true });
+        await renewLease(tx, jobId, ctx.correlationId);
         const decisions = await exceptionDecisions(tx, jobId);
         const ctxIds = await importContext(tx, deps, j, records);
-        for (const r of chunk) {
+        // Re-read this chunk under the lock: an upload that landed mid-run is imported as it is now (R-P3-2).
+        const fresh = await loadSourceRecordsFor(
+          tx,
+          jobId,
+          dataClass,
+          chunk.map((r) => r.key),
+        );
+        for (const r0 of chunk) {
+          const r = fresh.get(r0.key) ?? (r0.origin.file === 'derived from reservations' ? r0 : null);
+          if (!r) continue;
           if (opts.failAfter !== undefined && processed >= opts.failAfter)
             throw new Error(`Injected failure after ${processed} records (test)`);
           processed++;

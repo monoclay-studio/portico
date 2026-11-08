@@ -10,7 +10,7 @@ import { currentDataFingerprint } from '../src/service/certificate';
 import { db, loadJob } from '../src/service/context';
 import { sampleGuesthousePack } from '../src/sources/templates';
 import { LEAD, productionInSync } from './flows';
-import { ALL_MIGRATION, type Harness, setupLiveWithTrial, startHarness } from './harness';
+import { ALL_MIGRATION, asSystem, type Harness, setupLiveWithTrial, startHarness } from './harness';
 
 let h: Harness;
 beforeAll(async () => {
@@ -294,5 +294,54 @@ describe('R-P1-4 decided records never hold the cutover; undecided (or newly cha
     );
     const after = await f.live.run(async (tx) => currentDataFingerprint(tx, await loadJob(tx, f.jobId)));
     expect(after).not.toBe(before);
+  });
+});
+
+describe('R-P1-8 (sibling) money that changes after finance confirmed the opening balances re-opens the confirmation', () => {
+  it('a sync upload changes a deposit: the gate waits for finance again; after finance confirms, the cutover passes', async () => {
+    const f = await productionInSync(h);
+    const p = pack();
+    const deposits = p.deposits.map((d, i) => (i === 0 ? d.map((v, j) => (j === 1 ? '150.00' : v)) : d));
+    const control_totals = p.control_totals.map((c) =>
+      c[0] === 'deposit' ? ['deposit', 'USD', '2', '350.00'] : c,
+    );
+    // A booking changes too, so the trial rehearses again: the money it already posted stays as first rehearsed.
+    const reservations = p.reservations.map((r) =>
+      r[0] === 'CN1003' ? r.map((v, i) => (i === ROOM_TOTAL ? '999.00' : i === TOTAL ? '1035.60' : v)) : r,
+    );
+    await migration.uploadFiles(h.t.db, h.deps, f.lead, f.jobId, {
+      files: sampleGuesthouseFiles(BD, { deposits, control_totals, reservations }),
+    });
+    const r = await migration.runPipeline(h.t.db, h.deps, f.lead, f.jobId, { start: 'freeze' });
+    expect(r.executed[0]?.detail).toMatch(/rehearsed again and reconcile exactly/);
+    expect(r.executed.map((e) => `${e.step}:${e.status}`)).toEqual([
+      'delta_sync:succeeded',
+      'freeze:waiting',
+    ]);
+    expect(r.executed[1]?.detail).toMatch(/Confirm the opening balances/);
+    await f.live.run(
+      (tx) =>
+        migration.completeChecklistItem(tx, f.jobId, 'opening_balances', {
+          status: 'done',
+          evidence: { note: 'deposit change agreed' },
+        }),
+      f.finance,
+    );
+    const again = await migration.runPipeline(h.t.db, h.deps, f.lead, f.jobId, { start: 'freeze' });
+    expect(again.executed.map((e) => `${e.step}:${e.status}`)).toEqual([
+      'freeze:succeeded',
+      'cutover:succeeded',
+      'verify:succeeded',
+      'rollback_window:waiting',
+    ]);
+    // Live posted the confirmed amount (150.00); the trial copy keeps the 100.00 it rehearsed first.
+    const deposit = async (org: typeof f.live) =>
+      withTenantTx(h.t.db, org.admin, async (tx) => {
+        const row = await sql<{ id: string }>`select id from fake_providers.bookings
+          where property_id = ${org.propertyId} and source_key = 'CN1001'`.execute(tx.db);
+        return (await h.finance.getDeposits(asSystem(tx), row.rows[0]?.id as string))?.balance.amountMinor;
+      });
+    expect(await deposit(f.live)).toBe(15000);
+    expect(await deposit(f.trial)).toBe(10000);
   });
 });

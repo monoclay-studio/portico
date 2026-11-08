@@ -26,6 +26,7 @@ import {
   type Guarantee,
   type GuestRecord,
   inHouseKey,
+  normalizeSourceKey,
   type Problem,
   type ReservationRecord,
   type SourceRecord,
@@ -119,6 +120,8 @@ export function buildPack(tables: readonly PackTable[], opts: PackOptions): Pack
   const nights = new Map<string, Array<{ date: string | null; amountRaw: string }>>();
   const hasGuestTable = tables.some((t) => t.kind === 'guests');
   const derivedGuests = new Map<string, { origin: { file: string; row: number }; payload: GuestRecord }>();
+  /** Index in `records` of each reservation row → its confirmation as written (multi-room vs conflict). */
+  const verbatimConf = new Map<number, string>();
 
   // Date order per date column: detected from its values, else the reviewed plan decision.
   const orderFor = (t: PackTable, field: string): DateOrder | null => {
@@ -209,7 +212,7 @@ export function buildPack(tables: readonly PackTable[], opts: PackOptions): Pack
   for (const t of tables.filter((x) => x.kind === 'reservation_nights')) {
     const g = getter(t);
     t.table.rows.forEach((row) => {
-      const conf = g(row, 'confirmation');
+      const conf = normalizeSourceKey(g(row, 'confirmation'));
       if (!conf) return;
       const date = dateIn(t, row, 'date', [], true);
       const list = nights.get(conf) ?? [];
@@ -269,7 +272,7 @@ export function buildPack(tables: readonly PackTable[], opts: PackOptions): Pack
           break;
         }
         case 'guests': {
-          const id = g(row, 'guest_id');
+          const id = normalizeSourceKey(g(row, 'guest_id'));
           let given = cleanText(g(row, 'given_name'), 80);
           let family = cleanText(g(row, 'family_name'), 80);
           const full = cleanText(g(row, 'full_name'), 160);
@@ -345,7 +348,9 @@ export function buildPack(tables: readonly PackTable[], opts: PackOptions): Pack
           break;
         }
         case 'reservations': {
-          const conf = g(row, 'confirmation');
+          const verbatim = g(row, 'confirmation');
+          const conf = normalizeSourceKey(verbatim);
+          if (conf) verbatimConf.set(records.length, verbatim.trim());
           if (!conf)
             problems.push(
               problem('required_missing', 'blocking', 'Confirmation number is missing.', 'confirmation'),
@@ -409,7 +414,7 @@ export function buildPack(tables: readonly PackTable[], opts: PackOptions): Pack
             cleanText(g(row, 'guest_name'), 160) ??
             (familyCol ? [givenCol, familyCol].filter(Boolean).join(' ') : null) ??
             (g(row, 'guest_id') ? `Guest ${g(row, 'guest_id')}` : null);
-          let guestKey = cleanText(g(row, 'guest_id'), 120);
+          let guestKey = cleanText(normalizeSourceKey(g(row, 'guest_id')), 120);
           if (!guestKey && !hasGuestTable && guestName && !isMasked(guestName)) {
             // SMB exports carry the guest on the reservation row: derive one profile per person.
             const email = normalizeEmail(g(row, 'guest_email'));
@@ -519,7 +524,7 @@ export function buildPack(tables: readonly PackTable[], opts: PackOptions): Pack
           break;
         }
         case 'deposits': {
-          const conf = g(row, 'confirmation');
+          const conf = normalizeSourceKey(g(row, 'confirmation'));
           if (!conf)
             problems.push(
               problem('required_missing', 'blocking', 'Confirmation number is missing.', 'confirmation'),
@@ -547,7 +552,7 @@ export function buildPack(tables: readonly PackTable[], opts: PackOptions): Pack
           break;
         }
         case 'in_house_balances': {
-          const conf = g(row, 'confirmation');
+          const conf = normalizeSourceKey(g(row, 'confirmation'));
           const folio = g(row, 'folio') || '1';
           const currency = currencyIn(t, row, problems);
           const balance = moneyIn(t, row, 'balance', currency, problems, true);
@@ -583,8 +588,8 @@ export function buildPack(tables: readonly PackTable[], opts: PackOptions): Pack
           break;
         }
         case 'ar_open_items': {
-          const account = g(row, 'account_code').toUpperCase();
-          const invoice = g(row, 'invoice');
+          const account = normalizeSourceKey(g(row, 'account_code'));
+          const invoice = normalizeSourceKey(g(row, 'invoice'));
           const currency = currencyIn(t, row, problems);
           const open = moneyIn(t, row, 'open_amount', currency, problems, true);
           const invoiceDate = dateIn(t, row, 'invoice_date', problems, true);
@@ -650,7 +655,68 @@ export function buildPack(tables: readonly PackTable[], opts: PackOptions): Pack
   }
   for (const [key, g] of derivedGuests)
     records.push({ dataClass: 'guest', key, payload: g.payload, origin: g.origin, problems: [] });
+  groupReservationRows(records, verbatimConf);
   return { records, controlTotals, ambiguousDateColumns, unknownStatuses: [...unknownStatuses] };
+}
+
+/**
+ * Several reservation rows with one confirmation (R-P2-5): written identically, they are the rooms of one
+ * multi-room booking — each room becomes its own record `${conf}/${line}` (lines ordered by content, so a re-sorted
+ * export keeps its keys) and deposits / folio balances of that confirmation attach to room 1. Written differently
+ * but normalising alike (`0012` and `12`, `CN1` and `cn1`), they are different identifiers that collide: every row
+ * is reported as `duplicate_key_conflict` and none is imported until a person decides. A source row is never dropped.
+ */
+function groupReservationRows(records: SourceRecord[], verbatim: ReadonlyMap<number, string>): void {
+  const groups = new Map<string, number[]>();
+  records.forEach((r, i) => {
+    if (r.dataClass !== 'reservation' || !verbatim.has(i)) return;
+    groups.set(r.key, [...(groups.get(r.key) ?? []), i]);
+  });
+  const multiRoom = new Set<string>();
+  for (const [conf, idx] of groups) {
+    if (idx.length < 2) continue;
+    const spellings = new Set(idx.map((i) => verbatim.get(i)));
+    const where = idx.map((i) => `${records[i]?.origin.file} row ${records[i]?.origin.row}`).join(', ');
+    if (spellings.size > 1) {
+      for (const i of idx)
+        (records[i] as SourceRecord).problems.push(
+          problem(
+            'duplicate_key_conflict',
+            'blocking',
+            `${idx.length} rows have confirmations that read alike (${[...spellings].map((x) => `"${x}"`).join(', ')}; ${where}) but are written differently. Portico treats them as one identifier; decide which booking is which (correct the confirmation in the source, or exclude the wrong row).`,
+            'confirmation',
+          ),
+        );
+      continue;
+    }
+    multiRoom.add(conf);
+    const sortKey = (i: number) => {
+      const p = records[i]?.payload as ReservationRecord | null;
+      return p
+        ? JSON.stringify([
+            0,
+            p.unitTypeCode,
+            p.arrival,
+            p.departure,
+            p.unitNumber ?? '',
+            p.guestName,
+            p.roomTotalMinor,
+          ])
+        : JSON.stringify([1, records[i]?.origin.row ?? 0]);
+    };
+    const ordered = [...idx].sort((a, b) => (sortKey(a) < sortKey(b) ? -1 : sortKey(a) > sortKey(b) ? 1 : 0));
+    ordered.forEach((i, n) => {
+      const r = records[i] as SourceRecord<'reservation'>;
+      r.key = `${conf}/${n + 1}`;
+      if (r.payload) r.payload = { ...r.payload, group: { ref: conf, line: n + 1, lines: idx.length } };
+    });
+  }
+  if (multiRoom.size === 0) return;
+  for (const r of records) {
+    if (r.dataClass !== 'deposit' && r.dataClass !== 'in_house_balance') continue;
+    const p = r.payload as { bookingKey: string } | null;
+    if (p && multiRoom.has(p.bookingKey)) r.payload = { ...p, bookingKey: `${p.bookingKey}/1` } as never;
+  }
 }
 
 function parseIntStrictLarge(raw: string): number | null {

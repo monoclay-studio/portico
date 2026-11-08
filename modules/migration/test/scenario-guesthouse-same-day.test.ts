@@ -306,7 +306,14 @@ describe('a guesthouse moved to Portico the same day', () => {
       for (const e of post) if (await migration.journalEvent(tx, e)) n++;
       // the same event twice is journaled once
       await migration.journalEvent(tx, post[0] as DomainEvent);
-      // events raised by the migration's own cutover run (its correlation id) are the migration, not activity
+      // events raised by the migration's own writes carry the server-issued migration actor: not activity
+      const own = {
+        ...(post[0] as DomainEvent),
+        id: newId(),
+        actor: { kind: 'system' as const, process: 'migration' },
+      };
+      expect(await migration.journalEvent(tx, own)).toBe(false);
+      // R-P2-3: a staff write that reuses a run's correlation id (a client-chosen X-Request-Id) is still journaled
       const runs = (
         await db(tx)
           .selectFrom('migration.jobs')
@@ -315,21 +322,21 @@ describe('a guesthouse moved to Portico the same day', () => {
           .executeTakeFirstOrThrow()
       ).run_correlations;
       expect(runs.length).toBeGreaterThan(0);
-      const own = {
-        ...(post[0] as DomainEvent),
+      const spoofed = {
+        ...(post[1] as DomainEvent),
         id: newId(),
         correlationId: runs[runs.length - 1] as string,
       };
-      expect(await migration.journalEvent(tx, own)).toBe(false);
-      return n;
+      expect(await migration.journalEvent(tx, spoofed)).toBe(true);
+      return n + 1;
     });
-    expect(journaled).toBe(4);
+    expect(journaled).toBe(5);
     const before = await live.run((tx) => h.reservations.count(tx, live.propertyId));
     const req = await live.run(
       (tx) => migration.requestRollback(tx, h.deps, jobId, { reason: 'Day Close cannot complete (drill)' }),
       lead(),
     );
-    expect(req.worklist).toBe(4);
+    expect(req.worklist).toBe(5);
     await live.run((tx) => migration.approveRollback(tx, h.deps, jobId, 'Agreed with the GM'), gm());
     const v = await view();
     expect(v.state).toBe('rolled_back');
@@ -345,6 +352,7 @@ describe('a guesthouse moved to Portico the same day', () => {
       'payments.payment.captured',
       'reservations.booking.confirmed',
       'reservations.booking.modified',
+      'reservations.booking.modified', // the spoofed-correlation staff write (R-P2-3)
     ]);
     expect(JSON.stringify(journal)).not.toMatch(/Rasheed|Lindqvist|@example/);
     void ev;

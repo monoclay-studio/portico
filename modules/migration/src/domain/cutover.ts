@@ -111,6 +111,8 @@ export interface GateInput {
   planFingerprint: string;
   /** Fingerprint of the data and decisions that would be cut over now (`dataFingerprint`). */
   dataFingerprint: string;
+  /** Opening money: what finance confirmed (checklist evidence) and what would be posted now. */
+  money?: { confirmed: string | null; current: string };
   authorization: { planFingerprint: string; grantedBy: string; expiresAt: Date } | null;
   jobCreatedBy: string;
   transition: { status: string; approved: boolean } | null;
@@ -141,6 +143,12 @@ export function evaluateCutoverGate(g: GateInput): GateResult {
   );
   if (gap) add(gap.code, gap.message);
   if (g.purpose === 'production') {
+    const openingDone = g.checklist.some((c) => c.key === 'opening_balances' && c.status === 'done');
+    if (openingDone && g.money && g.money.confirmed !== g.money.current)
+      add(
+        'opening_balances_stale',
+        'The opening money changed after finance confirmed it. Finance confirms the opening balances again.',
+      );
     for (const item of CHECKLIST)
       if (!g.checklist.some((c) => c.key === item.key && c.status !== 'waiting'))
         add(`checklist_${item.key}`, `Waiting for: ${item.title} (${item.ownerRole}).`);

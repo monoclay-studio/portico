@@ -19,12 +19,13 @@ import {
 } from '@portico/kernel';
 import type { MigrationPlan } from './domain/mapping';
 import { initialSteps } from './domain/pipeline';
-import { DATA_CLASSES, type SourceRecord } from './domain/records';
+import { type ControlTotal, DATA_CLASSES, FINANCIAL_CLASSES, type SourceRecord } from './domain/records';
 import type { MigrationPorts, RehearsalEvidence, RehearsalPort, RehearsalRequest } from './ports';
-import { db, loadJob, type MigrationDeps, saveJob, toJob } from './service/context';
+import { db, type Job, loadJob, type MigrationDeps, saveJob, toJob } from './service/context';
 import { storeExtract } from './service/extract';
 import { runPipeline } from './service/pipeline';
 import { latestReports } from './service/reconcile';
+import { loadAllParsedRecords, loadLedger } from './service/state';
 
 async function trialContext(
   database: PorticoDatabase,
@@ -141,6 +142,12 @@ export function createRehearsalBridge(
         }
         let job = toJob(row);
         job = await saveJob(tx, job, { plan });
+        const copy = await withPostedMoneyKept(
+          tx,
+          job,
+          input.extract.records as SourceRecord[],
+          input.extract.controlTotals as ControlTotal[],
+        );
         await storeExtract(tx, job, {
           kind: (await db(tx)
             .selectFrom('migration.extracts')
@@ -152,8 +159,8 @@ export function createRehearsalBridge(
           source: {
             type: 'records',
             name: `live job ${input.liveJobId}, extract ${input.extract.seq}`,
-            records: input.extract.records as SourceRecord[],
-            controlTotals: input.extract.controlTotals as never[],
+            records: copy.records,
+            controlTotals: copy.controlTotals,
             // The live state is complete: a class it no longer holds is gone from the rehearsal too.
             classes: [...DATA_CLASSES],
           },
@@ -235,6 +242,41 @@ export function createRehearsalBridge(
       });
       return jobId ? evidenceOf(database, ctx, jobId) : null;
     },
+  };
+}
+
+/**
+ * Opening money already posted in the trial copy is immutable there: a later rehearsal round keeps it as it was first
+ * rehearsed (changed amounts are not re-posted, removed items stay) and does not compare the source's money control
+ * totals against it. New money records are rehearsed. The live cutover's money is bound by finance's confirmation
+ * and reconciled exactly at verify — not by this copy (see `currentDataFingerprint`).
+ */
+async function withPostedMoneyKept(
+  tx: TxContext,
+  job: Job,
+  records: SourceRecord[],
+  controlTotals: ControlTotal[],
+): Promise<{ records: SourceRecord[]; controlTotals: ControlTotal[] }> {
+  const posted = new Set(
+    [...(await loadLedger(tx, job)).values()]
+      .filter((l) => FINANCIAL_CLASSES.has(l.dataClass) && (l.state === 'imported' || l.state === 'merged'))
+      .map((l) => `${l.dataClass}:${l.key}`),
+  );
+  if (posted.size === 0) return { records, controlTotals };
+  const id = (r: { dataClass: string; key: string }) => `${r.dataClass}:${r.key}`;
+  const kept = new Map((await loadAllParsedRecords(tx, job.id)).map((r) => [id(r), r]));
+  const incoming = new Set(records.map(id));
+  const out = records.map((r) => (posted.has(id(r)) ? (kept.get(id(r)) ?? r) : r));
+  for (const k of posted) {
+    const r = kept.get(k);
+    if (r && !incoming.has(k)) out.push(r);
+  }
+  const moneyClasses = new Set([...posted].map((k) => k.split(':')[0]));
+  return {
+    records: out,
+    controlTotals: controlTotals.map((t) =>
+      moneyClasses.has(t.dataClass) ? { ...t, amountMinor: null } : t,
+    ),
   };
 }
 

@@ -90,6 +90,11 @@ export interface ReservationRecord {
   totalMinor: number;
   channel: { code: string; bookingId: string } | null;
   guarantee: Guarantee;
+  /**
+   * Multi-room booking: several rows of the source share one confirmation. Each room is its own record (key
+   * `${ref}/${line}`); the group keeps them together. Absent for single-room bookings.
+   */
+  group?: { ref: string; line: number; lines: number };
 }
 export interface DepositRecord {
   /** Source key of the reservation this deposit belongs to. */
@@ -164,6 +169,27 @@ export interface ControlTotal {
 /** Content hash of a record payload: stable across key order, used for delta detection and idempotency. */
 export function contentHash(payload: unknown): string {
   return sha256Hex(canonicalJson(payload)).slice(0, 32);
+}
+
+/**
+ * The one normalisation of a source identifier (confirmation, guest id, invoice) used in every ledger key, for every
+ * adapter (R-P1-5): Unicode NFKC, trimmed, inner whitespace collapsed, case-folded to upper case; an all-digit key
+ * loses its leading zeros and a trailing ".0" (spreadsheets turn `00123` into `123`), and an exponent form
+ * (`1.23E+16`, how spreadsheets show long numbers) is expanded. Two spellings of one identifier get one key; two
+ * different source rows that normalise alike are reported as `duplicate_key_conflict`, never merged.
+ */
+export function normalizeSourceKey(raw: string): string {
+  const v = raw.normalize('NFKC').trim().replace(/\s+/g, ' ').toUpperCase();
+  const numeric = /^(\d+)(?:\.0+)?$/.exec(v);
+  if (numeric) return (numeric[1] as string).replace(/^0+(?=\d)/, '');
+  const exp = /^(\d+)(?:\.(\d+))?E\+?(\d{1,2})$/.exec(v);
+  if (exp) {
+    const int = exp[1] as string;
+    const frac = exp[2] ?? '';
+    const e = Number(exp[3]);
+    if (frac.length <= e) return `${int}${frac}${'0'.repeat(e - frac.length)}`.replace(/^0+(?=\d)/, '');
+  }
+  return v;
 }
 
 /** Natural key of a unit: number is unique per property. */

@@ -12,14 +12,15 @@ import {
   suggestTaxAccounts,
   suggestUnitTypes,
 } from '../domain/mapping';
-import { checkQuality, recordId } from '../domain/quality';
-import type {
-  DepositRecord,
-  RatePlanRecord,
-  ReservationRecord,
-  SourceRecord,
-  UnitRecord,
-  UnitTypeRecord,
+import { checkAgainstImported, checkQuality, recordId } from '../domain/quality';
+import {
+  type DepositRecord,
+  FINANCIAL_CLASSES,
+  type RatePlanRecord,
+  type ReservationRecord,
+  type SourceRecord,
+  type UnitRecord,
+  type UnitTypeRecord,
 } from '../domain/records';
 import { MASKED_FILE_THRESHOLD } from '../domain/sensitive';
 import { P } from '../manifest';
@@ -30,6 +31,8 @@ import {
   closeCorrected,
   exceptionDecisions,
   importability,
+  loadAllParsedRecords,
+  loadLedger,
   loadParsedRecords,
   loadSourceRecords,
   raiseException,
@@ -219,6 +222,36 @@ export async function runValidateStep(
     knownUnitTypes,
     unitsPerType,
   });
+  // Records already in Portico (this source's ledger) vs records not imported yet: a re-keyed copy is never
+  // imported automatically (R-P1-5). After the switch, money is never posted without finance (R-P1-8).
+  const ledger = await loadLedger(tx, job);
+  const isImported = (r: { dataClass: string; key: string }) => {
+    const l = ledger.get(`${r.dataClass}:${r.key}`);
+    return l?.state === 'imported' || l?.state === 'merged';
+  };
+  const candidates = records.filter((r) => !isImported(r));
+  // Only after the switch: before it, a production job has imported nothing in live, and a rehearsal must import
+  // exactly what the live cutover will (its earlier rounds are not "already in Portico" for the cutover).
+  if (job.switchedAt)
+    for (const [id, list] of checkAgainstImported(
+      candidates,
+      (await loadAllParsedRecords(tx, job.id)).filter(isImported),
+    ))
+      findings.set(id, [...(findings.get(id) ?? []), ...list]);
+  if (job.switchedAt)
+    for (const r of candidates)
+      if (FINANCIAL_CLASSES.has(r.dataClass) && r.payload) {
+        const id = recordId(r.dataClass, r.key);
+        findings.set(id, [
+          ...(findings.get(id) ?? []),
+          {
+            code: 'post_switch_money',
+            severity: 'blocking',
+            message:
+              'Opening money read after the switch to Portico. It is not posted until finance confirms it (import as is posts it once; exclude keeps it out).',
+          },
+        ]);
+      }
   // Quality findings are replaced wholesale on every validation (a finding that disappeared is gone).
   await db(tx)
     .updateTable('migration.source_records')
@@ -333,4 +366,7 @@ const KNOWN_RECORD_CODES = [
   'possible_duplicate_profile',
   'unit_type_derived',
   'masked_export',
+  'rekeyed_channel_booking',
+  'possible_duplicate_booking',
+  'post_switch_money',
 ];

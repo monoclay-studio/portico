@@ -13,6 +13,7 @@ import {
   REMINDER_INTERVAL_HOURS,
 } from '../domain/cutover';
 import { FINANCIAL_CLASSES } from '../domain/records';
+import { currentMoneyFingerprint } from './certificate';
 import { actorKey, actorName, assertOpen, db, type Job, loadJobFor } from './context';
 import { latestReports } from './reconcile';
 
@@ -164,6 +165,8 @@ export async function completeChecklistItem(
         );
       const fp = ev?.reports?.[ev.reports.length - 1]?.fingerprint ?? last?.fingerprint ?? null;
       evidence.reportFingerprint = fp;
+      // Binds the confirmation to the money it covers: any later change re-opens it and the gate refuses it.
+      evidence.moneyFingerprint = await currentMoneyFingerprint(tx, job);
       signoffKind = 'opening_balances';
       report = last ? { id: last.id, fingerprint: last.fingerprint } : null;
       break;
@@ -240,6 +243,40 @@ export async function completeChecklistItem(
 }
 
 /** Mark the cutover-window step done (by `planCutover`). */
+/**
+ * Finance confirmed the opening balances on the money it saw. When the source's money changes afterwards (a sync, a
+ * re-upload, a final capture before the switch), that confirmation no longer covers what the cutover would post: it
+ * re-opens and the gate waits for finance again (R-P1-8). After the switch, new money is staged per record instead.
+ */
+export async function reopenOpeningBalances(tx: TxContext, job: Job, changedMoney: number): Promise<boolean> {
+  if (job.purpose !== 'production' || job.switchedAt || changedMoney === 0) return false;
+  const row = (await loadChecklist(tx, job.id)).find((r) => r.key === 'opening_balances');
+  if (row?.status !== 'done') return false;
+  await db(tx)
+    .updateTable('migration.checklist')
+    .set((eb) => ({
+      status: 'waiting',
+      evidence: JSON.stringify({
+        ...((row.evidence as Record<string, unknown> | null) ?? {}),
+        reopened: { at: tx.now.toISOString(), changedRecords: changedMoney },
+      }),
+      completed_by: null,
+      completed_at: null,
+      version: eb('version', '+', 1),
+    }))
+    .where('job_id', '=', job.id)
+    .where('key', '=', 'opening_balances')
+    .execute();
+  await tx.audit({
+    action: 'migration.checklist.reopen',
+    target: { type: 'migration_job', id: job.id },
+    propertyId: job.propertyId,
+    reason: `${changedMoney} money record(s) changed in the source after finance confirmed the opening balances.`,
+    after: { key: 'opening_balances' },
+  });
+  return true;
+}
+
 export async function markCutoverWindow(tx: TxContext, job: Job, plannedStartAt: Date): Promise<void> {
   if (job.purpose !== 'production') return;
   await db(tx)
