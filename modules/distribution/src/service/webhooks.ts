@@ -12,7 +12,14 @@ import { createHmac } from 'node:crypto';
 import { type PorticoDatabase, sql, type TxContext, withTenantTx } from '@portico/db';
 import { constantTimeEqual, newId, sha256Hex, systemContext, type TenantEnvironment } from '@portico/kernel';
 import { WEBHOOK_SIGNATURE_HEADER, WEBHOOK_TOKEN_HEADER, WireParseError } from '../adapters/channex/wire';
-import { type ConnectionRow, type DistributionDeps, db, loadConnection, scheduleTenant } from './common';
+import {
+  type ConnectionRow,
+  type DistributionDeps,
+  db,
+  loadConnection,
+  scheduleTenant,
+  settingsOf,
+} from './common';
 import { raiseException } from './exceptions';
 import { logDelivery, PropertyMismatchError, storeRevision } from './inbound';
 
@@ -134,7 +141,7 @@ export async function receiveWebhook(
       });
       return { status: 200, body: { received: true, ignored: notice.event } };
     }
-    if (notice.revision) {
+    if (notice.revision && settingsOf(conn).webhookPayload === 'store') {
       try {
         const r = await storeRevision(tx, conn, notice.revision, 'webhook');
         return { status: 200, body: { received: true, outcome: r.outcome } };

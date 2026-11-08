@@ -14,6 +14,7 @@ import {
   HubTransportError,
 } from '../hub';
 import {
+  ACK_AGAIN_STATUSES,
   availabilityBody,
   bookingsSinceQuery,
   CHANNEX_AUTH_HEADER,
@@ -21,13 +22,17 @@ import {
   CHANNEX_HOSTS,
   errorText,
   feedQuery,
+  hasNextPage,
   PATHS,
   parseAriSuccess,
   parseBookings,
   parseFeed,
+  parsePropertyTitle,
   parseSingleRevision,
   parseWebhook,
+  REVISION_MISSING_STATUS,
   restrictionsBody,
+  retryAfterSeconds,
   toHubRevision,
   WireParseError,
   webhookRegistration,
@@ -49,13 +54,6 @@ export interface ChannexAdapterDeps {
   simulator(tenantId: string, externalPropertyId: string): HubTransport;
 }
 
-function retryAfter(res: HubHttpResponse): number | null {
-  const v = res.headers['retry-after'];
-  if (!v) return null;
-  const n = Number(v);
-  return Number.isFinite(n) && n >= 0 ? Math.min(n, 3600) : null;
-}
-
 function failureFromResponse(res: HubHttpResponse, what: string): HubFailure {
   const cls = classifyHttp(res.status);
   const text = errorText(res.body);
@@ -71,7 +69,7 @@ function failureFromResponse(res: HubHttpResponse, what: string): HubFailure {
     class: cls,
     message,
     httpStatus: res.status,
-    retryAfterSeconds: retryAfter(res),
+    retryAfterSeconds: retryAfterSeconds(res.headers),
     outcomeUnknown: false,
     detail: { body: text },
   };
@@ -145,14 +143,20 @@ export function channexAdapter(deps: ChannexAdapterDeps): HubAdapter {
     }
   }
 
-  async function ari(ctx: HubCallContext, path: string, body: unknown, what: string): Promise<AriResult> {
+  async function ari(
+    ctx: HubCallContext,
+    path: string,
+    body: { values: readonly unknown[] },
+    what: string,
+  ): Promise<AriResult> {
     const res = await call(ctx, 'POST', path, what, body);
-    const parsed = parseAriSuccess(res.body);
+    const parsed = parseAriSuccess(res.body, body.values.length);
     return {
       httpStatus: res.status,
       taskIds: parsed.taskIds,
       refused: parsed.refused,
       unrecognizedAnswer: parsed.unrecognized,
+      unrecognizedWhy: parsed.why,
     };
   }
 
@@ -160,13 +164,7 @@ export function channexAdapter(deps: ChannexAdapterDeps): HubAdapter {
     hub: 'channex',
     async testCredentials(ctx) {
       const res = await call(ctx, 'GET', PATHS.property(ctx.externalPropertyId), 'the property check');
-      try {
-        const j = JSON.parse(res.body) as { data?: { attributes?: { title?: unknown } } };
-        const title = j.data?.attributes?.title;
-        return { propertyName: typeof title === 'string' ? title : null };
-      } catch {
-        return { propertyName: null };
-      }
+      return { propertyName: parsePropertyTitle(res.body) };
     },
     async registerWebhook(ctx, input) {
       await call(
@@ -203,9 +201,7 @@ export function channexAdapter(deps: ChannexAdapterDeps): HubAdapter {
           throw unreadable('the revision feed', err);
         }
         for (const it of feed.items) items.push(toItem(it.id, it.attributes));
-        const limit = feed.limit ?? feed.items.length;
-        if (feed.items.length === 0 || limit === 0 || feed.items.length < limit) break;
-        if (feed.total !== null && page * limit >= feed.total) break;
+        if (!hasNextPage(page, feed.items.length, feed.limit, feed.total)) break;
       }
       return items;
     },
@@ -220,17 +216,25 @@ export function channexAdapter(deps: ChannexAdapterDeps): HubAdapter {
         }
         return toItem(one.id, one.attributes);
       } catch (err) {
-        if (err instanceof HubError && err.failure.httpStatus === 404) return null;
+        if (err instanceof HubError && err.failure.httpStatus === REVISION_MISSING_STATUS) return null;
         throw err;
       }
     },
     async acknowledge(ctx, revisionId) {
-      const res = await call(ctx, 'POST', PATHS.ack(revisionId), 'the booking acknowledgement');
-      return { httpStatus: res.status };
+      try {
+        const res = await call(ctx, 'POST', PATHS.ack(revisionId), 'the booking acknowledgement');
+        return { httpStatus: res.status };
+      } catch (err) {
+        const status = err instanceof HubError ? err.failure.httpStatus : null;
+        if (status !== null && ACK_AGAIN_STATUSES.includes(status))
+          return { httpStatus: status, refusedAgain: true };
+        throw err;
+      }
     },
     async listBookingsSince(ctx, since, opts) {
       const out: Array<{ bookingId: string; latestRevisionId: string | null }> = [];
       const maxPages = opts?.maxPages ?? 20;
+      let truncated = false;
       for (let page = 1; page <= maxPages; page++) {
         const res = await call(
           ctx,
@@ -245,11 +249,11 @@ export function channexAdapter(deps: ChannexAdapterDeps): HubAdapter {
           throw unreadable('the booking list', err);
         }
         out.push(...list.items);
-        const limit = list.limit ?? list.items.length;
-        if (list.items.length === 0 || limit === 0 || list.items.length < limit) break;
-        if (list.total !== null && page * limit >= list.total) break;
+        if (!hasNextPage(page, list.items.length, list.limit, list.total)) break;
+        // P3-2: more pages remain beyond the cap — say so instead of silently listing a partial set.
+        if (page === maxPages) truncated = true;
       }
-      return out;
+      return { bookings: out, truncated };
     },
     parseWebhook,
   };

@@ -79,7 +79,7 @@ export const WIRE_FACTS: ReadonlyArray<{ id: string; fact: string; status: FactS
   },
   {
     id: 'ari.response',
-    fact: '2xx answer { data: [{ id, type: "task" }], meta: { message, warnings } }; warnings carry the index of a refused value (partial acceptance)',
+    fact: '2xx answer { data: [{ id, type: "task" }], meta: { message, warnings } }; warnings carry the index of a refused value (partial acceptance). Anything else is treated as NOT confirmed (pending verification), never as accepted',
     status: 'unverified',
     source: 'assumption',
   },
@@ -152,7 +152,7 @@ export const WIRE_FACTS: ReadonlyArray<{ id: string; fact: string; status: FactS
   },
   {
     id: 'revisions.ack_idempotent',
-    fact: 'Acknowledging an already acknowledged revision succeeds',
+    fact: 'Acknowledging an already acknowledged revision succeeds. If the hub instead answers 404 or 422 (ACK_AGAIN_STATUSES), Portico counts it as acknowledged only when it already holds a 2xx acknowledgement for that revision',
     status: 'unverified',
     source: 'assumption',
   },
@@ -194,11 +194,72 @@ export const WIRE_FACTS: ReadonlyArray<{ id: string; fact: string; status: FactS
   },
   {
     id: 'property.get',
-    fact: 'GET /properties/:id shows a property the key can access (credential test)',
+    fact: "GET /properties/:id shows a property the key can access (credential test); a key cannot read another account's property",
+    status: 'unverified',
+    source: "assumption — R4: try a second account's property id with the first account's key (must fail)",
+  },
+  {
+    id: 'property.title',
+    fact: 'The property answer carries its name in data.attributes.title (display only; never required)',
+    status: 'unverified',
+    source: 'assumption',
+  },
+  {
+    id: 'pagination.meta',
+    fact: 'List answers carry meta.limit (page size) and meta.total (all items); pages are requested with pagination[page] from 1; a page shorter than limit is the last',
+    status: 'unverified',
+    source: 'assumption — R4: list more than one page of revisions and bookings',
+  },
+  {
+    id: 'revisions.get_missing',
+    fact: 'GET /booking_revisions/:id answers 404 when the hub holds no such revision',
     status: 'unverified',
     source: 'assumption',
   },
 ];
+
+// ───────────────────────────── answers outside the bodies (moved here from client.ts, P2-4) ─────────────────────
+
+/** WIRE_FACTS `limits.retry_after`: seconds to wait after a 429, when the hub says (capped at one hour). */
+export function retryAfterSeconds(headers: Readonly<Record<string, string>>): number | null {
+  const v = headers['retry-after'];
+  if (!v) return null;
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 ? Math.min(n, 3600) : null;
+}
+
+/** WIRE_FACTS `property.title`: the property's display name from the credential test, or null. */
+export function parsePropertyTitle(body: string): string | null {
+  try {
+    const j = JSON.parse(body) as { data?: { attributes?: { title?: unknown } } };
+    const title = j.data?.attributes?.title;
+    return typeof title === 'string' ? title : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * WIRE_FACTS `pagination.meta`: is there a page after `page`? An answer without a usable page size or total is read
+ * conservatively: a page shorter than the previous one ends the list.
+ */
+export function hasNextPage(
+  page: number,
+  items: number,
+  limit: number | null,
+  total: number | null,
+): boolean {
+  const size = limit ?? items;
+  if (items === 0 || size === 0 || items < size) return false;
+  if (total !== null && page * size >= total) return false;
+  return true;
+}
+
+/** WIRE_FACTS `revisions.ack_idempotent`: answers that may mean "already acknowledged" on a repeated acknowledgement. */
+export const ACK_AGAIN_STATUSES: readonly number[] = [404, 422];
+
+/** WIRE_FACTS `revisions.get_missing`: the HTTP status meaning "no such revision". */
+export const REVISION_MISSING_STATUS = 404;
 
 export const CHANNEX_HOSTS = { production: 'secure.channex.io', staging: 'staging.channex.io' } as const;
 export const CHANNEX_BASE_PATH = '/api/v1';
@@ -312,23 +373,40 @@ const ariSuccess = z
   })
   .loose();
 
-/** Parse a 2xx ARI answer: task ids and the values the hub refused (partial acceptance). */
-export function parseAriSuccess(body: string): {
+/**
+ * Parse a 2xx ARI answer: task ids and the values the hub refused (partial acceptance). FAILS CLOSED (P2-3): only an
+ * answer that positively confirms acceptance in the expected shape (WIRE_FACTS `ari.response`, unverified) is
+ * recognised — `data` is a non-empty list of tasks with ids, there is no `errors` member, and every warning names
+ * the index of a value that was sent. Anything else (a bare `{}`, a warning without a usable index, `errors` inside a
+ * 200, not JSON) is `unrecognized`: the caller records the message as pending verification, never as accepted.
+ */
+export function parseAriSuccess(
+  body: string,
+  valueCount: number,
+): {
   taskIds: string[];
   refused: Array<{ index: number; message: string }>;
   unrecognized: boolean;
+  why: string | null;
 } {
+  const no = (why: string) => ({ taskIds: [], refused: [], unrecognized: true, why });
   let json: unknown;
   try {
-    json = body ? JSON.parse(body) : {};
+    json = body ? JSON.parse(body) : null;
   } catch {
-    return { taskIds: [], refused: [], unrecognized: true };
+    return no('the answer is not JSON');
   }
+  if (json === null || typeof json !== 'object' || Array.isArray(json))
+    return no('the answer is not an object');
+  if ('errors' in json) return no('the answer carries "errors"');
   const p = ariSuccess.safeParse(json);
-  if (!p.success) return { taskIds: [], refused: [], unrecognized: true };
+  if (!p.success) return no('the answer does not have the expected shape');
+  const taskIds = (p.data.data ?? []).flatMap((d) => (d.id ? [d.id] : []));
+  if (taskIds.length === 0) return no('the answer confirms no task');
   const refused: Array<{ index: number; message: string }> = [];
   for (const w of p.data.meta?.warnings ?? []) {
-    if (w.index === undefined) continue;
+    if (w.index === undefined || !Number.isInteger(w.index) || w.index < 0 || w.index >= valueCount)
+      return no('a warning does not name a value that was sent');
     const text =
       typeof w.warning === 'string'
         ? w.warning
@@ -337,7 +415,7 @@ export function parseAriSuccess(body: string): {
           : JSON.stringify(w.warning ?? w.message ?? 'refused');
     refused.push({ index: w.index, message: text.slice(0, 500) });
   }
-  return { taskIds: (p.data.data ?? []).flatMap((d) => (d.id ? [d.id] : [])), refused, unrecognized: false };
+  return { taskIds, refused, unrecognized: false, why: null };
 }
 
 /** Best-effort error text from a non-2xx answer (shape unverified). */

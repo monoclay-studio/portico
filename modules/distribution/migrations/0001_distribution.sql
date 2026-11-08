@@ -128,8 +128,11 @@ create table distribution.ari_messages (
   property_id           uuid not null,
   kind                  text not null check (kind in ('availability', 'restrictions')),
   trigger               text not null check (trigger in ('delta', 'resync', 'protection')),
+  -- pending_verification: the hub answered 2xx in a shape Portico does not recognise (P2-3): nothing is assumed
+  -- accepted; its cells show "pending verification" until a later recognised acceptance covers them.
   status                text not null check (status in ('queued', 'sending', 'accepted', 'partially_accepted',
-                                                         'rejected', 'failed_transient', 'superseded')),
+                                                         'rejected', 'failed_transient', 'superseded',
+                                                         'pending_verification')),
   cells                 jsonb not null,
   payload               jsonb not null,
   cell_count            int not null,

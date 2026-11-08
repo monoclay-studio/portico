@@ -65,8 +65,13 @@ export interface AriResult {
   taskIds: string[];
   /** Values the hub refused (index into the values sent, in order). */
   refused: Array<{ index: number; message: string }>;
-  /** The 2xx answer had a shape we did not recognise (recorded; treated as accepted). */
+  /**
+   * The 2xx answer did not positively confirm acceptance in the expected shape (P2-3): the message is recorded as
+   * PENDING VERIFICATION (cells keep their previous channel state), never as accepted.
+   */
   unrecognizedAnswer: boolean;
+  /** Why the answer was not recognised (for the exception; no hub content). */
+  unrecognizedWhy?: string | null;
 }
 
 export type FeedItem =
@@ -84,12 +89,23 @@ export interface HubAdapter {
   /** Revisions the hub still holds as NOT acknowledged (recovery pull). */
   fetchFeed(ctx: HubCallContext, opts?: { maxPages?: number }): Promise<FeedItem[]>;
   fetchRevision(ctx: HubCallContext, revisionId: string): Promise<FeedItem | null>;
-  acknowledge(ctx: HubCallContext, revisionId: string): Promise<{ httpStatus: number }>;
+  /**
+   * `refusedAgain`: the hub refused with an answer that, on a REPEATED acknowledgement, may mean "already
+   * acknowledged" (unverified); the caller decides with what it already holds.
+   */
+  acknowledge(
+    ctx: HubCallContext,
+    revisionId: string,
+  ): Promise<{ httpStatus: number; refusedAgain?: boolean }>;
   /** Bookings created or changed since `since` (reconciliation "re-request since T"). */
   listBookingsSince(
     ctx: HubCallContext,
     since: string,
     opts?: { maxPages?: number },
-  ): Promise<Array<{ bookingId: string; latestRevisionId: string | null }>>;
+  ): Promise<{
+    bookings: Array<{ bookingId: string; latestRevisionId: string | null }>;
+    /** More pages remained beyond the page cap: the list is partial (P3-2). */
+    truncated: boolean;
+  }>;
   parseWebhook(rawBody: string): WebhookNotice;
 }

@@ -63,7 +63,7 @@ async function computeCells(
       .where('kind', '=', kind)
       .where((eb) =>
         eb.or([
-          eb('status', 'in', ['queued', 'sending', 'failed_transient']),
+          eb('status', 'in', ['queued', 'sending', 'failed_transient', 'pending_verification']),
           eb('rejected_cells', 'is not', null),
         ]),
       )
@@ -86,10 +86,17 @@ async function computeCells(
     }
   }
   const rejectedSeq = new Map<string, number>();
+  const unverifiedSeq = new Map<string, number>();
   for (const msg of messages) {
     if (['queued', 'sending', 'failed_transient'].includes(msg.status)) {
       for (const c of msg.cells as StoredCell[])
         pending.add(cellKey({ unitTypeId: c.u, ratePlanId: c.r, date: c.d }));
+    }
+    if (msg.status === 'pending_verification') {
+      for (const c of msg.cells as StoredCell[]) {
+        const k = cellKey({ unitTypeId: c.u, ratePlanId: c.r, date: c.d });
+        if (!unverifiedSeq.has(k)) unverifiedSeq.set(k, msg.seq);
+      }
     }
     for (const c of (msg.rejected_cells ?? []) as StoredCell[]) {
       const k = cellKey({ unitTypeId: c.u, ratePlanId: c.r, date: c.d });
@@ -101,6 +108,8 @@ async function computeCells(
     const a = ackedBy.get(k);
     const rej = rejectedSeq.get(k);
     const rejected = rej !== undefined && (!a || a.acked_message_seq < rej);
+    const unv = unverifiedSeq.get(k);
+    const unverified = unv !== undefined && (!a || a.acked_message_seq < unv);
     return {
       kind,
       unitTypeId: c.unitTypeId,
@@ -114,6 +123,7 @@ async function computeCells(
         acked: (a?.last_acked as CellValue | undefined) ?? null,
         pending: pending.has(k),
         rejected,
+        unverified,
       }),
       reason: c.reason ?? null,
     };

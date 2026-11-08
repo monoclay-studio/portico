@@ -123,7 +123,13 @@ export function compressRuns<V extends CellValue>(
   return runs;
 }
 
-export type CellSyncState = 'in_sync' | 'pending' | 'never_sent' | 'differs' | 'not_accepted';
+export type CellSyncState =
+  | 'in_sync'
+  | 'pending'
+  | 'never_sent'
+  | 'differs'
+  | 'not_accepted'
+  | 'pending_verification';
 
 /**
  * Compare what Portico would publish now with what the channel last acknowledged (DST-R06).
@@ -136,8 +142,11 @@ export function compareCell(input: {
   acked: CellValue | null;
   pending: boolean;
   rejected: boolean;
+  /** Sent in a message whose answer was not recognised, with no later acknowledgement (P2-3). */
+  unverified?: boolean;
 }): CellSyncState {
   if (input.pending) return 'pending';
+  if (input.unverified) return 'pending_verification';
   if (input.rejected) return 'not_accepted';
   if (input.acked === null) return input.expected === null ? 'in_sync' : 'never_sent';
   return sameValue(input.expected, input.acked) ? 'in_sync' : 'differs';

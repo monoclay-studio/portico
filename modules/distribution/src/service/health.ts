@@ -52,11 +52,12 @@ export async function gatherFacts(
     db(tx)
       .selectFrom('distribution.ari_messages')
       .select([
+        // A message whose answer was not recognised is NOT confirmed (P2-3): its changes stay unconfirmed.
         sql<Date | null>`min(oldest_change_at)`.as('oldest'),
-        sql<Date | null>`min(first_failed_at)`.as('failing'),
+        sql<Date | null>`min(first_failed_at) filter (where status <> 'pending_verification')`.as('failing'),
       ])
       .where('connection_id', '=', conn.id)
-      .where('status', 'in', ['queued', 'sending', 'failed_transient'])
+      .where('status', 'in', ['queued', 'sending', 'failed_transient', 'pending_verification'])
       .executeTakeFirst(),
     db(tx)
       .selectFrom('distribution.revision_processing')

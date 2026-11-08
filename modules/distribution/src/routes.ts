@@ -31,6 +31,7 @@ import {
   roomMappingInput,
   simulatorBookingInput,
   simulatorFaultInput,
+  simulatorModesInput,
   simulatorOutageInput,
   stopSellInput,
   stopSellView,
@@ -506,6 +507,11 @@ export function distributionHttp(input: { database: PorticoDatabase; deps: Distr
         '/distribution/connections/:id/simulator/faults',
         { schema: { tags, params: idParams, body: simulatorFaultInput } },
         (req) => tx(req, (t) => sim.injectFault(t, deps, req.params.id, req.body)),
+      );
+      app.post(
+        '/distribution/connections/:id/simulator/modes',
+        { schema: { tags, params: idParams, body: simulatorModesInput } },
+        (req) => tx(req, (t) => sim.setSimulatorModes(t, deps, req.params.id, req.body)),
       );
       app.post(
         '/distribution/connections/:id/simulator/outage',

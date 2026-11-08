@@ -7,7 +7,13 @@
 import type { PorticoDatabase, TxContext } from '@portico/db';
 import { withTenantTx } from '@portico/db';
 import { BusinessRuleError, type RequestContext, requirePermission, sha256Hex } from '@portico/kernel';
-import type { SimBookingInput, SimEndpoint, SimFaultKind, SimState } from '../adapters/channex/simulator';
+import type {
+  SimBookingInput,
+  SimEndpoint,
+  SimFaultKind,
+  SimModes,
+  SimState,
+} from '../adapters/channex/simulator';
 import { P } from '../manifest';
 import { type DistributionDeps, loadConnection } from './common';
 
@@ -120,6 +126,25 @@ export async function setOutage(
     (s, now) => {
       s.outageUntil = minutes > 0 ? new Date(now.getTime() + minutes * 60_000).toISOString() : null;
       return { outageUntil: s.outageUntil };
+    },
+    { tx },
+  );
+}
+
+/** Make the simulated hub behave another plausible way for unverified wire facts (P2-4). Merges into the modes. */
+export async function setSimulatorModes(
+  tx: TxContext,
+  deps: DistributionDeps,
+  connectionId: string,
+  modes: SimModes,
+) {
+  const conn = await simConnection(tx, connectionId);
+  return deps.simulator.run(
+    tx.tenantId,
+    conn.external_property_id,
+    (s) => {
+      s.modes = { ...(s.modes ?? {}), ...modes };
+      return { modes: s.modes };
     },
     { tx },
   );

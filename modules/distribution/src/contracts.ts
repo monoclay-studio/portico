@@ -52,6 +52,7 @@ export const messageStatus = z.enum([
   'rejected',
   'failed_transient',
   'superseded',
+  'pending_verification',
 ]);
 export const discrepancyKind = z.enum([
   'availability',
@@ -62,7 +63,15 @@ export const discrepancyKind = z.enum([
   'price',
 ]);
 export const discrepancyStatus = z.enum(['open', 'investigating', 'resolved', 'accepted']);
-export const cellSyncState = z.enum(['in_sync', 'pending', 'never_sent', 'differs', 'not_accepted']);
+export const cellSyncState = z.enum([
+  'in_sync',
+  'pending',
+  'never_sent',
+  'differs',
+  'not_accepted',
+  /** Sent, but the hub's answer did not confirm it in a recognised shape (P2-3). */
+  'pending_verification',
+]);
 
 // ───────────────────────────── universal record contract ─────────────────────────────
 
@@ -121,6 +130,12 @@ export const connectionSettings = z
     amountsIncludeTax: z.boolean().default(false),
     /** Rate plan for a mapped room whose channel rate plan is not mapped (EC-DST-005); null parks the booking. */
     fallbackRatePlanId: uuid.nullable().default(null),
+    /**
+     * What a booking webhook's payload is used for (WIRE_FACTS `webhook.payload`, unverified): `store` keeps the
+     * revision it carries (fastest); `notify` treats every webhook as a notification and stores the hub's revision
+     * resource from the feed instead — the one-setting remedy if R4 shows the payload differs from the feed.
+     */
+    webhookPayload: z.enum(['store', 'notify']).default('store'),
     /** Safety-net pull of revisions the hub still holds as unacknowledged. */
     feedPullMinutes: z.number().int().min(1).max(1440).default(15),
     /** Full non-destructive resync interval (nightly by default). */
@@ -263,6 +278,19 @@ export const simulatorFaultInput = z
       'bad_request',
     ]),
     times: z.number().int().min(1).max(100),
+  })
+  .strict();
+/** Alternative hub behaviours for unverified wire facts (simulator only; see SimModes). */
+export const simulatorModesInput = z
+  .object({
+    timestamps: z.enum(['unique_ms', 'equal', 'second', 'absent', 'zoneless']).optional(),
+    ariAnswer: z.enum(['v2', 'warning_without_index', 'errors_in_200', 'empty_object']).optional(),
+    webhookPayload: z.enum(['feed_attributes', 'ids_only', 'differs']).optional(),
+    pageSize: z.number().int().min(1).max(100).optional(),
+    ackAgain: z.union([z.literal(200), z.literal(404), z.literal(422)]).optional(),
+    dateTo: z.enum(['inclusive', 'exclusive']).optional(),
+    rateLimit: z.enum(['sliding_accepted', 'fixed_minute_all']).optional(),
+    retryAfter: z.boolean().optional(),
   })
   .strict();
 export const simulatorOutageInput = z

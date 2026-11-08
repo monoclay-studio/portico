@@ -57,7 +57,13 @@ export interface DispatchResult {
   sent: boolean;
   /** When this connection/kind next has something to do (null: nothing pending). */
   nextDueAt: Date | null;
-  outcome?: 'accepted' | 'partially_accepted' | 'rejected' | 'failed_transient' | 'late';
+  outcome?:
+    | 'accepted'
+    | 'partially_accepted'
+    | 'rejected'
+    | 'failed_transient'
+    | 'late'
+    | 'pending_verification';
 }
 
 const productKey = (p: Product) => `${p.unitTypeId}|${p.ratePlanId ?? ''}`;
@@ -478,6 +484,59 @@ export async function upsertChannelState(
   }
 }
 
+/**
+ * A recognised acceptance confirms its cells: earlier messages left "pending verification" (P2-3) drop those cells,
+ * and are superseded once none is left; the exception resolves itself when no such message remains for the kind.
+ */
+async function settleUnverified(
+  tx: TxContext,
+  connectionId: string,
+  kind: AriKind,
+  seq: number,
+  accepted: readonly StoredCell[],
+): Promise<void> {
+  if (accepted.length === 0) return;
+  const confirmed = new Set(accepted.map((c) => `${c.u}|${c.r ?? ''}|${c.d}`));
+  const open = await db(tx)
+    .selectFrom('distribution.ari_messages')
+    .select(['id', 'cells'])
+    .where('connection_id', '=', connectionId)
+    .where('kind', '=', kind)
+    .where('status', '=', 'pending_verification')
+    .where('seq', '<', seq)
+    .forUpdate()
+    .execute();
+  for (const m of open) {
+    const left = (m.cells as StoredCell[]).filter((c) => !confirmed.has(`${c.u}|${c.r ?? ''}|${c.d}`));
+    if (left.length === (m.cells as StoredCell[]).length) continue;
+    await db(tx)
+      .updateTable('distribution.ari_messages')
+      .set({
+        cells: json(left),
+        cell_count: left.length,
+        ...(left.length === 0 ? { status: 'superseded' as const } : {}),
+        updated_at: tx.now,
+        version: sql`version + 1`,
+      })
+      .where('id', '=', m.id)
+      .execute();
+  }
+  const remaining = await db(tx)
+    .selectFrom('distribution.ari_messages')
+    .select('id')
+    .where('connection_id', '=', connectionId)
+    .where('kind', '=', kind)
+    .where('status', '=', 'pending_verification')
+    .executeTakeFirst();
+  if (!remaining)
+    await autoResolve(
+      tx,
+      connectionId,
+      `ari_answer_unrecognized:${kind}`,
+      'A later update of the same values was confirmed by the hub.',
+    );
+}
+
 async function record(
   database: PorticoDatabase,
   deps: DistributionDeps,
@@ -518,6 +577,49 @@ async function record(
       updated_at: tx.now,
       version: sql<number>`version + 1`,
     };
+    if (outcome.ok && outcome.result.unrecognizedAnswer) {
+      // P2-3: fail closed. The hub answered 2xx in a shape Portico does not recognise: nothing is assumed accepted
+      // (channel_state keeps its previous values), the cells show "pending verification", and nothing is resent
+      // automatically (an unchanged resend would get the same unreadable answer). A later recognised acceptance of
+      // the same cells, a re-push or the nightly resync resolves them.
+      await db(tx)
+        .updateTable('distribution.ari_messages')
+        .set({
+          ...base,
+          status: 'pending_verification',
+          accepted_at: null,
+          next_attempt_at: null,
+          last_error: `The hub's answer was not recognised: ${outcome.result.unrecognizedWhy ?? 'unknown shape'}.`,
+          last_error_class: 'unrecognized_answer',
+        })
+        .where('id', '=', msg.id)
+        .execute();
+      await raiseException(tx, {
+        connectionId: conn.id,
+        propertyId: conn.property_id,
+        code: 'ari_answer_unrecognized',
+        dedupeKey: `ari_answer_unrecognized:${kind}`,
+        severity: 'urgent',
+        problem: `The hub answered a ${kind} update with HTTP ${outcome.result.httpStatus} in a format Portico does not recognise (${outcome.result.unrecognizedWhy ?? 'unknown shape'}), so Portico cannot tell whether the channel took the values.`,
+        businessImpact: `${cells.length} ${kind} value(s) are shown as "pending verification" on the channel calendar; the channel may still show its previous values.`,
+        responsibleParty: 'monoclay',
+        nextStep:
+          'Monoclay support checks the hub’s answer format. Meanwhile compare the dates with the channel extranet; a re-push (channel calendar) sends them again.',
+        refs: [{ type: RECORD.ariMessage, id: msg.id }],
+      });
+      await recordExchange(tx, {
+        connectionId: conn.id,
+        direction: 'outbound',
+        operation: `ari.${kind}`,
+        ref: msg.id,
+        httpStatus: outcome.result.httpStatus,
+        outcome: 'pending_verification',
+        durationMs: outcome.ms,
+        detail: { values: msg.value_count, cells: cells.length, why: outcome.result.unrecognizedWhy ?? null },
+        provenance: c.provenance,
+      });
+      return { sent: true, nextDueAt: tx.now, outcome: 'pending_verification' };
+    }
     if (outcome.ok) {
       const refusedIdx = new Set(outcome.result.refused.map((r) => r.index));
       const refused = cells.filter((x) => refusedIdx.has(x.i));
@@ -525,6 +627,7 @@ async function record(
       const status =
         refused.length === 0 ? 'accepted' : accepted.length === 0 ? 'rejected' : 'partially_accepted';
       await upsertChannelState(tx, conn.id, kind, { id: msg.id, seq: msg.seq }, accepted);
+      await settleUnverified(tx, conn.id, kind, msg.seq, accepted);
       await db(tx)
         .updateTable('distribution.ari_messages')
         .set({

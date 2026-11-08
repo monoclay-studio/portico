@@ -5,7 +5,9 @@
  * revisions and the webhooks announcing them, and injects faults:
  *   429 (and real per-minute limits), 5xx, outages, timeouts (before or after applying), unauthorized keys,
  *   bad requests, partial acceptance, duplicate and out-of-order webhook deliveries, revisions for unknown bookings.
- * It encodes the same unverified assumptions as `wire.ts` (WIRE_FACTS); only the R4 staging run can confirm them.
+ * By default it behaves as `wire.ts` assumes (WIRE_FACTS). For every assumption the simulator would otherwise
+ * mirror, a MODE makes it behave the other plausible way (P2-4), so tests can show Portico stays truthful when the
+ * real hub differs; only the R4 staging run can say which way Channex behaves.
  */
 import { randomUUID } from 'node:crypto';
 
@@ -27,6 +29,30 @@ export type SimFaultKind =
   | 'partial_acceptance'
   | 'unauthorized'
   | 'bad_request';
+
+/**
+ * Alternative hub behaviours for unverified wire facts (P2-4). Every mode is a plausible reading of the docs; the
+ * default (absent) is the reading `wire.ts` encodes.
+ */
+export interface SimModes {
+  /** `revisions.ordering`: unique increasing ms (default), all revisions of a booking at one instant, whole
+   * seconds, no `inserted_at` at all, or microseconds without a zone. */
+  timestamps?: 'unique_ms' | 'equal' | 'second' | 'absent' | 'zoneless';
+  /** `ari.response`: the v2 shape (default), a warning without an index, `errors` inside a 200, or `{}`. */
+  ariAnswer?: 'v2' | 'warning_without_index' | 'errors_in_200' | 'empty_object';
+  /** `webhook.payload`: the feed's attributes (default), ids only, or attributes that differ from the feed. */
+  webhookPayload?: 'feed_attributes' | 'ids_only' | 'differs';
+  /** `pagination.meta`: items per page of the feed and the booking list (default: 10 / everything). */
+  pageSize?: number;
+  /** `revisions.ack_idempotent`: the answer to acknowledging an acknowledged revision (default 200). */
+  ackAgain?: 200 | 404 | 422;
+  /** `ari.availability.dates`: date_to inclusive (default) or exclusive. */
+  dateTo?: 'inclusive' | 'exclusive';
+  /** `limits.ari`: sliding 60 s counting accepted requests (default), or calendar minutes counting every request. */
+  rateLimit?: 'sliding_accepted' | 'fixed_minute_all';
+  /** `limits.retry_after`: whether a 429 carries Retry-After (default true). */
+  retryAfter?: boolean;
+}
 
 export interface SimRestriction {
   rate: string | null;
@@ -69,6 +95,8 @@ export interface SimState {
   faults: Array<{ endpoint: SimEndpoint | 'any'; kind: SimFaultKind; remaining: number }>;
   outageUntil: string | null;
   seq: number;
+  /** Absent in states created before modes existed: the defaults apply. */
+  modes?: SimModes;
 }
 
 export interface SimRequest {
@@ -155,6 +183,16 @@ function eachInclusive(from: string, to: string): string[] {
   return out;
 }
 
+/** The nights a value covers under the hub's reading of date_to (mode `dateTo`). */
+function nightsOf(state: SimState, from: string, to: string): string[] {
+  return state.modes?.dateTo === 'exclusive' ? eachInclusive(from, to).slice(0, -1) : eachInclusive(from, to);
+}
+
+/** Under an exclusive date_to an equal pair is an empty range: a hub would refuse it (mode `dateTo`). */
+function emptyRange(state: SimState, from: string, to: string): boolean {
+  return state.modes?.dateTo === 'exclusive' && from >= to;
+}
+
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const DECIMAL = /^\d+(\.\d{1,2})?$/;
 
@@ -195,9 +233,12 @@ export function handleRequest(state: SimState, req: SimRequest, now: Date): SimO
     state.faults = state.faults.filter((f) => f.remaining > 0);
     switch (fault.kind) {
       case 'rate_limit':
-        return respond(429, errorBody('too_many_requests', 'Too Many Requests'), undefined, {
-          'retry-after': '60',
-        });
+        return respond(
+          429,
+          errorBody('too_many_requests', 'Too Many Requests'),
+          undefined,
+          state.modes?.retryAfter === false ? {} : { 'retry-after': '60' },
+        );
       case 'server_error':
         return respond(500, errorBody('internal_error', 'Internal Server Error'));
       case 'unauthorized':
@@ -219,14 +260,18 @@ export function handleRequest(state: SimState, req: SimRequest, now: Date): SimO
   if (r.endpoint === 'availability' || r.endpoint === 'restrictions') {
     const limit =
       r.endpoint === 'availability' ? state.limits.availabilityPerMinute : state.limits.restrictionsPerMinute;
-    const floor = now.getTime() - 60_000;
+    const fixed = state.modes?.rateLimit === 'fixed_minute_all';
+    const floor = fixed ? Math.floor(now.getTime() / 60_000) * 60_000 - 1 : now.getTime() - 60_000;
     const recent = state.log.filter(
-      (l) => l.endpoint === r.endpoint && l.status !== 429 && Date.parse(l.at) > floor,
+      (l) => l.endpoint === r.endpoint && (fixed || l.status !== 429) && Date.parse(l.at) > floor,
     ).length;
     if (recent >= limit) {
-      return respond(429, errorBody('too_many_requests', 'Too Many Requests'), undefined, {
-        'retry-after': '60',
-      });
+      return respond(
+        429,
+        errorBody('too_many_requests', 'Too Many Requests'),
+        undefined,
+        state.modes?.retryAfter === false ? {} : { 'retry-after': '60' },
+      );
     }
   }
   const out = dispatch(state, r, req, url, partial, respond);
@@ -264,19 +309,26 @@ function dispatch(
           r.endpoint === 'availability' ? applyAvailability(state, raw) : applyRestriction(state, raw);
         if (problem) warnings.push({ index, warning: problem });
       });
-      return respond(
-        200,
-        {
-          data: [{ id: randomUUID(), type: 'task' }],
-          meta: { message: 'Success', warnings },
-        },
-        body.values.length,
-      );
+      const task = [{ id: randomUUID(), type: 'task' }];
+      const answer =
+        state.modes?.ariAnswer === 'warning_without_index'
+          ? {
+              data: task,
+              meta: { message: 'Success', warnings: warnings.map((w) => ({ warning: w.warning })) },
+            }
+          : state.modes?.ariAnswer === 'errors_in_200'
+            ? warnings.length
+              ? { data: task, errors: { code: 'validation_error', details: warnings } }
+              : { data: task, meta: { message: 'Success' } }
+            : state.modes?.ariAnswer === 'empty_object'
+              ? {}
+              : { data: task, meta: { message: 'Success', warnings } };
+      return respond(200, answer, body.values.length);
     }
     case 'feed': {
       const property = url.searchParams.get('filter[property_id]');
       const page = Math.max(1, Number(url.searchParams.get('pagination[page]') ?? '1') || 1);
-      const limit = 10;
+      const limit = state.modes?.pageSize ?? 10;
       const pending = state.revisions
         .filter((x) => !x.acked && (!property || property === state.propertyId))
         .sort((a, b) => (a.inserted_at < b.inserted_at ? -1 : 1));
@@ -292,6 +344,14 @@ function dispatch(
     case 'ack': {
       const rev = state.revisions.find((x) => x.id === r.id);
       if (!rev) return respond(404, errorBody('not_found', 'Not Found'));
+      const again = state.modes?.ackAgain ?? 200;
+      if (rev.acked && again !== 200) {
+        rev.ack_count += 1;
+        return respond(
+          again,
+          errorBody(again === 404 ? 'not_found' : 'already_acknowledged', 'Already acknowledged'),
+        );
+      }
       rev.acked = true;
       rev.ack_count += 1;
       return respond(200, { meta: { message: 'Success' } });
@@ -335,12 +395,17 @@ function dispatch(
         const prev = byBooking.get(rev.booking_id);
         if (!prev || prev.inserted_at < rev.inserted_at) byBooking.set(rev.booking_id, rev);
       }
-      const data = [...byBooking.values()].map((rev) => ({
+      const all = [...byBooking.values()].map((rev) => ({
         id: rev.booking_id,
         type: 'booking',
         attributes: { revision_id: rev.id, inserted_at: rev.inserted_at, status: rev.status },
       }));
-      return respond(200, { data, meta: { total: data.length, limit: Math.max(1, data.length) } });
+      const size = state.modes?.pageSize;
+      if (!size)
+        return respond(200, { data: all, meta: { total: all.length, limit: Math.max(1, all.length) } });
+      const page = Math.max(1, Number(url.searchParams.get('pagination[page]') ?? '1') || 1);
+      const data = all.slice((page - 1) * size, page * size);
+      return respond(200, { data, meta: { page, total: all.length, limit: size } });
     }
   }
 }
@@ -355,7 +420,8 @@ function applyAvailability(state: SimState, raw: unknown): string | null {
     typeof v.date_to !== 'string' ||
     !DATE.test(v.date_from) ||
     !DATE.test(v.date_to) ||
-    v.date_from > v.date_to
+    v.date_from > v.date_to ||
+    emptyRange(state, v.date_from, v.date_to)
   ) {
     return 'invalid dates';
   }
@@ -363,7 +429,7 @@ function applyAvailability(state: SimState, raw: unknown): string | null {
     return 'availability must be a non-negative integer';
   }
   const cal = state.availability[v.room_type_id] ?? {};
-  for (const d of eachInclusive(v.date_from, v.date_to)) cal[d] = v.availability;
+  for (const d of nightsOf(state, v.date_from, v.date_to)) cal[d] = v.availability;
   state.availability[v.room_type_id] = cal;
   return null;
 }
@@ -378,7 +444,8 @@ function applyRestriction(state: SimState, raw: unknown): string | null {
     typeof v.date_to !== 'string' ||
     !DATE.test(v.date_from) ||
     !DATE.test(v.date_to) ||
-    v.date_from > v.date_to
+    v.date_from > v.date_to ||
+    emptyRange(state, v.date_from, v.date_to)
   ) {
     return 'invalid dates';
   }
@@ -388,7 +455,7 @@ function applyRestriction(state: SimState, raw: unknown): string | null {
     return `rate is below the minimum of ${plan.minRate} for this rate plan`;
   }
   const cal = state.restrictions[plan.id] ?? {};
-  for (const d of eachInclusive(v.date_from, v.date_to)) {
+  for (const d of nightsOf(state, v.date_from, v.date_to)) {
     const prev = cal[d];
     cal[d] = {
       rate: typeof v.rate === 'string' ? v.rate : (prev?.rate ?? null),
@@ -438,7 +505,20 @@ export function addRevision(state: SimState, input: SimBookingInput, now: Date):
   state.seq += 1;
   const id = input.revisionId ?? randomUUID();
   const bookingId = input.bookingId ?? randomUUID();
+  // Internal order of the hub (feed order); what the hub SHOWS depends on the timestamp mode.
   const insertedAt = new Date(now.getTime() + state.seq).toISOString();
+  const first = state.revisions.find((r) => r.booking_id === bookingId);
+  const mode = state.modes?.timestamps ?? 'unique_ms';
+  const shown =
+    mode === 'equal'
+      ? ((first?.attributes.inserted_at as string | undefined) ?? `${now.toISOString().slice(0, 19)}Z`)
+      : mode === 'second'
+        ? `${now.toISOString().slice(0, 19)}Z`
+        : mode === 'zoneless'
+          ? `${insertedAt.slice(0, 23)}${String(state.seq % 1000).padStart(3, '0')}`
+          : mode === 'absent'
+            ? undefined
+            : insertedAt;
   const rev: SimRevision = {
     id,
     booking_id: bookingId,
@@ -450,7 +530,7 @@ export function addRevision(state: SimState, input: SimBookingInput, now: Date):
       booking_id: bookingId,
       property_id: state.propertyId,
       status: input.status,
-      inserted_at: insertedAt,
+      ...(shown !== undefined ? { inserted_at: shown } : {}),
       ota_name: input.otaName ?? 'Booking.com',
       ota_reservation_code: input.otaReservationCode ?? `SIM${state.seq.toString().padStart(6, '0')}`,
       currency: input.currency ?? 'USD',
@@ -481,6 +561,21 @@ export function addRevision(state: SimState, input: SimBookingInput, now: Date):
   };
   state.revisions.push(rev);
   return rev;
+}
+
+/** What a send_data webhook carries (mode `webhookPayload`). */
+function webhookPayload(state: SimState, rev: SimRevision): Record<string, unknown> {
+  const mode = state.modes?.webhookPayload ?? 'feed_attributes';
+  if (mode === 'ids_only') return { id: rev.id, revision_id: rev.id, booking_id: rev.booking_id };
+  if (mode === 'differs') {
+    // Same revision, other content: e.g. the webhook rounds prices differently from the revision resource.
+    const rooms = (rev.attributes.rooms as Array<Record<string, unknown>>).map((room) => ({
+      ...room,
+      days: Object.fromEntries(Object.keys(room.days as Record<string, string>).map((d) => [d, '1.00'])),
+    }));
+    return { ...rev.attributes, rooms, id: rev.id, revision_id: rev.id };
+  }
+  return { ...rev.attributes, id: rev.id, revision_id: rev.id };
 }
 
 export interface WebhookDelivery {
@@ -519,7 +614,7 @@ export function webhookDeliveries(
             property_id: state.propertyId,
             user_id: null,
             timestamp: now.toISOString(),
-            payload: { ...rev.attributes, id: rev.id, revision_id: rev.id },
+            payload: webhookPayload(state, rev),
           }
         : { event: EVENT_OF[rev.status], property_id: state.propertyId, user_id: null },
     ),

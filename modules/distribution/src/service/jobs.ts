@@ -158,6 +158,17 @@ export async function nextDue(
           );
       }
     }
+    // Changes the hub answered in an unrecognised shape stay unconfirmed (P2-3): one health wake at the crossing.
+    const unverified = await db(tx)
+      .selectFrom('distribution.ari_messages')
+      .select(sql<Date | null>`min(oldest_change_at)`.as('at'))
+      .where('connection_id', '=', c.id)
+      .where('status', '=', 'pending_verification')
+      .executeTakeFirst();
+    if (unverified?.at)
+      pushFuture(
+        new Date(new Date(unverified.at).getTime() + settingsOf(c).freshnessTargetSeconds * 1000 + 1000),
+      );
     const rp = await db(tx)
       .selectFrom('distribution.revision_processing')
       .select([

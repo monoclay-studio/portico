@@ -912,6 +912,7 @@ export async function dispatchAcks(
   const results: Array<{
     item: (typeof claimed.items)[number];
     ok: boolean;
+    refusedAgain?: boolean;
     failure?: HubFailure;
     ms: number;
     status: number | null;
@@ -920,7 +921,13 @@ export async function dispatchAcks(
     const started = Date.now();
     try {
       const r = await deps.hub.acknowledge(claimed.hubCtx, item.revisionId);
-      results.push({ item, ok: true, ms: Date.now() - started, status: r.httpStatus });
+      results.push({
+        item,
+        ok: true,
+        ...(r.refusedAgain ? { refusedAgain: true } : {}),
+        ms: Date.now() - started,
+        status: r.httpStatus,
+      });
     } catch (err) {
       const failure: HubFailure =
         err instanceof HubError
@@ -957,13 +964,25 @@ export async function dispatchAcks(
         provenance,
       });
       if (row?.ack_state !== 'sending' || row.ack_lease_token !== r.item.token) continue;
+      if (r.ok && r.refusedAgain && !row.acked_at) {
+        // Never acknowledged before and the hub refuses: it does not hold the revision as Portico thinks.
+        r.ok = false;
+        r.failure = {
+          class: 'payload',
+          message: `The hub refused the acknowledgement (HTTP ${r.status}) of a revision Portico has never acknowledged before.`,
+          httpStatus: r.status,
+          retryAfterSeconds: null,
+          outcomeUnknown: false,
+        };
+      }
       if (r.ok) {
         acked++;
         await db(tx)
           .updateTable('distribution.revision_processing')
           .set({
             ack_state: 'acked',
-            acked_at: tx.now,
+            // A repeated acknowledgement the hub refused as "already done" keeps the first confirmed instant.
+            acked_at: r.refusedAgain ? row.acked_at : tx.now,
             ack_next_at: null,
             ack_first_failed_at: null,
             ack_lease_token: null,
@@ -1028,6 +1047,7 @@ export async function pullFeed(
 ): Promise<{ stored: number; duplicates: number; unparseable: number; failed: boolean }> {
   const pre = await withTenantTx(database, ctx, async (tx) => {
     const conn = await loadConnection(tx, connectionId);
+    requireOnConnection(tx, conn, P.reservationRecover); // P3-6 (the scheduler runs as the system)
     if (conn.status === 'disconnected' || conn.status === 'setup' || conn.credential_state !== 'valid')
       return null;
     try {
@@ -1156,9 +1176,10 @@ export async function recoverSince(
   ctx: RequestContext,
   connectionId: string,
   since: Date,
-): Promise<{ listed: number; fetched: number; stored: number; notAtChannel: number }> {
+): Promise<{ listed: number; fetched: number; stored: number; notAtChannel: number; truncated: boolean }> {
   const pre = await withTenantTx(database, ctx, async (tx) => {
     const conn = await loadConnection(tx, connectionId);
+    requireOnConnection(tx, conn, P.reservationRecover); // P3-6: the service checks, not only the route
     if (conn.status === 'disconnected' || conn.credential_state !== 'valid') {
       throw new BusinessRuleError(
         'hub_not_reachable',
@@ -1192,15 +1213,23 @@ export async function recoverSince(
       );
     }
   };
-  const listed = await guarded(() => deps.hub.listBookingsSince(pre.hubCtx, since.toISOString()));
-  const known = await withTenantTx(database, ctx, async (tx) =>
-    db(tx)
-      .selectFrom('distribution.inbound_revisions')
-      .select(['channel_booking_id', 'revision_id'])
-      .where('connection_id', '=', connectionId)
-      .execute(),
-  );
-  const knownRevisions = new Set(known.map((k) => k.revision_id));
+  const page = await guarded(() => deps.hub.listBookingsSince(pre.hubCtx, since.toISOString()));
+  const listed = page.bookings;
+  // P3-2: only the listed bookings' revisions are loaded (not every revision of the connection).
+  const knownRevisions = new Set<string>();
+  const ids = [...new Set(listed.map((b) => b.bookingId))];
+  for (let i = 0; i < ids.length; i += 500) {
+    const chunk = ids.slice(i, i + 500);
+    const rows = await withTenantTx(database, ctx, (tx) =>
+      db(tx)
+        .selectFrom('distribution.inbound_revisions')
+        .select('revision_id')
+        .where('connection_id', '=', connectionId)
+        .where('channel_booking_id', 'in', chunk)
+        .execute(),
+    );
+    for (const r of rows) knownRevisions.add(r.revision_id);
+  }
   const fetched: HubRevision[] = [];
   for (const b of listed) {
     if (!b.latestRevisionId || knownRevisions.has(b.latestRevisionId)) continue;
@@ -1216,14 +1245,26 @@ export async function recoverSince(
       if (r.outcome === 'stored') stored++;
     }
     const channelIds = new Set(listed.map((b) => b.bookingId));
-    const ours = await db(tx)
-      .selectFrom('distribution.revision_processing as p')
-      .innerJoin('distribution.inbound_revisions as r', 'r.id', 'p.revision_row_id')
-      .select(['p.channel_booking_id', 'p.booking_id'])
-      .where('p.connection_id', '=', conn.id)
-      .where('p.state', '=', 'applied')
-      .where('r.received_at', '>=', since)
-      .execute();
+    // P3-2: compare like with like — the hub lists bookings CREATED since T, so Portico's side is bookings whose
+    // creation the hub stamped at or after T (arrival time when the hub gave no time), not every revision received
+    // since T. A truncated hub list proves nothing: nothing is flagged.
+    const sinceMicros = since.getTime() * 1000;
+    const ours = page.truncated
+      ? []
+      : await db(tx)
+          .selectFrom('distribution.revision_processing as p')
+          .innerJoin('distribution.inbound_revisions as r', 'r.id', 'p.revision_row_id')
+          .select(['p.channel_booking_id', 'p.booking_id'])
+          .where('p.connection_id', '=', conn.id)
+          .where('p.state', '=', 'applied')
+          .where('r.channel_status', '=', 'new')
+          .where((eb) =>
+            eb.or([
+              eb('r.hub_micros', '>=', sinceMicros),
+              eb.and([eb('r.hub_micros', 'is', null), eb('r.received_at', '>=', since)]),
+            ]),
+          )
+          .execute();
     let notAtChannel = 0;
     for (const o of ours) {
       if (channelIds.has(o.channel_booking_id)) continue;
@@ -1253,11 +1294,18 @@ export async function recoverSince(
         fetched: fetched.length,
         stored,
         notAtChannel,
+        truncated: page.truncated,
         since: since.toISOString(),
       },
       provenance: provenanceOfTarget(conn.target),
     });
-    return { listed: listed.length, fetched: fetched.length, stored, notAtChannel };
+    return {
+      listed: listed.length,
+      fetched: fetched.length,
+      stored,
+      notAtChannel,
+      truncated: page.truncated,
+    };
   });
 }
 

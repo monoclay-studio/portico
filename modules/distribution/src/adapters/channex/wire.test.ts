@@ -77,13 +77,48 @@ describe('wire mapping — money, dates, bodies', () => {
   });
   it('reads partial acceptance from warnings and tolerates unknown answers', () => {
     expect(
-      parseAriSuccess('{"data":[{"id":"t1"}],"meta":{"warnings":[{"index":1,"warning":"rate too low"}]}}'),
+      parseAriSuccess('{"data":[{"id":"t1"}],"meta":{"warnings":[{"index":1,"warning":"rate too low"}]}}', 2),
     ).toEqual({
       taskIds: ['t1'],
       refused: [{ index: 1, message: 'rate too low' }],
       unrecognized: false,
+      why: null,
     });
-    expect(parseAriSuccess('not json').unrecognized).toBe(true);
+    expect(parseAriSuccess('not json', 1).unrecognized).toBe(true);
+  });
+  it('P2-3 (B4 inverted): any answer that does not positively confirm acceptance is unrecognised, never accepted', () => {
+    const unrecognised = [
+      // a warning without an index (which value was refused?)
+      '{"data":[{"id":"t1"}],"meta":{"warnings":[{"warning":"rate_plan_id is invalid"}]}}',
+      // "errors" inside a 200
+      '{"data":[{"id":"t1"}],"errors":{"code":"validation_error","title":"invalid"}}',
+      '{"errors":{"code":"validation_error"}}',
+      // nothing confirmed
+      '{}',
+      '',
+      '[]',
+      '{"data":[]}',
+      '{"meta":{"message":"Success"}}',
+      // an index outside the values sent, or not an integer
+      '{"data":[{"id":"t1"}],"meta":{"warnings":[{"index":5,"warning":"x"}]}}',
+      '{"data":[{"id":"t1"}],"meta":{"warnings":[{"index":-1,"warning":"x"}]}}',
+      '{"data":[{"id":"t1"}],"meta":{"warnings":[{"index":"0","warning":"x"}]}}',
+    ];
+    for (const body of unrecognised) {
+      const r = parseAriSuccess(body, 2);
+      expect({ body, unrecognized: r.unrecognized, refused: r.refused }).toEqual({
+        body,
+        unrecognized: true,
+        refused: [],
+      });
+      expect(r.why).toBeTruthy();
+    }
+    expect(
+      parseAriSuccess('{"data":[{"id":"t1","type":"task"}],"meta":{"message":"Success","warnings":[]}}', 2),
+    ).toMatchObject({
+      unrecognized: false,
+      refused: [],
+    });
   });
   it('every wire fact carries a verification status; nothing claims to be verified against the live API', () => {
     expect(WIRE_FACTS.length).toBeGreaterThan(20);
@@ -263,8 +298,7 @@ describe('simulator — the API surface the adapter talks to', () => {
     await adapter.acknowledge(ctx, a.id);
     expect(s.revisions.find((r) => r.id === a.id)).toMatchObject({ acked: true, ack_count: 2 });
     expect((await adapter.fetchFeed(ctx)).length).toBe(1);
-    await expect(adapter.acknowledge(ctx, 'unknown')).rejects.toMatchObject({
-      failure: { class: 'payload', httpStatus: 404 },
-    });
+    // A 404 is handed to the caller as "refused again" (it alone knows whether it acknowledged before).
+    expect(await adapter.acknowledge(ctx, 'unknown')).toEqual({ httpStatus: 404, refusedAgain: true });
   });
 });

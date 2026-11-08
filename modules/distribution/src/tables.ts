@@ -96,7 +96,8 @@ export interface AriMessagesTable {
     | 'partially_accepted'
     | 'rejected'
     | 'failed_transient'
-    | 'superseded';
+    | 'superseded'
+    | 'pending_verification';
   cells: Json;
   payload: Json;
   cell_count: number;
