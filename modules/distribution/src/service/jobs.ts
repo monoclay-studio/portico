@@ -286,13 +286,13 @@ async function unreadableChange(
   error: { issues: ReadonlyArray<{ path: PropertyKey[]; message: string }> },
 ): Promise<void> {
   const raw = event.payload as { propertyId?: unknown } | null;
-  const propertyId =
-    event.propertyId ?? (raw && typeof raw.propertyId === 'string' ? raw.propertyId : null);
+  const propertyId = event.propertyId ?? (raw && typeof raw.propertyId === 'string' ? raw.propertyId : null);
   const issues = error.issues
     .slice(0, 3)
     .map((i) => `${i.path.map(String).join('.') || '(payload)'}: ${i.message}`)
     .join('; ');
-  if (!propertyId) throw new Error(`Unreadable ${event.type} event ${event.id} without a property (${issues}).`);
+  if (!propertyId)
+    throw new Error(`Unreadable ${event.type} event ${event.id} without a property (${issues}).`);
   for (const conn of await publishingConnections(tx, propertyId)) {
     await raiseException(tx, {
       connectionId: conn.id,
@@ -387,7 +387,8 @@ export function distributionSubscriptions(deps: DistributionDeps): TxEventSubscr
             const p = dataAuthorityChangedPayload.safeParse(event.payload);
             // Authority decides whether Portico may publish at all: re-check both kinds (publication re-reads the
             // authority at every send, so a full resync is safe either way).
-            if (!p.success) return unreadableChange(tx, deps, event, ['availability', 'restrictions'], p.error);
+            if (!p.success)
+              return unreadableChange(tx, deps, event, ['availability', 'restrictions'], p.error);
             await onAuthorityChanged(tx, deps, p.data.propertyId, p.data.domain);
             return;
           }
