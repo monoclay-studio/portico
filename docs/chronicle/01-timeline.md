@@ -569,3 +569,14 @@ Each agent's brief and report are in `agents/`.
       generator must itself find re-applied old mutants.
   - Fix round 7 sent.
   - Lesson: after seven rounds of enumerated fixes, the proof method changed to generative.
+- **06:57 — Day-close fix round 1 done** <!-- t: agent-a6c837ce590a0c220 @ 2026-11-08T06:57:16.312Z (Build day-close module) -->; head `0282e8d`, pushed.
+  - **P0-1:** lines are posted under a stable `lineKey` (an additive change in rates) and recorded in a line register.
+    Lines served later become expectations that a re-price re-dates or cancels.
+  - **P0-2:** no pre-grant. Each night's credit is granted at its own close, and a conflict sets one line aside.
+  - **P1-1:** overrides record a decision that every catch-up and sweep respects.
+  - DST uses a forward rule tested in 15 cases; a final sweep and an advance-transaction check catch late check-ins;
+    there is an overdue alarm, and no guest names are in the report.
+  - The § 5.4 table shows about 30 mutants killed. Three survivors were named and justified as layered guards.
+  - The allowance decision became ADR-0018: a credit exists only once its night does, and the arrival-day credit
+    comes via reservations CR-5. Arrival-day coverage is R2 until then.
+- **06:58 — Day-close focused re-review launched** <!-- t: now @ 2026-11-08T06:58:34Z -->.

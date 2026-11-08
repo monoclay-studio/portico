@@ -1,7 +1,7 @@
 # Agent run: Build day-close module
 
-- Started: 2026-11-07T21:38:00.135Z · last activity: 2026-11-08T05:49:42.939Z
-- Turns: 285 · tool uses: 295 · output tokens: 385,262
+- Started: 2026-11-07T21:38:00.135Z · last activity: 2026-11-08T06:57:16.430Z
+- Turns: 483 · tool uses: 497 · output tokens: 693,694
 - Type: general-purpose
 
 ## Brief (2026-11-07T21:38:00.135Z)
@@ -127,6 +127,75 @@ Merge main into `feat/day-close` first.
 Commit after every meaningful step. Do not push. Never amend or rewrite commits. Gates: `pnpm lint`, `pnpm turbo run typecheck --force` and `pnpm turbo run test --force --concurrency=2` must all exit 0. A focused re-review follows.
 
 Address this before completing your current task.
+````
+
+## Follow-up message (2026-11-08T06:04:29.542Z)
+
+````text
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+<system-reminder>
+<tools-used-before-summary>Bash, Edit, Read, SubagentHandback, Write</tools-used-before-summary>
+</system-reminder>
+Summary:
+1. Primary Request and Intent:
+   - Original task (completed and reported): build `modules/day-close` (schema `day_close`) in worktree `/home/user/wt/day-close` on branch `feat/day-close`, with ports, composition wiring, resumable idempotent engine, readiness, postings via rates posting plan, no-shows via payments under ADR-0015 Amendment 1, integrity via finance, advance via platform (sensitive permission, no concurrency), report pack, records/search/permissions/role templates/demo seed, env safety, scenario tests S09/S04/S19, concurrency/interruption tests, parity file; reply with 10x targets, self-check tables, contract requests, stubs. Use PORTICO_TEST_DB_PREFIX=w2_dcl, Postgres postgres://postgres@127.0.0.1:5432/postgres. Commit locally with Conventional Commits; never push; never amend/reset/rebase pushed checkpoint commits.
+   - CURRENT task: **Day-close fix round 1** from the coordinator (steward review "merge after fixes": P0 2, P1 1, P2 14, P3 12). Merge main first (done). Fix P0-1 (stable line identity reconciliation; minimal additive rates change, never breaking keys/contracts because feat/integration-step touches rates; turn money probes into regression tests), P0-2 (never grant next night's allowance before that night exists; early departure never billed/forfeited for a night outside the stay; occupancy correction never hits idempotency_conflict rolling back the whole night; not retryable), P1-1 (catch-up respects overrides), P2-1 (DST west of UTC + earliest start; test several zones east and west; FR-3 must be right), P2-2/P2-3 (late check-in after sweep leaving before next close charged or flagged; facts after sweep; annex labels), P2-6 (no guest names in append-only report; ids, names at read time), P2-9 (S09 and 40-stay test stable under default concurrency; find slow part), other P2s (P2-4, P2-5, P2-7, P2-10, P2-11, P2-12, P2-13, P2-14), R1 mutant (pre-grant seal check test), cheap P3s. Self-check v6 tables: § 5.1 state machines for stay-night posting lifecycle and allowances with external writers (reservations re-pricing, finance corrections), pasted writer searches, control-fact grid with input-source column, § 5.4 mutation table for every P0/P1/P2 guard, § 6 claim ledger (five false claims must become true with tests or be rewritten). Gates must all exit 0: `pnpm lint`, `pnpm turbo run typecheck --force`, `pnpm turbo run test --force --concurrency=2`. Commit after every meaningful step; do not push; never amend or rewrite commits. Final report via SubagentHandback; focused re-review follows.
+
+2. Key Technical Concepts:
+   - Modular monolith, ports/adapters bound in apps/api/src/composition.ts; boundary checker (modules' src can't import other modules; tests may).
+   - Kysely, withTenantTx, RLS (`core.enable_tenant_isolation`), `core.make_append_only`, `withSavepoint` (names must match /^[a-z_][a-z0-9_]{0,62}$/), runIdempotent, outbox events (tx.emit), audit (tx.audit), TxEventSubscription {consumer, types, handle(tx,event)}.
+   - Engine: lease/heartbeat fencing (`heartbeat … where lease_owner = me`), per-item tx with progress, SimulatedCrash hooks (beforeStep/insideItem/afterItem/afterStep), advance + step completion in one tx, DB triggers for finality and DCL-I02.
+   - Finance provider `financeProvider(finance,'dayClose')` (postCharge, grantAllowance, closeAllowances(upTo), getUnbalancedItems, listFolios); finance idempotency keys hashed (`idempotency_conflict` on same key different content); finance refuses future service dates; finance check-out consumer closes allowances (forfeit).
+   - Rates: postingPlan(terms, stayId) → PostingLine; verifyTerms seal; inclusion rhythms nightly/arrival/departure/days_of_stay; departure-rhythm lines allocated to last night with serviceDate = departure.
+   - New model: lineKey register (`line_postings`), expectations (`deferred_lines` pending/posted/cancelled), night decisions, watched stays, post_advance due lines, allowances granted at night's own close and closed at next close (upTo D).
+   - kernel `zonedTimeToInstant`, `instantToZoned`; planned forward-search DST algorithm.
+
+3. Files and Code Sections:
+   - `modules/rates/src/domain/terms.ts` (COMMITTED 4297748): PostingLine additive fields:
+     ```ts
+     lineKey: string;
+     occurrence: { rhythm: 'nightly' | 'arrival' | 'departure' | 'days_of_stay'; stayNight: number };
+     ```
+     helper `lineIdentity(stayId, kind, inclusionId, rhythm, nightDate, stayNight)`: room/no inclusion → `room:{stay}:{night}`; arrival/departure → `inclusion:{stay}:{inc}:{r}`; days_of_stay → `inclusion:{stay}:{inc}:stay-night-{n}`; else `inclusion:{stay}:{inc}:{night}`. Spread into both component and addedComponents pushes. Tests added in `modules/rates/src/domain/offer.test.ts` (nightly lineKey === idempotencyKey, unique) and `modules/rates/test/scenario-s19-package-bill-pricing.test.ts` (departure lineKey `inclusion:stay-s19:{inc}:departure`, occurrence {rhythm:'departure', stayNight:3}; arrival `…:arrival`). 13 tests pass.
+   - `modules/day-close/migrations/0001_day_close.sql` (edited, uncommitted): new tables `day_close.line_postings` (tenant_id, property_id, stay_id, line_key, night, service_date, kind, amount_minor bigint, currency char(3), outcome check in ('posted','conflict'), entry_id, run_id refs runs, business_date, posted_at; PK (tenant_id, stay_id, line_key); append-only), `day_close.deferred_lines` (id, tenant_id, property_id, stay_id, line_key, night, service_date, line jsonb, status check pending|posted|cancelled, status_reason, created_run_id, updated_run_id, updated_at, version; unique (tenant_id, stay_id, line_key)), `day_close.night_decisions` (id, tenant_id, property_id, stay_id, night, decision check skip_pending|posted_elsewhere|post_by_day_close, run_id, reason, actor, created_at; append-only), `day_close.watched_stays` (tenant_id, property_id, stay_id, from_night, reason, created_at, resolved_at; PK (tenant_id, stay_id)); schedules `configured_by text`; schedule_log event adds 'overdue'; function `day_close.overdue_closes(p_now timestamptz, p_grace interval)` returning (tenant_id, property_id) for enabled schedules with next_due_at < now−grace UNION active runs started < now − grace*3; revoke from public. STILL TODO: steps.key check constraint rename 'statistics_snapshot' → 'final_sweep'.
+   - `modules/day-close/src/tables.ts` (edited): LinePostingsTable, DeferredLinesTable (new shape), NightDecisionsTable, WatchedStaysTable, `configured_by` in SchedulesTable, DB map entries.
+   - `modules/day-close/src/ports.ts` (edited): PostingLine gets lineKey/occurrence; RatesPort `nightLevies(terms: unknown, night: LocalDate): Money | null`; ReservationsPort `getStayAgreement(tx, input: { propertyId: string; stayId: string }): Promise<StayAgreement | null>` (CONTRACT REQUEST CR-18); `export interface StayAgreement { stayId; bookingId; propertyId; status; arrival; departure; commercialType: 'standard'|'complimentary'|'house_use'; occupancy: Occupancy; segments: Array<{ from; to; terms: unknown }> }`.
+   - `modules/day-close/src/service/steps/postings.ts` (fully rewritten, uncommitted): exports `NightResult`, `decisionFor`, `postStayNight(s, tx, stay, businessDate)`, `stayNightFromAgreement`, `WorkItem {key, ref, kind: 'night'|'due', stay?, stayId?}`, `processItems(s, step, items, done)`, `roomAndPackagePostings`, `unpostedInHouse(s, tx, night, handledSteps)`, `SWEEP_HANDLED`, `sweepNight(s, step, businessDate)`, `postDueLines(s, businessDate)`. Internal: `postLine` (register check, posted_line_changed follow-up, savepoint 'dcl_line', allowance via grantAllowanceLine with `const ents = stay.terms ? s.deps.ports.rates.allowances(stay.terms) : []`, postCharge with `idempotencyKey: line.lineKey`, conflict → register 'conflict' + `posting_conflict` follow-up), `syncExpectations`, `raiseLevyNotPosted` (levy_not_posted warning when room line zero and nightLevies > 0), `readAgreement` (savepoint 'dcl_agreement', null on module_not_available), `watchedDeparted` (blocking `night_not_posted_departed` when agreement unavailable), `workList`, `recordNightDecisionPending` (skip_pending + blocking `night_decision_needed`, dedupe `night_decision:{stay}:{night}`), `failedOutcome`. Imports `catchUpNights, latestDecisions, nightsClosed` from '../readiness'.
+   - `modules/day-close/src/service/readiness.ts` (edited): added `nightsClosed`, `latestDecisions`; catchUpNights excludes decided nights (latest decision skip_pending/posted_elsewhere); ownIssueActions new codes (night_decision_needed with `decideNight:post_by_day_close`/`decideNight:posted_elsewhere` actions on P.exceptionOverride; night_not_posted_departed; posted_line_changed/posting_conflict/posted_from_last_known_agreement/posted_after_close → openFolio + resolve; close_overdue → startRun + resolve).
+   - Files still needing changes: `src/service/steps/index.ts` (currently imports `pregrantAllowances, processItems, roomAndPackagePostings, sweepNight` — must be rewritten: rename statistics step to final_sweep doing sweep + blocker re-check; advance with in-tx unposted check loop + facts freeze inside advance tx; post_advance: report (PII-free), postDueLines, post-advance sweep (catch-up), drift check P2-4, export with code-only message; allowanceClose upTo D for in-house + departed seen at D−1; no-show floor; remove dead branch P3-12), `src/contracts.ts` (STEP_KEYS rename, earliestStartLocalTime default '20:00', restatementsSince shape with corrections/postedAfterClose/latePostings, P3-4 comment), `src/domain/steps.ts` (labels), `src/domain/schedule.ts` (forward search), `src/domain/policy.ts` (schedule ≥ earliest validation), `src/domain/errors.ts` (idempotency_conflict non-retryable; 409 retryable only for version_conflict/run_in_progress/request_in_progress), `src/service/engine.ts` (P3-1 audit only on change, P3-2 recordFailure heartbeat, finance in integrity notification roles), `src/service/policy.ts` (P2-12 require advance permission when enabling schedule, configured_by), `src/service/scheduler.ts` (P3-1 next_due_at, P3-9 adopt active run, fire_refused follow-up), `src/jobs.ts` (overdue job), `src/service/runs.ts` (decideNight command; overrides), `src/service/reports.ts` (annex labels, latePostings, render messages), `src/routes.ts` (report route P3-3, decideNight route), new events consumer for `reservations.stay.checkedIn` (watched_stays), `src/index.ts` exports, `apps/api/src/composition.ts` (getStayAgreement stub via unavailablePort 'reservations' with CR-18, nightLevies adapter from terms.nights[].taxes per-person/unit statutory, subscriptions, overdue job), `test/harness.ts` (fake getStayAgreement from dcl_fake.stays, nightLevies, quote cache for speed, P3-10 return uncovered stays), tests (update S19 allowance model, chaos/STEP_KEYS rename, new regression tests from probes: R-DEFER extension → 2 transfers + posted_line_changed; shortening → departure charged once; R-PREGRANT early departure → no allowance for night outside stay; occupancy correction → room posted, no conflict; forced conflict → room still posted, not retryable; R-CATCHUP → one room charge + night_decision_needed; R-GAP; R-STATS; R-DAYTIME; R-PII; R-LATE; DST multi-zone; R1 tampered AI terms no allowance; P2-12; P2-7), README, FOUNDATION_REQUESTS FR-3 update, parity rows P2-14.
+
+4. Errors and fixes:
+   - Phase 1 errors (fixed): reply.status type; DST London; savepoint names with '.'/capitals made all readiness sources "unavailable" (sanitized names); sweep re-failing overridden items (exclude handled items); chaos test needed yesterday's check-outs; S19 allowanceUsage semantics (assert instances instead); integrity override ordering; executeRun lacked permission (added, M25 red); python edit patterns broken after biome reformatting (re-grep, re-apply); typecheck error in lifecycle test summarize; parity tool rewrites docs/parity/COVERAGE.md (revert with `git checkout docs/parity/COVERAGE.md`).
+   - Fix round: Write tool initially refused rewrite of postings.ts ("File has not been read yet") → Read first then Write succeeded.
+
+5. Problem Solving:
+   - Chose post_advance posting of departure-dated lines (business date = service date, before checkout) to avoid finance's future-service-date refusal and P2-10.
+   - Chose no pre-grant; night N's allowance granted at N's close, closed at N+1's close (allowance_close upTo D), consistent with S19 scenario order; early departure leaves no grant for unstayed night.
+   - Departed-stay reconciliation needs reservations lookup (CR-18, stubbed on main) with last-known-line fallback + follow-up.
+   - Pending: DST forward search, PII-free storage, flake speed-up, P2-4/5/7/12/13 implementations.
+
+6. All user messages:
+   - Message 1 (original task, full): module owner for day-close; read CLAUDE.md, playbook, self-check, spec, 10x brief, gap plan M6, parity, domain map, READMEs, scenarios, ADRs 0004/0005/0006/0008/0015/0016; worktree /home/user/wt/day-close on feat/day-close; create modules/day-close with `day_close` schema; ports; bind in composition where providers exist, else `module_not_available` stub and list contract under FOUNDATION_REQUESTS / Contract requests; feat/integration-step will merge soon, build against contracts; "Commit locally after each meaningful step, with Conventional Commits. Never push, and never amend, reset or rebase a pushed checkpoint commit. Postgres is at postgres://postgres@127.0.0.1:5432/postgres; use PORTICO_TEST_DB_PREFIX=w2_dcl." Build list (resumable process, readiness, postings, no-shows, proof books balance, advance, report pack, records, env safety, proof tests, parity file). "Before reporting, run the gates on a tree merged with main: `pnpm lint && pnpm turbo run typecheck --force && pnpm turbo run test --force --concurrency=2` Check exit codes." Reply with 10x targets, self-check tables incl. § 5 with each test failing without fix, contract requests, stubs. "A steward review will follow."
+   - Message 2 (coordinator, fix round 1, verbatim essentials): "Day-close fix round 1. The steward review says "merge after fixes" (P0 2, P1 1, P2 14, P3 12)." Engine held under attacks; M2 and M16 confirmed killed. "The defects are all in what gets posted when a stay changes after one of its nights has closed." Read first on main: `docs/orchestration/reviews/review-day-close.md`, probes `docs/orchestration/reviews/day-close-poc/zz-review-*.txt`, pending-fixes lines. "Merge main into `feat/day-close` first." 1. P0-1 re-priced package lines reconciled by "a stable line identity that does not include the allocated night: the package component plus its service-date rule from the sealed terms. If rates must expose that identity, make a minimal, additive change to its posting-plan output and list it in your report. Never change existing keys or contracts in a breaking way, because `feat/integration-step` also touches rates. Turn the reviewer's money probes into regression tests." 2. P0-2 "Never grant the next night's allowance before that night exists. An early departure must never bill or forfeit an allowance for a night outside the stay. An occupancy correction must never hit finance's `idempotency_conflict` and roll back the whole night, room charge included. That failure must not be marked retryable." 3. P1-1 "catch-up respects overrides. A night that was overridden and posted by hand must never be posted again." 4. P2-1 DST wrong west of UTC, earliest-start same; "Fix both and test several zones east and west. FR-3 asks the kernel to copy this logic, so it must be right." 5. P2-2/P2-3 late check-in after sweep leaving before next close charged or flagged; facts after sweep; annex labels correctly. 6. P2-6 "no guest names in the append-only day report. Use ids and resolve names at read time, so erasure works." 7. P2-9 S09 and 40-stay test stable under default concurrency on loaded machine; "Find the slow part rather than only raising budgets." 8. Other P2s: P2-4 in-flight posting follow-up; P2-5 enforce earliest start (no 10:00 close no-showing afternoon arrivals); P2-7 alarm when no close runs; P2-10 departure transfer before or at check-out; P2-11 raise `levy_not_posted`; P2-12 `dayClose.policy.manage` cannot indirectly advance with system authority; P2-13 late charges for D reach D's report or labelled annex; P2-14 correct 2 overclaiming parity rows. 9. R1 mutant: seal check in pre-grant (`postings.ts:248`) needs a test that fails without it. 10. Cheap P3s. Self-check v6 tables: § 5.1 state machines (stay-night posting lifecycle, allowances) with external writers (reservations re-pricing, finance corrections); pasted writer searches; control-fact grid with input-source column; § 5.4 mutation table for every P0/P1/P2 guard; § 6 claim ledger (five false claims made true with tests or rewritten). "Commit after every meaningful step. Do not push. Never amend or rewrite commits. Gates: `pnpm lint`, `pnpm turbo run typecheck --force` and `pnpm turbo run test --force --concurrency=2` must all exit 0. A focused re-review follows." "Address this before completing your current task."
+
+7. Pending Tasks:
+   - Finish the day-close redesign (steps/index.ts rewrite, contracts/step key rename incl. migration check constraint, domain/steps labels, errors toFailure, policy/scheduler/engine/jobs/runs/reports/routes changes, events consumer for reservations.stay.checkedIn, decideNight command, composition bindings incl. getStayAgreement stub + nightLevies + subscriptions + overdue job, harness fake getStayAgreement + nightLevies + quote caching + P3-10).
+   - P2-1 DST forward search + multi-zone tests; FR-3 update.
+   - P2-4, P2-5, P2-6, P2-7, P2-9, P2-10, P2-11, P2-12, P2-13 (partial + finance CR-19), P2-14 parity rows; R1 test; P3-1/2/3/4/5/6/9/10/11/12 (P3-7, P3-8 note/optional).
+   - Regression tests from probes; update existing tests (S19 allowance model, chaos with final_sweep, lifecycle, etc.).
+   - README (claims, Known gaps incl. P3-11, DCL-I04 status, CR-18/19), FOUNDATION_REQUESTS (FR-3 forward rule).
+   - Self-check v6 tables, mutation runs for all P0/P1/P2 guards, claim ledger.
+   - Gates (lint, typecheck --force, test --force --concurrency=2; also report default concurrency), commit steps, final report via SubagentHandback (list rates additive change).
+
+8. Current Work:
+   Immediately before the summary, I had committed the rates additive change (4297748) and was mid-way through the day-close redesign (uncommitted): migration, tables.ts, ports.ts edited; postings.ts fully rewritten for the lineKey/expectations/decisions/watched model; readiness.ts gained `nightsClosed`, `latestDecisions`, decided-night exclusion in catchUpNights, and new issue actions. The last command's output: `444:    case 'night_decision_needed':` (edits applied). The module does not compile yet because `src/service/steps/index.ts` still imports `pregrantAllowances` and uses the old `sweepNight(s)` signature, and `final_sweep` is not yet a StepKey.
+
+9. Optional Next Step:
+   Continue the fix round exactly where it stopped: rewrite `modules/day-close/src/service/steps/index.ts` for the new model (rename `statistics_snapshot` → `final_sweep` in contracts STEP_KEYS, migration check constraint and STEP_LABELS; final_sweep = sweepNight(s,'final_sweep',D) + blocker re-check; advance = sweep loop + in-tx unposted check + facts freeze + advance; post_advance = PII-free report, `postDueLines(s, D+1)`, `sweepNight(s,'post_advance',D+1)`, drift follow-up, code-only export issue; allowanceClose upTo D incl. departed stays; no-show floor), then update errors.ts (`idempotency_conflict` not retryable), composition/harness bindings (`getStayAgreement`, `nightLevies`), get typecheck green and commit — per the coordinator: "P0-2 … An occupancy correction must never hit finance's `idempotency_conflict` and roll back the whole night, room charge included. That failure must not be marked retryable." and "Commit after every meaningful step."
+
+If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /root/.claude/projects/-home-user-portico/4f98af2a-3564-5e4b-aedc-2d94c911507d/subagents/agent-a6c837ce590a0c220.jsonl
+Continue the conversation from where it left off without asking the user any further questions. Resume directly — do not acknowledge the summary, do not recap what was happening, do not preface with "I'll continue" or similar. Pick up the last task as if the break never happened.
 ````
 
 ## Report (2026-11-07T22:52:40.658Z)
@@ -312,6 +381,238 @@ Everything else is bound to real providers. Integrity, trial balance and daily r
 On main, reservations' own rates and finance ports are still stubs. So the composed-app S09/S04/S19 runs are blocked by binding until `feat/integration-step` merges. The module scenario evidence and its binding manifest and assertion map are in `modules/day-close/README.md` § Scenarios.
 
 Files: `/home/user/wt/day-close/modules/day-close/README.md`, `/home/user/wt/day-close/modules/day-close/FOUNDATION_REQUESTS.md`, `/home/user/wt/day-close/docs/parity/day-close.md`, `/home/user/wt/day-close/apps/api/src/composition.ts`, `/home/user/wt/day-close/apps/api/test/day-close.test.ts`.
+
+````
+
+## Report (2026-11-08T06:57:16.312Z)
+
+````text
+## Day-close fix round 1: report
+
+**Branch** `feat/day-close` in `/home/user/wt/day-close`, committed locally and not pushed. I merged `main` @ `b4d6832` at the end: merge commit `0282e8d`. Earlier fix-round merge: `7b1b032`.
+
+**Commits this round:** `4297748` (rates), `98c5984`, `302370c`, `e2217ce`, `9227e42`, `8987921`, `5f3b722`, `95a8f92`, `6ab4711`, `3b8caa7`, `832e7a4`, `8d9de81`. Nothing was amended or rewritten.
+
+### Gates (on the merged tree; exit codes read from log files)
+
+| Command | Exit | Notes |
+|---|---|---|
+| `pnpm lint` | **0** | |
+| `pnpm turbo run typecheck --force` | **0** | |
+| `pnpm turbo run test --force --concurrency=2` | **0** | 17/17 tasks, 2 m 30 s. day-close 13 files / 134 tests; api 18 / 71 |
+| `pnpm turbo run test --force` (default concurrency), run 1 | 1 | turbo stopped after 3 tasks. Timing failures in backoffice (`sign-in-steps.test.tsx`) and identity (factor race, 12 s), neither ours |
+| same with `--continue` (run 2) | 1 | **day-close 134/134 green**; the 40-stay test took 4.5 s. api failed 2 tests, both on the 30 s limit: `rates.test.ts` "prices every demo property…" (the tracked demo-seed flake) and `inventory.test.ts` "seeds realistic Maldives demo inventory…" (same demo-seed chain; 6.0 s at concurrency 2) |
+| `node tools/parity-report.mjs --gate day-close` | 1 | Same 11 open P0 rows as the review (PAR-DCL-033/064/065/067/082/085, EC-DCL-012/016/018/034/035). Whether to merge with them open is your call |
+
+**Logs:** `/tmp/claude-0/-home-user-portico/4f98af2a-3564-5e4b-aedc-2d94c911507d/scratchpad/{lint,typecheck,test-c2,test-default,test-default2}.log`
+
+### Change outside day-close (rates, additive, `4297748`)
+
+`modules/rates/src/domain/terms.ts`: `PostingLine` gains two fields.
+- `lineKey`: a stable identity for each line. Nightly lines: `room:{stay}:{night}` / `inclusion:{stay}:{inc}:{night}`, which equals the old `idempotencyKey`. Once-per-stay lines: `inclusion:{stay}:{inc}:arrival`, `…:departure`, `…:stay-night-{n}`.
+- `occurrence`: `{ rhythm, stayNight }`.
+
+The existing `idempotencyKey` and every other field are unchanged. Tests are in `offer.test.ts` and `scenario-s19-package-bill-pricing.test.ts`. This should not conflict with `feat/integration-step`, since nothing existing changed.
+
+### What changed, per finding
+
+- **P0-1, re-priced package lines.**
+  - Every line is posted under `lineKey` and recorded in a new append-only table, `day_close.line_postings`. A line already recorded is never sent to finance again; if the agreement has changed since, Day Close raises `posted_line_changed` for finance.
+  - Lines served after their night (e.g. the departure transfer) become expectations in `deferred_lines` (status `pending` / `posted` / `cancelled`, with a reason). At every close they are re-checked against the agreement now in force: moved to the new date, or cancelled.
+  - They are posted right after the advance to their service date, so the charge is on the folio before check-out (this also fixes **P2-10**).
+  - A stay that is no longer in house is re-checked at once, from reservations' agreement lookup (**CR-18**, new). Until reservations provides it, Day Close posts the last version of the line it saw, on its own date, and raises `posted_from_last_known_agreement`.
+  - A once-per-stay line that a re-price adds for a night already closed is posted at the next close.
+- **P0-2, allowances.**
+  - The pre-grant is gone. Night N's dining credit is granted at N's own close and is valid the day after (finance only accepts a credit for charges dated inside its period). It closes at the N+1 close or at check-out.
+  - An early departure therefore never meets a credit for a night that did not happen. A guest-count correction is posted from the corrected agreement, so it never hits finance's `idempotency_conflict`.
+  - Each line posts inside its own savepoint. If finance already holds a key with different content, that line is set aside (recorded as `conflict`, with a `posting_conflict` follow-up) and the rest of the night still posts.
+  - `toFailure` now treats a 409 as retryable only for `version_conflict`, `request_in_progress` and `run_in_progress`.
+  - **Decision for you:** this makes a night's credit cover the day after its night, so the arrival day has no credit. I re-scoped CR-5 so reservations can grant one at check-in if a package intends it. The reviewer's alternative, a provisional grant confirmed at the close, cannot be done with finance's current options:
+    - with `credit_back`, the tax charged at grant time is not returned on an early departure;
+    - with the `prepayment` treatment, the credit covers tax-inclusive amounts, so the guest gets less food than with the default treatment.
+
+    This deserves an ADR amendment if you accept it.
+- **P1-1, overridden nights.**
+  - Overriding a failed stay-night now records a pending decision (`night_decisions`, append-only) and raises a blocking `night_decision_needed` follow-up. It blocks the **next** close, not tonight's (tonight's override is already a decision).
+  - New command `decideNight`, with route `POST /day-close/properties/:id/night-decisions`. It needs the sensitive override permission and a reason, and is audited.
+    - "Day Close posts it": posted once, with the plan key, even if the guest has left.
+    - "Charged another way": never posted.
+  - The catch-up, the final sweep, the post-advance sweep and the departed-stay check all skip decided nights.
+  - Overriding a failed agreement-line item cancels its pending lines and raises a warning.
+  - The failure messages no longer advise "post it by hand".
+- **P2-1, DST.**
+  - New rule (`firstInstantAtOrAfter`): the scheduled time is the first instant whose local time is at or after the configured time. In a gap that is the end of the gap; in an overlap, the earlier occurrence.
+  - Tested in 15 cases: London, New York ×4, Los Angeles, Santiago, Havana, Sydney, Lord Howe, both overlaps, Maldives, UTC+14.
+  - A year-long sweep over four zones checks "at or after, and the first such minute". The earliest-start check uses the same rule.
+  - FR-3 now asks the kernel to adopt this rule.
+- **P2-2 and P2-3, check-ins during the close and frozen facts.**
+  - Step `statistics_snapshot` became `final_sweep` (late check-ins plus the re-check of what blocks).
+  - Under the advance lock, the advance transaction checks that no in-house stay of D is unposted; if one appeared it goes back to the sweep. It then freezes the day facts in that same transaction and advances.
+  - After the advance, a sweep posts anyone who checked in during the advance transaction.
+  - A new event consumer, `dayCloseSubscriptions()` (bound in composition), listens to reservations' check-in, extension, shortening and check-out events. It records late check-ins in `watched_stays`, so a guest who leaves before the next close is still posted (via CR-18) or flagged with a blocking `night_not_posted_departed`.
+  - The report annex labels each entry by cause.
+- **P2-4, postings in flight across the advance.** Raised as a `posted_after_close` follow-up for finance, checked right after the advance and again at the next close. When accounting is external it also flags that the journal must be re-exported.
+- **P2-5, daytime close.**
+  - `earliestStartLocalTime` now always has a value (default 22:00).
+  - A schedule earlier than it cannot be saved.
+  - A non-overridable `no_shows_before_cutoff` item and a check in the no-show step make sure nobody is marked no-show before the cut-off.
+- **P2-6, guest names.** Step details and the report pack store only codes and references. Messages and staff names are filled in when the report is read. Follow-up text is Day Close's own, never another module's.
+- **P2-7, a close that never runs.**
+  - A refused scheduled start raises `close_not_started` straight away.
+  - A separate job, `dayClose.overdue`, raises `close_overdue` and a notification request (`dayClose.close.overdue`) to night audit, front-office manager and general manager when a close is 2 h overdue, or a run has been open for 6 h.
+- **P2-9, slow tests.**
+  - Where the time goes: in S09 the postings themselves take about 25 ms per stay-night (finance's tax calculation dominates). The 112 real quotes in setup took about 2 s.
+  - The harness now shares one real quote per identical request.
+  - The two scenario-sized tests have a documented 180 s timeout.
+  - Alone, S09 runs in 8.2 s and the 40-stay test in 4.3 s.
+- **P2-11:** a zero-price night raises `levy_not_posted` with the levy amount (port `nightLevies`, bound in composition).
+- **P2-12:** enabling or changing a schedule needs `platform.businessDate.advance` at the property, and the schedule records who configured it.
+- **P2-13:** the annex lists Day Close's own late postings for the date. Other modules' late charges are labelled "not connected" until finance can list postings by service date (**CR-19**, new).
+- **P2-14:** EC-DCL-004 and EC-DCL-024 now point to the new tests, with the caveat about CR-18.
+- **R1:** a test with tampered all-inclusive terms checks that no credit, room charge or line is posted. The mutant is killed.
+- **P3 items done:**
+  - P3-1: audit rows only when the blockers change; a stuck run re-checks hourly instead of every minute.
+  - P3-2: failure records are fenced by the lease.
+  - P3-3: route `/day-close/reports/:id` added.
+  - P3-4: comment corrected.
+  - P3-5: `inventory_not_checked` warning in the report.
+  - P3-6: finance is added to integrity-failure notifications.
+  - P3-9: the schedule adopts a run created by hand first.
+  - P3-10: the strict reservations fake no longer drops stays.
+  - P3-12: dead branch removed.
+- **P3 items not done:** P3-7 (untestable on main), P3-8 (event schemas still not exported) and P3-11 (listed in the README's known gaps).
+
+**Stubs and contract requests:**
+- `getStayAgreement` is a `module_not_available` stub (CR-18).
+- CR-19 is new (finance: postings by service date).
+- CR-4 and CR-5 are re-scoped.
+- The FR-3 text is updated.
+- The README is updated throughout: claims, invariants, ports, known gaps.
+
+### § 3 re-attack (BS2-2)
+
+| Finding | Fix | Regression test | (a) reverse order | (b) siblings | (c) failure path | (d) griefing | (e) atomic |
+|---|---|---|---|---|---|---|---|
+| P0-1 | `98c5984`, `e2217ce` | regressions-money: "R-DEFER…", "an extension before…", "a shortened stay…", "…not connected (main)…", "room-only stay re-priced to all-inclusive…" | Extension after the line was charged: no second charge, `posted_line_changed` (R-DEFER). Extension before it was charged: moved | postStayNight, catch-up, final, advance and post-advance sweeps, `postDueLines` (in house / departed / lookup off), allowance line | A held key → only that line is set aside; room charge kept ("finance holding a line key…") | Only reservations re-pricing and finance corrections reach the inputs; recovery is the follow-up | Line register PK + item transaction; one executor (lease) |
+| P0-2 | `98c5984`, `302370c` | "R-PREGRANT: an occupancy correction…", "R-PREGRANT: an early departure…", "a deterministic conflict…" | Correction after the night's grant → key recorded, never re-sent | Posting step, catch-up, departed-stay posting, allowance close of departed stays | Conflict inside a savepoint; night still recorded | n/a | n/a |
+| P1-1 | `98c5984`, `e2217ce`, `8d9de81` | "R-CATCHUP…", "overridden and not charged…", "deciding needs the sensitive override permission…" | Decide before the next close vs. after it was blocked: both tested | Catch-up (readiness.ts:613), postStayNight (postings.ts:388), unpostedInHouse (:892), watchedDeparted (:552), due-item overrides | `no_decision_pending` / `night_already_posted` refusals write nothing | Only a holder of `dayClose.exception.override` at the property can decide | Decisions append-only; latest one wins |
+| P2-1 | `98c5984` | domain "schedule" (15 cases + year sweep) | Overlap: earlier instance | `scheduledInstant`, `earliestStart` (start refusal, no-show floor) | n/a | n/a | n/a |
+| P2-2/3 | `98c5984` | regressions-ops P2-2 ×4, R-STATS | Check-in during re-check / during advance transaction / after close / after close with lookup off | Sweep in final_sweep, in the advance loop, post-advance; watched stays | n/a | n/a | Advance lock + check inside the transaction |
+| P2-5/6/7/12/13 | `98c5984`, `8987921` | regressions-ops R-DAYTIME ×3, R-PII, P2-7, P2-12, R-LATE | P2-12: other policy edits stay allowed | Manual / API / schedule start; no-show step | Refused policy save → nothing saved (exception thrown before write) | n/a | n/a |
+
+### § 5.1 State machines (external writers included)
+
+| Record | States | Transition | Trigger (internal / external) | Closure row (test) |
+|---|---|---|---|---|
+| Agreement line (`line_postings`, `deferred_lines`) | unknown → pending (future-dated) → posted / cancelled; or unknown → posted / conflict | → pending | postStayNight: a line served after its night | S19 |
+| | | pending → re-dated | **reservations re-pricing** (extension) | "an extension before…" |
+| | | pending → cancelled | re-price removes the line; stay cancelled or no-show; a person overrode the item | "R-DEFER" (re-plan), override path |
+| | | pending → posted | post-advance on its service date; departed stay reconciled at once | S19, "a shortened stay…" |
+| | | posted + agreement changed | **reservations re-pricing** after the charge → `posted_line_changed`, never re-sent | "R-DEFER" |
+| | | posted + **finance correction** (reverse/transfer) | not watched. The correction is finance's record and Day Close never re-posts a recorded key: no duplicate, but no reconciliation either (residual) | — |
+| | | → conflict | finance holds the key with other content → follow-up; never retried | "finance holding a line key…" |
+| Stay-night (`night_postings`, `night_decisions`, `watched_stays`) | unposted → posted; unposted → skip_pending → post_by_day_close → posted; skip_pending → posted_elsewhere | → skip_pending | override of a failed item | P1-1 tests |
+| | | skip_pending → decided | `decideNight` (person) | both P1-1 tests |
+| | | unposted (stay left) → posted / flagged | **reservations check-in/out events** → watch; CR-18 lookup | P2-2 tests |
+| | | watched → resolved | every closed night up to departure posted or decided | P2-2 "after the close…" |
+| Allowance instance (finance) | granted at N's close → used → closed (forfeit / carry) at N+1's close or check-out | grant | posting step for night N, never earlier | "R-PREGRANT: early departure" |
+| | | close | allowance_close (in-house + departed, upTo D+1); **finance check-out consumer** | S19 (breakage once, after check-out) |
+| | | guest-count correction | **reservations re-pricing** before N's close → N granted from the new terms | "R-PREGRANT: occupancy correction" |
+
+**External holders:** finance holds the posted entries and allowance instances. The integration journal export is a stub, flagged on `posted_after_close`.
+
+### Writer searches (pasted)
+
+```
+grep -rnE "(insertInto|updateTable)\('day_close\.(line_postings|deferred_lines|night_decisions|watched_stays|night_postings)'\)" src
+src/service/decisions.ts:60  insertInto night_decisions     src/service/decisions.ts:77  insertInto watched_stays
+src/service/decisions.ts:145 updateTable watched_stays      src/service/decisions.ts:164 insertInto watched_stays
+src/service/steps/postings.ts:153 insertInto line_postings  :267 insertInto deferred_lines  :288 :307 updateTable deferred_lines
+:455 insertInto night_postings  :557 updateTable watched_stays  :638 insertInto night_decisions
+:687 :1037 :1059 updateTable deferred_lines
+grep -rnE "ports\.finance\.(postCharge|grantAllowance|closeAllowances)\(" src
+src/service/steps/index.ts:340 closeAllowances   src/service/steps/postings.ts:77 grantAllowance   :179 postCharge
+external: reservations stay_segments writers: reservations/src/service/repo.ts:185, bookings.ts:496;
+  events changing dates: workflows.ts:994 stayShortened, changes.ts:1653 stayExtended, :1664 stayShortened, bookingModified ×4
+  finance corrections: postings.ts:1776 reverseEntry, :1271 transferPostings, folios.ts:360 voidFolio
+```
+
+**Residual:** `bookingModified` is not consumed, so a date change that arrives only as a modification does not update the watched departure. The agreement lookup takes precedence when it is connected.
+
+### § 5.1.4 Control facts (decisions, with an input-source column)
+
+| Path acting under it | Input source | Decision checked | Night posted? | Seal checked | Property scope |
+|---|---|---|---|---|---|
+| Catch-up | `night_decisions` (override path postings.ts:638; `decideNight` decisions.ts:60) | readiness.ts:613 | readiness.ts (`night_postings` per night) | postings.ts:389 | listInHouse(propertyId) |
+| postStayNight | same | postings.ts:388 | postings.ts:385 | :389 | postings.ts (`stay_other_property`) |
+| Final / advance / post-advance sweep | same | postings.ts:892 | `unpostedInHouse` `night_postings` | :389 | property list |
+| Departed stays | same + `watched_stays` (decisions.ts:164 consumer, :77 decide) | postings.ts:552 | postings.ts:538 | :1015 | `getStayAgreement` (propertyId) |
+| `decideNight` | — | decisions.ts:46 (pending only) | decisions.ts (`night_already_posted`) | n/a | decisions.ts:34 permission + :46 property |
+| Scheduled run | `schedules.configured_by` | policy.ts:81 at save | — | — | **missing**: no re-check at fire time (residual) |
+
+### § 5.3 Exemptions
+
+| Exemption | What it lets through | Attack run against it |
+|---|---|---|
+| Zero-amount line | skipped | Levy raised (test) |
+| `allowance` kind that is not monetary | not posted | Code only |
+| Lookup not connected | last known line posted on its own date (flagged) | Tested |
+| Pending row with a future service date and no agreement | skipped until its date | Shortening test, lookup off |
+| Own-run `night_decision_needed` treated as a warning | does not block tonight | Next close blocked (test) |
+| Post-advance item failures | never fail the run (warning; next close retries) | Code only; no test forces one |
+| `postStayNight` decided check | defensive layer behind three filters | Mutant survives by design |
+
+### § 5.4 Proof by mutation (one guard removed at a time; scripted, files restored)
+
+| Mutant | Guard removed | File:line | Result / test that turns red |
+|---|---|---|---|
+| M-P0-1r | rates once-per-stay identity | rates terms.ts:91 | **killed**: R-DEFER |
+| M-P0-1a | finance key = `lineKey` (postCharge) | postings.ts:193 | survived: the line register (`lineKey`) is the guard; finance's key is a second layer |
+| M-P0-1b / bx | expectation re-dated on re-price | postings.ts:284 (+ :1056) | survived alone (post-advance re-dates too); **killed** with both: "an extension before…" |
+| M-P0-1c | once-per-stay line due on a closed night | :415 | **killed**: "room-only stay re-priced…" |
+| M-P0-1d | departed stay's pending lines reconciled at once | :980 | **killed**: "a shortened stay…" |
+| M-P0-1e | `posted_line_changed` on already-charged lines | :261 | **killed**: R-DEFER |
+| M-P0-2a | credit valid the day after its night | :86 | **killed**: S19 |
+| M-P0-2b | no grant of next night (pre-grant re-added) | :411 | **killed**: R-PREGRANT occupancy |
+| M-P0-2c | conflict set aside, not fatal | :206 | **killed**: "finance holding a line key…" |
+| M-P0-2d | 409 retryable only for concurrency codes | errors.ts:37 | **killed**: "a deterministic conflict…" |
+| M-P1-1a | catch-up skips decided nights | readiness.ts:613 | **killed**: R-CATCHUP (readiness assertion) |
+| M-P1-1b | postStayNight decided check | postings.ts:388 | survived: defensive layer behind the catch-up, sweep and departed filters |
+| M-P1-1c | own decision does not block tonight | readiness.ts:359 | **killed**: R-CATCHUP |
+| M-P2-1 | forward DST rule | schedule.ts:20 | **killed**: domain schedule |
+| M-P2-2a | check inside the advance transaction | index.ts:559 | **killed**: R-GAP |
+| M-P2-2b | post-advance sweep | index.ts:765 | **killed**: "…during the advance transaction…" |
+| M-P2-2c / d | watched departed stays / consumer watch | postings.ts (work list), decisions.ts:162 | **killed**: "checked in after the close and gone…" |
+| M-P2-3 / 3x | final-sweep sweep (alone / with M-P2-2a) | index.ts:434 | survived alone (the advance loop still posts before the freeze); **killed** together: R-STATS |
+| M-P2-4 | posted-after-close check | index.ts:757 | **killed**: concurrency in-flight |
+| M-P2-5a / b / c | default earliest / schedule ≥ earliest / cut-off item | contracts, policy.ts:68, readiness.ts:235 | **killed** ×3 |
+| M-P2-6 | no prose in step detail | index.ts | **killed**: R-PII |
+| M-P2-7a / b | `close_not_started` / overdue alarm | scheduler.ts:117 / :162 | **killed** ×2 |
+| M-P2-8 (R1) | seal check | postings.ts:389 | **killed**: tampered AI terms |
+| M-P2-10 | departure lines after the advance | index.ts:764 | **killed**: S19 |
+| M-P2-11 / 12 / 13 | levy / advance permission / late postings | postings, policy.ts:81, reports.ts | **killed** ×3 |
+| M-P3-1 / P3-9 | audit on change / adoption | engine, scheduler | **killed** ×2 |
+
+The seal check in `postDueLines` (postings.ts:1007/1015) has no dedicated test (second layer).
+
+### § 6 Claim ledger (the five false claims from the review)
+
+| Claim | Now | Evidence | Verdict |
+|---|---|---|---|
+| README DCL-I04 "never silently missed" | Rewritten: "every occupied night … posted (or decided)" + "Partial in the composed app until CR-18" | regressions-ops P2-2 ×4 (lookup off → blocking `night_not_posted_departed`) | true at module level; partial label kept |
+| FR-3 "fixed locally" | Forward rule, multi-zone | domain "schedule" | true |
+| Self-check 29 "no guest personal data stored, ids only" | Pack and step detail store codes and references only | R-PII (`count … like '%Zz-Unique%'` = 0) | true |
+| "Day-close tests pass under both concurrency settings" | day-close 134/134 at default concurrency (`--continue` run) | test-default2.log | true for day-close; the workspace run exits 1 on api demo-seed and backoffice/identity timeouts |
+| "Mutation proof: all red" | R1 killed; survivors above named with their reason | § 5.4 | rewritten: 3 survivors are layered or defensive by design |
+| README "raises a blocking alarm to finance" | Finance added to the notification roles; README says finance needs CR-13 to see the issue | engine.ts recordFailure | downgraded (honest) |
+
+### Checklist summary (§ 2, v1 items 5–32)
+
+Unchanged from the first report, except:
+- **29 (PII) is now yes:** test R-PII.
+- **New no, listed in the README's Known gaps:** a schedule's authority is not re-checked at fire time (P2-12 residual); blocked auto-runs still bump the run version on each re-check (P3-1 residual); P3-7 untested; P3-8 schemas not exported; P3-11 readiness sources missing.
+
+**A focused re-review should look at:** the allowance-validity decision (P0-2 above) and the post-advance posting order.
 
 ````
 

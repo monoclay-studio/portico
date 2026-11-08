@@ -1,7 +1,7 @@
 # Agent run: Integration step: bind module ports
 
-- Started: 2026-11-07T16:16:26.294Z · last activity: 2026-11-08T05:52:12.502Z
-- Turns: 1370 · tool uses: 1405 · output tokens: 1,249,556
+- Started: 2026-11-07T16:16:26.294Z · last activity: 2026-11-08T06:55:07.573Z
+- Turns: 1526 · tool uses: 1562 · output tokens: 1,460,579
 - Type: general-purpose
 
 ## Brief (2026-11-07T16:16:26.294Z)
@@ -918,6 +918,227 @@ Merge main first.
 - All gates must exit 0.
 
 Address this before completing your current task.
+````
+
+## Follow-up message (2026-11-08T06:09:53.858Z)
+
+````text
+This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+
+<system-reminder>
+<tools-used-before-summary>Bash, Edit, Monitor, Read, SubagentHandback, ToolSearch, Write</tools-used-before-summary>
+</system-reminder>
+Summary:
+1. Primary Request and Intent:
+   - **Role.** I am the integration engineer for Portico, a TypeScript modular monolith. I work in the worktree `/home/user/wt/integration-step` on branch `feat/integration-step`, applying coordinator fix rounds from steward re-reviews.
+   - **Rules (verbatim intent):**
+     - "Commit after every meaningful step. Do not push, and never rewrite or amend existing commits, including checkpoint WIP."
+     - Every commit message ends with:
+       ```
+       Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+       Claude-Session: https://claude.ai/code/session_01XDtqZDkxkzHxUrbV9kDsKR
+       ```
+     - Never activate paid contracts, live transactions, production keys or live connections.
+     - No secrets in code, tests or logs. Never import across modules.
+     - Owner questions go to `docs/OPEN_QUESTIONS.md`.
+     - Gates: `pnpm install --frozen-lockfile`, `pnpm lint` (`--error-on-warnings`), `pnpm turbo run typecheck --force`, `pnpm turbo run test --force --concurrency=2`, all with a `PORTICO_TEST_DB_PREFIX` (`w1_intstep_fix7` for round 7). All must exit 0.
+     - Report via SubagentHandback (its last step ends the run).
+   - **Rounds 2–6:** completed and reported. Round 5 HEAD `333a83e`; round 6 HEAD `932e7c1`.
+   - **Current request: Round 7** (coordinator message, re-review #7, "merge after fixes", P0 0, P1 2, P2 2, P3 5). Merge main first.
+     1. **One balance per obligation (R7-P1-1, R7-P2-1).**
+        - Each deposit due, each penalty and each folio balance is one finance-owned balance.
+        - Every settlement method draws it down under one lock: card charge/capture, cash, cheque, terminal, link, deposit forfeit, transfer, credit, write-off.
+        - Collections are limited by what is still owed on the ledger, never by a separate record.
+        - Tests: F1/F2 (forfeit then penalty on card, both orders), F3 (penalty credited off then forfeit), N1 (penalty paid by cheque then no_show card charge).
+     2. **Moved credits keep their counterpart's owner (R7-P1-2).** Test M1 (Otto's cheque moved to Vera, then Otto's card charged).
+     3. **R7-P2-2:** adopt the reviewer's R7-N2 test (`penaltyOn` following transfers; kills M7).
+     4. **P3s:**
+        - the capture request hash includes `purpose`;
+        - a customer-initiated hold capture gets fact limits and a landing-table row;
+        - `recordPayment` with `authorizationId` checks property, booking and remaining amount;
+        - correct the overstated landing-table claims (forfeit, transfers);
+        - a DB-level test for the unknown-owner branch.
+     5. **New: a seeded model-based test of the money invariant.**
+        - A reference model plus a generator running random sequences of every money operation against the real composition.
+        - At least 2 guests × 2 folios × 2 cards with agreements.
+        - Operations: charge, hold, capture, increment, link payment, cash/cheque, deposit apply/forfeit, transfer, routing, refund, credit/write-off, no-show/cancellation penalties, add_stay. Include a concurrent mode.
+        - After every step assert:
+          - (a) no card paid more than the obligations its agreement covers;
+          - (b) no obligation collected more than once across all methods;
+          - (c) the ledger balances.
+        - A fixed seed list in CI (fast with `--concurrency=2`, ideally < 60 s) plus an env var for a longer local run.
+        - Run the long run and report how many sequences ran and any failing seeds; keep failing seeds as regression tests.
+        - `fast-check` dev dependency or a hand-rolled seeded PRNG.
+        - Mutation-check the generator by re-applying 3 earlier mutants (e.g. N7, R1, R3); the generator alone must find each.
+     - **Self-check v6:** input-source column, landing table updated, a § 5.4 row for each new guard, § 6 claim ledger.
+
+2. Key Technical Concepts:
+   - **ADR-0015 Amendments 3–6:**
+     - named-booking coverage with stay evidence;
+     - purposes are facts;
+     - coverage where money lands;
+     - staff agreements capped;
+     - purpose judged at landing;
+     - every posting has an owner;
+     - one balance per obligation;
+     - generative invariant testing.
+   - **Payments:**
+     - `consentProblem` (card-row lock, `ownerCoverage`, `coverageProblem` with `debtOriginsOf`, `runningTotal`);
+     - `derivePurpose` / `assertWithinFact` in `purpose.ts`;
+     - `assertCollectionOwnership`;
+     - `cardMoneyMayMeet`;
+     - `cardDepositForfeitProblem`.
+   - **Finance:**
+     - provenance (`rootOf`, `folioProvenance`, `postingRoot`, `penaltyOn`, `penaltyFoliosOfStay`, `assertMoneyMayLand`, `assertDebtMayLand`);
+     - `applyDeposits`, `forfeitDeposit`, `transferPostings`, billing-rule writers;
+     - journal triggers: postings only in the entry's creating transaction; entries need ≥2 balanced lines in functional currency; guest-ledger line mirroring each posting.
+   - **Ports:**
+     - `LedgerPort.penaltyOwedOn`, `depositsReceivedFor`, `depositsHeldFor`, `balanceOf`, `debtOriginsOf`;
+     - finance `PaymentsPort.cardMoneyMayMeet`, `cardDepositForfeitProblem`, `lockCollections`;
+     - `BookingDirectoryPort.describeBooking` (now returns `stayIds`).
+   - **Test infrastructure:**
+     - api scenario harness: `bookWithCard`, `cardholderConfirms`, `guestWithCard`, `cardOnFile` (`maxAmount` default 5,000,000);
+     - payments module fake world: `LedgerControls` with `stays`, `penalties`, `depositDue`, `debtOrigins`, `ledgerPenalty`, `balances` (default 10,000,000);
+     - held-transaction/barrier tests for lock proofs; mutation runner scripts in the scratchpad (`run.py`, `run5.py`, `run6.py`).
+
+3. Files and Code Sections (worktree `/home/user/wt/integration-step`):
+   - **`modules/finance/src/service/provenance.ts`.**
+     - Round 6: `rootOf` never returns none. Kinds are `debt` / `payment` / `deposit` / `folio_balance` / `other_money` / `unknown` (unknown → `addDebt({type:'unknown_origin', id})`).
+     - Round 7 additions:
+       - `penaltyRoots(tx, stayId)`.
+       - `rootRow(tx, p0)`: follows `transfer_in` / `transfer_out` / `adjustment` corrects and the tax parent.
+       - `penaltyOn(tx, folioId, stayId)`: returns `Math.max(0, Math.min(penalty, penalty - money))`, where `money -= amount` for root kind `payment`, `deposit_application` or `refund`.
+       - `penaltyFoliosOfStay(tx, stayId)`: expands up to 8 hops via `corrects_posting_id`.
+       - In `folioProvenance`:
+         ```ts
+         const creditMoving = (p.kind === 'transfer_out' && amount > 0) || (p.kind === 'transfer_in' && amount < 0);
+         if (creditMoving) { const peer = p.transfer_peer_id ? await posting(tx, p.transfer_peer_id) : undefined;
+           const peerOwner = peer ? await folioOwner(tx, peer.folio_id) : null;
+           addDebt(peerOwner ?? { type: 'unknown_origin', id: p.id }, amount);
+           if (root.kind === 'payment') pays.set(...); else if (root.kind === 'deposit') deps.set(...); continue; }
+         ```
+   - **`modules/finance/src/service/deposits.ts`.**
+     - `forfeitDeposit`:
+       1. `amountMinor = input.amountMinor ?? depositHeldMinor`.
+       2. `describeBooking(...).stayIds` → carriers via `penaltyFoliosOfStay` → `lockCollections`.
+       3. Owed per folio via `penaltyOn`.
+       4. If total > 0: amount > total → `forfeit_exceeds_penalty_owed`; otherwise `applyDeposits` per folio (idempotencyKey `${input.idempotencyKey}:${folioId}`) and return `{entryId, balance, replayed}`.
+       5. Otherwise `cardDepositForfeitProblem` → `forfeit_not_covered_by_card_consent`; otherwise `depositOutflow`.
+     - New `depositReceivedMinor(tx, bookingId)`: sum of `deposit_movements` where kind is not in (`applied`, `forfeited`).
+     - `applyDeposits` has `assertMoneyMayLand` (round 5).
+   - **`modules/finance/src/service/postings.ts` (`transferPostings`).**
+     - Moved money/debt checks, including unknown roots as `unknown_origin` debt.
+     - New `creditItems(tx, ids)` helper.
+     - When credits leave the source: `assertDebtMayLand(tx, deps, from.id, [dest.owner, ...dest.debtOwners], 'transfer_not_covered_by_card_consent')`.
+   - **`modules/finance/src/service/billing-rules.ts`:** `assertRoutingCovered` (`lockCollections`, then `assertDebtMayLand`).
+   - **`modules/finance/src/service/index.ts`:**
+     - service: `folioProvenance`, `penaltyOn`, `depositReceivedMinor`;
+     - ledger provider: `debtOriginsOf`, `penaltyOwedOn`, `depositsReceivedFor`.
+   - **`modules/finance/src/ports.ts`:** `PaymentsPort.cardMoneyMayMeet`, `cardDepositForfeitProblem`; `describeBooking` returns `stayIds?`.
+   - **Finance stubs and fakes:** `modules/finance/src/wiring.ts` (null and covered stubs); `modules/finance/test/helpers.ts` (coverage fake; `cardDepositForfeitProblem` returns null).
+   - **`modules/reservations/src/service/provider.ts`:**
+     - `describeReference`: `depositDue` per stay (segments share by nights kept), `penalties`, `stayIds`;
+     - `describeBooking`: returns `stayIds`.
+     - Also: `changes.ts` records `stays.cancellation`; migration `0002_stay_cancellation_penalty.sql`.
+   - **`modules/payments/src/service/purpose.ts` — `assertWithinFact`:**
+     - deposit: `collected = await d.ledger.depositsReceivedFor(tx, ref.id) + await unpostedOn(tx, ref)`.
+     - balance: `folioOwedNow`.
+     - no_show: `stillOwed = penaltyOwedOn(tx, ref.id, ctx.stayId)`; `left = Math.min(stillOwed - inFlight, owedNow)`; error `no_show_penalty_exceeded` with details `stillOwedMinor`, `inFlightMinor`, `owedMinor`.
+     - New `unpostedOn` helper; `collectedMinor` removed.
+   - **`modules/payments/src/service/collect.ts`:**
+     - capture derives `fact = derivePurpose(d, tx, ref, input.purpose)`;
+     - capture hash `{a, m, r, u: input.purpose ?? null, x: input.separateCollection?.reason ?? null}`;
+     - `if (holdMethod) await assertWithinFact(...)` for all captures; `assertDestinationCovered` for merchant holds only;
+     - `recordPayment` with `authorizationId`: same property and same booking family, else `authorization_other_reference`; amount > remaining → `capture_exceeds_hold`;
+     - charge: an in-flight block before the fact check.
+   - **`modules/payments/src/service/consent.ts`:**
+     - `purposeOk`: holds use guarantee/incidentals; charges and captures use the landing purpose;
+     - `cardMoneyMayMeet`;
+     - `cardDepositForfeitProblem(tx, input)` (`d` param removed): returns a message if card money is in the deposit.
+   - **Payments wiring:** `payments/src/service/index.ts` (`cardDepositForfeitProblem: (tx, i) => consent.cardDepositForfeitProblem(tx, i)`); `finance-collections.ts` passthrough; `apps/api/src/composition.ts` binds `cardMoneyMayMeet` and `cardDepositForfeitProblem`.
+   - **`modules/payments/src/ports.ts`:** `LedgerPort.penaltyOwedOn`, `depositsReceivedFor`, `debtOriginsOf`.
+   - **`modules/payments/test/harness.ts` (fake ledger):**
+     - `depositsReceivedFor`: SQL sum of succeeded/recorded payments on the booking;
+     - `penaltyOwedOn`: (`ledgerPenalty ?? recorded penalties`) − posted payments on the folio.
+   - **Tests created this round:**
+     - `modules/payments/test/review-r7-regressions.test.ts` (3 tests: capture hash `idempotency_conflict`, customer capture `deposit_not_due`, recorded hold checks). Passing.
+     - `apps/api/test/review-regressions-r7.test.ts`. Header copied from r6 (helpers: settle, codeOf, usd, simAccount, paymentsOn, methodFor, bookFor, folioOfStay, owe, balanceOf, cardCharge, etc.) plus `penaltyPostingOf`, `forfeitOf`, `heldOn`, `cardPaidOn`, `cancelledWithCardDeposit`. Tests:
+       - R7-F1/F2/F3, R7-N1, R7-N2 (+mirror);
+       - R7-M1 (move first), card first, boundaries (same booking, moved back);
+       - R7-P3-5 (DB-level unknown owner, in progress).
+   - **Earlier r6 file:** `apps/api/test/review-regressions-r6.test.ts` (7 tests; helpers renamed with underscores where unused).
+
+4. Errors and fixes:
+   - **Round 6:**
+     - Postgres went down (ECONNREFUSED); restarted with `pnpm db:up`.
+     - Biome reformatting made exact-text Python replaces fail; I re-read the formatted text and re-applied.
+     - Unused imports were removed by `biome --unsafe` (`cardholderConfirms`, `balanceOf`); I re-added or renamed them.
+     - Mutant R2 survived; I added the capture-onto-booking fact-limit test.
+   - **Round 7:**
+     - A provenance python assert failed due to formatting; fixed by matching the formatted multi-line text.
+     - The idempotency mismatch code is `idempotency_conflict`, not `idempotency_mismatch`.
+     - P3-5 DB-insert test hit successive trigger errors:
+       1. Reusing an existing entry: "Postings can only be added to journal entry ... in the transaction that created it."
+       2. Then a new entry: "0 line(s)" → added lines.
+       3. "unbalanced in functional currency" → set `functional_amount_minor` too.
+       4. "not mirrored by a matching guest-ledger journal line" → guest line copied from the folio-subledger line with `posting_id = unknownId`, plus an opposite line.
+       5. The latest is again "Postings can only be added to journal entry <new id> in the transaction that created it." Likely cause: the journal-entry copy includes a txid-like column copied from the original entry (cols = all except id and idempotency_key). It needs to be excluded so it defaults to the current transaction.
+
+5. Problem Solving:
+   - **Round-7 core fixes are done and committed**, with api r7 tests passing (8 of 9). Full api suite passed after the moved-credit fix (181 + 29 todo); payments 161 + new module tests; finance 92.
+   - **Ongoing:** the P3-5 test insert path. Then the generator test, mutation-checks, docs claims, self-check tables, gates and report.
+
+6. All user messages:
+   - **Earlier rounds** (summarized): the original integration task; fix rounds 1–4; self-check v3/v4/v5/v6 instructions; round-4 detailed list.
+   - **Round 5 coordinator message:**
+     - "Integration-step fix round 5. Re-review #5 says 'merge after fixes' (P0 0, P1 2, P2 2, P3 4)… The pattern is the problem now… So this round closes the class, not the path."
+     - Items: purposes are facts (R5-P1-1); coverage where money lands (R5-P1-2); staff agreements require `maxAmount`; R5-P2-1 link-stopped; R5-P2-2 pending_verification; the P3s.
+     - Self-check v6 additions: input-source column; writers list; § 5.4; § 6.
+     - "Gates as before (lint `--error-on-warnings`). Commit after every meaningful step. Do not push, and never rewrite or amend existing commits."
+   - **Round 6 coordinator message:**
+     - "Integration-step fix round 6. Re-review #6 says 'merge after fixes' (P0 0, P1 2, P2 1, P3 3)… Budget warning: the account's weekly allowance is at about 94% with no overage, and work may stop hard at any moment. So: Work lean. Commit after every meaningful step (each fix with its test)… Fix the P1s first, then P2, then P3. Don't push, and never amend or rewrite commits."
+     - Items R6-P1-1, R6-P1-2, R6-P2-1, P3s; self-check with a landing table; gates.
+   - **Round 7 coordinator message (current):**
+     - "Integration-step fix round 7. Re-review #7 says 'merge after fixes' (P0 0, P1 2, P2 2, P3 5)… Seven rounds have each closed named paths, and a sibling has remained each time. This round changes the shape of the fix and of the proof."
+     - Items 1–5 as listed in section 1, including the seeded model-based test with: 2 guests × 2 folios × 2 cards; every operation; concurrent mode; invariants (a)(b)(c); a fixed CI seed list under ~60 s; an env var for a longer run; run the long run and report sequences and failing seeds; keep failing seeds; mutation-check with 3 earlier mutants (e.g. N7, R1, R3).
+     - "Self-check v6: the input-source column; the landing table, updated; a § 5.4 row for each new guard; the § 6 claim ledger. Rules: Commit after every meaningful step. Do not push. Never amend or rewrite commits. All gates must exit 0."
+
+7. Pending Tasks:
+   - Finish the R7-P3-5 DB-level unknown-owner test in `apps/api/test/review-regressions-r7.test.ts` and commit.
+   - R7-P3-4: correct claims (README Charges row, domain-map round-7 section, landing table: forfeit = penalty owed on the ledger, settled by applying; transfers check the source side too); mark round 7 in `pending-fixes.md`; commit.
+   - Build the seeded model-based generator test (e.g. `apps/api/test/money-invariant.test.ts`):
+     - mulberry32 PRNG;
+     - fixed seeds for CI (< 60 s) and an env var (e.g. `MONEY_SEEDS`/`MONEY_STEPS`) for a long run;
+     - 2 guests, 2 folios, 2 cards (one narrow `['guarantee','no_show']`, one all purposes);
+     - all operations; a concurrent mode;
+     - invariants after each step:
+       - (a) per-card paid ≤ covered obligations minus the guest's other money (held deposits excluded);
+       - (b) global money ≤ obligations;
+       - (c) journal lines balanced per entry;
+     - run the long run, record counts and failing seeds, keep failing seeds as tests;
+     - mutation-check with N7, R1, R3 using the generator only.
+   - Mutation rows for the round-7 guards (forfeit settles penalty; `penaltyOn` money netting; moved-credit attribution; source-side transfer check; capture hash; customer capture fact; `recordPayment` checks; depositsReceived; M7 via R7-N2).
+   - Self-check v6 tables, the full gate block with `PORTICO_TEST_DB_PREFIX=w1_intstep_fix7`, a check for leftover DBs, and the SubagentHandback report (commits, finding→test table, landing table, input sources, mutation table, claim ledger, generator stats, exit codes).
+
+8. Current Work:
+   I was writing the R7-P3-5 DB-level test in `apps/api/test/review-regressions-r7.test.ts`. It inserts, inside `s.t.admin.kysely.transaction().execute(async (trx) => …)`:
+   - a copied `finance.journal_entries` row: new id and `idempotency_key` `import:<id>`; other columns copied via an `information_schema` column list excluding `id` and `idempotency_key`;
+   - a `finance.postings` row `{ id: unknownId, entry_id: entryId, kind: 'deposit_application', amount_minor: -5000, description: 'Imported deposit (no source)' }` on folio f2;
+   - two journal lines: one copied from the folio-subledger line with amount/functional −5000 and `posting_id = unknownId`, and one copied from a non-folio line with +5000.
+
+   The test then asserts:
+   - a card charge on f2 → `mandate_reference_not_covered`;
+   - transferring the unknown posting from f2 to f1 (which holds card money) → `transfer_not_covered_by_card_consent`.
+
+   The last run failed with: "error: Postings can only be added to journal entry 01a1b9c5-a65c-7d57-8819-194aa84a321d in the transaction that created it." The other 8 r7 api tests pass. Committed so far in round 7: `6f4989d` (merge), `0946317`, `1d7e15e`, `7aab2a2`.
+
+9. Optional Next Step:
+   - Fix the journal-entry copy so the entry is created by the current transaction: exclude the creation-transaction column (e.g. a txid column) from the copied column list so it takes its default. Rerun `npx vitest run test/review-regressions-r7.test.ts`, lint, and commit.
+   - Then continue with the coordinator's round-7 list: the P3-4 claim corrections, then "a seeded, model-based test of the money invariant… Use a fixed seed list in CI… plus an env var for a longer local run. Run the long run yourself, and report how many sequences ran and any failing seeds… Mutation-check the generator: re-apply 3 of your earlier mutants (for example N7, R1 and R3). The generator alone must find each one."
+   - Finally the self-check tables, gates and the SubagentHandback report.
+
+If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /root/.claude/projects/-home-user-portico/4f98af2a-3564-5e4b-aedc-2d94c911507d/subagents/agent-a29fdf2e9c7d0e9dc.jsonl
+Continue the conversation from where it left off without asking the user any further questions. Resume directly — do not acknowledge the summary, do not recap what was happening, do not preface with "I'll continue" or similar. Pick up the last task as if the break never happened.
 ````
 
 ## Report (2026-11-07T17:04:17.381Z)
