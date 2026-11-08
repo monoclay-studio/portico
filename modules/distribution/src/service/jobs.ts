@@ -19,7 +19,7 @@ import {
   systemContext,
   type TenantEnvironment,
 } from '@portico/kernel';
-import { ARI_KINDS } from '../domain/ari';
+import { ARI_KINDS, type AriKind } from '../domain/ari';
 import {
   availabilityChangedPayload,
   CONSUMED_EVENTS,
@@ -28,7 +28,7 @@ import {
   pricesChangedPayload,
   restrictionsChangedPayload,
 } from '../events';
-import { markPropertyDirty } from './ari-dirty';
+import { markPropertyDirty, publishingConnections } from './ari-dirty';
 import { dispatchKind, nextBudgetSlot, publicationBlockedBy } from './ari-dispatch';
 import { checkDiscrepancies } from './calendar';
 import {
@@ -41,6 +41,7 @@ import {
 } from './common';
 import { onAuthorityChanged, requestResync } from './connections';
 import { applyRetention, eraseRevisionGuestData } from './erasure';
+import { raiseException } from './exceptions';
 import { nextHealthDue, refreshHealth } from './health';
 import { dispatchAcks, escalateParked, PARK_ESCALATION_MS, processInbound, pullFeed } from './inbound';
 
@@ -271,6 +272,46 @@ export function distributionJobs(
 }
 
 /**
+ * A change event Portico cannot read is never dropped silently (P2-8, AP-35/43): every publishing connection of the
+ * property gets an urgent exception (Monoclay: a producer changed its event format) and is marked fully dirty for
+ * the kind — values are read at send time, so a full resync publishes the current truth whatever the event said. A
+ * property with no publishing connection raises nothing. Without even a property, the delivery fails (retried,
+ * then dead-lettered in the outbox, visible to operations).
+ */
+async function unreadableChange(
+  tx: Parameters<TxEventSubscription['handle']>[0],
+  deps: DistributionDeps,
+  event: DomainEvent,
+  kinds: AriKind[],
+  error: { issues: ReadonlyArray<{ path: PropertyKey[]; message: string }> },
+): Promise<void> {
+  const raw = event.payload as { propertyId?: unknown } | null;
+  const propertyId =
+    event.propertyId ?? (raw && typeof raw.propertyId === 'string' ? raw.propertyId : null);
+  const issues = error.issues
+    .slice(0, 3)
+    .map((i) => `${i.path.map(String).join('.') || '(payload)'}: ${i.message}`)
+    .join('; ');
+  if (!propertyId) throw new Error(`Unreadable ${event.type} event ${event.id} without a property (${issues}).`);
+  for (const conn of await publishingConnections(tx, propertyId)) {
+    await raiseException(tx, {
+      connectionId: conn.id,
+      propertyId,
+      code: 'change_event_unreadable',
+      dedupeKey: `change_event_unreadable:${event.type}`,
+      severity: 'urgent',
+      problem: `A ${event.type} change could not be read (${issues}); Portico cannot tell which nights changed.`,
+      businessImpact:
+        'Portico re-sends every night of this connection for the affected kind instead (current values), so the channel catches up; until then it may be behind.',
+      responsibleParty: 'monoclay',
+      nextStep: 'Monoclay support checks the event format of the module that produced it.',
+      refs: [{ type: 'event', id: event.id }],
+    });
+    await requestResync(tx, deps, conn, { trigger: 'on_demand', kinds });
+  }
+}
+
+/**
  * Change capture (DST-R04): availability and rate events mark the affected cells dirty — never values, so a
  * late, repeated or reordered event can at most cause one redundant send of CURRENT values (idempotent consumer).
  */
@@ -315,7 +356,7 @@ export function distributionSubscriptions(deps: DistributionDeps): TxEventSubscr
         switch (event.type) {
           case CONSUMED_EVENTS.availabilityChanged: {
             const p = availabilityChangedPayload.safeParse(event.payload);
-            if (!p.success) return;
+            if (!p.success) return unreadableChange(tx, deps, event, ['availability'], p.error);
             await markPropertyDirty(tx, deps, {
               propertyId: p.data.propertyId,
               kind: 'availability',
@@ -332,7 +373,7 @@ export function distributionSubscriptions(deps: DistributionDeps): TxEventSubscr
                 ? pricesChangedPayload
                 : restrictionsChangedPayload;
             const p = schema.safeParse(event.payload);
-            if (!p.success) return;
+            if (!p.success) return unreadableChange(tx, deps, event, ['restrictions'], p.error);
             await markPropertyDirty(tx, deps, {
               propertyId: p.data.propertyId,
               kind: 'restrictions',
@@ -344,7 +385,9 @@ export function distributionSubscriptions(deps: DistributionDeps): TxEventSubscr
           }
           case CONSUMED_EVENTS.dataAuthorityChanged: {
             const p = dataAuthorityChangedPayload.safeParse(event.payload);
-            if (!p.success) return;
+            // Authority decides whether Portico may publish at all: re-check both kinds (publication re-reads the
+            // authority at every send, so a full resync is safe either way).
+            if (!p.success) return unreadableChange(tx, deps, event, ['availability', 'restrictions'], p.error);
             await onAuthorityChanged(tx, deps, p.data.propertyId, p.data.domain);
             return;
           }
