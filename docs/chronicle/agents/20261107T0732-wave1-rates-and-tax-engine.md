@@ -1,10 +1,35 @@
 # Agent run: Wave1: rates and tax engine
 
 - Started: 2026-11-07T07:32:35.545Z · last activity: 2026-11-07T12:06:37.267Z
-- Turns: 292 · tool uses: 332 · output tokens: 627,709
+- Turns: 292 · tool uses: 491 · output tokens: 627,709
 - Type: general-purpose
 
 ## Brief (2026-11-07T07:32:35.545Z)
+
+````text
+You are the engineer for Portico's **rates** module (wave 1) — pricing, packages, policies, the single tax & fee engine and the quote engine. First read the shared playbook at /tmp/claude-0/-home-user/4f98af2a-3564-5e4b-aedc-2d94c911507d/scratchpad/wave1-playbook.md and follow it exactly.
+
+Your worktree: /home/user/wt/rates (branch feat/rates-core). Test DB prefix: PORTICO_TEST_DB_PREFIX=w1_rates. Module path: modules/rates (package @portico/rates, schema `rates`). Spec: /home/user/wt/product/docs/specs/rates.md.
+
+Build (provider contract in docs/architecture/domain-map.md § rates):
+- Rate plans: base and derived (± amount / ± percent / rounding rule from a parent, multi-level, cycle-safe), meal plan, channel/market availability, member/negotiated (company-specific) plans, promotions & promo codes, sell dates vs stay dates.
+- Prices per unit type × night × occupancy (base occupancy + extra adult + child age bands), seasonal/bulk calendar updates (date ranges + weekdays), with history (every price change versioned; who/when).
+- Restrictions: min/max LOS (arrival-based and through), closed, CTA, CTD, min/max advance, sales limits.
+- Packages, inclusions and allowances (monetary or quantity, per night/per stay/per person, consumable at outlets, unused-remainder policy) and meal plans implemented as inclusions.
+- Policies: cancellation (deadlines relative to arrival in property time zone, fee rules: first night / % / fixed / non-refundable), guarantee, deposit schedules.
+- TAX & FEE ENGINE (used for everything, not just rooms): rules are effective-dated DATA with source citation and verification status — percentage, per person-night, per unit-night, banded, capped, exempt; inclusive vs exclusive; compounding order (e.g. service charge then GST on top); applicability by charge category, property classification (e.g. mv.establishmentType), guest age, stay length. computeTaxes(tx, lines…) returns per-line tax breakdown with rule versions. Ship a Maldives template (TGST 17% from 2025-07-01 with history row 16% before; Green Tax USD 12 per person-night for resorts/hotels >50 rooms and USD 6 for ≤50-room inhabited-island guesthouses, children exemptions as configurable; 10% service charge) — mark each rule `verificationStatus: 'unverified'` with source URLs from docs/research/04-connectivity-payments-compliance.md and a note to confirm with MIRA. NEVER hard-code rates in code paths; templates are seed data.
+- Quote engine: quote(stay request) → offers with nightly prices, inclusions, taxes/fees breakdown, totals (net/taxes/fees/gross), policies, restriction violations (explain why an offer is not bookable), and a self-contained, versioned TermsSnapshot that is sufficient to post every night later without reading current configuration (brief §5: agreed terms never silently change).
+- priceChange(terms, change) for change previews: keep agreed nights at agreed prices, price new nights by policy, show differences.
+- Rounding: single documented rounding per line; totals consistent with line sums (prove with property-based-style tests over many random inputs).
+- Data authority domain `rates` (assertWritable) for configuration writes.
+- Events rates.prices.changed / rates.restrictions.changed (coalescible ranges) for distribution.
+- HTTP routes for rate plans, price calendar (bulk update with preview of affected dates), restrictions, packages, policies, tax rules (with effective dating), and POST /quotes. Permissions e.g. rates.ratePlan.manage, rates.price.manage, rates.taxRule.manage (sensitive), rates.quote.read.
+- Seed helper: realistic Maldives demo rates (guesthouse B&B and half board; resort with seasonal BAR, derived non-refundable −10%, all-inclusive package with dining allowance and seaplane transfer inclusion, honeymoon promo).
+
+Tests: rounding/tax compounding unit tests; rate change after booking does not alter a TermsSnapshot (brief §5 + readiness §19 "tax or rate changes affecting future versus historical records"); scenario s19 pricing part (packages + allowances + different taxes); isolation/permissions.
+````
+
+## Follow-up message (2026-11-07T07:32:35.545Z)
 
 ````text
 You are the engineer for Portico's **rates** module (wave 1) — pricing, packages, policies, the single tax & fee engine and the quote engine. First read the shared playbook at /tmp/claude-0/-home-user/4f98af2a-3564-5e4b-aedc-2d94c911507d/scratchpad/wave1-playbook.md and follow it exactly.
@@ -310,6 +335,52 @@ Summary:
 
 If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /root/.claude/projects/-home-user-portico/4f98af2a-3564-5e4b-aedc-2d94c911507d/subagents/agent-a22524f08e4267407.jsonl
 Continue the conversation from where it left off without asking the user any further questions. Resume directly — do not acknowledge the summary, do not recap what was happening, do not preface with "I'll continue" or similar. Pick up the last task as if the break never happened.
+````
+
+## Report (2026-11-07T08:24:21.260Z)
+
+````text
+The rates module is built on `feat/rates-core` in /home/user/wt/rates, in 13 commits; nothing is pushed. I merged main three times as you asked. Lint (including the boundary check), workspace typecheck and the full test run all pass, and the migrations apply cleanly to an empty database.
+
+**What's built** (`modules/rates`, schema `rates`, 14 tables)
+- **Rate plans:** base plans plus derived plans up to two levels deep. Derived plans can't form cycles, even with two people editing at once. Each derived plan chooses per restriction type and per policy whether to inherit from its parent. Also covered: meal plans, channel/company eligibility (negotiated plans with commission or net terms), sell and stay windows, and draft/active/paused/retired status.
+- **Prices:** set per unit type, night and occupancy (base, single, extra adult, child age bands, occupancy overrides). Bulk updates by date ranges and weekdays come with a preview that also lists the derived plans affected. Every change is kept in history with who and when.
+- **Restrictions:** all the listed kinds, with plain-language explanations when a stay breaks one. Staff with the override permission can book through them with a reason; channels never can.
+- **Promotions, packages, inclusions and allowances:** promo codes, early booking, stay-7-pay-6 and combinability rules. Packages can be part of a plan or added to a stay; allowances carry their remainder policy.
+- **Policies:** cancellation deadlines in the property's time zone, guarantee, and deposit schedules. Policy text is generated from the structure.
+- **Tax & fee engine:** rules are dated, cited data. It handles compounding, prices that include tax, caps, exemptions, and four tax-point policies including Maldives time of supply. Activation shows a change report first.
+- **Quote engine and agreed terms:** every offer carries a sealed, versioned TermsSnapshot that is enough to post every night without reading current configuration. `priceChange` handles extensions, shortenings, occupancy and unit-type changes.
+- **Plumbing:** HTTP routes, the universal record contract (rate plans and tax rules only), search provider, events, and the Maldives demo seed.
+
+**Maldives template** comes from main's `maldives-tax-rules.md`: TGST 16%→17%, general-sector GST 8%, Green Tax USD 12 / USD 6 using `mv.registeredRooms` with under-2s exempt, and service charge 10%. The MIRA-sourced rules are marked `verified_official_source`; service charge is `unverified` because its legal basis wasn't confirmed. All carry "adviser to confirm (Q20)".
+
+**Tests:** 105 in rates (70 pure logic, including ~6,000 random cases proving totals always add up exactly; 35 against a real database) plus 2 HTTP end-to-end tests in the API.
+- The required scenario tests pass: S19 pricing (`test/scenario-s19-package-bill-pricing.test.ts`) and rate/tax changes after booking (`test/terms-immutability.test.ts`).
+- The tests found and I fixed four real defects:
+  - closing an old tax version changed later recalculations of past charges;
+  - a free promotional night produced a negative room line;
+  - derived plans inherited sales limits;
+  - per-person inclusions ignored child bands.
+
+**Things that differ from the brief or spec**
+- Amount adjustments on derived plans apply per room-night and don't change extra-adult or child prices; percent adjustments change everything. This is a product decision; it's listed in the README's open questions.
+- Sales limits needed a sales ledger that reservations feeds through two new calls, `recordPlanSale` / `releasePlanSale`.
+- I added a `rates.taxRule.read` permission, since nothing in the spec covered reading tax rules.
+
+**What you need to do at merge**
+- Bind the optional `listUnitTypes` port to inventory. Until then, unit type ids aren't checked on price writes and the demo seed can't run.
+- Register the demo seed: `{ name: 'rates', run: createRatesDemoSeed(rates, ratesPorts) }`, after the inventory step.
+- Copy the additive contract changes from the README into `domain-map.md`. The main ones: richer `ChargeLine` for `computeTaxes` (including `taxPointDate`), `computeTaxesDetailed`, `postingPlan`, `instantiatePaymentSchedule`, and the sales-ledger calls.
+- Foundation request: a platform `getPropertyFacts` that needs no permission. Rates is currently bound to `platform.getProperty` using the system authorizer.
+
+**Gaps:**
+- Pricing recommendations, mirroring rates from an external system, and forwarding rate edits to one aren't built; rate writes are refused when another system owns rates.
+- Second-currency plans need exchange rates in quotes and don't get them yet.
+- The tax change report can't list affected stays; reservations and finance own that data.
+- Policies, packages, inclusions and promotions return plain records, not the full record contract yet.
+
+Readiness is R3 at most (implemented and tested internally); none of it is validated with staff or approved externally.
+
 ````
 
 ## Report (2026-11-07T08:24:21.260Z)

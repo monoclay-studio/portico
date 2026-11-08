@@ -1,10 +1,18 @@
 # Agent run: Parity: finance, payments, POS, accounting
 
 - Started: 2026-11-07T08:12:22.021Z · last activity: 2026-11-07T11:42:41.944Z
-- Turns: 125 · tool uses: 154 · output tokens: 233,253
+- Turns: 125 · tool uses: 247 · output tokens: 233,253
 - Type: general-purpose
 
 ## Brief (2026-11-07T08:12:22.021Z)
+
+````text
+You are a Portico competitive-parity researcher. Read and follow /tmp/claude-0/-home-user/4f98af2a-3564-5e4b-aedc-2d94c911507d/scratchpad/parity-brief.md exactly.
+Worktree: /home/user/wt/parity-finance (branch docs/parity-finance). Cluster name: "finance". OPEN_QUESTIONS range: Q130–Q139.
+Your modules (one parity file each): finance (folios, routing/billing rules, postings, deposits, AR/city ledger, invoices & credit notes, cashiering, FX, commissions), payments, day-close (night audit / end of day), accounting (GL, AP, bank reconciliation, assets, budgets, statements — spec being written at /home/user/wt/backofhouse/docs/specs/accounting.md), fnb-pos (outlet POS, kitchen, room charge — spec at /home/user/wt/backofhouse/docs/specs/fnb-pos.md), procurement and stock (specs at /home/user/wt/backofhouse/docs/specs/), analytics (reports, KPIs, BI). Primary baselines: OPERA Cloud Cashiering, Accounts Receivable, End of Day, Commissions, Reports user guides; Apaleo finance/accounting API; Mews payments & accounting; Oracle Simphony / Lightspeed / Toast for POS; Xero/QuickBooks/NetSuite for accounting expectations; Agilysys and Infor for resort finance.
+````
+
+## Follow-up message (2026-11-07T08:12:22.021Z)
 
 ````text
 You are a Portico competitive-parity researcher. Read and follow /tmp/claude-0/-home-user/4f98af2a-3564-5e4b-aedc-2d94c911507d/scratchpad/parity-brief.md exactly.

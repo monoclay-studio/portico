@@ -1,10 +1,37 @@
 # Agent run: Wave1: payments module
 
 - Started: 2026-11-07T07:32:35.579Z · last activity: 2026-11-07T12:12:18.426Z
-- Turns: 329 · tool uses: 364 · output tokens: 649,740
+- Turns: 329 · tool uses: 524 · output tokens: 649,740
 - Type: general-purpose
 
 ## Brief (2026-11-07T07:32:35.579Z)
+
+````text
+You are the engineer for Portico's **payments** module (wave 1). Read ADR-0007 carefully: the hotel's legal entity is the merchant of record; Monoclay never holds guest funds; the domain is provider-agnostic; unknown outcomes are `pending_verification`, never guessed. First read the shared playbook at /tmp/claude-0/-home-user/4f98af2a-3564-5e4b-aedc-2d94c911507d/scratchpad/wave1-playbook.md and follow it exactly. Also read docs/research/04-connectivity-payments-compliance.md Part B fully and docs/product/operational-readiness-brief.md §7–8.
+
+Your worktree: /home/user/wt/payments (branch feat/payments-core). Test DB prefix: PORTICO_TEST_DB_PREFIX=w1_payments. Module path: modules/payments (package @portico/payments, schema `payments`). Spec: /home/user/wt/product/docs/specs/payments.md (may still be in progress — re-check later).
+
+Build (provider contract in domain-map § payments):
+- Payment accounts per legal entity (provider, external account id, capabilities, onboarding status, country/currency support, status: pending/active/restricted/disabled). Never store raw card data; payment methods are provider tokens with brand/last4/expiry/holder name, owner (guest profile/company), MIT agreement flag, token portability notes.
+- PaymentProvider adapter interface (authorize, incrementAuthorization, capture, void, charge, refund, retrieve/lookup by idempotency key, parse+verify webhook) with:
+  1) SimulatorProvider (default for demo/trial/training and tests): deterministic scenario controls — approve, decline (with reason codes), soft decline, timeout-then-succeeded, timeout-then-failed, duplicate webhooks, out-of-order webhooks, provider outage, delayed settlement, dispute. Uses approved TEST card semantics only.
+  2) StripeConnectProvider: direct charges on the hotel's connected account (Stripe-Account header), PaymentIntents with manual capture for authorizations, idempotency keys forwarded, application fee optional, webhook signature verification. Implement against Stripe's HTTP API using fetch with an injectable HTTP client; unit-test with recorded/mock responses ONLY. Never call real Stripe; no keys exist. Gate with assertExternalEffectAllowed('payment.charge'): live → live, sandbox → test mode keys only, else simulator.
+- Provider-operation journal: before each provider call persist intent (operation, amount, idempotency key, attempt); call; persist outcome. Timeouts/network errors → status pending_verification (scenario s05: payment succeeds externally but the screen times out — UI must show pending, and reconciliation later records exactly ONE successful payment).
+- State machines: authorization (pending_verification, authorized, partially_captured, captured, voided, expired, failed), payment (pending_verification, succeeded, failed), refund (pending_verification, succeeded, failed) — refunds are separate objects referencing the payment; partial refunds; refund retry after interruption never refunds twice (scenario s06).
+- Webhook intake: dedupe by provider event id; out-of-order safe (state transitions are monotonic); unknown events stored.
+- Reconciliation job (callable function + worker consumer): resolves pending_verification by provider lookup; flags mismatches as payment exceptions.
+- LedgerPort to finance (recordPayment, recordRefund, recordDeposit, recordPayout) called ONLY after provider-confirmed success, idempotent by key. Payouts: record payout with gross/fees/net and the payments included; payout ≠ revenue; failed payouts flagged.
+- Payment requests / links (amount, purpose, expiry, status: open/paid/expired/cancelled) — "paid" only when the underlying payment succeeded.
+- OTA virtual cards: VCC record with activation date/amount/currency, charge-when-active scheduling, funding-delay retry; card data itself never stored (assume vault/proxy token; document the PCI vault dependency as unresolved).
+- Disputes: record, evidence checklist, status, ledger implications via finance port (document).
+- Provider outage handling (scenario s20 payments part): circuit-breaker state per account visible via API; staff get a clear "card payments unavailable — accept cash / payment link later / record manual authorization" set of actions; nothing shows success that didn't happen.
+- Data authority domain `payments` (assertWritable).
+- HTTP routes for accounts, methods (tokens only), authorizations/captures/charges/refunds (Idempotency-Key mandatory), payment requests, webhooks (public, signature-verified), status, exceptions. Permissions e.g. payments.payment.collect, payments.payment.refund (sensitive), payments.account.manage (sensitive), payments.paymentRequest.create, payments.payment.read.
+
+Tests: s05, s06, s20 (payments), duplicate/out-of-order webhooks, environment safety (demo can never reach Stripe), decline messages that explain recovery, isolation/permissions.
+````
+
+## Follow-up message (2026-11-07T07:32:35.579Z)
 
 ````text
 You are the engineer for Portico's **payments** module (wave 1). Read ADR-0007 carefully: the hotel's legal entity is the merchant of record; Monoclay never holds guest funds; the domain is provider-agnostic; unknown outcomes are `pending_verification`, never guessed. First read the shared playbook at /tmp/claude-0/-home-user/4f98af2a-3564-5e4b-aedc-2d94c911507d/scratchpad/wave1-playbook.md and follow it exactly. Also read docs/research/04-connectivity-payments-compliance.md Part B fully and docs/product/operational-readiness-brief.md §7–8.
@@ -143,6 +170,61 @@ Summary:
 
 If you need specific details from before compaction (like exact code snippets, error messages, or content you generated), read the full transcript at: /root/.claude/projects/-home-user-portico/4f98af2a-3564-5e4b-aedc-2d94c911507d/subagents/agent-a9a49381734d6041d.jsonl
 Continue the conversation from where it left off without asking the user any further questions. Resume directly — do not acknowledge the summary, do not recap what was happening, do not preface with "I'll continue" or similar. Pick up the last task as if the break never happened.
+````
+
+## Report (2026-11-07T08:28:25.450Z)
+
+````text
+## Payments wave 1 — `feat/payments-core`, worktree `/home/user/wt/payments`
+
+The payments module is built and committed, and all checks passed on the last run. The finance ledger is still a stub, so in the composed app every confirmed card payment shows "not yet on the bill" (`ledger: failed`) and raises an urgent exception until you bind finance. Stripe Connect has only been tested against recorded/mock responses; it has never called Stripe (no keys exist), so it is R1 as an integration.
+
+**What's built**
+- **Accounts and methods:** a payment account per legal entity (merchant of record checked against the property's legal entity). Payment methods are provider tokens only. Card numbers are refused by the API schema, by the service and by a database check, and the schema has no column that could hold one.
+- **Simulator:** the default in demo, trial and training. It covers approve, decline with reason codes, soft decline, timeout-then-succeeded, timeout-then-failed, outage (refused or timing out), duplicate and out-of-order webhooks, delayed settlement, dispute and virtual-card funding delay. It accepts approved test tokens only.
+- **Stripe Connect:** direct charges on the hotel's connected account, manual capture for holds, idempotency keys forwarded, optional application fee, lookups and webhook signature checks.
+- **Environment safety:** demo, trial and training always use the simulator, even for a Stripe account. Sandbox accepts test keys only, live accepts live keys only, and simulator accounts are refused in live.
+- **Operation journal:** each provider call is recorded before it is sent and sent at most once. A timeout becomes `pending_verification` and is resolved only by provider lookup or webhook, never by re-sending.
+- **State machines and refunds:** holds, payments and refunds only move forward. Refunds are separate records with partial refunds; total refunds can never exceed what was collected (database check).
+- **Webhooks:** duplicates are ignored, late older events change nothing, and unknown events are stored.
+- **Reconciliation:** a callable function, two worker consumers, and scheduled jobs (`payments.reconcile`, `payments.chargeDueVirtualCards`).
+- **Other features:** payment requests (paid only when the provider confirms), OTA virtual cards, disputes with an evidence checklist, payouts with gross/fees/net, and a per-account circuit breaker that shows staff the safe alternatives.
+- **Route D, as you asked:** card payments on the hotel's own terminal, cash and bank transfers are recorded as `recorded_unverified`, posted to the ledger at record time, and never shown as provider-verified. A CSV statement import matches them; mismatches become exceptions with an owner, and corrections are linked adjustments.
+- **Record contract, search, demo seed:** done; the demo seed is `seedPaymentsDemo`, ready for you to register.
+
+**Tests:** 96 module tests (38 domain, 15 Stripe adapter, 43 on Postgres) plus 6 API end-to-end. The payments suite passed 4 times in a row; the API suite (17 tests) passed; lint and typecheck are green.
+
+| Scenario | Test file |
+|---|---|
+| s05 payment timeout | `test/scenario-s05-payment-timeout.test.ts` |
+| s06 refund retry | `test/scenario-s06-refund-retry.test.ts` |
+| s20 provider outage (payments part) | `test/scenario-s20-provider-outage.test.ts` |
+| s05 and s20 over HTTP | `apps/api/test/payments.test.ts` |
+
+**Contract changes** (README § Contract changes):
+- Provider functions now take `propertyId`.
+- Ledger targets for charges and captures are a folio or a booking deposit.
+- The ledger port gains `method` and `verification` fields, `recordRefund.bookingId`, and two new functions: `recordPaymentAdjustment` and `recordDisputeMovement`.
+- Views return `status` as a per-family map.
+
+**Ports to bind**
+- **Finance ledger port:** currently `unavailablePort('finance')` in `composition.ts`. Postings are idempotent by key, so the backlog posts once on reconciliation after you bind it.
+- **Platform port:** already bound to the real platform module.
+- **Stripe secrets:** read from `PAYMENTS_STRIPE_*` environment variables, none of which are set.
+
+**For you at merge** (`modules/payments/FOUNDATION_REQUESTS.md`):
+- `@portico/testing` has a rare teardown race that I worked around in my own test harness.
+- The front-desk role template lacks `payments.payment.read`.
+- Apply the contract changes to the domain map.
+- Move `modules/payments/PARITY.md` to `docs/parity/payments.md`; the parity gate passed on a scratch copy.
+
+**Risks and gaps**
+- Not built: collection plans and payment automation, refund approval thresholds, hosted card entry/3DS pages, automatic re-authorization, a full provider balance sweep, local Maldivian acquirer adapters (Q2), and forwarding payments to an external folio.
+- The virtual-card PCI vault is an unresolved dependency.
+- The "one pending collection at a time" guard works per folio/booking, which is conservative and may briefly block parallel split payments on the same folio.
+- The Stripe API version is pinned to `2024-06-20`; it needs checking before the first sandbox test.
+
+Owner questions are listed in the README for you to add to `docs/OPEN_QUESTIONS.md`.
 ````
 
 ## Report (2026-11-07T08:28:25.450Z)
