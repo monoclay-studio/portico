@@ -180,23 +180,23 @@ describe('order within a booking (P1-2)', () => {
     expect(await booking(org, id)).toEqual([{ status: 'confirmed', nights: 4 }]);
   });
 
-  it('a zone-less hub time is UTC, whatever the server’s zone (a 1-second-later change is not taken for 14 hours older)', async () => {
-    const tz = process.env.TZ;
-    process.env.TZ = 'Pacific/Kiritimati'; // UTC+14: a local-time parse would put the change 14 h before its creation
-    try {
-      const { org, c } = await ready();
-      const id = `BK-${newId()}`;
-      await store(org, c, hubRev(c, id, { status: 'new', insertedAt: '2026-11-07T06:00:00Z' }));
-      await processAll(org, c);
-      const mod = hubRev(c, id, { status: 'modified', rooms: rooms(4), insertedAt: '2026-11-07T06:00:01' });
-      await store(org, c, mod);
-      await processAll(org, c);
-      expect((await stateOf(org, c, mod.revisionId)).status.revision).toBe('applied');
-      expect(await booking(org, id)).toEqual([{ status: 'confirmed', nights: 4 }]);
-    } finally {
-      if (tz === undefined) delete process.env.TZ;
-      else process.env.TZ = tz;
-    }
+  // Zone-less hub times: src/domain/domain.test.ts parses them in a process running at UTC+14 (the test runner does
+  // not apply a runtime TZ change, so an in-process check would prove nothing).
+  it('a change that arrives behind an earlier change parked as an orphan parks itself (visible, escalated)', async () => {
+    const { org, c } = await ready();
+    const id = `BK-${newId()}`;
+    const m1 = hubRev(c, id, { status: 'modified', notes: 'first', insertedAt: '2026-11-07T06:00:10Z' });
+    const m2 = hubRev(c, id, { status: 'modified', rooms: rooms(4), insertedAt: '2026-11-07T06:00:20Z' });
+    await store(org, c, m1);
+    await processAll(org, c);
+    await store(org, c, m2);
+    await processAll(org, c);
+    expect((await stateOf(org, c, m2.revisionId)).status.revision).toBe('parked');
+    await store(org, c, hubRev(c, id, { status: 'new', insertedAt: '2026-11-07T06:00:00Z' }));
+    await processAll(org, c);
+    expect((await stateOf(org, c, m1.revisionId)).status.revision).toBe('applied');
+    expect((await stateOf(org, c, m2.revisionId)).status.revision).toBe('applied');
+    expect(await booking(org, id)).toEqual([{ status: 'confirmed', nights: 4 }]);
   });
 
   it('two changes the hub cannot separate are applied in arrival order with a discrepancy to check the extranet', async () => {

@@ -1,3 +1,6 @@
+import { spawnSync } from 'node:child_process';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   compareCell,
@@ -293,6 +296,22 @@ describe('revisions — ordering, parking and translation', () => {
     }
   });
 
+  it('a zone-less hub time is UTC whatever the process time zone (checked in a process running at UTC+14)', () => {
+    // The test runner may not apply a runtime TZ change, so the parse runs in a fresh process with TZ set.
+    const here = dirname(fileURLToPath(import.meta.url));
+    const pkg = join(here, '..', '..');
+    const out = spawnSync(
+      join(pkg, 'node_modules', '.bin', 'tsx'),
+      [
+        '-e',
+        `import('${join(here, 'revisions.ts').replace(/\\/g, '/')}').then((m) => console.log(m.hubMicrosOf('2026-11-07T06:00:01.25')))`,
+      ],
+      { env: { ...process.env, TZ: 'Pacific/Kiritimati' }, encoding: 'utf8', cwd: pkg },
+    );
+    expect(out.stderr).toBe('');
+    expect(Number(out.stdout.trim())).toBe(Date.parse('2026-11-07T06:00:01Z') * 1000 + 250_000);
+  });
+
   describe('order within a booking (P1-2: hub ordinal, hub time, lifecycle, arrival — never a hash)', () => {
     const r = (id: string, o: Partial<BookingRevision>): BookingRevision => ({
       id,
@@ -360,6 +379,21 @@ describe('revisions — ordering, parking and translation', () => {
       expect(orderWithinBooking(a, all).earlierUnsettled.sort()).toEqual(['b', 'c']);
       expect(orderWithinBooking(b, all).earlierUnsettled).toEqual(['c']);
       expect(orderWithinBooking(c, all).earlierUnsettled).toEqual([]);
+    });
+
+    it('a creation precedes its changes even when the hub stamped it later (skewed hub clocks)', () => {
+      const c = cancel({ hubMicros: 100, state: 'applied', arrival: 1 });
+      const n = create({ hubMicros: 200, arrival: 2 });
+      expect(orderWithinBooking(n, [c, n]).laterApplied).toBe('c');
+      const n2 = create({ hubMicros: 200, state: 'applied', arrival: 1 });
+      const c2 = cancel({ hubMicros: 100, arrival: 2 });
+      expect(orderWithinBooking(c2, [n2, c2])).toMatchObject({ laterApplied: null, earlierUnsettled: [] });
+    });
+
+    it('a change never waits behind an EARLIER change parked as an orphan (it parks itself, visibly)', () => {
+      const m1 = r('m1', { hubMicros: 1, state: 'parked', parkReason: 'orphan', arrival: 1 });
+      const m2 = r('m2', { hubMicros: 2, arrival: 2 });
+      expect(orderWithinBooking(m2, [m1, m2]).earlierUnsettled).toEqual([]);
     });
 
     it('the hub ordinal wins when every revision has one', () => {

@@ -113,6 +113,8 @@ describe('blocked work never keeps the organization due (P1-1)', () => {
     expect((await openException(org, c, 'credentials_invalid'))?.occurrences).toBe(1);
 
     // The unblocking transition pulls the schedule: due now, one pass sends the change and the acknowledgement.
+    await tick(org); // the stored next wake is the 15-minute ceiling again
+    expect(await storedDue(org)).toBeGreaterThan(h.clock.now().getTime() + 60_000);
     await svc.verifyConnection(h.t.db, h.dist.deps, org.ctx, c.connectionId);
     expect(await storedDue(org)).toBeLessThanOrEqual(h.clock.now().getTime());
     h.clock.advance(1_000);
@@ -157,6 +159,8 @@ describe('blocked work never keeps the organization due (P1-1)', () => {
     for (const e of blocked) expect(e.occurrences).toBe(1);
     expect((await org.run((tx) => svc.getHealth(tx, h.dist.deps, c.connectionId))).health).toBe('blocked');
 
+    await tick(org);
+    expect(await storedDue(org)).toBeGreaterThan(h.clock.now().getTime() + 60_000);
     await setAuthority('portico');
     await h.drain();
     expect(await storedDue(org)).toBeLessThanOrEqual(h.clock.now().getTime());

@@ -104,8 +104,8 @@ export interface BookingRevision extends RevisionOrderKey {
 
 /**
  * A total order over the revisions of ONE booking (P1-2), consistent with the hub's sequence: the hub's ordinal when
- * every revision has one; else the hub's timestamp when every revision has one and they differ; else lifecycle
- * meaning (new < modified < cancelled); else first arrival. A key component is used only when the whole booking has
+ * every revision has one; else a creation first; else the hub's timestamp when every revision has one and they
+ * differ; else lifecycle meaning (modified < cancelled); else first arrival. A key component is used only when the whole booking has
  * it, so the order stays transitive when the hub sends some revisions without it.
  */
 export function bookingComparator(all: readonly RevisionOrderKey[]) {
@@ -114,6 +114,9 @@ export function bookingComparator(all: readonly RevisionOrderKey[]) {
   return (a: RevisionOrderKey, b: RevisionOrderKey): { cmp: number; byArrival: boolean } => {
     if (useSeq && a.hubSequence !== b.hubSequence)
       return { cmp: Math.sign((a.hubSequence ?? 0) - (b.hubSequence ?? 0)), byArrival: false };
+    // A creation precedes every change of its booking, whatever the hub's clocks say (no change exists before it):
+    // a skewed hub time can never make a creation "older news" than its own cancellation.
+    if ((a.rank === 0) !== (b.rank === 0)) return { cmp: a.rank === 0 ? -1 : 1, byArrival: false };
     if (useTs && a.hubMicros !== b.hubMicros)
       return { cmp: Math.sign((a.hubMicros ?? 0) - (b.hubMicros ?? 0)), byArrival: false };
     if (a.rank !== b.rank) return { cmp: Math.sign(a.rank - b.rank), byArrival: false };
