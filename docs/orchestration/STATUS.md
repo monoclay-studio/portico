@@ -218,6 +218,20 @@
   - **Owner, 05:4x:** "don't let it effect your current work though. AT ALL". The scope limit never reduces the rigor
     of this wave: full reviews, full fix rounds with self-check v6, re-reviews until clean, and the full merge procedure.
 
+- **2026-11-08 07:0x UTC — STOPPED: extra-usage budget almost spent (owner: "$14 left").** All agents were stopped
+  and `tools/checkpoint.sh` committed WIP and pushed every active branch. (Push failures on `docs/parity-finance` and
+  `ux/lab` are old merged or disposable branches.) **RESUME (Wednesday 2026-11-11 17:03 UTC task):** resume each agent
+  with "your WIP was committed and pushed as a checkpoint; build on top of it, never amend it", in this order:
+  1. integration-step fix round 7, mid-way: the model-based money test exists; it was adding refund consistency and
+     concurrent-order alternatives;
+  2. distribution fix round 1, mid-way: 3 mutants M6, M7 and M10 survived its new ordering tests and need tightening;
+  3. migration fix round 1, mid-way: cutover.ts service changes were next;
+  4. the day-close focused re-review, stopped early: relaunch it from the same brief
+     (`reviews/review-day-close-2.md` may be partial).
+
+  Then focused re-reviews of integration-step (#8), distribution and migration, then merges. Then the 22:55 order item
+  4 onward.
+
 ## 1. Owner, product and how to work with the owner
 
 - Owner: founder of **Monoclay LLC** (Delaware, Stripe Atlas), based in the Maldives. Product: **Portico** (final name).
