@@ -1,7 +1,7 @@
 # Readiness register
 
 Single source of truth for the readiness of every capability and integration (CLAUDE.md §7; readiness brief §2).
-Maintained by the orchestrating session; every change cites evidence. Last updated: 2026-11-07.
+Maintained by the orchestrating session; every change cites evidence. Last updated: 2026-11-08 (distribution rows: module agent, fix round 1 P3-3, pending orchestrator review).
 
 **Scale (technical level):** R1 Planned · R2 Demonstrated with sample data · R3 Implemented and tested internally ·
 R4 Tested against the provider's sandbox (integrations only) · R5 Submitted for required external approval ·
@@ -63,7 +63,7 @@ External approval vocabulary: **Not required** · **Not started** · **Submitted
 | Dispute evidence pack | R1 | Not required | Not started | — |
 | Operations: housekeeping, inspections, maintenance, service requests, escalation | R1 | Not required | Not started | — |
 | Day Close (resumable, idempotent) | R1 | Not required | Not started | — |
-| Distribution core: mappings, ARI queue, revision log, acks, health panel | R1 | Not required | Not started | — |
+| Distribution core: mappings, ARI queue, revision log, acks, health panel | R3 (branch `feat/distribution-channex`, not yet merged) | Not required | Not started | `pnpm --filter @portico/distribution test`: 20 files, 151 passed + 2 todo, 2026-11-08, distribution module agent, against real Postgres with the real platform/inventory/rates/secrets bindings and a strict reservations fake; steward review fix round 1 applied (`docs/orchestration/reviews/review-distribution.md`). Real channel ingestion blocked on main by reservations' rates binding (README). |
 | OTA simulator | R1 | Not required | N/A | — |
 | Groups: blocks, allotments, pickup, rooming lists, function space, events | R1 | Not required | Not started | — |
 | Communications workspace, templates, automations, translation | R1 | Not required | Not started | — |
@@ -90,7 +90,7 @@ External approval vocabulary: **Not required** · **Not started** · **Submitted
 | Maldives Islamic Bank | R1 | Not started | Not started | §2.5 |
 | "CBM" (identity to confirm) | R1 | Not started | Not started | §2.6 |
 | PCI vault / Channex PCI | R1 | Not started (certified-partner status required) | Not started | §2.9 |
-| Channex (ARI, bookings, mapping) | R1 | Not started (certification + contract required) | Not started | §3.1 |
+| Channex (ARI, bookings, mapping) | R3 — adapter tested against Portico's own Channex **simulator** only (no call to the real Channex API; a simulator is not a working integration); R4 needs the owner's staging key | Not started (certification + contract required) | Not started | §3.1; `modules/distribution/README.md` "Channex: what is verified and what is not" (WIRE_FACTS statuses) and "R4 staging plan"; tests as above, 2026-11-08 |
 | Booking.com via Channex | R1 | Not started (via Channex; hotel authorization) | Not started | `channel-capability-matrix.md` |
 | Expedia via Channex | R1 | Not started | Not started | same |
 | Airbnb via Channex | R1 | Not started | Not started | same |

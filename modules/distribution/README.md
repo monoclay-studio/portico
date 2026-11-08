@@ -2,33 +2,49 @@
 
 Status: wave 2, increment 1 (`docs/strategy/modules/distribution.md` §5) — the owner's **Channex readiness** direction
 (spec §3.2). Readiness: **R3 (implemented and tested internally, against a simulator)**. Nothing here has touched the
-real Channex API: that is R4 and needs the owner's Channex staging key (§ "R4 staging plan" below).
+real Channex API: that is R4 and needs the owner's Channex staging key (§ "R4 staging plan" below). Steward review fix
+round 1 (2026-11-08) is applied: P1-1, P1-2, P2-1…P2-8, G-1 and P3-1…P3-9 (`docs/orchestration/reviews/review-distribution.md`).
 
 ## What is built, by owner requirement
 
 | Owner requirement (verbatim) | What exists | Proof (test file → test) |
 |---|---|---|
-| **1. ARI Engine** — "track and batch availability, rate, and restriction (ARI) changes (no heavy database polling loops)" | Outbox consumer `distribution.ari.capture` on `inventory.availability.changed`, `rates.prices.changed`, `rates.restrictions.changed` (and `platform.dataAuthority.changed`) marks **which cells changed** in a dirty set — never values — per (connection, kind, unit type, rate plan), as merged half-open ranges (overlapping AND adjacent ranges merge). Values are read from inventory (`sellable`) and rates (price + effective restrictions) only when a message is built, so only the latest state per night is ever sent. Full resync on connect, every 24 h (400 nights) and on demand (date range, kinds) — non-destructive: values are re-sent, nothing is unlisted. Last-acknowledged state per cell (`channel_state`) beside Portico's value; the discrepancy check turns unexplained differences into discrepancies and re-pushes them. | `ari-engine.test.ts` "fifty price edits in a minute become ONE message…", "connect → full resync…"; `lifecycle.test.ts` "range resync re-sends only that range and never removes anything; the nightly resync runs every 24 h", "a difference no queued work explains becomes a discrepancy, is re-pushed and resolves itself" |
-| **2. Outbox & Queue** — "batches updates into Channex API calls while respecting their 20 ARI/minute rate limits" | One **open message** per (connection, kind) with a stable, idempotent message id; while it waits (budget, backoff) newer changes are **absorbed** into it, so a burst becomes a few large calls. Per-connection **budget**: 10 availability + 10 restriction requests per minute by default (= the owner's 20 ARI/minute; Channex's published split, see below), configurable per connection. Acceptance recorded per message; partial acceptance per value. Classification: payload error → never retried, exception with a plain-language fix, cells shown "not accepted"; transient → 5 s → 10 s → 20 s → 40 s → every minute, urgent after 30 min (retries continue, the exception closes itself on success); 429 → budget paused ≥ 60 s; 401/403 → this connection only stops, urgent exception (E04). Stop-sell protection (DST-R07) and manual stop-sell. No publication while another system is authoritative for availability (all ARI) or rates (rates/restrictions) — DST-I05. Environment safety: demo/trial/training → simulator, sandbox → Channex **staging**, live → production only with platform's live scope (refused on main). | `ari-engine.test.ts` "a burst far above the budget never exceeds 10 requests per minute per kind, and every change arrives", "20 concurrent reservations against a limit of 10 → exactly 10 succeed", "transient errors back off 5 → 10 → 20 s on the SAME message…", "a payload error is never retried…", "HTTP 429 pauses the connection budget for a minute", "a revoked key stops ARI for that connection only…", "nothing is published while an external system is authoritative…", "a sandbox organization reaches Channex STAGING only…"; `scenario-s20-hub-outage.test.ts` |
-| **3. Webhook Endpoint** — "receive, parse, and durably save booking delivery revisions" | Public `POST /v1/distribution/webhooks/channex/:endpointId` (unguessable endpoint id → organization via a SECURITY DEFINER router; rate-limited). Authentication is **pluggable**: `header_secret` (default — a 256-bit token Portico generates, configured in the Channex webhook `headers`; only its SHA-256 is compared, in constant time) or `hmac_sha256` (`t=…,v1=HMAC(secret,"t.body")`, ±300 s). Each revision is stored **immutably** (append-only table) keyed by (connection, channel booking id, revision id) before answering 200; redeliveries are logged `duplicate`, the same id with other content is a `conflict` (first stands, urgent exception). Notification-only webhooks (`send_data=false`) schedule an immediate pull. Per-property ordered processing (advisory lock; revision order within a booking); orphans (modification/cancellation of an unknown booking) are **parked**, re-processed when the creation arrives or a recovery pull finds it, urgent after 15 min, with "Apply as new" / "Dismiss" recovery. Recovery: pull of not-acknowledged revisions (on webhook gaps, on orphan, every 15 min as a safety net) and "re-request since T" reconciliation that also flags Portico bookings the hub does not list. Unmapped bookings are parked with a **provisional inventory hold** and an urgent alert (DST-R10/I03). | `inbound.test.ts` (all), `scenario-s02-channel-ingestion.test.ts`, `isolation-permissions.test.ts` "…B's token never authenticates A's endpoint" |
+| **1. ARI Engine** — "track and batch availability, rate, and restriction (ARI) changes (no heavy database polling loops)" | Outbox consumer `distribution.ari.capture` on `inventory.availability.changed`, `rates.prices.changed`, `rates.restrictions.changed` (and `platform.dataAuthority.changed`) marks **which cells changed** in a dirty set — never values — per (connection, kind, unit type, rate plan), as merged half-open ranges (overlapping AND adjacent ranges merge). Values are read from inventory (`sellable`) and rates (price + effective restrictions) only when a message is built, so only the latest state per night is ever sent. Full resync on connect, daily at the property's quiet hour (03:00 local by default; 400 nights) and on demand (date range, kinds) — non-destructive: values are re-sent, nothing is unlisted. An event Portico cannot read raises an urgent exception and re-sends the whole kind (never a silent drop). No polling: see below. Last-acknowledged state per cell (`channel_state`) beside Portico's value; the discrepancy check turns unexplained differences into discrepancies and re-pushes them. | `ari-engine.test.ts` "fifty price edits in a minute become ONE message…", "connect → full resync…"; `lifecycle.test.ts` "range resync re-sends only that range…", "a difference no queued work explains becomes a discrepancy…"; `no-polling.test.ts` (A1/A2 inverted and siblings); `change-capture.test.ts` |
+| **2. Outbox & Queue** — "batches updates into Channex API calls while respecting their 20 ARI/minute rate limits" | One **open message** per (connection, kind) with a stable, idempotent message id; while it waits (budget, backoff) newer changes are **absorbed** into it, so a burst becomes a few large calls. Per-connection **budget**: 10 availability + 10 restriction requests per minute by default (= the owner's 20 ARI/minute; Channex's published split, see below), configurable per connection, accounted on the **database clock** shared by every worker and counted from each request's completion plus a margin (below). Acceptance recorded per message only when the hub's answer positively confirms it; partial acceptance per value; an answer Portico does not recognise leaves the message **pending verification** (never "accepted"). Classification: payload error → never retried, exception with a plain-language fix, cells shown "not accepted"; transient → 5 s → 10 s → 20 s → 40 s → every minute, urgent after 30 min (retries continue, the exception closes itself on success); 429 → budget paused ≥ 60 s; 401/403 → this connection only stops, urgent exception (E04). Stop-sell protection (DST-R07) and manual stop-sell. No publication while another system is authoritative for availability (all ARI) or rates (rates/restrictions) — DST-I05. Environment safety: demo/trial/training → simulator, sandbox → Channex **staging**, live → production only with platform's live scope (refused on main). | `budget-clock.test.ts`; `hub-modes.test.ts` (ARI answer shapes, calendar-minute limits); `ari-engine.test.ts` "a burst far above the budget never exceeds 10 requests per minute per kind, and every change arrives", "20 concurrent reservations against a limit of 10 → exactly 10 succeed", "transient errors back off 5 → 10 → 20 s on the SAME message…", "a payload error is never retried…", "HTTP 429 pauses the connection budget for a minute", "a revoked key stops ARI for that connection only…", "nothing is published while an external system is authoritative…", "a sandbox organization reaches Channex STAGING only…"; `scenario-s20-hub-outage.test.ts` |
+| **3. Webhook Endpoint** — "receive, parse, and durably save booking delivery revisions" | Public `POST /v1/distribution/webhooks/channex/:endpointId` (unguessable endpoint id → organization via a SECURITY DEFINER router). Limits are keyed on the **endpoint**, never on the sender's address (the hub sends every hotel's webhooks from a few addresses): a delivery that passes the token check is never limited; refused requests are counted on one aggregated row per connection and answered 429 past the limit, nothing written. Authentication is **pluggable**: `header_secret` (default — a 256-bit token Portico generates, configured in the Channex webhook `headers`; only its SHA-256 is compared, in constant time) or `hmac_sha256` (`t=…,v1=HMAC(secret,"t.body")`, ±300 s). Each revision is stored **immutably** keyed by (connection, channel booking id, revision id) before answering 200 (the only change ever allowed is the redaction of the guest's data — erasure or retention, below); redeliveries are logged `duplicate`, the same id with other content is a `conflict` (first stands, urgent exception). Notification-only webhooks (`send_data=false`) schedule an immediate pull. Per-property ordered processing (advisory lock) and, within a booking, the hub's order: hub time to the microsecond (zone-less read as UTC), then lifecycle (new < modified < cancelled), then arrival — never a hash; a revision ordered before an applied one is `stale` (decided by Portico, never sent to reservations); two changes the hub cannot separate are applied by arrival with a discrepancy; orphans (modification/cancellation of an unknown booking) are **parked**, re-processed when the creation arrives or a recovery pull finds it, urgent after 15 min, with "Apply as new" / "Dismiss" recovery. Recovery: pull of not-acknowledged revisions (on webhook gaps, on orphan, every 15 min as a safety net) and "re-request since T" reconciliation that also flags Portico bookings the hub does not list. Unmapped bookings are parked with a **provisional inventory hold** and an urgent alert (DST-R10/I03). | `inbound.test.ts` (all), `revision-order.test.ts`, `webhook-abuse.test.ts`, `hub-modes.test.ts` (timestamps, webhook payload, pagination), `scenario-s02-channel-ingestion.test.ts`, `isolation-permissions.test.ts` "…B's token never authenticates A's endpoint" |
 | **4. Acknowledge Flow** — "sends back booking confirmations/acknowledgments to Channex once received" | The revision's outcome, the reservations change and the acknowledgement due date commit **in one transaction** (`reservations.ingestChannelBooking` runs in distribution's transaction, in a savepoint). Acks are claimed only in a later transaction and only for final outcomes (also a database CHECK: `ack_state = 'not_due' or state in (applied, duplicate, stale, rejected)`). Retried until accepted (same backoff, urgent after 30 min — Channex e-mails the hotel after 30 min unacknowledged). A revision that failed to apply is never acknowledged: retryable failures retry with backoff; refusals become an exception with Retry / Dismiss (a person's Dismiss is recorded, then acknowledged). Duplicates of a settled revision are acknowledged again, never applied twice. | `inbound.test.ts` "while the booking transaction is still open, no acknowledgement can be sent; after commit it is" (a genuinely concurrent probe), "a revision that failed to apply is never acknowledged…", "a revision the reservations module refuses is rejected…", "a lost acknowledgement makes the hub resend…", "10 concurrent deliveries and 5 concurrent processors…"; `regressions.test.ts` "an acknowledgement can never be due for a revision that is received, failed or parked (CHECK)" |
 
 ### Rate limit: why a sliding-window budget, not a classic token bucket
 
 A continuous-refill bucket of capacity N refilled at N per minute allows N requests at second 0 and another N during
 the next 59 seconds — up to **2N in one minute**, which a provider counting per minute answers with HTTP 429. The
-budget here is a token bucket whose tokens each return exactly 60 s after use: at most N in **any** 60-second window,
-bursts of N allowed, N per minute sustained (`src/domain/budget.ts`, property test in `domain.test.ts`). It is
-reserved under a row lock before the call (`reserveBudget`), so concurrent dispatchers can never exceed it.
+budget here is a token bucket whose tokens each return 60 s (+ a margin, default 2 s) after use: at most N in **any**
+60-second window, bursts of N allowed, N per minute sustained (`src/domain/budget.ts`, property tests in
+`domain.test.ts`). It is reserved under a row lock before the call (`reserveBudget`), so concurrent dispatchers can
+never exceed it, and since fix round 1 (P2-2):
+
+- one clock: stamps are read from the **database** (`clock_timestamp()`, under the lock), so workers whose own clocks
+  differ can neither erase each other's slots nor double-spend (tests simulate time with `budgetClock: 'transaction'`);
+- stamps later than "now" are kept and counted; stamps are monotonic (a clock stepping back frees nothing);
+- each request is **re-stamped at its completion** (the hub may receive it any time before), so latency jitter (a
+  cold TLS handshake on request 1, a warm request 11) can never put 11 requests inside the hub's 60 s.
 
 ### No polling loops
 
 Change capture is event-driven (outbox). Nothing scans inventory or rates tables. The only periodic thing is the
 scheduler tick (`distribution.dueWork`, every 2 s) that claims organizations whose `next_due_at` has passed — an index
-that writers pull **earlier** when they queue work (dirty cells, received revisions, due acks) and that the tick sets
-to the next instant anything is due (budget slot, backoff, cool-down, nightly resync, 15-min feed pull). A tick with
-nothing due reads one indexed row set and does nothing else. The discrepancy check (nightly) is the only reader of
-current values outside a send, and it exists to catch missed events.
+that writers pull **earlier** when they queue work (dirty cells, received revisions, due acks).
+
+The due index holds **only instants at which work can progress** (fix round 1, P1-1): budget slot, backoff, lease
+expiry, cool-down, nightly resync, 15-minute feed pull. Work that waits on a person or on another system contributes
+nothing — hub work while the key is refused or not yet verified or the environment / live scope refuses the hub
+(`hubBlocker`), ARI of a kind another system of record controls, ARI of a paused connection — and the transition that
+removes the block pulls the schedule (Verify, authority back to Portico, resume). Health instants count only while in
+the future (one wake when the oldest change crosses the freshness target). An organization therefore sleeps at most
+until its 15-minute ceiling (which also re-checks conditions that change outside this module: the environment and the
+live scope). Standing conditions (`publication_blocked`, `publication_refused`) are written once per state change, not
+per pass. Proof: `test/no-polling.test.ts` follows the due index for an hour — a refused key or another system of
+record with pending work wakes the organization ≤ 5 / ≤ 6 times (it woke 3 600 times before the fix).
 
 ## Channex: what is verified and what is not
 
@@ -42,15 +58,33 @@ blocked in this environment (as for research 04); on 2026-11-07 I read **search-
 | **unverified** | `date_from` / `date_to` field names and whether `date_to` is inclusive (assumed inclusive); restriction field names (`rate`, `min_stay_arrival`, `min_stay_through`, `max_stay`, `closed_to_arrival`, `closed_to_departure`, `stop_sell`) and the "no restriction" values (min stay 1, max stay 0); rate as a decimal string; the ARI answer shape and partial acceptance via `meta.warnings[].index`; `Retry-After` on 429; the revision JSON:API shape and attribute names (`booking_id`, `property_id`, `inserted_at`, `ota_name`, `ota_reservation_code`, `currency`, `customer{name,surname,mail,phone,country}`, `rooms[]{room_type_id,rate_plan_id,checkin_date,checkout_date,occupancy{adults,children,infants,ages},days{date: amount}}`, `notes`, `payment_collect`); acknowledging twice succeeds; `GET /bookings?filter[inserted_at][gte]=…` for "re-request since T"; webhook body with `send_data=true`; event names other than `booking_new`; `GET /properties/:id` as a credential test; **Channex webhooks are not signed** (no signature appears in the excerpts; only `headers`) — hence the pluggable verifier. |
 | **owner** | 20 ARI requests per minute. |
 
-The simulator (`src/adapters/channex/simulator.ts`) encodes the **same** assumptions with its own literal field names
-(it does not reuse the adapter's builders), so it catches adapter/simulator drift but cannot verify Channex itself.
+Added in fix round 1 (all **unverified**): `revisions.ordering` (`inserted_at` precision and zone; no per-booking
+ordinal known), `pagination.meta`, `property.title`, `revisions.get_missing` (404), `webhook.manage` (registration id,
+`DELETE /webhooks/:id`), repeated acknowledgement answered 404/422 (`ACK_AGAIN_STATUSES`), and the cross-account
+reading of `property.get`. Every Channex assumption that `client.ts` used to hold (Retry-After, property title,
+pagination meta, 404 = no revision) now lives in `wire.ts`.
+
+The simulator (`src/adapters/channex/simulator.ts`) uses its own literal field names (it does not reuse the adapter's
+builders). By default it behaves as `wire.ts` assumes; for every assumption it would otherwise mirror, a **mode** makes
+it behave the other plausible way (P2-4): timestamps equal / whole seconds / absent / zone-less µs; ARI answers with a
+warning without index, `errors` inside a 200, or `{}`; webhook payload with ids only or different content; multi-page
+lists; repeated acknowledgement refused (404/422); exclusive `date_to`; calendar-minute limits counting 429s, without
+`Retry-After`. `test/hub-modes.test.ts` shows Portico stays truthful in each (one exception, below: exclusive `date_to`).
 
 ## R4 staging plan (once the owner provides a Channex staging key)
 
 Run `sandbox` organization → connection target `staging` → `https://staging.channex.io/api/v1` (the transport allows
 only the two Channex hosts). The staging run must check, and record in the readiness register:
 
-1. **Credentials:** `GET /properties/:id` with `user-api-key` answers 200 for the staging property, 401 for a wrong key.
+0. **First, the facts whose wrong reading Portico cannot detect by itself:** (a) `date_to` inclusive vs exclusive — under
+   an exclusive reading a multi-night run silently loses its last night (single-night values are refused and shown
+   "not accepted"; `hub-modes.test.ts`); (b) `inserted_at` precision and zone, and whether two revisions of one booking
+   can share it (create → modify → cancel within one second); (c) the 2xx ARI answer shape (until confirmed, any other
+   shape leaves messages "pending verification"); (d) whether the `send_data` webhook payload equals the feed's
+   revision — if not, set the connection setting `webhookPayload: 'notify'` (the feed becomes the only source).
+1. **Credentials:** `GET /properties/:id` with `user-api-key` answers 200 for the staging property, 401 for a wrong key,
+   and a key of ANOTHER Channex account cannot read this property (Verify is the proof of control that claims a
+   production hub property — P2-6).
 2. **Availability:** one `POST /availability` with two values (a 3-night run, a 1-night run) — confirm `date_from`/`date_to`
    names and inclusivity by reading back `GET /availability?filter[property_id]&filter[date][gte]&filter[date][lte]`.
 3. **Restrictions:** `POST /restrictions` with `rate` as `"250.00"`, `min_stay_arrival`, `min_stay_through`, `max_stay`,
@@ -68,8 +102,10 @@ only the two Channex hosts). The staging run must check, and record in the readi
 7. **Revisions:** `GET /booking_revisions/feed` and `GET /booking_revisions/:id` real JSON — confirm every attribute in
    `revisionAttributes` (especially `inserted_at` for ordering, `days` amounts, `occupancy.ages`, `payment_collect`)
    and that no card data reaches us without Channex PCI.
-8. **Acknowledgement:** `POST /booking_revisions/:id/ack` (POST vs PUT), acknowledging twice, and that an acked
-   revision leaves the feed.
+8. **Acknowledgement:** `POST /booking_revisions/:id/ack` (POST vs PUT), acknowledging twice (200, or 404/422 —
+   Portico counts a refusal as acknowledged only when it holds an earlier 2xx), and that an acked revision leaves the feed.
+8b. **Lists and webhooks:** more than one page of feed and bookings (`meta.limit`/`meta.total`); `POST /webhooks`
+   answer carries the registration id; `DELETE /webhooks/:id` after a token rotation stops the old deliveries.
 9. **Reorder and recovery:** create → modify → cancel quickly; deliver nothing for 15 min (webhook disabled) and
    confirm the 15-minute feed pull recovers all three in order; confirm `GET /bookings` filters for "since T".
 10. **Certification:** run Channex's PMS certification checklist; R5 (submitted) and R6 (approved) are separate
@@ -111,7 +147,14 @@ only the two Channex hosts). The staging run must check, and record in the readi
 | Secrets never in responses, idempotency records, audit or the simulator view | `apps/api/test/distribution.test.ts` "permissions, isolation, idempotent create…", "…publishes its calendar" |
 | Tenant isolation and permission at the record's property | `isolation-permissions.test.ts` |
 | A dismissed revision (a person's decision, acknowledged) is never re-opened by Retry | `inbound.test.ts` "an orphan never matched escalates after 15 minutes; staff can dismiss it…" |
-| A production hub property belongs to one active connection across all organizations (webhook routing directory) | `isolation-permissions.test.ts` "a production hub property can be claimed by one active connection across ALL organizations" |
+| A production hub property is claimed only by proof (first successful Verify); an unproven connection blocks no one; one proven claim per hub property across all organizations | `hub-claim.test.ts` (B7 inverted, race, release on disconnect) |
+| Blocked work contributes no due instant; standing exceptions written once per state change (P1-1) | `no-polling.test.ts` |
+| Revision order within a booking: hub µs time, lifecycle, arrival; a creation never waits behind its parked orphan; a revision waits for an earlier unsettled one (P1-2, P2-1) | `revision-order.test.ts`; `domain.test.ts` comparator |
+| Budget on one shared clock, future stamps kept, re-stamped at completion (P2-2) | `budget-clock.test.ts`; `domain.test.ts` B5 inverted |
+| An unrecognised ARI answer is never "accepted" (P2-3) | `wire.test.ts` B4 inverted; `hub-modes.test.ts` ari.response |
+| Webhook limits per endpoint; refused requests cost one aggregated row (P2-5) | `webhook-abuse.test.ts` |
+| A revision can only ever be redacted (guest data), never otherwise changed or deleted (P2-7) | `guest-data.test.ts` |
+| An unreadable change event raises an exception and re-sends the kind (P2-8) | `change-capture.test.ts` |
 
 ## Scenarios
 
@@ -125,7 +168,7 @@ only the two Channex hosts). The staging run must check, and record in the readi
 
 `distribution.channel.read` · `distribution.connection.manage` ⚑ · `distribution.mapping.manage` ·
 `distribution.ari.resync` · `distribution.reservation.recover` · `distribution.discrepancy.resolve` ·
-`distribution.stopSell.manage` · `distribution.simulator.control` (organization; never effective in live).
+`distribution.stopSell.manage` · `distribution.guestData.erase` ⚑ · `distribution.simulator.control` (organization; never effective in live).
 `distribution.bookingEngine.manage` is not registered until the booking engine exists. Role templates (identity):
 revenue manager and general manager hold `distribution.*`; the reservations agent now holds `distribution.channel.read`
 and `distribution.reservation.recover` (`test/compat/contracts.test.ts`).
@@ -136,7 +179,8 @@ Emitted (payloads are ids and counts only — never guest data; schemas in `cont
 `distribution.booking.received|parked|recovered`, `distribution.discrepancy.detected|resolved`,
 `distribution.channel.degraded|restored`, `distribution.stopSell.applied|released`.
 Consumed: `inventory.availability.changed`, `rates.prices.changed`, `rates.restrictions.changed`,
-`platform.dataAuthority.changed`. The consumer only marks cells dirty, so a late, repeated or reordered event can at
+`platform.dataAuthority.changed`; `guests.profile.anonymized` only when the guest-erasure lookup port is bound (FR-7,
+not bound on main). An event Portico cannot read raises `change_event_unreadable` and re-sends the kind. The consumer only marks cells dirty, so a late, repeated or reordered event can at
 most cause one redundant send of CURRENT values (idempotent by design; no `aggregateVersion` needed).
 
 ## Ports and binding status (`apps/api/src/composition.ts`)
@@ -149,6 +193,7 @@ most cause one redundant send of CURRENT values (idempotent by design; no `aggre
 | `reservations.ingestChannelBooking` | `@portico/reservations` (system scope, ADR-0015) | bound — but on main reservations' own `rates` port is a stub, so ingestion answers 503 and nothing is acknowledged; real ingestion needs `termsFromChannelPrices` (integration step / rates) |
 | `secrets` | integration's `localSecretStore` (the composition's instance; AWS store: integration FR-4) | bound |
 | `liveScope` | stub refusing every live channel (platform activation scope G-04 not on main) | **bind with platform activation scope** |
+| `guestErasure` (optional: anonymized guest → channel bookings) | **not bound** (reservations has no such lookup — FR-7); tests bind a strict fake | erasure from guests' anonymization waits for FR-7; staff action and retention work now |
 | hub transport | `fixedHostHttpTransport` (Channex hosts only) and the persisted simulator | bound |
 
 Provider functions other modules expect from distribution: rates' `channelForApiClient` (wave 2) — **not built**.
@@ -171,8 +216,15 @@ Data-authority domains owned: none.
 - **Real channel ingestion is blocked on main** (reservations → rates `termsFromChannelPrices`); module tests use a
   strict fake. S02 Money and Inventory lines are `.todo`.
 - Not an integration-module connection: exceptions and the exchange log are distribution's own tables (FR-3).
-- Personal data in stored revisions (guest name, e-mail, phone) has no retention or erasure path yet; the table is
-  append-only on purpose (FR-5). Card data is never read or stored.
+- Guest data in stored revisions: redaction by staff action (`distribution.guestData.erase`) and daily retention
+  (`guestDataRetentionDays`, default 90 after the stay) are built; erasure triggered by guests' anonymization needs
+  reservations' guest → channel booking lookup (FR-7). `reservations.channel_revisions.payload` (other module) holds
+  the same data. Card data is never read or stored.
+- Under an exclusive reading of `date_to` (unverified) a multi-night run would silently lose its last night; only a
+  read-back at R4 can tell (R4 item 0a). Unrecognised ARI answers stay "pending verification" until R4 confirms the
+  shape (no automatic read-back: the read endpoint's shape is unverified too).
+- Disconnect does not remove the webhook registration at the hub (deliveries then answer 404); a token rotation does
+  (Verify removes the old registration first).
 - Occupancy-based pricing: only the base-occupancy price is published; child/extra-adult prices and per-occupancy
   Channex rates are not (unverified field shapes).
 - Not published: `minAdvanceDays`, `maxAdvanceDays`, `salesLimit` (listed, never silently dropped).
