@@ -86,3 +86,81 @@ Reviewer: architecture steward (independent). Date: 2026-11-08.
   modify un-parks and applies (4 nights). **Sibling paths:** `recoverSince` stores only each booking's latest revision
   (orders against older ones already stored); the feed pull; "Apply as new" (`inbound.ts:1197-1215`) which must use the
   same order; reservations' `compareRevision` (it receives this number).
+
+### P2-1 · Mutation survivor: ordered processing within a booking is untested (the PAR-DST-023 "ordered" claim has no asserting test)
+
+- **Where:** `src/service/inbound.ts:680` — `if ((await earlierUnsettled(tx, row)) > 0) { … wait … }`.
+- **Mutant (reviewer-planted):** `if (false && (await earlierUnsettled(tx, row)) > 0)`. Result: full module suite
+  **11 files, 91 passed + 2 todo** (exit 0); `apps/api/test/distribution.test.ts` **3 passed**. Every test that touches
+  ordering (S02/E02, "cancel-before-create", "exactly once", S20) still passes, because each orders revisions
+  through the parking path, never through the per-booking wait.
+- **Why it matters:** "per-property ordered processing; revision order within a booking" is owner requirement 3's
+  core promise and parity row PAR-DST-023 is marked `tested`; nothing proves it. P1-2 shows the ordering is also
+  wrong at its edges, so this guard will be changed in the fix round with no test to catch a regression.
+- **Fix:** a test where an earlier revision of the booking is **unsettled but not parked** (create `failed` with a
+  retryable 503 from reservations; modification arrives) — the modification must wait, then apply after the create;
+  the mutant above must turn it red. Downgrade PAR-DST-023 to `specified` until then. Same treatment for the sibling
+  guard in "Apply as new" (`inbound.ts:1204`).
+
+### P2-2 · The budget's "never more than N in any 60 s" holds only for reservation instants on synchronized worker clocks (owner requirement 2)
+
+- **Where:** `src/domain/budget.ts:27` (`pruneSends` drops stamps **later** than `now`), `src/service/ari-dispatch.ts:95-97`
+  (writes the pruned array back, deleting them), `packages/db/src/tx.ts` (`tx.now` is the process clock, read when the
+  transaction starts, before any lock wait).
+- **Reproduction:** `zz-review-a.test.ts.txt` A5 — worker A (clock +2 s) reserves 10, worker B (correct clock) then
+  reserves **10 more**: `granted within 2 s of real time: 20`, and the stored array holds 10 (A's stamps were erased).
+  `zz-review-b.test.ts.txt` B5 — the slot returns at exactly +60 s of the reservation instant: with 300 ms latency on
+  request 1 (cold TLS) and 20 ms on request 11, the hub sees **11 requests inside 60 s**.
+- **What held:** with one clock, three workers ticking the same organization concurrently through a sustained burst
+  stayed at 10/min per kind with zero 429s and every change delivered (B1); a 429 storm kept ≥ 60 s gaps (B2);
+  two connections' budgets are independent (B3); the builder's "20 concurrent reservations" mutant is killed.
+- **Fix (principle):** *a budget slot is accounted on one clock that every worker shares, from the moment the request
+  can reach the hub until the hub can no longer count it; nothing a worker cannot see as "past" is discarded.* Stamp
+  with the database clock inside the locked statement (`clock_timestamp()`), keep future stamps (count a stamp until
+  `stamp + window`), and add a configurable margin (e.g. window 62 s, or record the slot again at completion and count
+  the later instant). **Attack run against the fix:** a DB failover with a clock step backwards — keep the slot list
+  monotonic (`greatest(stamp, max(sends))`), so a step back cannot free slots.
+
+### P2-3 · An ARI answer Portico does not recognise is recorded as ACCEPTED (unverified response shape fails open; DST-I04, CLAUDE.md §5 "never show synced unless confirmed")
+
+- **Where:** `src/adapters/channex/wire.ts:308-334` (`parseAriSuccess`: a warning without `index` is skipped; a 2xx
+  body that matches nothing still parses because every field is optional), `src/service/ari-dispatch.ts:456-480`
+  (status `accepted`, cells written to `channel_state`; `unrecognizedAnswer` only goes to the exchange log).
+- **Reproduction:** `zz-review-b.test.ts.txt` B4 — `{ data:[{id:'t1'}], meta:{ warnings:[{ warning:'rate_plan_id is
+  invalid' }] } }` → `refused: [], unrecognized: false`; a 200 with `{ errors: {…} }` → `refused: [], unrecognized:
+  false` (not even flagged).
+- **Why it matters:** the answer shape and partial acceptance are `unverified` (`WIRE_FACTS` `ari.response`). If
+  Channex reports refusals any other way, Portico shows the channel calendar "in sync", the discrepancy check compares
+  Portico with a `channel_state` that copies Portico and finds nothing, and the hotel sells at a price the channel
+  never took.
+- **Fix (principle):** *only an answer that positively confirms acceptance in the verified shape moves a cell to
+  "acknowledged"; anything else is "pending verification" and is resolved by reading the channel back.* Treat a
+  warning without a usable index, any `errors` member, and an unrecognised 2xx as `pending_verification` for the whole
+  message (cells keep their previous `channel_state`, an exception asks Monoclay to check the format), and schedule a
+  read-back. **Attack run against the fix:** a real Channex answer that is a bare `{}` with 200 — it stays pending
+  until R4 confirms the shape; acceptable, and visible.
+
+### P2-4 · The simulator mirrors the adapter's unverified assumptions, so drift is invisible; and `client.ts` also holds wire assumptions (focus f)
+
+- **Isolation:** Channex paths, field names and headers are confined to `src/adapters/channex/wire.ts` (search of
+  `src/` outside `wire.ts`/`simulator.ts` finds only Portico column names), **except** `client.ts:53` (`retry-after`,
+  unverified `limits.retry_after`), `client.ts:164-166` (property answer `data.attributes.title`), `client.ts:206-208`
+  and `:248-250` (pagination meta semantics), `client.ts:223` (404 means "no such revision").
+- **Mirroring that hides drift** (each is a place where the simulator answers exactly what the parser expects):
+  1. revision timestamps are unique and strictly increasing per call (`simulator.ts:441`), so P1-2 cannot appear;
+  2. ARI refusals always carry `index` (`simulator.ts:258-262`), so P2-3 cannot appear;
+  3. the webhook payload is the feed's attributes plus `id`/`revision_id` (`simulator.ts:522`), so webhook and feed
+     always hash equal. If the real `send_data` payload differs from the feed (unverified `webhook.payload`), every
+     webhook-first revision becomes an urgent `revision_conflict` at the next feed pull **and the webhook's content
+     stands** (`inbound.ts:216-237`; B8 shows a webhook price of 1.00 standing over the feed's 500.00);
+  4. `GET /bookings` always answers one page with `limit = data.length` (`simulator.ts:343`), so the 20-page cap is
+     never exercised (see P3-2);
+  5. acknowledging twice always answers 200 (`simulator.ts:292-296`), mirroring unverified `revisions.ack_idempotent`;
+  6. `date_to` is applied inclusively (`eachInclusive`, `simulator.ts:152`), mirroring unverified `ari.availability.dates`;
+  7. the rate limit is a sliding 60 s by arrival that ignores refused requests — the same model as the budget.
+- **Fix (principle):** *each `unverified` WIRE_FACT has at least one simulator mode in which the hub behaves the other
+  plausible way, and a test that shows Portico stays truthful in that mode.* Concretely: timestamp modes (equal, second
+  precision, absent, TZ-less), refusal shape modes (no index, `errors` with 200), webhook payload subset mode, multi-page
+  booking list, ack-twice → 404/422, exclusive `date_to`, fixed-minute limit counting 429s. Move the four `client.ts`
+  assumptions into `wire.ts` with `WIRE_FACTS` entries. **Attack run against the fix:** a mode the simulator models
+  but the code still maps to "accepted" must fail a test (B4 inverted).
