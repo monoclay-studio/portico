@@ -4,7 +4,10 @@
  *  store   — each revision is stored IMMUTABLY, keyed by (connection, channel booking id, revision id); a
  *            redelivery is logged as `duplicate` (and re-acknowledged if its outcome is final), the same id with
  *            different content is a `conflict` (the first stands, an urgent exception is raised).
- *  process — per property, one revision at a time (advisory lock), in revision order within a booking. A
+ *  process — per property, one revision at a time (advisory lock), in revision order within a booking
+ *            (`orderWithinBooking`: hub ordinal, hub time in µs, lifecycle, arrival — never a hash). Portico decides
+ *            staleness itself (a revision ordered before an applied one is `stale`, never sent to reservations) and
+ *            gives reservations a number that increases per booking in the order it applies. A
  *            modification or cancellation of a booking Portico does not hold is PARKED (orphan) until the creation
  *            arrives or a recovery pull finds it; > 15 minutes → urgent exception. An unmapped booking is parked
  *            with a provisional inventory hold and an urgent alert (DST-R10/I03). Application calls
@@ -29,11 +32,15 @@ import { HubError } from '../adapters/hub';
 import type { RevisionView } from '../contracts';
 import { type HubFailure, isEscalated, nextAttemptAt, retryDelayMs } from '../domain/delivery';
 import {
+  type BookingRevision,
   decideProcessing,
   type HubRevision,
+  hubMicrosOf,
+  LIFECYCLE_RANK,
   type MappingLookup,
+  type OrderDecision,
+  orderWithinBooking,
   revisionHash,
-  revisionOrderOf,
   translateRevision,
   type UnmappedRoom,
 } from '../domain/revisions';
@@ -62,7 +69,6 @@ import { autoResolve, markCredentialsInvalid, raiseDiscrepancy, raiseException }
 
 export const PARK_ESCALATION_MS = 15 * 60_000;
 const FINAL: readonly RevisionState[] = ['applied', 'duplicate', 'stale', 'rejected'];
-const UNSETTLED: readonly RevisionState[] = ['received', 'failed', 'parked'];
 
 // ───────────────────────────── store ─────────────────────────────
 
@@ -126,6 +132,7 @@ export async function storeRevision(
   }
   const hash = revisionHash(rev);
   const id = newId(tx.now.getTime());
+  const hubMicros = hubMicrosOf(rev.insertedAt);
   const inserted = await db(tx)
     .insertInto('distribution.inbound_revisions')
     .values({
@@ -135,7 +142,9 @@ export async function storeRevision(
       property_id: conn.property_id,
       channel_booking_id: rev.bookingId,
       revision_id: rev.revisionId,
-      revision_order: revisionOrderOf(rev.revisionId, rev.insertedAt, tx.now),
+      hub_sequence: rev.hubSequence ?? null,
+      hub_micros: hubMicros,
+      lifecycle_rank: LIFECYCLE_RANK[rev.status],
       channel_status: rev.status,
       payload: json(rev),
       payload_hash: hash,
@@ -145,7 +154,7 @@ export async function storeRevision(
     .onConflict((oc) =>
       oc.columns(['tenant_id', 'connection_id', 'channel_booking_id', 'revision_id']).doNothing(),
     )
-    .returning(['id', 'revision_order'])
+    .returning(['id', 'arrival_seq'])
     .executeTakeFirst();
   if (inserted) {
     await db(tx)
@@ -156,14 +165,16 @@ export async function storeRevision(
         connection_id: conn.id,
         property_id: conn.property_id,
         channel_booking_id: rev.bookingId,
-        revision_order: inserted.revision_order,
+        arrival_seq: inserted.arrival_seq,
+        apply_seq: null,
         state: 'received',
         park_reason: null,
         outcome: null,
         booking_id: null,
-        note: rev.insertedAt
-          ? null
-          : 'The hub did not say when it recorded this revision; it is ordered by arrival time.',
+        note:
+          hubMicros !== null
+            ? null
+            : `The hub ${rev.insertedAt ? 'sent a time Portico could not read' : 'did not say when it recorded this revision'}; within its booking it is ordered by meaning (creation, change, cancellation), then by arrival.`,
         attempts: 0,
         next_attempt_at: tx.now,
         first_failed_at: null,
@@ -278,16 +289,101 @@ async function bookingKnown(tx: TxContext, conn: ConnectionRow, channelBookingId
   return row !== undefined;
 }
 
-async function earlierUnsettled(tx: TxContext, row: Joined): Promise<number> {
+/** Every revision of the row's booking with its order key and state (P1-2: order is decided per booking). */
+async function bookingRevisions(tx: TxContext, row: Joined): Promise<BookingRevision[]> {
+  const rows = await db(tx)
+    .selectFrom('distribution.revision_processing as p')
+    .innerJoin('distribution.inbound_revisions as r', 'r.id', 'p.revision_row_id')
+    .select([
+      'p.revision_row_id',
+      'p.state',
+      'p.park_reason',
+      'r.channel_status',
+      'r.hub_sequence',
+      'r.hub_micros',
+      'r.lifecycle_rank',
+      'r.arrival_seq',
+    ])
+    .where('p.connection_id', '=', row.connection_id)
+    .where('p.channel_booking_id', '=', row.channel_booking_id)
+    .execute();
+  return rows.map((r) => ({
+    id: r.revision_row_id,
+    status: r.channel_status,
+    state: r.state,
+    parkReason: r.park_reason,
+    hubSequence: r.hub_sequence,
+    hubMicros: r.hub_micros,
+    rank: r.lifecycle_rank,
+    arrival: r.arrival_seq,
+  }));
+}
+
+async function orderOf(tx: TxContext, row: Joined): Promise<OrderDecision> {
+  const all = await bookingRevisions(tx, row);
+  const target = all.find((r) => r.id === row.revision_row_id);
+  if (!target) throw new NotFoundError('channel_revision', row.revision_row_id);
+  return orderWithinBooking(target, all);
+}
+
+/** The number reservations receives: strictly greater than every number of this booking applied before. */
+async function nextApplySeq(tx: TxContext, row: Joined): Promise<number> {
   const r = await db(tx)
     .selectFrom('distribution.revision_processing')
-    .select(sql<number>`count(*)::int`.as('n'))
+    .select(sql<number>`coalesce(max(apply_seq), 0)::int`.as('n'))
     .where('connection_id', '=', row.connection_id)
     .where('channel_booking_id', '=', row.channel_booking_id)
-    .where('revision_order', '<', row.revision_order)
-    .where('state', 'in', [...UNSETTLED])
     .executeTakeFirst();
-  return r?.n ?? 0;
+  return (r?.n ?? 0) + 1;
+}
+
+/**
+ * A revision ordered BEFORE one already applied is older news: recorded as `stale` (final, acknowledged so the hub
+ * stops offering it), never sent to reservations, where it could overwrite the newer state.
+ */
+async function markStale(
+  tx: TxContext,
+  conn: ConnectionRow,
+  row: Joined,
+  laterId: string,
+): Promise<RevisionState> {
+  const later = await db(tx)
+    .selectFrom('distribution.inbound_revisions')
+    .select('revision_id')
+    .where('id', '=', laterId)
+    .executeTakeFirst();
+  await db(tx)
+    .updateTable('distribution.revision_processing')
+    .set({
+      state: 'stale',
+      outcome: 'stale',
+      note: `Older than revision ${later?.revision_id ?? laterId} of this booking, which was already applied; recorded, not applied.`,
+      attempts: row.attempts + 1,
+      next_attempt_at: null,
+      last_error: null,
+      processed_at: tx.now,
+      ack_state: 'pending',
+      ack_next_at: tx.now,
+      updated_at: tx.now,
+      version: sql`version + 1`,
+    })
+    .where('revision_row_id', '=', row.revision_row_id)
+    .execute();
+  await autoResolve(
+    tx,
+    conn.id,
+    `apply:${row.revision_row_id}`,
+    'A newer revision of the booking was applied.',
+  );
+  await tx.audit({
+    action: 'distribution.revision.processed',
+    target: { type: RECORD.revision, id: row.revision_row_id },
+    propertyId: conn.property_id,
+    before: { state: row.state },
+    after: { state: 'stale', laterRevisionRowId: laterId },
+  });
+  await wakeBooking(tx, row, false);
+  return 'stale';
 }
 
 async function mappingLookup(tx: TxContext, conn: ConnectionRow): Promise<MappingLookup> {
@@ -484,7 +580,7 @@ async function processOne(
   deps: DistributionDeps,
   conn: ConnectionRow,
   row: Joined,
-  opts: { forceApply?: boolean } = {},
+  opts: { forceApply?: boolean; tiedByArrival?: readonly string[] } = {},
 ): Promise<RevisionState> {
   const rev = row.payload as HubRevision;
   if (!opts.forceApply) {
@@ -508,6 +604,7 @@ async function processOne(
     return 'parked';
   }
   const holds = (row.hold_ids as string[] | null) ?? [];
+  const applySeq = await nextApplySeq(tx, row);
   let result: IngestResult;
   try {
     result = await withSavepoint(tx, 'dst_apply', async () => {
@@ -521,7 +618,7 @@ async function processOne(
       return deps.ports.reservations.ingestChannelBooking(tx, {
         connectionId: conn.id,
         externalId: row.channel_booking_id,
-        revision: row.revision_order,
+        revision: applySeq,
         payload: translation.payload,
       });
     });
@@ -567,6 +664,7 @@ async function processOne(
       state,
       outcome: result.outcome,
       booking_id: result.bookingId ?? null,
+      apply_seq: state === 'applied' ? applySeq : null,
       note:
         result.note ?? (translation.fallbackRooms.length ? 'Applied with the fallback rate plan.' : row.note),
       attempts: row.attempts + 1,
@@ -603,6 +701,21 @@ async function processOne(
       dedupeKey: `fallback_rate:${row.channel_booking_id}:${roomRef}`,
       summary: `${label(rev)} room ${roomRef} used an unmapped channel rate plan; it was recorded with the fallback rate plan at the channel's price.`,
       refs: [{ type: RECORD.revision, id: row.revision_row_id }],
+    });
+  }
+  if (state === 'applied' && row.channel_status !== 'cancelled' && (opts.tiedByArrival?.length ?? 0) > 0) {
+    // The hub's data could not order this revision against another of its booking (same time and kind, or no
+    // time): Portico applied them in arrival order, which may not be the channel's order (P1-2).
+    await raiseDiscrepancy(tx, {
+      connectionId: conn.id,
+      propertyId: conn.property_id,
+      kind: 'reservation',
+      dedupeKey: `order_uncertain:${row.channel_booking_id}`,
+      summary: `${label(rev)}: two ${row.channel_status === 'new' ? 'creations' : 'changes'} could not be ordered from the hub's data (same time, or no time); Portico applied them in the order they arrived. Compare the booking with the channel extranet.`,
+      refs: [
+        { type: RECORD.revision, id: row.revision_row_id },
+        ...(opts.tiedByArrival ?? []).map((id) => ({ type: RECORD.revision, id })),
+      ],
     });
   }
   if (result.outcome === 'needs_review') {
@@ -670,14 +783,14 @@ export async function processInbound(
         .where('p.state', 'in', ['received', 'failed'])
         .where('p.next_attempt_at', 'is not', null)
         .where('p.next_attempt_at', '<=', tx.now)
-        .orderBy('p.revision_order')
-        .orderBy('r.received_at')
+        .orderBy('p.arrival_seq')
         .limit(50)
         .execute();
       for (const c of candidates) {
         const row = await loadJoined(tx, c.revision_row_id, true);
         if (!['received', 'failed'].includes(row.state)) continue;
-        if ((await earlierUnsettled(tx, row)) > 0) {
+        const order = await orderOf(tx, row);
+        if (order.earlierUnsettled.length > 0) {
           // Ordered processing: wait until the earlier revision settles (it wakes this one).
           await db(tx)
             .updateTable('distribution.revision_processing')
@@ -686,7 +799,8 @@ export async function processInbound(
             .execute();
           continue;
         }
-        return processOne(tx, deps, conn, row);
+        if (order.laterApplied) return markStale(tx, conn, row, order.laterApplied);
+        return processOne(tx, deps, conn, row, { tiedByArrival: order.tiedByArrival });
       }
       return null;
     });
@@ -1203,13 +1317,21 @@ export async function resolveRevision(
         'Only a revision parked because its booking was never received can be applied as new.',
       );
     }
-    if ((await earlierUnsettled(tx, row)) > 0) {
+    // The same order as automatic processing (P1-2): never ahead of an earlier unsettled revision of the booking.
+    const order = await orderOf(tx, row);
+    if (order.earlierUnsettled.length > 0) {
       throw new BusinessRuleError(
         'earlier_revision_unsettled',
         'An earlier revision of this booking is not settled yet; resolve it first.',
       );
     }
-    await processOne(tx, deps, conn, row, { forceApply: true });
+    if (order.laterApplied) {
+      throw new BusinessRuleError(
+        'revision_superseded',
+        'A newer revision of this booking was already applied; this one cannot be applied as new. Dismiss it instead.',
+      );
+    }
+    await processOne(tx, deps, conn, row, { forceApply: true, tiedByArrival: order.tiedByArrival });
     await db(tx)
       .updateTable('distribution.revision_processing')
       .set({ resolved_by: by })

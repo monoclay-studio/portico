@@ -237,7 +237,12 @@ create table distribution.inbound_revisions (
   property_id           uuid not null,
   channel_booking_id    text not null check (length(channel_booking_id) between 1 and 200),
   revision_id           text not null check (length(revision_id) between 1 and 200),
-  revision_order        bigint not null,
+  -- Order within the booking (P1-2): the hub's ordinal when it gives one, the hub's timestamp in microseconds
+  -- (UTC; null when absent or unreadable), lifecycle rank (new 0 < modified 1 < cancelled 2), then arrival.
+  hub_sequence          bigint,
+  hub_micros            bigint,
+  lifecycle_rank        smallint not null check (lifecycle_rank in (0, 1, 2)),
+  arrival_seq           bigint generated always as identity,
   channel_status        text not null check (channel_status in ('new', 'modified', 'cancelled')),
   payload               jsonb not null,
   payload_hash          text not null,
@@ -246,7 +251,7 @@ create table distribution.inbound_revisions (
   unique (tenant_id, connection_id, channel_booking_id, revision_id)
 );
 create index inbound_revisions_booking_idx on distribution.inbound_revisions
-  (tenant_id, connection_id, channel_booking_id, revision_order);
+  (tenant_id, connection_id, channel_booking_id);
 select core.enable_tenant_isolation('distribution.inbound_revisions');
 select core.make_append_only('distribution.inbound_revisions');
 
@@ -256,7 +261,11 @@ create table distribution.revision_processing (
   connection_id         uuid not null references distribution.connections(id),
   property_id           uuid not null,
   channel_booking_id    text not null,
-  revision_order        bigint not null,
+  -- Arrival order (copied from inbound_revisions.arrival_seq): the processing queue is first-in first-out; order
+  -- within a booking is decided per booking (orderWithinBooking).
+  arrival_seq           bigint not null,
+  -- The number given to reservations when applied: strictly increasing per booking in the order Portico applies.
+  apply_seq             int,
   state                 text not null check (state in ('received', 'applied', 'duplicate', 'stale', 'parked',
                                                         'rejected', 'failed')),
   park_reason           text check (park_reason in ('orphan', 'unmapped')),
@@ -287,7 +296,7 @@ create table distribution.revision_processing (
 create index revision_processing_due_idx on distribution.revision_processing (tenant_id, property_id, state, next_attempt_at);
 create index revision_processing_ack_idx on distribution.revision_processing (tenant_id, ack_state, ack_next_at);
 create index revision_processing_booking_idx on distribution.revision_processing
-  (tenant_id, connection_id, channel_booking_id, revision_order);
+  (tenant_id, connection_id, channel_booking_id);
 select core.enable_tenant_isolation('distribution.revision_processing');
 
 -- Every delivery (webhook, feed pull, recovery), including duplicates and refused ones: append-only.

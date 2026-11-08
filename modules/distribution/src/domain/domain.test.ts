@@ -4,7 +4,14 @@ import { BUDGET_WINDOW_MS, maxInAnyWindow, nextSlotAt, reserveSlot } from './bud
 import { classifyHttp, isEscalated, nextAttemptAt, retryDelayMs } from './delivery';
 import { computeHealth, type HealthFacts } from './health';
 import { clipRanges, countNights, mergeRanges, normalizeRanges, subtractRanges, takeNights } from './ranges';
-import { decideProcessing, type HubRevision, revisionOrderOf, translateRevision } from './revisions';
+import {
+  type BookingRevision,
+  decideProcessing,
+  type HubRevision,
+  hubMicrosOf,
+  orderWithinBooking,
+  translateRevision,
+} from './revisions';
 
 const r = (from: string, to: string) => ({ from, to });
 const at = (s: number) => new Date(Date.UTC(2026, 10, 7, 6, 0, 0) + s * 1000);
@@ -209,13 +216,121 @@ function firstRoom(): HubRevision['rooms'][number] {
 }
 
 describe('revisions — ordering, parking and translation', () => {
-  it('orders by the hub timestamp with a deterministic tie-break; falls back to arrival time', () => {
-    const a = revisionOrderOf('a', '2026-11-07T06:00:00.000Z', at(999));
-    const b = revisionOrderOf('b', '2026-11-07T06:00:00.001Z', at(0));
-    expect(b).toBeGreaterThan(a);
-    expect(revisionOrderOf('a', '2026-11-07T06:00:00.000Z', at(0))).toBe(a);
-    expect(revisionOrderOf('a', null, at(5))).toBeGreaterThanOrEqual(at(5).getTime() * 1000);
-    expect(Number.isSafeInteger(a)).toBe(true);
+  it('reads hub timestamps to the microsecond, zone-less as UTC (P1-2)', () => {
+    const base = Date.parse('2026-11-07T06:00:00Z') * 1000;
+    expect(hubMicrosOf('2026-11-07T06:00:00Z')).toBe(base);
+    // Date.parse would make these equal (milliseconds only).
+    expect(hubMicrosOf('2026-11-07T06:00:00.123456Z')).toBe(base + 123_456);
+    expect(hubMicrosOf('2026-11-07T06:00:00.123999Z')).toBe(base + 123_999);
+    expect(hubMicrosOf('2026-11-07T06:00:00.1234569Z')).toBe(base + 123_456); // beyond µs: truncated
+    // No zone → UTC (never the server's local time); offsets are applied.
+    expect(hubMicrosOf('2026-11-07T06:00:00.5')).toBe(base + 500_000);
+    expect(hubMicrosOf('2026-11-07 06:00:00')).toBe(base);
+    expect(hubMicrosOf('2026-11-07T11:00:00+05:00')).toBe(base);
+    expect(hubMicrosOf('2026-11-07T01:30:00-0430')).toBe(base);
+    expect(Number.isSafeInteger(hubMicrosOf('2026-11-07T06:00:00.999999Z'))).toBe(true);
+    for (const bad of [null, '', 'yesterday', '2026-02-30T00:00:00Z', '2026-11-07T24:00:00Z', '1730959200']) {
+      expect(hubMicrosOf(bad)).toBeNull();
+    }
+  });
+
+  describe('order within a booking (P1-2: hub ordinal, hub time, lifecycle, arrival — never a hash)', () => {
+    const r = (id: string, o: Partial<BookingRevision>): BookingRevision => ({
+      id,
+      status: 'modified',
+      state: 'received',
+      parkReason: null,
+      hubSequence: null,
+      hubMicros: null,
+      rank: 1,
+      arrival: 0,
+      ...o,
+    });
+    const create = (o: Partial<BookingRevision> = {}) => r('n', { status: 'new', rank: 0, ...o });
+    const modify = (o: Partial<BookingRevision> = {}) => r('m', { status: 'modified', rank: 1, ...o });
+    const cancel = (o: Partial<BookingRevision> = {}) => r('c', { status: 'cancelled', rank: 2, ...o });
+
+    it("A3: a modification with its creation's timestamp is LATER (lifecycle), never stale", () => {
+      const n = create({ hubMicros: 1, state: 'applied', arrival: 1 });
+      const m = modify({ hubMicros: 1, arrival: 2 });
+      expect(orderWithinBooking(m, [n, m])).toEqual({
+        earlierUnsettled: [],
+        laterApplied: null,
+        tiedByArrival: [],
+      });
+      // Delivered modify-first: the modification waits behind the unsettled creation.
+      const m1 = modify({ hubMicros: 1, arrival: 1 });
+      const n2 = create({ hubMicros: 1, arrival: 2 });
+      expect(orderWithinBooking(m1, [m1, n2]).earlierUnsettled).toEqual(['n']);
+      expect(orderWithinBooking(n2, [m1, n2]).earlierUnsettled).toEqual([]);
+    });
+
+    it('A4: a creation never waits behind its own parked orphan; without times lifecycle orders them', () => {
+      const c = cancel({ state: 'parked', parkReason: 'orphan', arrival: 1 });
+      const n = create({ arrival: 2 });
+      expect(orderWithinBooking(n, [c, n])).toEqual({
+        earlierUnsettled: [],
+        laterApplied: null,
+        tiedByArrival: [],
+      });
+      // After the creation is applied the cancellation is re-woken and is later.
+      const c2 = cancel({ state: 'received', arrival: 1 });
+      const n2 = create({ state: 'applied', arrival: 2 });
+      expect(orderWithinBooking(c2, [c2, n2]).laterApplied).toBeNull();
+      // An unmapped park is a real earlier revision (its booking is held): later revisions wait for it.
+      const nu = create({ state: 'parked', parkReason: 'unmapped', arrival: 1 });
+      const m = modify({ arrival: 2 });
+      expect(orderWithinBooking(m, [nu, m]).earlierUnsettled).toEqual(['n']);
+    });
+
+    it('the hub time decides when every revision has one; an older revision arriving after a newer applied one is stale', () => {
+      const m1 = modify({ id: 'm1', hubMicros: 200, state: 'applied', arrival: 1 });
+      const m2 = r('m2', { hubMicros: 100, arrival: 2 });
+      expect(orderWithinBooking(m2, [m1, m2]).laterApplied).toBe('m1');
+      // A cancellation recorded BEFORE a modification by the hub is earlier, despite its rank.
+      const c = cancel({ hubMicros: 50, arrival: 3 });
+      expect(orderWithinBooking(c, [m1, c]).laterApplied).toBe('m1');
+    });
+
+    it('a time missing on one revision drops time for the whole booking (transitive order)', () => {
+      // With per-pair rules this would cycle: a<c (time), c<b (rank), b<a (rank).
+      const a = r('a', { status: 'cancelled', rank: 2, hubMicros: 1, arrival: 1 });
+      const b = r('b', { status: 'modified', rank: 1, hubMicros: null, arrival: 2 });
+      const c = r('c', { status: 'new', rank: 0, hubMicros: 2, arrival: 3 });
+      const all = [a, b, c];
+      expect(orderWithinBooking(a, all).earlierUnsettled.sort()).toEqual(['b', 'c']);
+      expect(orderWithinBooking(b, all).earlierUnsettled).toEqual(['c']);
+      expect(orderWithinBooking(c, all).earlierUnsettled).toEqual([]);
+    });
+
+    it('the hub ordinal wins when every revision has one', () => {
+      const x = r('x', { hubSequence: 2, hubMicros: 1, arrival: 1, state: 'applied' });
+      const y = r('y', { hubSequence: 1, hubMicros: 9, arrival: 2 });
+      expect(orderWithinBooking(y, [x, y]).laterApplied).toBe('x');
+    });
+
+    it('two changes the hub cannot separate are ordered by arrival and reported as tied', () => {
+      const m1 = r('m1', { hubMicros: 5, arrival: 1, state: 'applied' });
+      const m2 = r('m2', { hubMicros: 5, arrival: 2 });
+      expect(orderWithinBooking(m2, [m1, m2])).toEqual({
+        earlierUnsettled: [],
+        laterApplied: null,
+        tiedByArrival: ['m1'],
+      });
+    });
+
+    it('settled revisions never block; failed and received earlier ones do', () => {
+      for (const state of ['applied', 'duplicate', 'stale', 'rejected'] as const) {
+        const n = create({ state, hubMicros: 1 });
+        const m = modify({ hubMicros: 2 });
+        expect(orderWithinBooking(m, [n, m]).earlierUnsettled).toEqual([]);
+      }
+      for (const state of ['received', 'failed'] as const) {
+        const n = create({ state, hubMicros: 1 });
+        const m = modify({ hubMicros: 2 });
+        expect(orderWithinBooking(m, [n, m]).earlierUnsettled).toEqual(['n']);
+      }
+    });
   });
   it('parks a modification or cancellation for an unknown booking; waits for earlier revisions', () => {
     expect(decideProcessing({ channelStatus: 'new', bookingKnown: false, earlierUnsettled: 0 })).toEqual({

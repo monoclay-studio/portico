@@ -179,7 +179,10 @@ export interface InboundRevisionsTable {
   property_id: string;
   channel_booking_id: string;
   revision_id: string;
-  revision_order: number;
+  hub_sequence: number | null;
+  hub_micros: number | null;
+  lifecycle_rank: number;
+  arrival_seq: Generated<number>;
   channel_status: 'new' | 'modified' | 'cancelled';
   payload: Json;
   payload_hash: string;
@@ -196,7 +199,8 @@ export interface RevisionProcessingTable {
   connection_id: string;
   property_id: string;
   channel_booking_id: string;
-  revision_order: number;
+  arrival_seq: number;
+  apply_seq: number | null;
   state: RevisionState;
   park_reason: 'orphan' | 'unmapped' | null;
   outcome: string | null;

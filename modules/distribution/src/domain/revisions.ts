@@ -12,6 +12,11 @@ export interface HubRevision {
   status: 'new' | 'modified' | 'cancelled';
   /** When the hub recorded the revision (ISO); orders revisions of one booking. Null when the hub omits it. */
   insertedAt: string | null;
+  /**
+   * The hub's own ordinal of the revision within its booking, when the hub gives one. No such attribute is verified
+   * for Channex (WIRE_FACTS `revisions.ordering`), so its adapter leaves it out; the order uses it when present.
+   */
+  hubSequence?: number | null;
   otaName: string | null;
   otaReservationCode: string | null;
   currency: string;
@@ -45,15 +50,107 @@ export function revisionHash(r: HubRevision): string {
 }
 
 /**
- * Order of a revision among the revisions of its booking: the hub's own timestamp (microsecond scale) plus a
- * deterministic tie-break from the revision id, so two revisions never share an order and redeliveries keep theirs.
- * Without a hub timestamp, the receipt time is used (and the revision is flagged).
+ * Lifecycle meaning orders revisions the hub's clock cannot separate: a creation precedes its changes and a
+ * cancellation ends them (P1-2). Never a hash.
  */
-export function revisionOrderOf(revisionId: string, insertedAt: string | null, receivedAt: Date): number {
-  const parsed = insertedAt ? Date.parse(insertedAt) : Number.NaN;
-  const ms = Number.isFinite(parsed) ? parsed : receivedAt.getTime();
-  const tie = Number.parseInt(sha256Hex(revisionId).slice(0, 6), 16) % 1000;
-  return ms * 1000 + tie;
+export const LIFECYCLE_RANK: Record<HubRevision['status'], number> = { new: 0, modified: 1, cancelled: 2 };
+
+const TS =
+  /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})(?:[.,](\d{1,9}))?\s*(Z|[+-]\d{2}(?::?\d{2})?)?$/i;
+
+/**
+ * The hub's revision timestamp as integer MICROSECONDS since the epoch, UTC (P1-2). The whole fractional part is kept
+ * to the microsecond (`Date.parse` keeps milliseconds only: `.123456` and `.123999` would compare equal), and a
+ * timestamp without a zone is read as UTC, never as the server's local time. Null when absent or unreadable. The
+ * field's name, precision and zone at Channex are unverified (WIRE_FACTS `revisions.ordering`).
+ */
+export function hubMicrosOf(ts: string | null | undefined): number | null {
+  if (!ts) return null;
+  const m = TS.exec(ts.trim());
+  if (!m) return null;
+  const [, y, mo, d, h, mi, s, frac, zone] = m;
+  const ms = Date.UTC(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), Number(s));
+  if (!Number.isFinite(ms)) return null;
+  const check = new Date(ms);
+  if (check.getUTCDate() !== Number(d) || check.getUTCHours() !== Number(h)) return null; // e.g. 2026-02-30
+  const micros = Number((frac ?? '').padEnd(6, '0').slice(0, 6));
+  let offsetMinutes = 0;
+  if (zone && zone.toUpperCase() !== 'Z') {
+    const sign = zone.startsWith('-') ? -1 : 1;
+    const digits = zone.slice(1).replace(':', '');
+    offsetMinutes = sign * (Number(digits.slice(0, 2)) * 60 + Number(digits.slice(2, 4) || '0'));
+  }
+  return (ms - offsetMinutes * 60_000) * 1000 + micros;
+}
+
+/** What orders one revision among the revisions of its booking. */
+export interface RevisionOrderKey {
+  /** The hub's own ordinal for the revision, when it gives one (none is verified for Channex). */
+  hubSequence: number | null;
+  /** The hub's timestamp in microseconds (`hubMicrosOf`), when present and readable. */
+  hubMicros: number | null;
+  /** `LIFECYCLE_RANK` of the revision's status. */
+  rank: number;
+  /** Portico's arrival order (first stored first). */
+  arrival: number;
+}
+
+export interface BookingRevision extends RevisionOrderKey {
+  id: string;
+  status: HubRevision['status'];
+  state: 'received' | 'applied' | 'duplicate' | 'stale' | 'parked' | 'rejected' | 'failed';
+  parkReason: 'orphan' | 'unmapped' | null;
+}
+
+/**
+ * A total order over the revisions of ONE booking (P1-2), consistent with the hub's sequence: the hub's ordinal when
+ * every revision has one; else the hub's timestamp when every revision has one and they differ; else lifecycle
+ * meaning (new < modified < cancelled); else first arrival. A key component is used only when the whole booking has
+ * it, so the order stays transitive when the hub sends some revisions without it.
+ */
+export function bookingComparator(all: readonly RevisionOrderKey[]) {
+  const useSeq = all.every((r) => r.hubSequence !== null);
+  const useTs = all.every((r) => r.hubMicros !== null);
+  return (a: RevisionOrderKey, b: RevisionOrderKey): { cmp: number; byArrival: boolean } => {
+    if (useSeq && a.hubSequence !== b.hubSequence)
+      return { cmp: Math.sign((a.hubSequence ?? 0) - (b.hubSequence ?? 0)), byArrival: false };
+    if (useTs && a.hubMicros !== b.hubMicros)
+      return { cmp: Math.sign((a.hubMicros ?? 0) - (b.hubMicros ?? 0)), byArrival: false };
+    if (a.rank !== b.rank) return { cmp: Math.sign(a.rank - b.rank), byArrival: false };
+    return { cmp: Math.sign(a.arrival - b.arrival), byArrival: true };
+  };
+}
+
+export interface OrderDecision {
+  /** Earlier revisions of the booking that are not settled (the target waits for them). */
+  earlierUnsettled: string[];
+  /** A LATER revision of the booking is already applied: the target is older news (stale, never applied). */
+  laterApplied: string | null;
+  /** Revisions ordered against the target only by arrival (the hub could not separate them). */
+  tiedByArrival: string[];
+}
+
+/**
+ * Where a revision stands in its booking. A parked ORPHAN never counts as an earlier unsettled revision: it is parked
+ * because the creation is missing, so a creation (or any revision) must never wait behind it — it is re-woken and
+ * re-ordered when the booking exists (A4). An unmapped park is a real earlier revision (its booking is held).
+ */
+export function orderWithinBooking(
+  target: BookingRevision,
+  siblings: readonly BookingRevision[],
+): OrderDecision {
+  const others = siblings.filter((s) => s.id !== target.id);
+  const cmp = bookingComparator([target, ...others]);
+  const out: OrderDecision = { earlierUnsettled: [], laterApplied: null, tiedByArrival: [] };
+  for (const o of others) {
+    const c = cmp(o, target);
+    if (c.byArrival) out.tiedByArrival.push(o.id);
+    const unsettled =
+      o.state === 'received' || o.state === 'failed' || (o.state === 'parked' && o.parkReason !== 'orphan');
+    if (c.cmp < 0 && unsettled) out.earlierUnsettled.push(o.id);
+    if (c.cmp > 0 && o.state === 'applied' && out.laterApplied === null) out.laterApplied = o.id;
+  }
+  return out;
 }
 
 export type ProcessingDecision =

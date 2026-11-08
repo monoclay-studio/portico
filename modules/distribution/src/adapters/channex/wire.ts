@@ -144,6 +144,13 @@ export const WIRE_FACTS: ReadonlyArray<{ id: string; fact: string; status: FactS
     source: 'assumption',
   },
   {
+    id: 'revisions.ordering',
+    fact: 'Revisions of one booking are ordered by attribute `inserted_at` (ISO 8601; precision assumed up to microseconds; a value without a zone is read as UTC); no per-booking revision ordinal is known, so none is read. Where `inserted_at` cannot separate two revisions Portico orders by lifecycle (new < modified < cancelled), then by arrival, and flags two such changes for review',
+    status: 'unverified',
+    source:
+      'assumption — R4: record inserted_at of a create/modify/cancel sequence made within one second; look for an ordinal attribute',
+  },
+  {
     id: 'revisions.ack_idempotent',
     fact: 'Acknowledging an already acknowledged revision succeeds',
     status: 'unverified',
@@ -455,6 +462,7 @@ export function toHubRevision(envelopeId: string, raw: unknown): HubRevision {
     bookingId: a.booking_id,
     externalPropertyId: a.property_id,
     status: a.status,
+    // Ordering (WIRE_FACTS `revisions.ordering`, unverified): kept as sent; read to the microsecond, zone-less = UTC.
     insertedAt: a.inserted_at ?? null,
     otaName: a.ota_name ?? null,
     otaReservationCode: a.ota_reservation_code ?? null,
