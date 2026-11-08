@@ -323,6 +323,11 @@ export const captureInput = z
   .object({
     amount: money.optional(),
     ledgerRef: ledgerRef.optional(),
+    /**
+     * ADR-0015 Amendment 5: a label, as for charges — the capture's purpose is derived where the money lands (booking →
+     * deposit, folio → balance; `no_show` asks for the stay's recorded penalty). The hold's purpose never carries over.
+     */
+    purpose: collectionLabel.optional(),
     /** SW-PAY-1: collecting money a payment link already owns needs a stated reason (audited). */
     separateCollection: separateCollection.optional(),
   })

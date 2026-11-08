@@ -643,7 +643,11 @@ describe('R3-P1-2 — the cardholder consent bounds every money movement, whoeve
         }),
       ),
     );
-    expect(cap.ok ? 'captured' : cap.e.code).toBe('mandate_reference_not_covered');
+    // Outside the agreement twice over (Amendment 5: it would land as another booking's deposit, which is neither agreed
+    // nor a named booking); the purpose is checked first.
+    expect(['mandate_purpose_not_covered', 'mandate_reference_not_covered']).toContain(
+      cap.ok ? 'captured' : cap.e.code,
+    );
     // A payment user cannot designate the card as the guarantee of another booking either.
     const designated = await settle(
       org.run(desk, (tx) =>

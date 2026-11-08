@@ -524,6 +524,8 @@ export async function capture(
     authorizationId: string;
     amount?: { amountMinor: number; currency: string };
     ledgerRef?: { type: 'folio' | 'booking'; id: string };
+    /** A label: the purpose is derived where the money lands (Amendment 5). */
+    purpose?: string;
     separateCollection?: { reason: string };
     businessKey: string;
   },
@@ -583,6 +585,9 @@ export async function capture(
   }
   const property = await loadProperty(d, tx, a.property_id);
   await assertLedgerTarget(d, tx, ref, property);
+  // ADR-0015 Amendment 5 rule 1 (R6-P1-1): consent is judged on the purpose of the money WHERE IT LANDS — derived from
+  // the destination's facts, never the hold's `guarantee`.
+  const fact = await derivePurpose(d, tx, ref, input.purpose);
   // R3-P1-2 / R4-P1-2: a merchant-initiated capture stays inside the cardholder's consent (the bill it pays is covered;
   // the running total stays within the agreed amount), checked under the card lock — taken BEFORE the collection lock
   // (domain-map order: authorization → card → collection → folio → request).
@@ -600,7 +605,7 @@ export async function capture(
     if (a.initiator === 'merchant') {
       await assertWithinConsent(d, tx, method, property, 'merchant', {
         kind: 'capture',
-        purpose: 'guarantee',
+        purpose: fact.purpose,
         amount: { amountMinor, currency: a.currency },
         ref,
         authorizationId: a.id,
@@ -626,13 +631,24 @@ export async function capture(
     isLedgerRef(holdRef) && (holdRef.type !== ref.type || holdRef.id !== ref.id) ? [ref, holdRef] : [ref];
   await lockCollectionRefs(d, tx, refs);
   for (const r of refs) {
-    await assertCollectionOwnership(d, tx, r, defaultPurpose(r), input.separateCollection, {
-      amountMinor,
-    });
+    const landing = r.type === ref.type && r.id === ref.id;
+    await assertCollectionOwnership(
+      d,
+      tx,
+      r,
+      landing ? fact.purpose : defaultPurpose(r),
+      input.separateCollection,
+      {
+        amountMinor,
+      },
+    );
   }
-  // Amendment 4 rule 2, under the collection lock: where a merchant hold's money lands is still covered.
-  if (holdMethod && a.initiator === 'merchant')
+  // Amendments 4 and 5, under the collection lock: the fact the landing purpose rests on still allows this amount
+  // (deposit due, folio owed, penalty owed), and the destination is still covered.
+  if (holdMethod && a.initiator === 'merchant') {
+    await assertWithinFact(d, tx, holdMethod, fact, ref, { amountMinor, currency: a.currency });
     await assertDestinationCovered(d, tx, holdMethod, property, ref);
+  }
   await assertBreakerAllows(d, tx, account);
   const id = newId(tx.now.getTime());
   const inserted = await insertPayment(
@@ -648,7 +664,8 @@ export async function capture(
       payment_request_id: null,
       virtual_card_id: null,
       kind: 'capture',
-      purpose: defaultPurpose(ref),
+      purpose: fact.purpose,
+      purpose_basis: fact.basis,
       method: 'card',
       initiator: a.initiator,
       ref_type: ref.type,

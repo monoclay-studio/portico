@@ -332,6 +332,7 @@ export function paymentsHttp(deps: { database: PorticoDatabase; service: Payment
               businessKey: key,
               ...(req.body.amount ? { amount: req.body.amount } : {}),
               ...(req.body.ledgerRef ? { ledgerRef: req.body.ledgerRef } : {}),
+              ...(req.body.purpose ? { purpose: req.body.purpose } : {}),
               ...(req.body.separateCollection ? { separateCollection: req.body.separateCollection } : {}),
             }),
           );

@@ -35,7 +35,7 @@ import { db, type MethodRow, type PaymentsDeps, type ReferenceContext, reference
 export interface ConsentUse {
   /** `hold`: a new authorization, or an increase (pass `authorizationId` and the hold's NEW total); `charge`; `capture`. */
   kind: 'hold' | 'charge' | 'capture';
-  /** A charge's purpose as DERIVED from the facts (`derivePurpose`); holds and captures: `guarantee`. */
+  /** Where money lands (charge, capture): the purpose DERIVED from the destination's facts; holds: `guarantee`. */
   purpose: CollectionPurpose | 'guarantee';
   /** Omitted: the amount is not known yet (assessing a card before a hold). */
   amount?: { amountMinor: number; currency: string };
@@ -253,14 +253,15 @@ export async function consentProblem(
     };
   }
   const purposes = scope.purposes ?? [];
+  // Amendment 5 rule 1: a hold is judged as a hold; money that lands (a charge, a capture) on the purpose it lands as.
   const purposeOk =
-    use.kind === 'charge'
-      ? purposes.includes(use.purpose)
-      : purposes.includes('guarantee') || purposes.includes('incidentals');
+    use.kind === 'hold'
+      ? purposes.includes('guarantee') || purposes.includes('incidentals')
+      : purposes.includes(use.purpose);
   if (!purposeOk) {
     return {
       code: 'mandate_purpose_not_covered',
-      message: `The cardholder agreed to ${purposes.join(', ') || 'no'} charges on this card, not to ${use.kind === 'charge' ? `a ${use.purpose.replace('_', '-')} charge` : 'this hold'}. ${NEW_CONSENT}`,
+      message: `The cardholder agreed to ${purposes.join(', ') || 'no'} charges on this card, not to ${use.kind === 'hold' ? 'this hold' : `a ${use.purpose.replace('_', '-')} ${use.kind}`}. ${NEW_CONSENT}`,
     };
   }
   // Amendments 3 and 4: only the bookings and folios the agreement NAMES, as consented — and where the money lands.

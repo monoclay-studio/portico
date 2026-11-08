@@ -533,7 +533,8 @@ describe('R4-P1-2 — the running total is read under the card-row lock; open ho
       org,
       k,
       { type: 'guest_profile', id: profileId },
-      { purposes: ['guarantee'], maxAmount: usd(10_000), bookingIds: [a.id] },
+      // Amendment 5: the capture lands as the booking's deposit, so the agreement covers deposits too.
+      { purposes: ['guarantee', 'deposit'], maxAmount: usd(10_000), bookingIds: [a.id] },
     );
     const h1 = await holdOn(org, k, desk, capped.id, { type: 'stay', id: a.stays[0]?.id as string }, 10_000);
     const h2 = await holdOn(org, k, desk, capped.id, { type: 'booking', id: a.id }, 10_000);
