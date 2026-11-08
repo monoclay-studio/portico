@@ -20,7 +20,7 @@ export interface HubCallContext {
 }
 
 export interface HubHttpRequest {
-  method: 'GET' | 'POST';
+  method: 'GET' | 'POST' | 'DELETE';
   url: string;
   headers: Record<string, string>;
   body?: string;
@@ -83,7 +83,13 @@ export interface HubAdapter {
   /** A harmless read proving the key can see the property. */
   testCredentials(ctx: HubCallContext): Promise<{ propertyName: string | null }>;
   /** Ask the hub to notify Portico of booking revisions, sending `token` back in a header. */
-  registerWebhook(ctx: HubCallContext, input: { callbackUrl: string; token: string }): Promise<void>;
+  /** Returns the hub's id of the registration when its answer names one (to replace it later — P3-1). */
+  registerWebhook(
+    ctx: HubCallContext,
+    input: { callbackUrl: string; token: string },
+  ): Promise<{ webhookId: string | null }>;
+  /** Remove an earlier registration (old token) before registering a new one. A missing one is not an error. */
+  removeWebhook(ctx: HubCallContext, webhookId: string): Promise<void>;
   pushAvailability(ctx: HubCallContext, runs: readonly AvailabilityRun[]): Promise<AriResult>;
   pushRestrictions(ctx: HubCallContext, runs: readonly RestrictionRun[]): Promise<AriResult>;
   /** Revisions the hub still holds as NOT acknowledged (recovery pull). */

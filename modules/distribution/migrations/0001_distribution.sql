@@ -47,6 +47,10 @@ create table distribution.connections (
   -- First successful Verify: proof that a key for this hub property worked (P2-6). Only a proven connection holds
   -- the global claim on a production hub property; it keeps it until disconnected (a key rotation re-verifies).
   verified_at           timestamptz,
+  -- The hub's id of the current webhook registration (replaced, not duplicated, after a token rotation — P3-1).
+  webhook_hub_id        text,
+  -- One Verify at a time per connection (its hub calls happen between two transactions — P3-1).
+  verify_lease_until    timestamptz,
   created_by            text not null,
   created_at            timestamptz not null,
   updated_at            timestamptz not null,

@@ -36,6 +36,8 @@ export interface ConnectionsTable {
   next_full_sync_at: TsN;
   activated_at: TsN;
   verified_at: TsN;
+  webhook_hub_id: string | null;
+  verify_lease_until: TsN;
   created_by: string;
   created_at: Ts;
   updated_at: Ts;

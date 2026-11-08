@@ -19,6 +19,7 @@ export type SimEndpoint =
   | 'ack'
   | 'property'
   | 'webhooks'
+  | 'webhook_delete'
   | 'bookings';
 
 export type SimFaultKind =
@@ -87,6 +88,8 @@ export interface SimState {
   restrictions: Record<string, Record<string, SimRestriction>>;
   revisions: SimRevision[];
   webhook: {
+    /** The hub's id of the registration (absent in states created before it existed). */
+    id?: string;
     callbackUrl: string;
     headers: Record<string, string>;
     sendData: boolean;
@@ -168,6 +171,8 @@ function route(method: string, path: string): { endpoint: SimEndpoint; id?: stri
   m = /^\/properties\/([^/]+)$/.exec(p);
   if (method === 'GET' && m) return { endpoint: 'property', id: decodeURIComponent(m[1] as string) };
   if (method === 'POST' && p === '/webhooks') return { endpoint: 'webhooks' };
+  m = /^\/webhooks\/([^/]+)$/.exec(p);
+  if (method === 'DELETE' && m) return { endpoint: 'webhook_delete', id: decodeURIComponent(m[1] as string) };
   if (method === 'GET' && p === '/bookings') return { endpoint: 'bookings' };
   return null;
 }
@@ -379,13 +384,21 @@ function dispatch(
               Object.entries(w.headers as Record<string, unknown>).map(([k, v]) => [k, String(v)]),
             )
           : {};
+      const id = randomUUID();
       state.webhook = {
+        id,
         callbackUrl: w.callback_url,
         headers,
         sendData: w.send_data === true,
         active: w.is_active !== false,
       };
-      return respond(201, { data: { id: randomUUID(), type: 'webhook' } });
+      return respond(201, { data: { id, type: 'webhook' } });
+    }
+    case 'webhook_delete': {
+      if (!state.webhook || state.webhook.id !== r.id)
+        return respond(404, errorBody('not_found', 'Not Found'));
+      state.webhook = null;
+      return respond(200, { meta: { message: 'Success' } });
     }
     case 'bookings': {
       const since = url.searchParams.get('filter[inserted_at][gte]');

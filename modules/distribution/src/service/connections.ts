@@ -136,6 +136,8 @@ export function connectionView(tx: TxContext, deps: DistributionDeps, c: Connect
       ),
     ],
     issues,
+    // P3-9: the team responsible for channel connections.
+    owner: { kind: 'department' as const, id: 'distribution', name: 'Revenue and distribution' },
     links: [{ rel: 'property', type: 'property', id: c.property_id }],
     version: c.version,
   };
@@ -233,6 +235,8 @@ export async function createConnection(
         next_full_sync_at: null,
         activated_at: null,
         verified_at: null,
+        webhook_hub_id: null,
+        verify_lease_until: null,
         created_by: actorKey(tx),
         created_at: tx.now,
         updated_at: tx.now,
@@ -278,21 +282,39 @@ export async function verifyConnection(
     if (conn.status === 'disconnected')
       throw new BusinessRuleError('connection_disconnected', 'The connection is disconnected.');
     if (await claimedElsewhere(tx, conn.id)) throw claimedError();
-    return {
-      conn,
-      hubCtx: await hubContext(tx, deps, conn),
-      token: await deps.ports.secrets.get(tx, conn.webhook_secret_ref),
-    };
+    const hubCtx = await hubContext(tx, deps, conn);
+    const token = await deps.ports.secrets.get(tx, conn.webhook_secret_ref);
+    // P3-1: one Verify at a time per connection (two concurrent ones would register the webhook twice).
+    const leased = await db(tx)
+      .updateTable('distribution.connections')
+      .set({ verify_lease_until: new Date(tx.now.getTime() + 2 * deps.config.callDeadlineMs) })
+      .where('id', '=', conn.id)
+      .where((eb) => eb.or([eb('verify_lease_until', 'is', null), eb('verify_lease_until', '<', tx.now)]))
+      .returning('id')
+      .executeTakeFirst();
+    if (!leased) {
+      throw new ConflictError(
+        'verification_in_progress',
+        'Another verification of this connection is running. Try again in a minute.',
+      );
+    }
+    return { conn, hubCtx, token };
   });
   let failure: HubError | null = null;
   let propertyName: string | null = null;
+  let webhookId: string | null = null;
   try {
     propertyName = (await deps.hub.testCredentials(pre.hubCtx)).propertyName;
     if (!pre.conn.webhook_registered_at) {
-      await deps.hub.registerWebhook(pre.hubCtx, {
-        callbackUrl: webhookUrl(deps, pre.conn.webhook_endpoint_id),
-        token: pre.token,
-      });
+      // P3-1: after a token rotation the old registration is removed first, so the hub never delivers twice
+      // (once with the old token, refused).
+      if (pre.conn.webhook_hub_id) await deps.hub.removeWebhook(pre.hubCtx, pre.conn.webhook_hub_id);
+      webhookId = (
+        await deps.hub.registerWebhook(pre.hubCtx, {
+          callbackUrl: webhookUrl(deps, pre.conn.webhook_endpoint_id),
+          token: pre.token,
+        })
+      ).webhookId;
     }
   } catch (err) {
     if (!(err instanceof HubError)) throw err;
@@ -322,6 +344,8 @@ export async function verifyConnection(
             credential_state: state,
             ...(failure ? {} : { webhook_registered_at: conn.webhook_registered_at ?? tx.now }),
             ...(failure ? {} : { verified_at: conn.verified_at ?? tx.now }),
+            ...(webhookId ? { webhook_hub_id: webhookId } : {}),
+            verify_lease_until: null,
             // The unblocking transition (P1-1): bookings the hub may have sent while the key was refused or
             // unverified are pulled at once, and queued ARI and acknowledgements become due again.
             ...(!failure && inUse ? { next_feed_pull_at: tx.now } : {}),
@@ -335,6 +359,11 @@ export async function verifyConnection(
     } catch (err) {
       if ((err as { code?: string }).code !== '23505') throw err;
       claimed = false; // another connection proved this hub property first (race)
+      await db(tx)
+        .updateTable('distribution.connections')
+        .set({ verify_lease_until: null })
+        .where('id', '=', conn.id)
+        .execute();
     }
     if (!failure && claimed) {
       await autoResolve(tx, conn.id, 'credentials_invalid', 'The API key was verified.');

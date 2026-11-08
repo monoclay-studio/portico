@@ -485,6 +485,7 @@ export const revisionView = z.object({
   provenance: exchangeProvenance,
   allowedActions: z.array(recordAction),
   issues: z.array(recordIssue),
+  owner: recordOwner.optional(),
   links: z.array(recordLink),
   version: z.number().int(),
 });

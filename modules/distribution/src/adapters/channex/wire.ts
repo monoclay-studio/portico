@@ -169,6 +169,12 @@ export const WIRE_FACTS: ReadonlyArray<{ id: string; fact: string; status: FactS
     source: 'webhook collection (search excerpt)',
   },
   {
+    id: 'webhook.manage',
+    fact: 'POST /webhooks answers { data: { id } }; DELETE /webhooks/:id removes a registration (404 when already gone)',
+    status: 'unverified',
+    source: 'assumption — R4: rotate the webhook token and confirm the old registration stops delivering',
+  },
+  {
     id: 'webhook.auth',
     fact: 'Channex does not sign webhooks; authentication is a secret header we configure in `headers`',
     status: 'unverified',
@@ -258,6 +264,16 @@ export function hasNextPage(
 /** WIRE_FACTS `revisions.ack_idempotent`: answers that may mean "already acknowledged" on a repeated acknowledgement. */
 export const ACK_AGAIN_STATUSES: readonly number[] = [404, 422];
 
+/** WIRE_FACTS `webhook.manage`: the registration id from the answer to POST /webhooks, or null. */
+export function parseWebhookId(body: string): string | null {
+  try {
+    const j = JSON.parse(body) as { data?: { id?: unknown } };
+    return typeof j.data?.id === 'string' && j.data.id.length <= 200 ? j.data.id : null;
+  } catch {
+    return null;
+  }
+}
+
 /** WIRE_FACTS `revisions.get_missing`: the HTTP status meaning "no such revision". */
 export const REVISION_MISSING_STATUS = 404;
 
@@ -279,6 +295,7 @@ export const PATHS = {
   ack: (id: string) => `/booking_revisions/${encodeURIComponent(id)}/ack`,
   property: (id: string) => `/properties/${encodeURIComponent(id)}`,
   webhooks: '/webhooks',
+  webhook: (id: string) => `/webhooks/${encodeURIComponent(id)}`,
   bookings: '/bookings',
 } as const;
 

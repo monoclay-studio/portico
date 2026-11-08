@@ -19,13 +19,15 @@ export const distributionSearch: SearchProvider = {
     const scope = tx.authz.propertyScope(P.channelRead);
     if (scope !== 'all' && scope.length === 0) return [];
     const like = `%${escapeLike(q)}%`;
-    const conns = await db(tx)
+    // P3-5: the property scope is applied IN the query, before the limit (a scoped user is never starved of hits
+    // by other properties' rows); `readable` below stays as a second check.
+    let connQ = db(tx)
       .selectFrom('distribution.connections')
       .select(['id', 'name', 'property_id', 'status', 'health', 'external_property_id'])
-      .where((eb) => eb.or([eb('name', 'ilike', like), eb('external_property_id', 'ilike', like)]))
-      .limit(limit)
-      .execute();
-    const revs = await db(tx)
+      .where((eb) => eb.or([eb('name', 'ilike', like), eb('external_property_id', 'ilike', like)]));
+    if (scope !== 'all') connQ = connQ.where('property_id', 'in', scope);
+    const conns = await connQ.limit(limit).execute();
+    let revQ = db(tx)
       .selectFrom('distribution.revision_processing as p')
       .innerJoin('distribution.inbound_revisions as r', 'r.id', 'p.revision_row_id')
       .select([
@@ -41,10 +43,9 @@ export const distributionSearch: SearchProvider = {
           eb('p.channel_booking_id', 'ilike', like),
           eb(sql`r.payload->>'otaReservationCode'`, 'ilike', like),
         ]),
-      )
-      .orderBy('r.received_at', 'desc')
-      .limit(limit)
-      .execute();
+      );
+    if (scope !== 'all') revQ = revQ.where('p.property_id', 'in', scope);
+    const revs = await revQ.orderBy('r.received_at', 'desc').limit(limit).execute();
     const hits: SearchHit[] = [];
     for (const c of conns) {
       if (!readable(tx, c.property_id)) continue;

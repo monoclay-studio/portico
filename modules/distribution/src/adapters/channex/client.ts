@@ -30,6 +30,7 @@ import {
   parsePropertyTitle,
   parseSingleRevision,
   parseWebhook,
+  parseWebhookId,
   REVISION_MISSING_STATUS,
   restrictionsBody,
   retryAfterSeconds,
@@ -79,9 +80,12 @@ export function channexAdapter(deps: ChannexAdapterDeps): HubAdapter {
   const transportFor = (ctx: HubCallContext) =>
     ctx.mode === 'simulate' ? deps.simulator(ctx.tenantId, ctx.externalPropertyId) : deps.http;
 
+  const callMethod = (ctx: HubCallContext, method: 'DELETE', path: string, what: string) =>
+    call(ctx, method, path, what);
+
   async function call(
     ctx: HubCallContext,
-    method: 'GET' | 'POST',
+    method: 'GET' | 'POST' | 'DELETE',
     pathAndQuery: string,
     what: string,
     body?: unknown,
@@ -167,13 +171,27 @@ export function channexAdapter(deps: ChannexAdapterDeps): HubAdapter {
       return { propertyName: parsePropertyTitle(res.body) };
     },
     async registerWebhook(ctx, input) {
-      await call(
+      const res = await call(
         ctx,
         'POST',
         PATHS.webhooks,
         'the booking notification setup',
         webhookRegistration({ externalPropertyId: ctx.externalPropertyId, ...input }),
       );
+      return { webhookId: parseWebhookId(res.body) };
+    },
+    async removeWebhook(ctx, webhookId) {
+      try {
+        await callMethod(
+          ctx,
+          'DELETE',
+          PATHS.webhook(webhookId),
+          'the removal of the old booking notification',
+        );
+      } catch (err) {
+        if (err instanceof HubError && err.failure.httpStatus === 404) return; // already gone
+        throw err;
+      }
     },
     pushAvailability: (ctx, runs) =>
       ari(ctx, PATHS.availability, availabilityBody(ctx.externalPropertyId, runs), 'the availability update'),

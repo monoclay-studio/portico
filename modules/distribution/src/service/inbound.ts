@@ -1387,8 +1387,13 @@ export async function resolveRevision(
       .where('revision_row_id', '=', row.revision_row_id)
       .execute();
   } else {
-    if (!['parked', 'failed', 'rejected', 'received'].includes(row.state)) {
-      throw new BusinessRuleError('revision_settled', `This revision is already ${row.state}.`);
+    if (!dismissible(row)) {
+      throw new BusinessRuleError(
+        row.state === 'received' ? 'revision_not_tried' : 'revision_settled',
+        row.state === 'received'
+          ? 'Portico has not tried this revision yet; it is applied automatically. Dismiss is for a parked, failed or refused revision, or one waiting on an earlier revision of its booking.'
+          : `This revision is already ${row.state}.`,
+      );
     }
     for (const holdId of (row.hold_ids as string[] | null) ?? []) {
       await deps.ports.inventory.releaseHold(tx, {
@@ -1434,6 +1439,17 @@ export async function resolveRevision(
     reason: input.reason,
   });
   return getRevision(tx, revisionRowId);
+}
+
+/**
+ * P3-4: Dismiss closes a revision by a person's decision and acknowledges it — only for one Portico could not apply
+ * (parked, failed, refused) or one waiting on an earlier revision of its booking, never one not yet tried.
+ */
+function dismissible(row: Pick<Joined, 'state' | 'outcome' | 'next_attempt_at'>): boolean {
+  if (row.outcome === 'dismissed') return false;
+  if (row.state === 'parked' || row.state === 'failed') return true;
+  if (row.state === 'rejected') return true;
+  return row.state === 'received' && row.next_attempt_at === null; // waiting on an earlier revision
 }
 
 function revisionView(tx: TxContext, row: Joined, conn: Pick<ConnectionRow, 'target'>): RevisionView {
@@ -1516,11 +1532,15 @@ function revisionView(tx: TxContext, row: Joined, conn: Pick<ConnectionRow, 'tar
       action(
         'dismiss',
         'Dismiss',
-        ['parked', 'failed', 'rejected', 'received'].includes(row.state) && row.outcome !== 'dismissed',
-        'This revision is settled.',
+        dismissible(row),
+        row.state === 'received'
+          ? 'Portico has not tried this revision yet; it is applied automatically.'
+          : 'This revision is settled.',
       ),
     ],
     issues,
+    // P3-9: the team that acts on channel booking revisions.
+    owner: { kind: 'department' as const, id: 'reservations', name: 'Reservations' },
     links: [
       { rel: 'connection', type: RECORD.connection, id: row.connection_id },
       ...(row.booking_id ? [{ rel: 'booking', type: 'booking', id: row.booking_id }] : []),
