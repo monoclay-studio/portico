@@ -78,4 +78,47 @@ describe('the budget runs on one shared clock (P2-2)', () => {
     );
     expect(results.filter((r) => r.ok)).toHaveLength(10);
   });
+
+  it('a request is counted from its COMPLETION: 3 s of latency move its slot 3 s later', async () => {
+    const org = await setupOrg(h);
+    const c = await connect(org);
+    await runFor(org, 61_000, 61_000); // the connect resync's slots are free again
+    await org.run((tx) =>
+      h.rates.applyPriceUpdate(tx, {
+        propertyId: org.propertyId,
+        ratePlanId: org.bar,
+        unitTypeIds: [org.water],
+        ranges: [{ from: '2026-11-20', to: '2026-11-21' }],
+        set: { baseOccupancy: 2, baseAmountMinor: 61_100 },
+      }),
+    );
+    await h.drain();
+    const reservedAt = h.clock.now().getTime();
+    const stampsNow = async () => {
+      const row = await h.t.admin.kysely
+        .selectFrom('distribution.ari_budget')
+        .select('sends')
+        .where('connection_id', '=', c.connectionId)
+        .where('kind', '=', 'restrictions')
+        .executeTakeFirstOrThrow();
+      return (row.sends as Array<string | Date>).map((x) => new Date(x).getTime());
+    };
+    const before = await stampsNow();
+    const slow = {
+      ...h.dist.deps,
+      hub: {
+        ...h.dist.deps.hub,
+        async pushRestrictions(...args: Parameters<typeof h.dist.deps.hub.pushRestrictions>) {
+          h.clock.advance(3_000); // the answer comes back 3 s later
+          return h.dist.deps.hub.pushRestrictions(...args);
+        },
+      },
+    };
+    const r = await svc.dispatchKind(h.t.db, slow, sys(org), c.connectionId, 'restrictions');
+    expect(r.sent).toBe(true);
+    const after = await stampsNow();
+    // The new slot is stamped at the completion (reservation + 3 s), not at the reservation.
+    expect(after.filter((t) => t === reservedAt + 3_000).length).toBe(1);
+    expect(after.filter((t) => t === reservedAt).length).toBe(before.filter((t) => t === reservedAt).length);
+  });
 });
