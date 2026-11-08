@@ -202,6 +202,12 @@ const rev = (over: Partial<HubRevision> = {}): HubRevision => ({
   ...over,
 });
 
+function firstRoom(): HubRevision['rooms'][number] {
+  const r = rev().rooms[0];
+  if (!r) throw new Error('fixture has a room');
+  return r;
+}
+
 describe('revisions — ordering, parking and translation', () => {
   it('orders by the hub timestamp with a deterministic tie-break; falls back to arrival time', () => {
     const a = revisionOrderOf('a', '2026-11-07T06:00:00.000Z', at(999));
@@ -258,7 +264,7 @@ describe('revisions — ordering, parking and translation', () => {
     expect(bad.ok && bad.payload.notes).toMatch(/surname not supplied/);
   });
   it('an unmapped room is reported with the unit type to hold (from the rate mapping or the room mapping)', () => {
-    const t = translateRevision(rev({ rooms: [{ ...rev().rooms[0]!, channelRatePlanId: 'RP-UNKNOWN' }] }), {
+    const t = translateRevision(rev({ rooms: [{ ...firstRoom(), channelRatePlanId: 'RP-UNKNOWN' }] }), {
       propertyId: 'p',
       amountsIncludeTax: false,
       mapping,
@@ -268,7 +274,7 @@ describe('revisions — ordering, parking and translation', () => {
       unmapped: [{ holdUnitTypeId: 'ut-wv', channelRatePlanId: 'RP-UNKNOWN' }],
     });
     const fallback = translateRevision(
-      rev({ rooms: [{ ...rev().rooms[0]!, channelRatePlanId: 'RP-UNKNOWN' }] }),
+      rev({ rooms: [{ ...firstRoom(), channelRatePlanId: 'RP-UNKNOWN' }] }),
       {
         propertyId: 'p',
         amountsIncludeTax: false,
@@ -277,7 +283,7 @@ describe('revisions — ordering, parking and translation', () => {
     );
     expect(fallback).toMatchObject({ ok: true, fallbackRooms: ['1'] });
     const none = translateRevision(
-      rev({ rooms: [{ ...rev().rooms[0]!, channelRoomTypeId: 'X', channelRatePlanId: 'Y' }] }),
+      rev({ rooms: [{ ...firstRoom(), channelRoomTypeId: 'X', channelRatePlanId: 'Y' }] }),
       {
         propertyId: 'p',
         amountsIncludeTax: false,

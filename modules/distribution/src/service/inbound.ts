@@ -842,7 +842,7 @@ export async function dispatchAcks(
         durationMs: r.ms,
         provenance,
       });
-      if (!row || row.ack_state !== 'sending' || row.ack_lease_token !== r.item.token) continue;
+      if (row?.ack_state !== 'sending' || row.ack_lease_token !== r.item.token) continue;
       if (r.ok) {
         acked++;
         await db(tx)

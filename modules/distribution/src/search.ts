@@ -69,10 +69,9 @@ export const distributionSearch: SearchProvider = {
         status: { revision: r.state },
         propertyId: r.property_id,
         score: 0.7,
-        matched:
-          r.code && r.code.toLowerCase().includes(q.toLowerCase())
-            ? 'OTA reservation code'
-            : 'channel booking id',
+        matched: r.code?.toLowerCase().includes(q.toLowerCase())
+          ? 'OTA reservation code'
+          : 'channel booking id',
       });
     }
     return hits.sort((a, b) => b.score - a.score).slice(0, limit);

@@ -160,8 +160,8 @@ export async function checkDiscrepancies(
   for (const kind of ['availability', 'restrictions'] as const) {
     const byProduct = new Map<string, { product: Product; dates: string[] }>();
     for (let from = window.from; from < window.to; from = addDays(from, MAX_CALENDAR_NIGHTS)) {
-      const to =
-        addDays(from, MAX_CALENDAR_NIGHTS) < window.to ? addDays(from, MAX_CALENDAR_NIGHTS) : window.to;
+      const chunkEnd = addDays(from, MAX_CALENDAR_NIGHTS);
+      const to = [chunkEnd, window.to].sort()[0] as string; // earlier of two ISO dates
       for (const c of await computeCells(tx, deps, conn, kind, { from, to })) {
         if (c.state !== 'differs') continue;
         differing++;

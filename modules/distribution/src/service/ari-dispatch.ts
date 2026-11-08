@@ -432,7 +432,7 @@ async function record(
       .where('id', '=', c.messageId)
       .forUpdate()
       .executeTakeFirst();
-    if (!msg || msg.status !== 'sending' || msg.lease_token !== c.token) {
+    if (msg?.status !== 'sending' || msg.lease_token !== c.token) {
       // A late answer for a send that was already taken over or decided: logged, never applied.
       await recordExchange(tx, {
         connectionId: conn.id,
