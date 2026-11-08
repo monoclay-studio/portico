@@ -2,10 +2,11 @@
  * S19 (Day Close part) — a guest's bill combines packages, allowances and different taxes. Kandu, all-inclusive
  * package (room + board + nightly dining credit for each adult, forfeit; seaplane in on arrival, out on departure),
  * 2 adults + 1 child (8), 2 nights. Day Close posts each night from the sealed agreed terms through rates' posting
- * plan, with taxes from the real Maldives rule pack (service charge + TGST compounding, Green Tax per person-night);
- * allowances are granted for the night (and pre-granted at the start of the next night so guests can use them that
- * day); unused allowance is forfeited (breakage) at that night's close; the departure transfer is posted by the
- * close whose business date reaches its service date. Ledger reconciles to the minor unit.
+ * plan, under each line's stable identity (review P0-1), with taxes from the real Maldives rule pack (service charge
+ * + TGST compounding, Green Tax per person-night). Night N's dining credit is granted at N's own close — never before
+ * the night exists (review P0-2) — valid the next day (the day the guests wake up to), and closed (unused part
+ * forfeited as breakage) at N+1's close or at check-out. The departure transfer is posted right after the advance to its service date, so it is on the folio
+ * before the guest checks out (review P2-10). Ledger reconciles to the minor unit.
  */
 import { sql } from '@portico/db';
 import { money, newId } from '@portico/kernel';
@@ -64,24 +65,25 @@ describe('S19: packages, allowances and taxes posted by Day Close', () => {
     const auditor = nightAudit(h, org);
     const r1 = await h.service.startRun(h.t.db, auditor, { propertyId: org.propertyId });
     expect(r1.runStatus).toBe('completed');
-    // Every line of night D posted once with its plan key; the departure transfer waits for its service date.
+    // Every line of night D posted once under its stable identity (the arrival transfer as "arrival").
     for (const l of n1)
-      expect(await entriesByKey(h, org.tenantId, l.idempotencyKey)).toEqual([
-        { idempotency_key: l.idempotencyKey, n: 1 },
-      ]);
+      expect(await entriesByKey(h, org.tenantId, l.lineKey)).toEqual([{ idempotency_key: l.lineKey, n: 1 }]);
+    expect(n1.find((l) => l.occurrence.rhythm === 'arrival')?.lineKey).toMatch(/:arrival$/);
     // Taxes follow the rules: room line carries service charge, TGST and Green Tax for 3 persons × USD 12.
     const room = await linesOf(h, org, `room:${s.stayId}:${D}`);
     expect(room.get('tax:green_tax')).toBe(-3_600);
     expect(room.get('tax:tgst')).toBeLessThan(0);
-    // Unused dining credit of the arrival night is forfeited at its close (breakage), once.
-    expect(await entriesByKey(h, org.tenantId, 'breakage:')).toHaveLength(1);
-    // After the advance, tonight's (D+1) dining credit is already granted so the guests can use it today.
+    // Tonight's credit is granted now and usable tomorrow; nothing for D+1 exists yet; nothing is forfeited yet.
     const n2 = plan.filter((l) => l.nightDate === '2026-11-08');
     const credit2 = n2.find((l) => l.kind === 'allowance');
-    expect(await entriesByKey(h, org.tenantId, credit2?.idempotencyKey as string)).toHaveLength(1);
-    expect(r1.steps.find((x) => x.key === 'post_advance')?.detail.allowances).toMatchObject({ granted: 1 });
+    expect(await entriesByKey(h, org.tenantId, allowanceLine?.lineKey as string)).toHaveLength(1);
+    expect(await entriesByKey(h, org.tenantId, credit2?.lineKey as string)).toEqual([]);
+    expect(await entriesByKey(h, org.tenantId, 'breakage:')).toEqual([]);
+    const out = plan.find((l) => l.occurrence.rhythm === 'departure');
+    expect(out?.serviceDate).toBe('2026-11-09');
+    expect(out?.lineKey).toBe(`inclusion:${s.stayId}:${out?.inclusionId}:departure`);
 
-    // ── Day D+1: dinner consumes the credit and goes over it once ──
+    // ── Day D+1: lunch and dinner consume the credit and go over it once ──
     const desk = org.as(['finance.posting.create', 'finance.folio.read']);
     const dine = (amountMinor: number, ref: string) =>
       org.run(
@@ -101,49 +103,47 @@ describe('S19: packages, allowances and taxes posted by Day Close', () => {
       );
     const lunch = await dine(3_000, 'lunch');
     expect(lunch.allowanceUsage?.amountMinor).toBeGreaterThan(0);
-    await dine(9_000, 'dinner'); // goes over what is left of tonight's credit: the excess is payable
+    await dine(9_000, 'dinner'); // goes over what is left of the credit: the excess is payable
     const instances = await h.t.admin.kysely
       .selectFrom('finance.allowance_instances')
-      .select(['period_key', 'granted_minor', 'used_minor', 'status'])
+      .select(['period_key', 'granted_minor', 'used_minor'])
       .where('stay_id', '=', s.stayId)
       .orderBy('period_key')
       .execute();
-    expect(instances).toEqual([
-      { period_key: D, granted_minor: 10_000, used_minor: 0, status: 'closed' }, // forfeited at the close of D
-      { period_key: '2026-11-08', granted_minor: 10_000, used_minor: 10_000, status: 'consumed' },
-    ]);
+    // Night D's credit, granted at D's close and valid the day after (the day the guests wake up to).
+    expect(instances).toEqual([{ period_key: '2026-11-08', granted_minor: 10_000, used_minor: 10_000 }]);
 
-    // ── Close of D+1: the pre-granted credit is replayed (not granted twice); nothing left to forfeit ──
+    // ── Close of D+1: night D+1 posted with its credit; yesterday's (fully used) credit closes, nothing forfeited;
+    //    after the advance the departure transfer lands on the folio with service date D+2, before check-out ──
     h.clock.set(nightOf(1));
     const r2 = await h.service.startRun(h.t.db, auditor, { propertyId: org.propertyId });
     expect(r2.runStatus).toBe('completed');
-    expect(await entriesByKey(h, org.tenantId, credit2?.idempotencyKey as string)).toHaveLength(1);
-    expect(await entriesByKey(h, org.tenantId, 'breakage:')).toHaveLength(1); // fully used: no second breakage
-    const out = plan.find((l) => l.serviceDate === '2026-11-09');
-    expect(out).toBeDefined();
-    const pending = await h.t.admin.kysely
+    for (const l of n2)
+      expect(await entriesByKey(h, org.tenantId, l.lineKey)).toEqual([{ idempotency_key: l.lineKey, n: 1 }]);
+    expect(await entriesByKey(h, org.tenantId, 'breakage:')).toEqual([]); // fully used: nothing to forfeit
+    expect(await entriesByKey(h, org.tenantId, out?.lineKey as string)).toEqual([
+      { idempotency_key: out?.lineKey, n: 1 },
+    ]);
+    const transfer = await h.t.admin.kysely
+      .selectFrom('finance.journal_entries')
+      .select(['business_date'])
+      .where('idempotency_key', '=', out?.lineKey as string)
+      .executeTakeFirstOrThrow();
+    expect(transfer.business_date).toBe('2026-11-09'); // its service date: no future-dated posting, no late charge
+    const expectation = await h.t.admin.kysely
       .selectFrom('day_close.deferred_lines')
-      .select(['idempotency_key', 'status', 'service_date'])
+      .select(['line_key', 'status', 'service_date'])
       .where('stay_id', '=', s.stayId)
       .execute();
-    expect(pending).toEqual([
-      { idempotency_key: out?.idempotencyKey, status: 'pending', service_date: '2026-11-09' },
-    ]);
+    expect(expectation).toEqual([{ line_key: out?.lineKey, status: 'posted', service_date: '2026-11-09' }]);
 
-    // ── Departure D+2; the close of D+2 posts the departure transfer once on its service date ──
+    // ── Departure D+2: check-out; the close of D+2 forfeits the unused last credit once; nothing is posted twice ──
     await checkOut(org, s.stayId);
     h.clock.set(nightOf(2));
     const r3 = await h.service.startRun(h.t.db, auditor, { propertyId: org.propertyId });
     expect(r3.runStatus).toBe('completed');
-    expect(await entriesByKey(h, org.tenantId, out?.idempotencyKey as string)).toEqual([
-      { idempotency_key: out?.idempotencyKey, n: 1 },
-    ]);
-    const deferredEntry = await h.t.admin.kysely
-      .selectFrom('finance.journal_entries')
-      .select(['business_date'])
-      .where('idempotency_key', '=', out?.idempotencyKey as string)
-      .executeTakeFirstOrThrow();
-    expect(deferredEntry.business_date).toBe('2026-11-09');
+    expect(await entriesByKey(h, org.tenantId, out?.lineKey as string)).toHaveLength(1);
+    expect(await entriesByKey(h, org.tenantId, 'breakage:')).toHaveLength(1);
 
     // Ledger: trial balance zero; guest ledger = folios; allowance clearing = open allowances.
     const report = await assertBooksBalance(h, org);

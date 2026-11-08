@@ -284,8 +284,8 @@ describe('a guest arriving during or after the close (EC-DCL-004, EC-DCL-010)', 
     ]);
     const noShows = run.steps.find((s) => s.key === 'no_shows');
     expect(noShows?.done).toBe(1); // recorded: kept expected (transfer delayed)
-    const sweep = run.steps.find((s) => s.key === 'advance');
-    expect(sweep?.done).toBe(1); // the stay-night posted by the pre-advance sweep
+    const sweep = run.steps.find((s) => s.key === 'final_sweep');
+    expect(sweep?.done).toBe(1); // the stay-night posted by the final sweep, before the facts froze
   });
 
   it('a stay checked in after the advance gets its missed night posted by the next close (catch-up), once', async () => {

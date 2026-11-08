@@ -32,7 +32,15 @@ beforeAll(async () => {
 afterAll(async () => h?.close());
 
 type Point = { at: 'beforeStep' | 'afterStep' | 'insideItem' | 'afterItem'; step: StepKey };
-const WITH_ITEMS: StepKey[] = ['no_shows', 'room_and_package_postings', 'allowance_close', 'advance'];
+// post_advance items: each day's all-inclusive stay leaves the next day, so its departure transfer is posted right
+// after the advance (review P2-10) — a crash inside that item is a point of its own.
+const WITH_ITEMS: StepKey[] = [
+  'no_shows',
+  'room_and_package_postings',
+  'allowance_close',
+  'advance',
+  'post_advance',
+];
 const POINTS: Point[] = [
   ...STEP_KEYS.flatMap((step) => [
     { at: 'beforeStep' as const, step },
@@ -41,7 +49,7 @@ const POINTS: Point[] = [
   ...WITH_ITEMS.map((step) => ({ at: 'insideItem' as const, step })),
   // Right after the advance transaction committed (date moved), before anything else is recorded.
   { at: 'afterItem' as const, step: 'advance' as StepKey },
-  // Right after the report and the day-closed event committed, before tonight's allowances are pre-granted.
+  // Right after the report and the day-closed event committed, before the departure lines are posted.
   { at: 'afterItem' as const, step: 'post_advance' as StepKey },
 ];
 
@@ -110,8 +118,15 @@ describe('crash at every step boundary and inside every step, then resume (E07)'
     }
     expect(await entriesByKey(h, org.tenantId, 'room:')).toHaveLength(3 * POINTS.length);
     expect(await entriesByKey(h, org.tenantId, 'penalty:no_show:')).toHaveLength(POINTS.length);
-    // Allowance breakage closed nightly for each package stay (forfeit), once.
-    expect(await entriesByKey(h, org.tenantId, 'breakage:')).toHaveLength(POINTS.length);
+    // Allowance breakage closed nightly for each package stay (forfeit), once. Night N's credit is granted at N's
+    // close and closed at N+1's close (review P0-2), so the last day's credit is still open (usable at check-out).
+    expect(await entriesByKey(h, org.tenantId, 'breakage:')).toHaveLength(POINTS.length - 1);
+    // Each package stay's departure transfer: once, posted on its own service date after the advance (review P2-10).
+    const departures = (await entriesByKey(h, org.tenantId, 'inclusion:')).filter((r) =>
+      r.idempotency_key.endsWith(':departure'),
+    );
+    expect(departures).toHaveLength(POINTS.length);
+    expect(departures.every((d) => d.n === 1)).toBe(true);
     const log = await h.t.admin.kysely
       .selectFrom('platform.business_date_log')
       .select(['from_date'])

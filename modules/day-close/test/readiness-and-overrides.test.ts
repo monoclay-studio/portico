@@ -341,7 +341,7 @@ describe('blocking, overrides and policy', () => {
       },
     });
     expect(run.runStatus).toBe('blocked');
-    expect(run.currentStep).toBe('advance');
+    expect(run.currentStep).toBe('final_sweep'); // the re-check right before the advance
     expect(run.blockers.map((b) => b.code)).toEqual(['payment_pending_verification']);
     expect(await businessDate(org)).toBe(D);
     // The provider answers; nothing is pending any more: resume moves the date.

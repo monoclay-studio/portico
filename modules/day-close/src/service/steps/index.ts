@@ -291,9 +291,10 @@ async function finishItems(s: StepContext, step: StepKey): Promise<StepOutcome> 
 // ───────────────────────────── 4. allowance close ─────────────────────────────
 
 /**
- * Night N's allowance is granted at N's own close (never before the night exists, review P0-2) and used the next day;
- * it closes here at N+1's close (`upTo` D closes periods ending on or before D). Stays that left today (their last
- * night was D−1) close theirs too, if finance's check-out consumer has not already.
+ * Night N's allowance is granted at N's own close (never before the night exists, review P0-2), valid the day after,
+ * and closes here at N+1's close (`upTo` D+1 closes credits valid until D+1, i.e. last night's). Stays that left
+ * today (their last night was D−1) or whose earlier nights this run posted after they left close theirs too, if
+ * finance's check-out consumer has not already.
  */
 async function allowanceClose(s: StepContext): Promise<StepOutcome> {
   const { ports } = s.deps;
@@ -306,9 +307,10 @@ async function allowanceClose(s: StepContext): Promise<StepOutcome> {
       .selectFrom('day_close.night_postings')
       .select('stay_id')
       .where('property_id', '=', propertyId)
-      .where('night', '=', addDays(D, -1))
+      .where((eb) => eb.or([eb('night', '=', addDays(D, -1)), eb('run_id', '=', s.run.id)]))
       .execute();
-    return { stays: tonight, departed: lastNight.map((r) => r.stay_id).filter((id) => !here.has(id)) };
+    const gone = [...new Set(lastNight.map((r) => r.stay_id))].filter((id) => !here.has(id));
+    return { stays: tonight, departed: gone };
   });
   const step: StepKey = 'allowance_close';
   const items = [
@@ -338,7 +340,7 @@ async function allowanceClose(s: StepContext): Promise<StepOutcome> {
     const r = await ports.finance.closeAllowances(
       tx,
       { propertyId },
-      { stayId: it.stayId, upTo: D, departureDate: it.departure },
+      { stayId: it.stayId, upTo: addDays(D, 1), departureDate: it.departure },
     );
     return { closed: r.closed };
   });

@@ -17,7 +17,7 @@
  * person decides "post it" (then once, with the plan key) or "posted elsewhere".
  */
 import { type TxContext, withSavepoint } from '@portico/db';
-import { BusinessRuleError, DomainError, type LocalDate, type Money, newId } from '@portico/kernel';
+import { addDays, BusinessRuleError, DomainError, type LocalDate, type Money, newId } from '@portico/kernel';
 import type { StepKey } from '../../contracts';
 import { type FailureRecord, toFailure } from '../../domain/errors';
 import type { AllowanceEntitlement, PostingLine, StayAgreement, StayNight } from '../../ports';
@@ -52,7 +52,12 @@ function priceMode(line: PostingLine): 'inclusive' | 'exclusive' {
 const IDEMPOTENCY_CONFLICT = 'idempotency_conflict';
 const notConnected = (err: unknown) => err instanceof DomainError && err.code === 'module_not_available';
 
-/** Grant one night's allowance under the plan line's identity. */
+/**
+ * Grant one night's allowance under the plan line's identity, at that night's own close (review P0-2: never before
+ * the night exists, so an early departure or a correction never meets a grant for a night that did not happen). The
+ * credit is valid the day after the night — the day the guest wakes up to — so it is usable before the next close and
+ * at check-out; it closes at the next close (unused part per the package's policy) or at check-out.
+ */
 async function grantAllowanceLine(
   s: PostCtx,
   tx: TxContext,
@@ -78,7 +83,7 @@ async function grantAllowanceLine(
       folioId,
       definitionRef: ent.inclusionId,
       label: ent.name,
-      period: { night: line.nightDate },
+      period: { night: addDays(line.nightDate, 1) },
       amount: line.amount,
       chargeCode: line.chargeCode,
       ...(ent.eligibleChargeCodes.length ? { eligibleChargeCodes: ent.eligibleChargeCodes } : {}),
