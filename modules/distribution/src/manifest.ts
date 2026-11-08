@@ -12,6 +12,7 @@ export const P = {
   discrepancyResolve: 'distribution.discrepancy.resolve',
   stopSellManage: 'distribution.stopSell.manage',
   simulatorControl: 'distribution.simulator.control',
+  guestDataErase: 'distribution.guestData.erase',
 } as const;
 
 /** Record types (universal record contract; `type` equals the audit target type). */
@@ -94,6 +95,13 @@ export const distributionManifest: ModuleManifest = {
       key: P.stopSellManage,
       description: 'Close or reopen sales on a channel (stop-sell), including releasing automatic protection',
       scope: 'property',
+    },
+    {
+      key: P.guestDataErase,
+      description:
+        'Erase the guest personal data held in stored channel booking revisions (privacy request); ids, dates and amounts stay',
+      scope: 'property',
+      sensitive: true,
     },
     {
       key: P.simulatorControl,

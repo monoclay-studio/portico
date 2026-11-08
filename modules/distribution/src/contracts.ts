@@ -138,6 +138,11 @@ export const connectionSettings = z
     webhookPayload: z.enum(['store', 'notify']).default('store'),
     /** Safety-net pull of revisions the hub still holds as unacknowledged. */
     feedPullMinutes: z.number().int().min(1).max(1440).default(15),
+    /**
+     * Days after the stay's last night that the guest's personal data in stored booking revisions is kept; then it
+     * is redacted (ids, dates, products and amounts stay). P2-7.
+     */
+    guestDataRetentionDays: z.number().int().min(1).max(3650).default(90),
     /** Full non-destructive resync interval (nightly by default). */
     fullResyncHours: z.number().int().min(1).max(168).default(24),
   })
@@ -280,6 +285,13 @@ export const simulatorFaultInput = z
     times: z.number().int().min(1).max(100),
   })
   .strict();
+export const eraseGuestDataInput = z
+  .object({
+    channelBookingIds: z.array(z.string().min(1).max(200)).min(1).max(500),
+    reason: z.string().min(3).max(500),
+  })
+  .strict();
+
 /** Alternative hub behaviours for unverified wire facts (simulator only; see SimModes). */
 export const simulatorModesInput = z
   .object({

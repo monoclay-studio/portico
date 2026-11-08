@@ -15,6 +15,7 @@ import {
   createConnectionInput,
   createdConnection,
   discrepancyView,
+  eraseGuestDataInput,
   exceptionView,
   healthView,
   mappingView,
@@ -42,6 +43,7 @@ import { getChannelCalendar, runDiscrepancyCheck } from './service/calendar';
 import { type DistributionDeps, loadConnection, requireOnConnection } from './service/common';
 import * as conns from './service/connections';
 import { listDiscrepancies, resolveDiscrepancy } from './service/discrepancies';
+import { eraseRevisionGuestData } from './service/erasure';
 import { listExceptions, resolveException } from './service/exceptions';
 import { getHealth, propertyHealth } from './service/health';
 import { getRevision, listRevisions, pullFeed, recoverSince, resolveRevision } from './service/inbound';
@@ -436,6 +438,18 @@ export function distributionHttp(input: { database: PorticoDatabase; deps: Distr
           setVersion(reply, r.version);
           return r;
         },
+      );
+      app.post(
+        '/distribution/connections/:id/guest-data/erase',
+        {
+          schema: {
+            tags,
+            params: idParams,
+            body: eraseGuestDataInput,
+            response: { 200: z.object({ redacted: z.number().int(), revisions: z.number().int() }) },
+          },
+        },
+        (req) => tx(req, (t) => eraseRevisionGuestData(t, deps, req.params.id, req.body)),
       );
 
       // ── Exceptions and discrepancies ──

@@ -23,9 +23,16 @@ export const CONSUMED_EVENTS = {
   pricesChanged: 'rates.prices.changed',
   restrictionsChanged: 'rates.restrictions.changed',
   dataAuthorityChanged: 'platform.dataAuthority.changed',
+  /** guests' erasure (consumed only when the GuestErasurePort is bound — FR-7). */
+  guestAnonymized: 'guests.profile.anonymized',
 } as const;
 
 const range = z.object({ from: z.iso.date(), to: z.iso.date() });
+
+/** guests.profile.anonymized (guests' ProfileAnonymizedPayload; equal copy, no import of another module). */
+export const guestAnonymizedPayload = z
+  .object({ profileId: z.string(), privacyRequestId: z.string(), alsoAnonymized: z.array(z.string()) })
+  .loose();
 
 /** inventory.availability.changed (inventory `AvailabilityChangedPayload`). */
 export const availabilityChangedPayload = z

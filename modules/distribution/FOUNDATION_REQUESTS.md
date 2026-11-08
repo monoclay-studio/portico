@@ -38,13 +38,22 @@ interfaces only (self-check item 22 asks producers to export schemas).
 producers' interfaces at compile time and with sample payloads at run time.
 **Proposed diff.** Each producer exports `availabilityChangedPayloadSchema` etc. from its `contracts.ts`.
 
-## FR-5 Erasure and retention for stored channel revisions
+## FR-5 Erasure and retention for stored channel revisions — built in distribution (fix round 1, P2-7)
 
-**Problem.** Revisions carry guest name, e-mail and phone; the table is append-only (immutability is the point), so
-there is no redaction path for an erasure request or for retention.
-**Proposed diff.** A reviewed SECURITY DEFINER function `distribution.redact_revision_payload(id)` replacing personal
-fields with a marker while keeping hashes and ids, called by the guests module's erasure flow and by a retention job
-(e.g. 30 days after the booking's departure, like integration's inbound retention).
+**Done here.** `distribution.redact_revision_payloads(ids, reason)` (SECURITY DEFINER) is the only change a revision
+can ever undergo: a trigger refuses any other update or delete, even by the owner. Customer and notes are removed;
+ids, dates, products, amounts and the payload hash stay. Paths: staff action (`distribution.guestData.erase`,
+`POST /v1/distribution/connections/:id/guest-data/erase`), daily retention (`guestDataRetentionDays`, default 90
+after the stay), and `guests.profile.anonymized` through the lookup port of FR-7.
+**Sibling store (other module).** `reservations.channel_revisions.payload` holds the same data.
+
+## FR-7 Guest → channel bookings lookup for erasure (reservations)
+
+**Problem.** Only reservations links a channel booking (connection, external id) to its booker and occupants, so
+distribution cannot find which stored revisions belong to an anonymized guest profile.
+**Proposed diff.** Reservations exposes `channelBookingsOfGuests(tx, { profileIds }) → [{ connectionId, externalId }]`
+(read of its own booking ↔ guest links); the composition root binds `ports.guestErasure` to it. Until then the port
+is unbound (no subscription; staff action and retention are the paths); tests bind a strict fake.
 
 ## FR-6 Platform activation scope for live channels
 

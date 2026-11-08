@@ -108,6 +108,20 @@ export interface LiveScopePort {
   assertLiveChannelAllowed(tx: TxContext, input: { propertyId: string; connectionId: string }): Promise<void>;
 }
 
+/**
+ * Guest erasure lookup (P2-7, FOUNDATION_REQUESTS FR-7): which channel bookings belong to anonymized guest
+ * profiles. Only reservations links a channel booking (connection, external id) to its booker and occupants. When
+ * bound, distribution redacts the guest data of those bookings' stored revisions on `guests.profile.anonymized`.
+ * NOT bound in the composition root until reservations offers the lookup (README "Guest data"); tests bind a strict
+ * fake. Until then: the staff erasure action and the retention job are the erasure paths.
+ */
+export interface GuestErasurePort {
+  channelBookingsOfGuests(
+    tx: TxContext,
+    input: { profileIds: readonly string[] },
+  ): Promise<Array<{ connectionId: string; externalId: string }>>;
+}
+
 export interface DistributionPorts {
   platform: PlatformPort;
   inventory: InventoryPort;
@@ -115,4 +129,6 @@ export interface DistributionPorts {
   reservations: ReservationsPort;
   secrets: SecretsPort;
   liveScope: LiveScopePort;
+  /** Optional until FR-7 (see GuestErasurePort). */
+  guestErasure?: GuestErasurePort;
 }

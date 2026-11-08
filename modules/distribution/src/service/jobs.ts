@@ -24,6 +24,7 @@ import {
   availabilityChangedPayload,
   CONSUMED_EVENTS,
   dataAuthorityChangedPayload,
+  guestAnonymizedPayload,
   pricesChangedPayload,
   restrictionsChangedPayload,
 } from '../events';
@@ -39,6 +40,7 @@ import {
   settingsOf,
 } from './common';
 import { onAuthorityChanged, requestResync } from './connections';
+import { applyRetention, eraseRevisionGuestData } from './erasure';
 import { nextHealthDue, refreshHealth } from './health';
 import { dispatchAcks, escalateParked, PARK_ESCALATION_MS, processInbound, pullFeed } from './inbound';
 
@@ -82,6 +84,7 @@ async function connectionWork(
       const conn = await loadConnection(tx, c.id);
       await checkDiscrepancies(tx, deps, conn);
       await requestResync(tx, deps, conn, { trigger: 'nightly' });
+      await applyRetention(tx, deps, conn); // guest data past its retention (P2-7), once a day
     });
   }
   // 3. ARI, within the budget (each call is one message; changes keep merging while the budget is spent).
@@ -272,7 +275,34 @@ export function distributionJobs(
  * late, repeated or reordered event can at most cause one redundant send of CURRENT values (idempotent consumer).
  */
 export function distributionSubscriptions(deps: DistributionDeps): TxEventSubscription[] {
+  const erasure = deps.ports.guestErasure;
   return [
+    // P2-7: a guest's anonymization reaches the stored revisions of their channel bookings — only when the lookup
+    // port is bound (FR-7); unbound, no subscription exists (README "Guest data": staff action and retention).
+    ...(erasure
+      ? [
+          {
+            consumer: 'distribution.guest.erasure',
+            types: [CONSUMED_EVENTS.guestAnonymized],
+            async handle(tx: Parameters<TxEventSubscription['handle']>[0], event: DomainEvent) {
+              const p = guestAnonymizedPayload.safeParse(event.payload);
+              if (!p.success)
+                throw new Error(`Unreadable ${event.type} event ${event.id}: erasure not applied.`);
+              const bookings = await erasure.channelBookingsOfGuests(tx, {
+                profileIds: [p.data.profileId, ...p.data.alsoAnonymized],
+              });
+              const byConnection = new Map<string, string[]>();
+              for (const b of bookings)
+                byConnection.set(b.connectionId, [...(byConnection.get(b.connectionId) ?? []), b.externalId]);
+              for (const [connectionId, channelBookingIds] of byConnection)
+                await eraseRevisionGuestData(tx, deps, connectionId, {
+                  channelBookingIds,
+                  reason: `Guest profile anonymized (privacy request ${p.data.privacyRequestId}).`,
+                });
+            },
+          } satisfies TxEventSubscription,
+        ]
+      : []),
     {
       consumer: 'distribution.ari.capture',
       types: [

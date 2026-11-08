@@ -47,6 +47,11 @@ export interface Harness {
   dist: DistributionModule;
   /** Requests the real HTTPS transport would have sent (never sent: tests never reach a real hub). */
   httpSent: HubHttpRequest[];
+  /**
+   * Strict fake of the guest-erasure lookup (FR-7; NOT bound in the composition root): anonymized guest profile id
+   * → its channel bookings. Unknown profiles have none.
+   */
+  guestLinks: Map<string, Array<{ connectionId: string; externalId: string }>>;
   drain(): Promise<void>;
   close(): Promise<void>;
 }
@@ -208,9 +213,19 @@ export async function startHarness(opts: { http?: HubTransport } = {}): Promise<
       return { status: 503, headers: {}, body: '{"errors":{"title":"test transport: no real hub"}}' };
     },
   };
+  const guestLinks = new Map<string, Array<{ connectionId: string; externalId: string }>>();
   const dist = createDistribution({
     database: t.db,
-    ports: bindPorts(inventory, rates, reservations, secrets),
+    ports: {
+      ...bindPorts(inventory, rates, reservations, secrets),
+      // Bound here only (strict fake): the composition root does not bind it until reservations offers it (FR-7).
+      guestErasure: {
+        async channelBookingsOfGuests(_tx, input) {
+          if (input.profileIds.length === 0) throw new Error('channelBookingsOfGuests: no profile ids');
+          return input.profileIds.flatMap((id) => guestLinks.get(id) ?? []);
+        },
+      },
+    },
     http,
     // Simulated time: the budget is accounted on the transaction's (fixed, advanced) clock. The production default,
     // the database clock, is exercised by test/budget-clock.test.ts.
@@ -225,6 +240,7 @@ export async function startHarness(opts: { http?: HubTransport } = {}): Promise<
     reservations,
     dist,
     httpSent,
+    guestLinks,
     async drain() {
       await drainOutbox(t.db, {
         subscriptions: dist.subscriptions,

@@ -233,8 +233,10 @@ create unique index stop_sells_protection_uq on distribution.stop_sells (tenant_
 select core.enable_tenant_isolation('distribution.stop_sells');
 
 ---------------------------------------------------------------------------------------------------------
--- Inbound booking revisions (DST-R08). The revision itself is IMMUTABLE (append-only), keyed by
--- (connection, channel booking id, revision id). Processing and acknowledgement state live beside it.
+-- Inbound booking revisions (DST-R08). The revision itself is IMMUTABLE, keyed by (connection, channel booking
+-- id, revision id). Processing and acknowledgement state live beside it. The ONLY change ever allowed is the
+-- redaction of the guest's personal data (P2-7: erasure and retention), through redact_revision_payloads():
+-- ids, statuses, stay dates, products, amounts and the payload hash stay; customer and notes are removed.
 ---------------------------------------------------------------------------------------------------------
 create table distribution.inbound_revisions (
   id                    uuid primary key,
@@ -254,12 +256,51 @@ create table distribution.inbound_revisions (
   payload_hash          text not null,
   received_via          text not null check (received_via in ('webhook', 'feed', 'recovery')),
   received_at           timestamptz not null,
+  redacted_at           timestamptz,
+  redaction_reason      text check (redaction_reason in ('erasure', 'retention')),
   unique (tenant_id, connection_id, channel_booking_id, revision_id)
 );
 create index inbound_revisions_booking_idx on distribution.inbound_revisions
   (tenant_id, connection_id, channel_booking_id);
 select core.enable_tenant_isolation('distribution.inbound_revisions');
-select core.make_append_only('distribution.inbound_revisions');
+
+-- The redaction rule (one place): the guest's identity and free text go; everything that proves what the channel
+-- sent and what Portico did with it stays. Card data is never stored in the first place.
+create or replace function distribution.redacted_payload(p jsonb) returns jsonb
+  language sql immutable as $$
+    select p || jsonb_build_object('customer', null, 'notes', null, 'redacted', true)
+$$;
+
+create or replace function distribution.revision_immutable() returns trigger
+  language plpgsql as $$
+begin
+  if tg_op = 'DELETE' then
+    raise exception 'Booking revisions are immutable: delete is not allowed.' using errcode = 'P0001';
+  end if;
+  if old.redacted_at is null and new.redacted_at is not null and new.redaction_reason is not null
+     and new.payload = distribution.redacted_payload(old.payload)
+     and (to_jsonb(new) - 'payload' - 'redacted_at' - 'redaction_reason')
+         = (to_jsonb(old) - 'payload' - 'redacted_at' - 'redaction_reason') then
+    return new;
+  end if;
+  raise exception 'Booking revisions are immutable: only the redaction of guest data is allowed.' using errcode = 'P0001';
+end $$;
+create trigger revision_immutable before update or delete on distribution.inbound_revisions
+  for each row execute function distribution.revision_immutable();
+
+-- Redact the guest data of the caller's organization's revisions (erasure request or retention). Returns how many
+-- were redacted now (already redacted ones are skipped: idempotent).
+create or replace function distribution.redact_revision_payloads(p_ids uuid[], p_reason text)
+  returns int
+  language plpgsql security definer set search_path = distribution, pg_temp as $$
+declare n int;
+begin
+  update distribution.inbound_revisions
+     set payload = distribution.redacted_payload(payload), redacted_at = now(), redaction_reason = p_reason
+   where tenant_id = core.current_tenant_id() and id = any(p_ids) and redacted_at is null;
+  get diagnostics n = row_count;
+  return n;
+end $$;
 
 create table distribution.revision_processing (
   revision_row_id       uuid primary key references distribution.inbound_revisions(id),
@@ -514,6 +555,10 @@ revoke execute on function distribution.sync_webhook_directory() from public, po
 revoke execute on function distribution.route_webhook(uuid) from public;
 revoke execute on function distribution.claim_due_tenants(timestamptz, int, int) from public;
 revoke execute on function distribution.hub_property_claimed_elsewhere(uuid) from public;
+-- Revisions: no direct update/delete by the application; redaction only through the reviewed function.
+revoke update, delete, truncate on distribution.inbound_revisions from portico_app;
+revoke execute on function distribution.redact_revision_payloads(uuid[], text) from public;
+grant execute on function distribution.redact_revision_payloads(uuid[], text) to portico_app;
 grant execute on function distribution.hub_property_claimed_elsewhere(uuid) to portico_app;
 grant execute on function distribution.route_webhook(uuid) to portico_app;
 grant execute on function distribution.claim_due_tenants(timestamptz, int, int) to portico_app;

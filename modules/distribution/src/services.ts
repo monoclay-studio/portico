@@ -4,6 +4,7 @@ export * from './service/ari-dispatch';
 export * from './service/calendar';
 export * from './service/connections';
 export * from './service/discrepancies';
+export * from './service/erasure';
 export * from './service/exceptions';
 export * from './service/health';
 export * from './service/inbound';

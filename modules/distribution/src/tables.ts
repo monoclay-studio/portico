@@ -190,6 +190,8 @@ export interface InboundRevisionsTable {
   payload_hash: string;
   received_via: 'webhook' | 'feed' | 'recovery';
   received_at: Ts;
+  redacted_at: TsN;
+  redaction_reason: 'erasure' | 'retention' | null;
 }
 
 export type RevisionState = 'received' | 'applied' | 'duplicate' | 'stale' | 'parked' | 'rejected' | 'failed';
