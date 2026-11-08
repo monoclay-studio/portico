@@ -23,13 +23,22 @@ plan already lists it (PF). Day Close then changes nothing: the annex stays as t
 (`z.string() as z.ZodType<Provenance>`), so OpenAPI shows a plain string. Proposed: `export const PROVENANCES =
 [...] as const` and `EFFECT_MODES` in `@portico/kernel`, so contracts can `z.enum(PROVENANCES)` without copying.
 
-## FR-3 — kernel `zonedTimeToInstant` in a DST gap
+## FR-3 — kernel: a local wall time to an instant, correct in DST gaps and overlaps
 
-The doc comment says "during a DST gap the next valid instant is returned". For Europe/London on 2027-03-28 (01:00 →
-02:00), `zonedTimeToInstant('2027-03-28', '01:30', 'Europe/London')` returns 01:30Z = 02:30 BST, not 02:00 BST.
-Day Close corrects it locally (`src/domain/schedule.ts` `nextValidLocalMinute`, tested in
-`src/domain/domain.test.ts` › "starts at the next valid local minute on a spring-forward night (EC-DCL-024)").
-Proposed: the same correction in the kernel (other modules use it for cancellation deadlines).
+The kernel doc of `zonedTimeToInstant` says "during a DST gap the next valid instant is returned"; it is not, and the
+direction of the error depends on the zone: Europe/London `01:30` on 2027-03-28 → 02:30 BST (an hour late), America/
+New_York `02:30` on 2027-03-14 → 01:30 EST (an hour **early**). Its doc says "earlier" for a fall-back overlap; it
+returns the later occurrence for London.
+
+The rule to adopt (review P2-1 — not Day Close's first correction, which walked backwards and was wrong west of UTC):
+**the instant is the first instant whose local wall time on that date is at or after the requested time.** A valid
+time maps to its instant (the earlier one in an overlap); a time in a gap maps to the end of the gap. Day Close computes
+it directly (`src/domain/schedule.ts` `firstInstantAtOrAfter`): offsets a day either side give the two candidates;
+a candidate whose wall time matches wins (the earlier if both); otherwise a minute-precision binary search between
+them finds the end of the gap. Tested (`src/domain/domain.test.ts` › "schedule") for London, New York, Los Angeles,
+Santiago and Havana (midnight gaps), Sydney, Lord Howe (30-minute shift), both overlaps, Maldives and UTC+14, plus a
+year-long sweep of four zones asserting "at or after, and the first such minute". Proposed: the same function in the
+kernel (other modules use `zonedTimeToInstant` for cancellation and payment deadlines).
 
 ## FR-4 — data-authority vocabulary in the kernel (BS3-1)
 
