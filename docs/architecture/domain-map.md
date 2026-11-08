@@ -419,6 +419,21 @@ Breaking changes (no consumer outside the composition root, all bound in the sam
   a `completed` link is refused (`link_reported_paid`). "Already paid" is recorded only when the request's paid total
   reaches the link's amount.
 
+### Integration-step fix round 6 (re-review #6, ADR-0015 Amendment 5)
+
+- **The purpose where money lands:** a capture derives the destination's purpose (`derivePurpose`, optional label on
+  `captureInput.purpose`); consent checks it and `assertWithinFact` applies under the collection lock. Holds are judged
+  as holds; a hold's purpose never carries over.
+- **Every posting has an owner:** finance provenance classifies every non-zero posting (refund, reversal, correction,
+  allowance, forfeit, receivables transfer → debt of the folio it was first posted on or its routing rule; cash/tender →
+  money with no agreement; unknown → an unknown owner that fails closed).
+- **Ledger penalty:** `LedgerPort.penaltyOwedOn(tx, folioId, stayId)` (finance: the `penalty:no_show` /
+  `penalty:cancellation` postings followed through corrections and transfers); the `no_show` limit is
+  min(record, ledger) − collected, within what the folio owes.
+- **Forfeit:** finance `PaymentsPort.cardDepositForfeitProblem(tx, { bookingId, amountMinor })` before
+  `forfeitDeposit`; a card-funded deposit is kept only up to the booking's recorded penalties.
+- **Deposit owed:** reservations sums it per stay (segments share their agreement's deposit by nights kept).
+
 ## Rules for changing a contract
 
 1. Update this file in the same commit as the provider change.
