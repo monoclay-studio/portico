@@ -69,10 +69,8 @@ export async function buildReport(
     reservations: await read(
       ['reservation'],
       () =>
-        ports.reservations.listImported(tx, {
-          propertyId: job.propertyId,
-          sourceSystem: ledgerNamespace(job),
-        }),
+        // Every migrated booking at the property (any source): duplicates and other copies are visible.
+        ports.reservations.listImported(tx, { propertyId: job.propertyId }),
       [],
     ),
     sold: await read(
@@ -110,6 +108,7 @@ export async function buildReport(
     businessDate: property.businessDate,
     scope,
     unitTypeIdByCode: await unitTypeIds(tx, job),
+    sourceSystem: ledgerNamespace(job),
   });
   const last = await db(tx)
     .selectFrom('migration.reports')

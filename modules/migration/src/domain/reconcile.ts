@@ -28,6 +28,8 @@ export interface PorticoReadBack {
   units: Array<{ id: string; number: string; unitTypeId: string }>;
   existingGuestIds: ReadonlySet<string>;
   reservations: Array<{
+    /** The migration source that imported it (absent = this job's source). */
+    sourceSystem?: string;
     sourceKey: string;
     bookingId: string;
     status: string;
@@ -79,6 +81,8 @@ export interface MeasureRow {
 export interface ControlTotalCheck {
   dataClass: DataClass;
   currency: string | null;
+  /** `amount` (closing balance, minor units) or `count` (number of records the source reports). */
+  kind?: 'amount' | 'count';
   reported: number | null;
   sourceDetail: number;
   portico: number;
@@ -112,6 +116,8 @@ export interface ReconcileInput {
   scope: ReadonlySet<DataClass>;
   /** Reservation key → Portico unit type id (reviewed mapping). */
   unitTypeIdByCode: ReadonlyMap<string, string>;
+  /** This job's source (ledger namespace): read-back bookings of other sources are other migrations' copies. */
+  sourceSystem?: string;
 }
 
 const emptyStates = (): Record<RecordState, number> =>
@@ -259,8 +265,15 @@ export function reconcile(input: ReconcileInput): ReconciliationResult {
     );
   }
 
-  // ── 4. reservations: per booking, counts by status × arrival month, room nights and revenue per stay date ──
-  const resBySource = new Map(input.portico.reservations.map((r) => [r.sourceKey, r]));
+  // ── 4. reservations: per booking, counts by status × arrival month, room nights and revenue per stay date.
+  // Both sides are computed independently (R-P1-3): the source from its imported records, Portico from the read-back
+  // alone — so a duplicate, an extra or another migration's copy in reservations is a difference, never invisible.
+  const mine = (r: PorticoReadBack['reservations'][number]) =>
+    !input.sourceSystem || !r.sourceSystem || r.sourceSystem === input.sourceSystem;
+  const heldMine = input.portico.reservations.filter(mine);
+  const heldBySource = new Map<string, PorticoReadBack['reservations']>();
+  for (const r of heldMine) heldBySource.set(r.sourceKey, [...(heldBySource.get(r.sourceKey) ?? []), r]);
+  const resBySource = new Map([...heldBySource].map(([k, list]) => [k, list[0] as (typeof list)[number]]));
   if (inScope('reservation') && !unavailable.includes('reservation')) {
     const src = records.filter(
       (r) => r.dataClass === 'reservation' && imported(r),
@@ -269,6 +282,48 @@ export function reconcile(input: ReconcileInput): ReconciliationResult {
     const countPor = new Map<string, number>();
     const revSrc = new Map<string, number>();
     const revPor = new Map<string, number>();
+    for (const por of heldMine) {
+      const pk = `${por.status}|${por.arrival.slice(0, 7)}`;
+      countPor.set(pk, (countPor.get(pk) ?? 0) + 1);
+      if (por.nightly)
+        for (const n of por.nightly)
+          revPor.set(`${por.currency}|${n.date}`, (revPor.get(`${por.currency}|${n.date}`) ?? 0) + n.amountMinor);
+    }
+    const importedKeys = new Set(src.map((r) => r.key));
+    for (const [key, list] of heldBySource) {
+      if (list.length > 1)
+        differences.push({
+          dataClass: 'reservation',
+          key,
+          measure: 'duplicate_in_portico',
+          source: '1',
+          portico: String(list.length),
+          message: `Reservations holds ${list.length} bookings for source booking ${key}. A source booking is imported exactly once: cancel the copies in Portico.`,
+          explained: false,
+        });
+      if (!importedKeys.has(key))
+        differences.push({
+          dataClass: 'reservation',
+          key,
+          measure: 'extra_in_portico',
+          source: 'absent',
+          portico: String(list.length),
+          message: `Reservations holds a booking for ${key}, which this migration did not import (or no longer imports). Check where it came from; cancel it in Portico if it is a copy.`,
+          explained: false,
+        });
+    }
+    const others = input.portico.reservations.filter((r) => !mine(r));
+    const otherSources = new Set(others.map((r) => r.sourceSystem));
+    for (const o of otherSources)
+      differences.push({
+        dataClass: 'reservation',
+        key: null,
+        measure: 'other_source_in_portico',
+        source: input.sourceSystem ?? '',
+        portico: String(o),
+        message: `${others.filter((r) => r.sourceSystem === o).length} booking(s) at this property were imported by another migration (${o}). Two migrations of one property duplicate bookings: reconcile them before this one is called complete.`,
+        explained: false,
+      });
     for (const r of src) {
       const p = r.payload as ReservationRecord;
       const k = `${p.status}|${p.arrival.slice(0, 7)}`;
@@ -289,14 +344,6 @@ export function reconcile(input: ReconcileInput): ReconciliationResult {
         });
         continue;
       }
-      const pk = `${por.status}|${por.arrival.slice(0, 7)}`;
-      countPor.set(pk, (countPor.get(pk) ?? 0) + 1);
-      if (por.nightly)
-        for (const n of por.nightly)
-          revPor.set(
-            `${por.currency}|${n.date}`,
-            (revPor.get(`${por.currency}|${n.date}`) ?? 0) + n.amountMinor,
-          );
       const taxSrc = p.taxes.reduce((s, t) => s + t.amountMinor, 0);
       const checks: Array<[string, string, string]> = [
         ['status', p.status, por.status],
@@ -406,18 +453,32 @@ export function reconcile(input: ReconcileInput): ReconciliationResult {
       excluded: boolean;
       portico: number | null;
     }>,
+    /** Everything Portico holds for this class (read-back alone), with whether a source item accounts for it. */
+    held: Array<{ ref: string; amount: number; currency: string; matched: boolean }>,
   ) => {
-    const currencies = new Set(items.map((i) => i.currency));
+    for (const x of held.filter((h) => !h.matched && h.amount !== 0))
+      differences.push({
+        dataClass: c,
+        key: x.ref,
+        measure: 'extra_in_portico',
+        source: 'absent',
+        portico: String(x.amount),
+        message: `Portico holds ${x.amount} ${x.currency} minor units (${c.replace(/_/g, ' ')} ${x.ref}) that no source item accounts for. Finance checks where it came from.`,
+        explained: false,
+      });
+    const currencies = new Set([...items.map((i) => i.currency), ...held.map((h) => h.currency)]);
     for (const cur of currencies) {
       const list = items.filter((i) => i.currency === cur);
       const detail = list.reduce((s, i) => s + i.amount, 0);
       const excluded = list.filter((i) => i.excluded).reduce((s, i) => s + i.amount, 0);
-      const portico = list.filter((i) => !i.excluded).reduce((s, i) => s + (i.portico ?? 0), 0);
+      // Portico's side is summed over what Portico holds, not over the source items (R-P1-3).
+      const portico = held.filter((h) => h.currency === cur).reduce((s, h) => s + h.amount, 0);
       measure(c, 'total held', cur, detail - excluded, portico);
       const reported = input.controlTotals.find((t) => t.dataClass === c && t.currency === cur);
       const check: ControlTotalCheck = {
         dataClass: c,
         currency: cur,
+        kind: 'amount',
         reported: reported?.amountMinor ?? null,
         sourceDetail: detail,
         portico,
@@ -463,48 +524,66 @@ export function reconcile(input: ReconcileInput): ReconciliationResult {
   if (inScope('deposit') && !unavailable.includes('deposit')) {
     const ex = excludedKeys('deposit');
     const dep = new Map(input.portico.deposits.map((d) => [d.bookingId, d]));
+    const items = records
+      .filter((r) => r.dataClass === 'deposit' && r.payload)
+      .map((r) => {
+        const p = r.payload as { bookingKey: string; amountMinor: number; currency: string };
+        const bid = resvTarget(p.bookingKey);
+        const d = bid ? dep.get(bid) : undefined;
+        return {
+          key: r.key,
+          bookingId: bid,
+          amount: p.amountMinor,
+          currency: p.currency,
+          excluded: ex.has(r.key),
+          portico: d && d.currency === p.currency ? d.amountMinor : null,
+        };
+      });
+    const accounted = new Set(items.filter((i) => !i.excluded).map((i) => i.bookingId));
     moneyClass(
       'deposit',
-      records
-        .filter((r) => r.dataClass === 'deposit' && r.payload)
-        .map((r) => {
-          const p = r.payload as { bookingKey: string; amountMinor: number; currency: string };
-          const bid = resvTarget(p.bookingKey);
-          const d = bid ? dep.get(bid) : undefined;
-          return {
-            key: r.key,
-            amount: p.amountMinor,
-            currency: p.currency,
-            excluded: ex.has(r.key),
-            portico: d && d.currency === p.currency ? d.amountMinor : null,
-          };
-        }),
+      items,
+      input.portico.deposits.map((d) => ({
+        ref: d.bookingId,
+        amount: d.amountMinor,
+        currency: d.currency,
+        matched: accounted.has(d.bookingId),
+      })),
     );
   }
   if (inScope('in_house_balance') && !unavailable.includes('in_house_balance')) {
     const ex = excludedKeys('in_house_balance');
     const bal = new Map(input.portico.inHouse.map((b) => [`${b.bookingId}#${b.folioRef}`, b]));
+    const items = records
+      .filter((r) => r.dataClass === 'in_house_balance' && r.payload)
+      .map((r) => {
+        const p = r.payload as {
+          bookingKey: string;
+          folioRef: string;
+          balanceMinor: number;
+          currency: string;
+        };
+        const bid = resvTarget(p.bookingKey);
+        const b = bid ? bal.get(`${bid}#${p.folioRef}`) : undefined;
+        return {
+          key: r.key,
+          ref: `${bid}#${p.folioRef}`,
+          amount: p.balanceMinor,
+          currency: p.currency,
+          excluded: ex.has(r.key),
+          portico: b && b.currency === p.currency ? b.balanceMinor : null,
+        };
+      });
+    const accounted = new Set(items.filter((i) => !i.excluded).map((i) => i.ref));
     moneyClass(
       'in_house_balance',
-      records
-        .filter((r) => r.dataClass === 'in_house_balance' && r.payload)
-        .map((r) => {
-          const p = r.payload as {
-            bookingKey: string;
-            folioRef: string;
-            balanceMinor: number;
-            currency: string;
-          };
-          const bid = resvTarget(p.bookingKey);
-          const b = bid ? bal.get(`${bid}#${p.folioRef}`) : undefined;
-          return {
-            key: r.key,
-            amount: p.balanceMinor,
-            currency: p.currency,
-            excluded: ex.has(r.key),
-            portico: b && b.currency === p.currency ? b.balanceMinor : null,
-          };
-        }),
+      items,
+      input.portico.inHouse.map((b) => ({
+        ref: `${b.bookingId}#${b.folioRef}`,
+        amount: b.balanceMinor,
+        currency: b.currency,
+        matched: accounted.has(`${b.bookingId}#${b.folioRef}`),
+      })),
     );
   }
   if (inScope('ar_open_item') && !unavailable.includes('ar_open_item')) {
@@ -530,9 +609,20 @@ export function reconcile(input: ReconcileInput): ReconciliationResult {
           portico: a && a.currency === p.currency ? a.openMinor : null,
           bucket: agingBucket(p.dueDate ?? p.invoiceDate, input.businessDate),
           account: p.accountCode,
+          ref: p.invoiceRef,
         };
       });
-    moneyClass('ar_open_item', items);
+    const accounted = new Set(items.filter((i) => !i.excluded).map((i) => `${i.account}#${i.ref}`));
+    moneyClass(
+      'ar_open_item',
+      items,
+      input.portico.receivables.map((a) => ({
+        ref: `${a.accountCode}#${a.invoiceRef}`,
+        amount: a.openMinor,
+        currency: a.currency,
+        matched: accounted.has(`${a.accountCode}#${a.invoiceRef}`),
+      })),
+    );
     const buckets = new Map<string, { s: number; q: number }>();
     for (const i of items.filter((x) => !x.excluded)) {
       const k = `${i.account}|${i.bucket}|${i.currency}`;
@@ -545,6 +635,78 @@ export function reconcile(input: ReconcileInput): ReconciliationResult {
       const [account, bucket, cur] = k.split('|') as [string, string, string];
       measure('ar_open_item', `aging ${account} ${bucket}`, cur, b.s, b.q);
     }
+  }
+
+  // ── 6. control counts: what the source reports vs its own detail, and vs what Portico holds (R-P1-3) ──
+  const ofClass = (c: DataClass, currency: string | null) =>
+    records.filter(
+      (r) =>
+        r.dataClass === c &&
+        (currency === null ||
+          !r.payload ||
+          (r.payload as { currency?: string }).currency === undefined ||
+          (r.payload as { currency?: string }).currency === currency),
+    );
+  const heldCount = (c: DataClass, currency: string | null): number | null => {
+    const cur = <T extends { currency: string }>(list: T[]) =>
+      currency === null ? list : list.filter((x) => x.currency === currency);
+    switch (c) {
+      case 'reservation':
+        return cur(heldMine).length;
+      case 'deposit':
+        return cur(input.portico.deposits).filter((d) => d.amountMinor !== 0).length;
+      case 'in_house_balance':
+        return cur(input.portico.inHouse).length;
+      case 'ar_open_item':
+        return cur(input.portico.receivables).length;
+      case 'guest':
+        return records.filter(
+          (r) =>
+            r.dataClass === 'guest' &&
+            imported(r) &&
+            input.portico.existingGuestIds.has(stateOf.get(`guest:${r.key}`)?.targetId ?? ''),
+        ).length;
+      default:
+        return null;
+    }
+  };
+  for (const t of input.controlTotals) {
+    if (t.count === null || !inScope(t.dataClass) || unavailable.includes(t.dataClass)) continue;
+    const list = ofClass(t.dataClass, t.currency);
+    const notImported = list.filter((r) => !imported(r)).length;
+    const held = heldCount(t.dataClass, t.currency);
+    const check: ControlTotalCheck = {
+      dataClass: t.dataClass,
+      currency: t.currency,
+      kind: 'count',
+      reported: t.count,
+      sourceDetail: list.length,
+      portico: held ?? 0,
+      excluded: notImported,
+      unexplainedMinor: held === null ? null : t.count - held - notImported,
+    };
+    controlTotals.push(check);
+    const noun = t.dataClass.replace(/_/g, ' ');
+    if (t.count !== list.length)
+      differences.push({
+        dataClass: t.dataClass,
+        key: null,
+        measure: 'control_count_source',
+        source: String(t.count),
+        portico: String(list.length),
+        message: `The source reports ${t.count} ${noun} record(s) but its export holds ${list.length}. The export is incomplete or holds extra rows: export again or explain the difference.`,
+        explained: false,
+      });
+    if (held !== null && t.count !== held + notImported)
+      differences.push({
+        dataClass: t.dataClass,
+        key: null,
+        measure: 'control_count',
+        source: String(t.count),
+        portico: String(held),
+        message: `The source reports ${t.count} ${noun} record(s); Portico holds ${held} and ${notImported} are listed as not imported. Every reported record is accounted for exactly once.`,
+        explained: false,
+      });
   }
 
   const unexplained = differences.filter((d) => !d.explained);

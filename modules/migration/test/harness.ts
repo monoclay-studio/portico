@@ -215,17 +215,15 @@ export class FakeReservations {
 
   async listImported(
     tx: TxContext,
-    input: { propertyId: string; sourceSystem: string },
+    input: { propertyId: string; sourceSystem?: string },
   ): Promise<ImportedBookingView[]> {
-    const rows = await fdb(tx)
-      .selectFrom('fake_providers.bookings')
-      .selectAll()
-      .where('property_id', '=', input.propertyId)
-      .where('source_system', '=', input.sourceSystem)
-      .execute();
+    let q = fdb(tx).selectFrom('fake_providers.bookings').selectAll().where('property_id', '=', input.propertyId);
+    if (input.sourceSystem) q = q.where('source_system', '=', input.sourceSystem);
+    const rows = await q.execute();
     return rows.map((r) => {
       const t = r.terms as MigratedBookingInput['terms'];
       return {
+        sourceSystem: r.source_system,
         sourceKey: r.source_key,
         bookingId: r.id,
         status: r.status,

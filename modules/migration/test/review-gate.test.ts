@@ -31,7 +31,12 @@ function changedExport() {
   );
   const cn1003 = reservations.find((r) => r[0] === 'CN1003') as string[];
   reservations.push(cn1003.map((v, i) => (i === 0 ? 'CN1099' : v)));
-  return sampleGuesthouseFiles(BD, { reservations });
+  return sampleGuesthouseFiles(BD, { reservations, control_totals: withReservationCount(9) });
+}
+
+/** The export's own control totals, with the reservation count the source reports. */
+function withReservationCount(n: number) {
+  return pack().control_totals.map((c) => (c[0] === 'reservation' ? ['reservation', '', String(n), ''] : c));
 }
 
 async function trialJob(trial: Awaited<ReturnType<typeof productionInSync>>['trial']) {
@@ -148,7 +153,10 @@ describe('R-P1-4 decided records never hold the cutover; undecided (or newly cha
 
   async function excludedFlow() {
     const p = pack();
-    const files = sampleGuesthouseFiles(BD, { reservations: [...p.reservations, staleRow()] });
+    const files = sampleGuesthouseFiles(BD, {
+      reservations: [...p.reservations, staleRow()],
+      control_totals: withReservationCount(9),
+    });
     const { live, trial } = await setupLiveWithTrial(h);
     const lead = live.user('Lead', LEAD);
     const gm = live.user('GM', ALL_MIGRATION);
@@ -250,6 +258,7 @@ describe('R-P1-4 decided records never hold the cutover; undecided (or newly cha
     const p = pack();
     const files = sampleGuesthouseFiles(BD, {
       reservations: [...p.reservations, staleRow((v, i) => (i === ROOM_TOTAL ? '1.2.3' : v))],
+      control_totals: withReservationCount(9),
     });
     await migration.uploadFiles(h.t.db, h.deps, f.lead, f.jobId, { files });
     const r = await migration.runPipeline(h.t.db, h.deps, f.lead, f.jobId, { start: 'freeze' });

@@ -84,6 +84,7 @@ describe('S18: opening balances against the previous system’s closing balances
     expect((full.result as { controlTotals: unknown[] }).controlTotals).toContainEqual({
       dataClass: 'deposit',
       currency: 'USD',
+      kind: 'amount',
       reported: 30001,
       sourceDetail: 30000,
       portico: 30000,

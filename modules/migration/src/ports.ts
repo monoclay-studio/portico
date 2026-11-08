@@ -218,6 +218,8 @@ export interface MigratedBookingResult {
 }
 
 export interface ImportedBookingView {
+  /** The migration source (ledger namespace) that imported it. */
+  sourceSystem: string;
   sourceKey: string;
   bookingId: string;
   status: string;
@@ -238,10 +240,14 @@ export interface ReservationsPort {
    * shortfall); history statuses (departed, cancelled, no_show) never consume it.
    */
   importBooking(tx: TxContext, input: MigratedBookingInput): Promise<MigratedBookingResult>;
-  /** MIG-CR-1. What reservations holds for this source (reconciliation read-back). */
+  /**
+   * MIG-CR-1. What reservations holds from migration sources at the property (reconciliation read-back). Without
+   * `sourceSystem` it returns every migrated booking at the property, whichever source imported it, so the report
+   * sees duplicates and other migrations' copies (R-P1-3, R-P1-7).
+   */
   listImported(
     tx: TxContext,
-    input: { propertyId: string; sourceSystem: string },
+    input: { propertyId: string; sourceSystem?: string },
   ): Promise<ImportedBookingView[]>;
 }
 
