@@ -187,6 +187,9 @@ export async function startHarness(): Promise<Harness> {
     },
     payments: {
       async lockCollections() {},
+      async cardDepositForfeitProblem() {
+        return null;
+      },
       async cardMoneyMayMeet(_tx, input) {
         coverage.calls.push(input);
         const refused = input.owners.find((o) => coverage.refuse.has(`${o.type}:${o.id}`));

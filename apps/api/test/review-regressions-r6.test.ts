@@ -477,3 +477,43 @@ describe('R6-P2-1 — a no-show fee rests on the penalty as it stands on the led
     expect(await paymentsOn(folioId)).toEqual([]);
   });
 });
+
+// ───────────────────────── P3: forfeit of a card-funded deposit ─────────────────────────
+
+describe('R6-P3-1 — a card-funded deposit is kept as revenue only up to a recorded penalty', () => {
+  it('without a recorded penalty the forfeit is refused; after the cancellation records one, the deposit is kept up to it', async () => {
+    const org = await organization(s);
+    const k = await kandu(s, org, '2027-03-10');
+    const { reservations, finance } = s.c.services;
+    const desk = org.staff('front_desk', 'Hassan', [k.id]);
+    const gm = org.staff('general_manager', 'GM', [k.id]);
+    const { profileId, card } = await guestWithCard(s, org, k);
+    const b = await bookFor(org, k, desk, profileId, '2027-03-20', '2027-03-22');
+    await folioOfStay(org, k, b.stays[0]?.id as string, profileId);
+    await cardholderConfirms(s, org, card.id, b.id);
+    expect(codeOf(await cardCharge(desk, k, card.id, { type: 'booking', id: b.id }, 10_000))).toBe(
+      'accepted',
+    );
+    await s.drain();
+    const forfeit = (amountMinor: number) =>
+      settle(
+        org.run(gm, (tx) =>
+          finance.forfeitDeposit(tx, {
+            bookingId: b.id,
+            chargeCode: 'CXL',
+            amountMinor,
+            reason: 'Guest did not come',
+            idempotencyKey: newId(),
+          }),
+        ),
+      );
+    expect(codeOf(await forfeit(10_000))).toBe('forfeit_not_covered_by_card_consent');
+    // The cancellation within the flexible plan's 21 days records a penalty on the stay.
+    const preview = await org.run(gm, (tx) =>
+      reservations.previewChange(tx, { kind: 'cancel_stay', stayId: b.stays[0]?.id as string } as never),
+    );
+    await reservations.commitChangeSafely(s.t.db, gm, { previewToken: preview.token });
+    await s.drain();
+    expect(codeOf(await forfeit(10_000))).toBe('accepted');
+  });
+});

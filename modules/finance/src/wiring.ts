@@ -44,6 +44,9 @@ export function unavailableFinancePorts(): {
         // No payments module: no card money is taken under a cardholder agreement.
         return { covered: true as const };
       },
+      async cardDepositForfeitProblem() {
+        return null;
+      },
       async syncBalanceRequest() {
         return {
           status: 'unavailable',

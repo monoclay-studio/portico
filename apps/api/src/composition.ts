@@ -325,6 +325,9 @@ export function compose(database: PorticoDatabase, options: CompositionOptions =
       // Re-review #5 (R5-P1-2, ADR-0015 Amendment 4 rule 2): card money keeps its agreement's coverage where it lands.
       cardMoneyMayMeet: (tx, input) =>
         paymentsCollectionsForFinance(bound(paymentsRef, 'payments')).cardMoneyMayMeet(tx, input),
+      // Re-review #6 R6-P3-1: a card-funded deposit is kept as revenue only up to the recorded penalties.
+      cardDepositForfeitProblem: (tx, input) =>
+        paymentsCollectionsForFinance(bound(paymentsRef, 'payments')).cardDepositForfeitProblem(tx, input),
     },
     // Payer names and invoice particulars for folios and tax invoices: guest profiles, companies and agencies (guests).
     payers: {

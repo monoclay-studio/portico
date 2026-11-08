@@ -167,6 +167,14 @@ export interface PaymentsPort {
       owners: Array<{ type: string; id: string }>;
     },
   ): Promise<{ covered: true } | { covered: false; reason: string }>;
+  /**
+   * Re-review #6 R6-P3-1: why keeping `amountMinor` of the booking's deposit as revenue is outside the cardholder's
+   * consent (card-funded deposit, no recorded penalty covering it), or null when it is not.
+   */
+  cardDepositForfeitProblem(
+    tx: TxContext,
+    input: { bookingId: string; amountMinor: number },
+  ): Promise<string | null>;
 }
 
 /** Payer particulars for folios and tax invoices (guests for people; companies/agencies when that module exists). */

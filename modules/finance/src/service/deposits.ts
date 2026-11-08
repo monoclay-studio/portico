@@ -736,6 +736,14 @@ export async function forfeitDeposit(
     idempotencyKey: string;
   },
 ): Promise<{ entryId: string; balance: Money; replayed: boolean }> {
+  // Re-review #6 R6-P3-1 (Amendment 5 rule 1): keeping a card-funded deposit as revenue rests on a recorded no-show or
+  // cancellation penalty of the booking's stays, never on a charge code and a free-text reason.
+  const amountMinor = input.amountMinor ?? (await depositHeldMinor(tx, input.bookingId));
+  const problem = await deps.ports.payments.cardDepositForfeitProblem(tx, {
+    bookingId: input.bookingId,
+    amountMinor,
+  });
+  if (problem) throw new BusinessRuleError('forfeit_not_covered_by_card_consent', problem);
   return depositOutflow(tx, deps, { ...input, kind: 'forfeited' });
 }
 

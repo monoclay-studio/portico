@@ -55,6 +55,9 @@ export function paymentsCollectionsForFinance(service: Pick<PaymentsService, 'pr
         input.folioIds.map((id) => ({ type: 'folio', id })),
       );
     },
+    /** Re-review #6 R6-P3-1: finance asks before it keeps a card-funded deposit as revenue. */
+    cardDepositForfeitProblem: (tx: TxContext, input: { bookingId: string; amountMinor: number }) =>
+      service.provider.cardDepositForfeitProblem(tx, input),
     /** Re-review #5 R5-P1-2: finance asks whether card money may meet this debt before it moves either. */
     cardMoneyMayMeet: (
       tx: TxContext,
