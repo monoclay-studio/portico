@@ -1,5 +1,5 @@
 import type { TxContext } from '@portico/db';
-import { type LocalDate, type Money, type Occupancy, requirePermission } from '@portico/kernel';
+import { eachNight, type LocalDate, type Money, type Occupancy, requirePermission } from '@portico/kernel';
 import type { Stay } from '../contracts';
 import { RESERVATIONS_PERMISSIONS as P } from '../manifest';
 import type { TermsSnapshot } from '../ports';
@@ -129,24 +129,29 @@ export async function describeReference(
     .orderBy('id')
     .execute();
   const live = stays.filter((x) => x.status !== 'cancelled' && x.status !== 'no_show').map((x) => x.id);
-  const segments =
-    live.length === 0
-      ? []
-      : await db(tx)
-          .selectFrom('reservations.stay_segments')
-          .select('terms_snapshot_id')
-          .where('stay_id', 'in', live)
-          .execute();
+  // Re-review #6 R6-P3-2: the deposit owed is summed PER STAY — each stay's agreed schedule, shared across its segments
+  // in proportion to the nights each segment keeps of its agreement (never counted once per distinct snapshot).
+  const rec = await loadBooking(tx, bookingId);
+  const liveStays = rec.stays.filter((x) => live.includes(x.row.id));
   const snapshots = await loadSnapshots(
     tx,
-    segments.map((x) => x.terms_snapshot_id),
+    liveStays.flatMap((x) => x.segments.map((g) => g.termsSnapshotId)),
   );
   let depositMinor = 0;
-  for (const terms of snapshots.values()) {
-    for (const item of deps.ports.rates.instantiatePaymentSchedule(terms)) {
-      if (item.kind === 'deposit' && item.amount.currency === b.currency)
-        depositMinor += item.amount.amountMinor;
+  for (const stay of liveStays) {
+    let stayDeposit = 0;
+    for (const seg of stay.segments) {
+      const terms = snapshotOf(snapshots, seg.termsSnapshotId);
+      const deposit = deps.ports.rates
+        .instantiatePaymentSchedule(terms)
+        .filter((i) => i.kind === 'deposit' && i.amount.currency === b.currency)
+        .reduce((n, i) => n + i.amount.amountMinor, 0);
+      const agreed = new Set(terms.nights.map((n) => n.date));
+      if (deposit === 0 || agreed.size === 0) continue;
+      const kept = eachNight({ from: seg.from, to: seg.to }).filter((d) => agreed.has(d)).length;
+      stayDeposit += (deposit * kept) / agreed.size;
     }
+    depositMinor += Math.round(stayDeposit);
   }
   return {
     ...base,
