@@ -58,6 +58,8 @@ import {
 } from '../src';
 
 export const D = '2026-11-07';
+/** Budget for the two scenario-sized tests (S09: 112 stay-nights; the 40-stay attention test), review P2-9. */
+export const HEAVY_TEST_TIMEOUT_MS = 180_000;
 /** 01:00 on 8 Nov in Malé (UTC+5): a typical night-audit moment for business date 7 Nov. */
 export const NIGHT = '2026-11-07T20:00:00.000Z';
 export const BOOKING_TIME = '2026-11-01T06:00:00.000Z';

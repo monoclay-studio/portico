@@ -16,6 +16,7 @@ import {
   D,
   entriesByKey,
   type Harness,
+  HEAVY_TEST_TIMEOUT_MS,
   NIGHT,
   nightAudit,
   setupOrg,
@@ -29,31 +30,38 @@ beforeAll(async () => {
 afterAll(async () => h?.close());
 
 describe('the 10x attention target: a normal day is one page and one press', () => {
-  it('a day with nothing blocking: readiness says so in one sentence; one Start closes the day; nobody else acts', async () => {
-    const org = await setupOrg(h);
-    for (let i = 0; i < 40; i++) await addStay(h, org, { arrival: '2026-11-06', departure: '2026-11-09' });
-    const auditor = nightAudit(h, org);
-    const page = await org.run((tx) => h.service.getReadiness(tx, org.propertyId), auditor);
-    expect(page.summary).toBe('Ready to close: nothing open.');
-    expect(page.canClose).toBe(true);
-    const started = Date.now();
-    const run = await h.service.startRun(h.t.db, auditor, { propertyId: org.propertyId }); // the only human action
-    const seconds = (Date.now() - started) / 1000;
-    expect(run.runStatus).toBe('completed');
-    expect(run.summary).toBe('Day closed: business date advanced to 2026-11-08.');
-    expect(seconds).toBeLessThan(60); // machine time for 40 stay-nights; the auditor is free meanwhile
-    const human = await h.t.admin.kysely
-      .selectFrom('core.audit_log')
-      .select(['action', 'actor_key'])
-      .where('tenant_id', '=', org.tenantId)
-      .where('action', 'like', 'dayClose.%')
-      .where('actor_key', 'like', 'user:%')
-      .execute();
-    // Every Day Close audit entry of this close comes from the one Start (no overrides, resumes or fixes needed).
-    expect(new Set(human.map((x) => x.action))).toEqual(
-      new Set(['dayClose.run.start', 'dayClose.businessDate.advanced', 'dayClose.run.complete']),
-    );
-  });
+  // 40 stay-nights through real rates and finance: ~4 s alone. Review P2-9: under the workspace gate at default
+  // concurrency (4 cores, load ≈ 12) it reached the 60 s default; the setup's real quotes are now shared per identical
+  // request (harness `quoteOffer`), and this test keeps a deliberate, larger budget for the postings themselves.
+  it(
+    'a day with nothing blocking: readiness says so in one sentence; one Start closes the day; nobody else acts',
+    async () => {
+      const org = await setupOrg(h);
+      for (let i = 0; i < 40; i++) await addStay(h, org, { arrival: '2026-11-06', departure: '2026-11-09' });
+      const auditor = nightAudit(h, org);
+      const page = await org.run((tx) => h.service.getReadiness(tx, org.propertyId), auditor);
+      expect(page.summary).toBe('Ready to close: nothing open.');
+      expect(page.canClose).toBe(true);
+      const started = Date.now();
+      const run = await h.service.startRun(h.t.db, auditor, { propertyId: org.propertyId }); // the only human action
+      const seconds = (Date.now() - started) / 1000;
+      expect(run.runStatus).toBe('completed');
+      expect(run.summary).toBe('Day closed: business date advanced to 2026-11-08.');
+      expect(seconds).toBeLessThan(60); // machine time for 40 stay-nights; the auditor is free meanwhile
+      const human = await h.t.admin.kysely
+        .selectFrom('core.audit_log')
+        .select(['action', 'actor_key'])
+        .where('tenant_id', '=', org.tenantId)
+        .where('action', 'like', 'dayClose.%')
+        .where('actor_key', 'like', 'user:%')
+        .execute();
+      // Every Day Close audit entry of this close comes from the one Start (no overrides, resumes or fixes needed).
+      expect(new Set(human.map((x) => x.action))).toEqual(
+        new Set(['dayClose.run.start', 'dayClose.businessDate.advanced', 'dayClose.run.complete']),
+      );
+    },
+    HEAVY_TEST_TIMEOUT_MS,
+  );
 });
 
 describe('lifecycle', () => {
