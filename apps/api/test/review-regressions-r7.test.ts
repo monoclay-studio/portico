@@ -576,3 +576,85 @@ describe('R7-P1-2 — a credit moved off a folio leaves a debit owned by whoever
     ).toBe('accepted');
   });
 });
+
+describe('R7-P3-5 — a posting whose origin cannot be established fails closed (DB-level)', () => {
+  it('an unclassifiable posting makes its folio uncovered for the card, and cannot be moved onto card money', async () => {
+    const org = await organization(s);
+    const k = await kandu(s, org, '2027-03-10');
+    const { finance } = s.c.services;
+    const desk = org.staff('front_desk', 'Hassan', [k.id]);
+    const gm = org.staff('general_manager', 'GM', [k.id]);
+    const { profileId, card } = await guestWithCard(s, org, k);
+    const b1 = await bookFor(org, k, desk, profileId, '2027-06-10', '2027-06-12');
+    const b2 = await bookFor(org, k, desk, profileId, '2027-06-20', '2027-06-22');
+    await cardholderConfirms(s, org, card.id, b1.id);
+    await cardholderConfirms(s, org, card.id, b2.id);
+    const f1 = await folioOfStay(org, k, b1.stays[0]?.id as string, profileId);
+    const f2 = await folioOfStay(org, k, b2.stays[0]?.id as string, profileId);
+    await owe(org, k, desk, b1.stays[0]?.id as string, 20_000, 'Dinner');
+    await owe(org, k, desk, b2.stays[0]?.id as string, 20_000, 'Spa');
+    expect(codeOf(await cardCharge(desk, k, card.id, { type: 'folio', id: f1 }, 20_000))).toBe('accepted');
+    await s.drain();
+    // A future import writes a deposit application with no booking source: its origin cannot be established.
+    const unknownId = newId();
+    const entryId = newId();
+    const cols = (
+      await sql<{ column_name: string }>`select column_name from information_schema.columns
+        where table_schema = 'finance' and table_name = 'journal_entries' and column_name not in ('id', 'idempotency_key', 'txid')`.execute(
+        s.t.admin.kysely,
+      )
+    ).rows.map((r) => `"${r.column_name}"`);
+    await s.t.admin.kysely.transaction().execute(async (trx) => {
+      await sql`insert into finance.journal_entries (id, idempotency_key, ${sql.raw(cols.join(', '))})
+        select ${entryId}, ${`import:${entryId}`}, ${sql.raw(cols.join(', '))} from finance.journal_entries
+         where id = (select entry_id from finance.postings where folio_id = ${f2} and kind = 'charge' limit 1)`.execute(
+        trx,
+      );
+      await sql`insert into finance.postings (id, tenant_id, entry_id, legal_entity_id, property_id, folio_id, kind,
+          amount_minor, currency, description, business_date, created_at)
+        select ${unknownId}, tenant_id, ${entryId}, legal_entity_id, property_id, folio_id, 'deposit_application',
+          -5000, currency, 'Imported deposit (no source)', business_date, created_at
+        from finance.postings where folio_id = ${f2} and kind = 'charge' limit 1`.execute(trx);
+      // Two balanced lines (the ledger stays balanced), copied in shape from the folio's charge entry.
+      const lineCols = (
+        await sql<{ column_name: string }>`select column_name from information_schema.columns
+          where table_schema = 'finance' and table_name = 'journal_lines'
+            and column_name not in ('id', 'entry_id', 'amount_minor', 'functional_amount_minor', 'posting_id')`.execute(
+          trx,
+        )
+      ).rows.map((r) => `"${r.column_name}"`);
+      const lines = (
+        await sql<{
+          id: string;
+          sub_ledger_type: string | null;
+        }>`select l.id, l.sub_ledger_type from finance.journal_lines l
+          where l.entry_id = (select entry_id from finance.postings where folio_id = ${f2} and kind = 'charge' limit 1)
+          order by l.line_no`.execute(trx)
+      ).rows;
+      const guest = lines.find((l) => l.sub_ledger_type === 'folio');
+      const other = lines.find((l) => l.sub_ledger_type !== 'folio');
+      for (const [l, amount, postingId] of [
+        [guest, -5000, unknownId],
+        [other, 5000, null],
+      ] as const) {
+        await sql`insert into finance.journal_lines (id, entry_id, amount_minor, functional_amount_minor, posting_id, ${sql.raw(lineCols.join(', '))})
+          select ${newId()}, ${entryId}, ${amount}, ${amount}, ${postingId}, ${sql.raw(lineCols.join(', '))}
+          from finance.journal_lines where id = ${l?.id as string}`.execute(trx);
+      }
+    });
+    const r = await cardCharge(desk, k, card.id, { type: 'folio', id: f2 }, 10_000);
+    expect(codeOf(r)).toBe('mandate_reference_not_covered');
+    const moved = await settle(
+      org.run(gm, (tx) =>
+        finance.transferPostings(tx, {
+          fromFolioId: f2,
+          toFolioId: f1,
+          items: [{ postingId: unknownId }],
+          reason: 'Import correction',
+          idempotencyKey: newId(),
+        }),
+      ),
+    );
+    expect(codeOf(moved)).toBe('transfer_not_covered_by_card_consent');
+  });
+});
