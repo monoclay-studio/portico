@@ -217,7 +217,10 @@ export class FakeReservations {
     tx: TxContext,
     input: { propertyId: string; sourceSystem?: string },
   ): Promise<ImportedBookingView[]> {
-    let q = fdb(tx).selectFrom('fake_providers.bookings').selectAll().where('property_id', '=', input.propertyId);
+    let q = fdb(tx)
+      .selectFrom('fake_providers.bookings')
+      .selectAll()
+      .where('property_id', '=', input.propertyId);
     if (input.sourceSystem) q = q.where('source_system', '=', input.sourceSystem);
     const rows = await q.execute();
     return rows.map((r) => {
@@ -413,19 +416,24 @@ export function migrationPorts(h: {
         });
       },
       async planTransition(tx, i) {
-        const t = await platform.planAuthorityTransition(asSystem(tx), i.propertyId, {
-          changes: i.changes,
-          reason: i.reason,
-          rollbackCriteria: i.rollbackCriteria,
-          freezeMinutes: i.freezeMinutes,
-          ...(i.plannedStartAt ? { plannedStartAt: i.plannedStartAt } : {}),
-        });
+        const t = await platform.planAuthorityTransition(
+          i.asMigrationProcess ? asMigrationProcess(tx) : asSystem(tx),
+          i.propertyId,
+          {
+            changes: i.changes,
+            reason: i.reason,
+            rollbackCriteria: i.rollbackCriteria,
+            freezeMinutes: i.freezeMinutes,
+            ...(i.plannedStartAt ? { plannedStartAt: i.plannedStartAt } : {}),
+          },
+        );
         return {
           id: t.id,
           status: t.status,
           approvalRequired: t.approvalRequired,
           approvedBy: t.approvedBy,
           plannedBy: t.plannedBy,
+          freezeMinutes: t.freezeMinutes,
         };
       },
       async getTransition(tx, propertyId, id) {
@@ -439,6 +447,7 @@ export function migrationPorts(h: {
               approvalRequired: t.approvalRequired,
               approvedBy: t.approvedBy,
               plannedBy: t.plannedBy,
+              freezeMinutes: t.freezeMinutes,
             }
           : null;
       },
@@ -450,6 +459,7 @@ export function migrationPorts(h: {
           approvalRequired: t.approvalRequired,
           approvedBy: t.approvedBy,
           plannedBy: t.plannedBy,
+          freezeMinutes: t.freezeMinutes,
         };
       },
       async freezeTransition(tx, id) {
@@ -460,6 +470,7 @@ export function migrationPorts(h: {
           approvalRequired: t.approvalRequired,
           approvedBy: t.approvedBy,
           plannedBy: t.plannedBy,
+          freezeMinutes: t.freezeMinutes,
         };
       },
       async completeTransition(tx, id) {
@@ -470,6 +481,7 @@ export function migrationPorts(h: {
           approvalRequired: t.approvalRequired,
           approvedBy: t.approvedBy,
           plannedBy: t.plannedBy,
+          freezeMinutes: t.freezeMinutes,
         };
       },
       async cancelTransition(tx, id, reason) {

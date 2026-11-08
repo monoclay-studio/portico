@@ -36,6 +36,9 @@ create table migration.jobs (
   certificate              jsonb,
   transition_id            uuid,
   rollback_transition_id   uuid,
+  -- Domains this migration made read-only in Portico, with what they were before (restored on cancel, R-P2-1).
+  restricted               jsonb not null default '[]',
+  restore_transition_id    uuid,
   cutover_planned_at       timestamptz,
   frozen_at                timestamptz,
   switched_at              timestamptz,

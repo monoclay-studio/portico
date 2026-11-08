@@ -216,12 +216,8 @@ describe('a guesthouse moved to Portico the same day', () => {
         }),
       lead(),
     );
-    // Until the switch, the old system is the system of record: Portico refuses staff writes there.
-    expect(await authority('reservations')).toMatchObject({
-      authority: 'external',
-      writeMode: 'read_only',
-      systemName: 'Coral Nest spreadsheets',
-    });
+    // Planning alone restricts nothing (R-P2-1): one person never makes Portico read-only.
+    expect(await authority('reservations')).toMatchObject({ authority: 'portico' });
     // The planner cannot approve the switch; a second person does.
     await expect(
       live.run(
@@ -231,7 +227,14 @@ describe('a guesthouse moved to Portico the same day', () => {
     ).rejects.toMatchObject({
       code: 'segregation_of_duties',
     });
+    expect(await authority('reservations')).toMatchObject({ authority: 'portico' });
     await live.run((tx) => migration.approveCutover(tx, h.deps, jobId, 'Go for 22:00'), gm());
+    // Until the switch, the old system is the system of record: Portico refuses staff writes there.
+    expect(await authority('reservations')).toMatchObject({
+      authority: 'external',
+      writeMode: 'read_only',
+      systemName: 'Coral Nest spreadsheets',
+    });
     r = await migration.runPipeline(h.t.db, h.deps, lead(), jobId);
     expect(r.executed.map((e) => `${e.step}:${e.status}`)).toEqual(['delta_sync:succeeded']);
     expect((await view()).state).toBe('in_sync');

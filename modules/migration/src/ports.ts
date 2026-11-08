@@ -59,6 +59,7 @@ export interface TransitionView {
   approvalRequired: boolean;
   approvedBy: string | null;
   plannedBy: string;
+  freezeMinutes: number;
 }
 
 export interface PlatformPort {
@@ -90,6 +91,11 @@ export interface PlatformPort {
       rollbackCriteria: string;
       freezeMinutes: number;
       plannedStartAt?: Date;
+      /**
+       * Planned by the migration process (`system:migration`) instead of the caller: used when the approver's own
+       * approval re-plans the switch after restricting (the approver then approves a plan they did not make).
+       */
+      asMigrationProcess?: boolean;
     },
   ): Promise<TransitionView>;
   getTransition(tx: TxContext, propertyId: string, transitionId: string): Promise<TransitionView | null>;

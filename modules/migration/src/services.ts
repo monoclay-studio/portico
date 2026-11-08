@@ -3,6 +3,7 @@ export { completeChecklistItem, remindOverdue } from './service/checklist';
 export { loadJobFor } from './service/context';
 export {
   approveCutover,
+  approveRestore,
   approveRollback,
   authorizeProduction,
   cancelJob,

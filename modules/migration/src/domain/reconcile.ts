@@ -287,7 +287,10 @@ export function reconcile(input: ReconcileInput): ReconciliationResult {
       countPor.set(pk, (countPor.get(pk) ?? 0) + 1);
       if (por.nightly)
         for (const n of por.nightly)
-          revPor.set(`${por.currency}|${n.date}`, (revPor.get(`${por.currency}|${n.date}`) ?? 0) + n.amountMinor);
+          revPor.set(
+            `${por.currency}|${n.date}`,
+            (revPor.get(`${por.currency}|${n.date}`) ?? 0) + n.amountMinor,
+          );
     }
     const importedKeys = new Set(src.map((r) => r.key));
     for (const [key, list] of heldBySource) {

@@ -26,6 +26,8 @@ export interface JobsTable {
   certificate: JsonNullable;
   transition_id: string | null;
   rollback_transition_id: string | null;
+  restricted: ColumnType<unknown, string | undefined, string>;
+  restore_transition_id: ColumnType<string | null, string | null | undefined, string | null>;
   cutover_planned_at: TsNullable;
   frozen_at: TsNullable;
   switched_at: TsNullable;

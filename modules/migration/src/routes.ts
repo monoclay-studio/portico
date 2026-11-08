@@ -45,6 +45,7 @@ import { assignChecklistOwner, completeChecklistItem } from './service/checklist
 import { db, loadJob, loadJobFor, type MigrationDeps } from './service/context';
 import {
   approveCutover,
+  approveRestore,
   approveRollback,
   authorizeProduction,
   cancelJob,
@@ -574,6 +575,23 @@ export function migrationHttp(deps: { database: PorticoDatabase; migration: Migr
         async (req) =>
           withTenantTx(database, req.ctx, async (tx) => {
             await approveRollback(tx, m, req.params.id, req.body.note);
+            return view(tx, req.params.id);
+          }),
+      );
+      app.post(
+        '/migration/jobs/:id/restore/approve',
+        {
+          schema: {
+            tags,
+            summary: 'Approve restoring what a cancelled migration made read-only (second person)',
+            params: idParams,
+            body: z.object({ note: z.string().max(1000).optional() }),
+            response: { 200: jobView },
+          },
+        },
+        async (req) =>
+          withTenantTx(database, req.ctx, async (tx) => {
+            await approveRestore(tx, m, req.params.id, req.body.note);
             return view(tx, req.params.id);
           }),
       );

@@ -599,6 +599,7 @@ export function compose(database: PorticoDatabase, options: CompositionOptions =
     approvalRequired: t.approvalRequired,
     approvedBy: t.approvedBy,
     plannedBy: t.plannedBy,
+    freezeMinutes: t.freezeMinutes,
   });
   const migrationDeps: MigrationDeps = {
     ports: {
@@ -630,13 +631,17 @@ export function compose(database: PorticoDatabase, options: CompositionOptions =
         },
         planTransition: async (tx, i) =>
           transitionView(
-            await platform.planAuthorityTransition(asSystem(tx), i.propertyId, {
-              changes: i.changes,
-              reason: i.reason,
-              rollbackCriteria: i.rollbackCriteria,
-              freezeMinutes: i.freezeMinutes,
-              ...(i.plannedStartAt ? { plannedStartAt: i.plannedStartAt } : {}),
-            }),
+            await platform.planAuthorityTransition(
+              i.asMigrationProcess ? asMigrationProcess(tx) : asSystem(tx),
+              i.propertyId,
+              {
+                changes: i.changes,
+                reason: i.reason,
+                rollbackCriteria: i.rollbackCriteria,
+                freezeMinutes: i.freezeMinutes,
+                ...(i.plannedStartAt ? { plannedStartAt: i.plannedStartAt } : {}),
+              },
+            ),
           ),
         async getTransition(tx, propertyId, id) {
           const t = (await platform.listAuthorityTransitions(asSystem(tx), propertyId)).find(

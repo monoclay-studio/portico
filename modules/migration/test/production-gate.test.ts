@@ -220,22 +220,80 @@ describe('environment safety', () => {
   });
 });
 
-describe('cancelling a planned migration', () => {
-  it('cancels the open authority transition; the old system stays the system of record (truthfully)', async () => {
+describe('cancelling a planned migration (R-P2-1: cancel restores what the migration restricted)', () => {
+  it('cancels the open switch, plans the restore; a second person approves it and Portico operates the domains again', async () => {
     const f = await productionInSync(h);
     const job = await f.live.run(
       (tx) => migration.cancelJob(tx, h.deps, f.jobId, 'Hotel postponed the move'),
       f.lead,
     );
     expect(job.state).toBe('cancelled');
-    const t = await f.live.run(
-      async (tx) => (await platform.listAuthorityTransitions(asSystem(tx), f.live.propertyId))[0],
+    const transitions = await f.live.run((tx) =>
+      platform.listAuthorityTransitions(asSystem(tx), f.live.propertyId),
     );
-    expect(t?.status).toBe('cancelled');
+    const cutover = transitions.find((t) => t.id !== job.restoreTransitionId && t.status !== 'effective');
+    expect(transitions.map((t) => t.status)).toContain('cancelled');
+    expect(cutover?.status).toBe('cancelled');
+    expect(transitions.find((t) => t.id === job.restoreTransitionId)?.status).toBe('planned');
+    // Until the second person approves, the old system stays the system of record (truthfully).
     const auth = await f.live.run((tx) => platform.getDataAuthority(tx, f.live.propertyId, 'reservations'));
     expect(auth).toMatchObject({ authority: 'external', writeMode: 'read_only' });
     await expect(migration.runPipeline(h.t.db, h.deps, f.lead, f.jobId)).rejects.toMatchObject({
       code: 'migration_closed',
     });
+    // The person who cancelled cannot approve the restore alone.
+    await expect(
+      f.live.run((tx) => migration.approveRestore(tx, h.deps, f.jobId), f.lead),
+    ).rejects.toBeTruthy();
+    await f.live.run((tx) => migration.approveRestore(tx, h.deps, f.jobId, 'Agreed'), f.gm);
+    expect(
+      await f.live.run((tx) => platform.getDataAuthority(tx, f.live.propertyId, 'reservations')),
+    ).toMatchObject({
+      authority: 'portico',
+    });
+  });
+
+  it("planning alone restricts nothing: the property becomes read-only only at the second person's approval", async () => {
+    const f = await productionInSync(h, { stopAt: 'signoff' });
+    await f.live.run(
+      (tx) => migration.authorizeProduction(tx, f.jobId, { evidenceRef: 'DPA-1', validHours: 72 }),
+      f.gm,
+    );
+    await f.live.run(
+      (tx) =>
+        migration.planCutover(tx, h.deps, f.jobId, {
+          plannedStartAt: '2026-12-01T22:00:00Z',
+          freezeMinutes: 15,
+        }),
+      f.lead,
+    );
+    expect(
+      await f.live.run((tx) => platform.getDataAuthority(tx, f.live.propertyId, 'reservations')),
+    ).toMatchObject({
+      authority: 'portico',
+    });
+  });
+});
+
+describe('R-P2-2 the gate is re-checked at the switch itself', () => {
+  it('freeze passes, the authorizer revokes, the next run does not switch: it unfreezes and nothing is imported', async () => {
+    const f = await productionInSync(h);
+    const r1 = await migration.runPipeline(h.t.db, h.deps, f.lead, f.jobId, { start: 'freeze', maxSteps: 1 });
+    expect(r1.executed.map((e) => `${e.step}:${e.status}`)).toEqual(['freeze:succeeded']);
+    await f.live.run(
+      (tx) => migration.revokeAuthorization(tx, f.jobId, 'Stop: the owner withdrew consent'),
+      f.gm,
+    );
+    const r2 = await migration.runPipeline(h.t.db, h.deps, f.lead, f.jobId);
+    expect(r2.executed).toEqual([
+      { step: 'cutover', status: 'waiting', detail: expect.stringMatching(/authorization was revoked/) },
+    ]);
+    expect(
+      await f.live.run((tx) => platform.getDataAuthority(asSystem(tx), f.live.propertyId, 'reservations')),
+    ).toMatchObject({ authority: 'external' });
+    const job = await f.live.run((tx) => migration.getJob(tx, f.jobId));
+    expect(job.state).toBe('in_sync');
+    expect(job.frozenAt).toBeNull();
+    expect(await f.live.run((tx) => h.reservations.count(tx, f.live.propertyId))).toBe(0);
   });
 });

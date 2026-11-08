@@ -85,19 +85,8 @@ export async function planCutover(
     if (t && (t.status === 'planned' || t.status === 'frozen'))
       await deps.ports.platform.cancelTransition(tx, job.transitionId, 'Cutover re-planned');
   }
-  for (const domain of migrated(job)) {
-    const a = await deps.ports.platform.getDataAuthority(tx, job.propertyId, domain);
-    if (a.authority === 'portico')
-      await deps.ports.platform.declareExternalAuthority(tx, {
-        propertyId: job.propertyId,
-        domain,
-        systemName: job.sourceSystem,
-        // Platform links an external system of record to a connection: the migration source's identity is that
-        // link (MIG-CR-6 asks integration to register migration sources as file-exchange connections).
-        connectionId: job.sourceIdentity,
-        reason: `Migration ${job.id}: ${job.sourceSystem} stays the system of record until the cutover.`,
-      });
-  }
+  // Nothing is restricted here: Portico becomes read-only for the migrated domains only when a second person
+  // approves the plan (R-P2-1, `approveCutover`).
   const transition = await deps.ports.platform.planTransition(tx, {
     propertyId: job.propertyId,
     changes: migrated(job).map((domain) => ({
@@ -132,12 +121,76 @@ export async function planCutover(
   return job;
 }
 
-/** The second person approves the switch of system of record (platform enforces planner ≠ approver). */
+/**
+ * The second person approves the switch of system of record (platform enforces planner ≠ approver). Only now is the
+ * source declared the system of record for the migrated domains still operated by Portico — restricting (Portico
+ * read-only there until the switch) — and what each domain was is recorded, so a cancel can restore it (R-P2-1).
+ */
 export async function approveCutover(tx: TxContext, deps: MigrationDeps, jobId: string, note?: string) {
-  const job = await loadJobFor(tx, jobId, P.productionAuthorize, { lock: true });
+  let job = await loadJobFor(tx, jobId, P.productionAuthorize, { lock: true });
   assertOpen(job);
   if (!job.transitionId) throw new BusinessRuleError('no_transition', 'Plan the cutover first.');
-  await deps.ports.platform.approveTransition(tx, job.transitionId, note);
+  const planned = await deps.ports.platform.getTransition(tx, job.propertyId, job.transitionId);
+  if (!planned || planned.status !== 'planned')
+    throw new BusinessRuleError(
+      'transition_not_open',
+      'The planned switch is no longer open. Plan the cutover again.',
+    );
+  // Segregation of duties is checked against the person who planned it (before any re-plan by the process).
+  const me = tx.actor.kind === 'user' ? (tx.actor.impersonatedBy ?? `user:${tx.actor.userId}`) : actorKey(tx);
+  if (planned.plannedBy === me || planned.plannedBy === actorKey(tx))
+    throw new BusinessRuleError(
+      'segregation_of_duties',
+      'The person who planned a change of system of record cannot approve it. Ask another manager with data-authority rights.',
+      { plannedBy: planned.plannedBy },
+    );
+  const restricted = [...job.restricted];
+  const toRestrict: MigratedDomain[] = [];
+  for (const domain of migrated(job)) {
+    const a = await deps.ports.platform.getDataAuthority(tx, job.propertyId, domain);
+    if (a.authority === 'portico') {
+      toRestrict.push(domain);
+      if (!restricted.some((r) => r.domain === domain)) restricted.push({ domain, writeMode: a.writeMode });
+    }
+  }
+  let transitionId = job.transitionId;
+  if (toRestrict.length) {
+    // Platform changes a domain's authority only while no switch is open for it: the planned switch is set aside,
+    // the domains are restricted, and the same switch is planned again by the migration process — so the approver
+    // approves a plan they did not make, and nobody restricted Portico alone.
+    await deps.ports.platform.cancelTransition(
+      tx,
+      job.transitionId,
+      'Re-planned at approval after restricting.',
+    );
+    for (const domain of toRestrict)
+      await deps.ports.platform.declareExternalAuthority(tx, {
+        propertyId: job.propertyId,
+        domain,
+        systemName: job.sourceSystem,
+        // Platform links an external system of record to a connection: the migration source's identity is that
+        // link (MIG-CR-6 asks integration to register migration sources as file-exchange connections).
+        connectionId: job.sourceIdentity,
+        reason: `Migration ${job.id}: ${job.sourceSystem} stays the system of record until the cutover (approved by a second person).`,
+      });
+    const replanned = await deps.ports.platform.planTransition(tx, {
+      propertyId: job.propertyId,
+      changes: migrated(job).map((domain) => ({
+        domain,
+        authority: 'portico' as const,
+        writeMode: 'exclusive' as const,
+      })),
+      reason: `Cutover of migration ${job.id} from ${job.sourceSystem}`,
+      rollbackCriteria:
+        'Reconciliation cannot be completed within 4 hours, Day Close cannot complete, or the decision-maker calls it; rollback replays the cutover journal into the old system.',
+      freezeMinutes: planned.freezeMinutes,
+      ...(job.cutoverPlannedAt ? { plannedStartAt: job.cutoverPlannedAt } : {}),
+      asMigrationProcess: true,
+    });
+    transitionId = replanned.id;
+  }
+  await deps.ports.platform.approveTransition(tx, transitionId, note);
+  job = await saveJob(tx, job, { restricted, transitionId });
   await tx.audit({
     action: 'migration.cutover.approve',
     target: { type: 'migration_job', id: job.id },
@@ -434,10 +487,50 @@ export async function runCutoverStep(
   job: Job,
   opts: { failAfter?: number },
 ): Promise<StepOutcome> {
-  await withTenantTx(database, ctx, async (tx) => {
+  const refused = await withTenantTx(database, ctx, async (tx) => {
     const j = await loadJob(tx, job.id, { lock: true });
-    if (j.switchedAt) return; // resumed after a crash: already switched
+    if (j.switchedAt) return null; // resumed after a crash: already switched
     const t = await deps.ports.platform.getTransition(tx, j.propertyId, j.transitionId as string);
+    // The irreversible step re-checks what can change after the freeze (R-P2-2): the authorization (revoked,
+    // expired, another plan), the approved and frozen switch, and blocking exceptions raised since.
+    const blockers: string[] = [];
+    if (j.purpose === 'production') {
+      const auth = await currentAuthorization(tx, j);
+      if (!auth) blockers.push('the production authorization was revoked or is missing');
+      else {
+        if (auth.expiresAt.getTime() <= tx.now.getTime())
+          blockers.push('the production authorization has expired');
+        if (auth.planFingerprint !== j.planFingerprint)
+          blockers.push('the plan changed after it was authorized');
+      }
+    }
+    if (!t || (t.status !== 'frozen' && t.status !== 'effective'))
+      blockers.push(`the switch of system of record is ${t?.status ?? 'missing'}`);
+    else if (t.approvalRequired && !t.approvedBy)
+      blockers.push('the switch of system of record is not approved');
+    const open = await countOpenBlocking(tx, j.id);
+    if (open > 0) blockers.push(`${open} blocking exception(s) are open`);
+    if (blockers.length) {
+      // Unfreeze: nothing switched; the old system stays the system of record; the cutover is planned again.
+      if (t && (t.status === 'frozen' || t.status === 'planned'))
+        await deps.ports.platform.cancelTransition(
+          tx,
+          j.transitionId as string,
+          `Cutover stopped: ${blockers.join('; ')}`,
+        );
+      await saveJob(tx, j, {
+        state: 'in_sync',
+        frozenAt: null,
+        steps: { ...j.steps, freeze: 'pending', cutover: 'pending' },
+      });
+      await tx.audit({
+        action: 'migration.cutover.unfrozen',
+        target: { type: 'migration_job', id: j.id },
+        propertyId: j.propertyId,
+        reason: blockers.join('; '),
+      });
+      return blockers;
+    }
     if (t?.status !== 'effective') await deps.ports.platform.completeTransition(tx, j.transitionId as string);
     await saveJob(tx, j, { switchedAt: tx.now, state: 'switched' });
     await tx.audit({
@@ -452,7 +545,14 @@ export async function runCutoverStep(
       aggregate: { type: 'migration_job', id: j.id },
       payload: { jobId: j.id, domains: j.domains },
     });
+    return null;
   });
+  if (refused)
+    return {
+      status: 'waiting',
+      detail: `Switch stopped before anything changed — unfreeze the old system: ${refused.join('; ')}. Plan and approve the cutover again.`,
+      owner: 'Migration approver',
+    };
   const s = await importAll(
     database,
     deps,
@@ -823,13 +923,70 @@ export async function cancelJob(
     if (t && (t.status === 'planned' || t.status === 'frozen'))
       await deps.ports.platform.cancelTransition(tx, job.transitionId, `Migration cancelled: ${reason}`);
   }
-  const next = await saveJob(tx, job, { state: 'cancelled' });
+  // Restore what this migration restricted: domains still external through THIS migration's source (re-checked
+  // now — a domain someone changed since is left as it is) move back to Portico through a transition that a second
+  // person approves (`approveRestore`), like any move of authority (R-P2-1).
+  const toRestore: Array<{ domain: MigratedDomain; writeMode: 'exclusive' | 'read_only' }> = [];
+  for (const r of job.restricted) {
+    const a = await deps.ports.platform.getDataAuthority(tx, job.propertyId, r.domain as MigratedDomain);
+    if (a.authority === 'external' && a.connectionId === job.sourceIdentity)
+      toRestore.push({
+        domain: r.domain as MigratedDomain,
+        writeMode: r.writeMode === 'read_only' ? 'read_only' : 'exclusive',
+      });
+  }
+  let restoreTransitionId: string | null = null;
+  if (toRestore.length) {
+    const t = await deps.ports.platform.planTransition(tx, {
+      propertyId: job.propertyId,
+      changes: toRestore.map((r) => ({
+        domain: r.domain,
+        authority: 'portico' as const,
+        writeMode: r.writeMode,
+      })),
+      reason: `Migration ${job.id} cancelled (${reason}): Portico becomes the system of record again for what the migration restricted.`,
+      rollbackCriteria: 'Not applicable: this restores the state before the migration was planned.',
+      freezeMinutes: 1,
+    });
+    restoreTransitionId = t.id;
+  }
+  const next = await saveJob(tx, job, { state: 'cancelled', restoreTransitionId });
   closeRehearsalCopy(tx, deps, job, 'cancelled');
   await tx.audit({
     action: 'migration.job.cancel',
     target: { type: 'migration_job', id: job.id },
     propertyId: job.propertyId,
     reason,
+    after: { restore: toRestore.map((r) => r.domain), restoreTransitionId },
   });
   return next;
+}
+
+/**
+ * A second person approves the restore planned at cancel: the domains the cancelled migration restricted are
+ * operated by Portico again (planner ≠ approver is enforced by platform).
+ */
+export async function approveRestore(tx: TxContext, deps: MigrationDeps, jobId: string, note?: string) {
+  const job = await loadJobFor(tx, jobId, P.productionAuthorize, { lock: true });
+  if (!job.restoreTransitionId)
+    throw new BusinessRuleError('no_restore', 'There is nothing to restore for this migration.');
+  const t = await deps.ports.platform.getTransition(tx, job.propertyId, job.restoreTransitionId);
+  if (!t || t.status === 'cancelled')
+    throw new BusinessRuleError(
+      'no_restore',
+      'The restore was cancelled. Plan it again from the data-authority page.',
+    );
+  if (t.status === 'planned' && t.approvalRequired && !t.approvedBy)
+    await deps.ports.platform.approveTransition(tx, job.restoreTransitionId, note);
+  if (t.status === 'planned') await deps.ports.platform.freezeTransition(tx, job.restoreTransitionId);
+  if (t.status !== 'effective') await deps.ports.platform.completeTransition(tx, job.restoreTransitionId);
+  await saveJob(tx, job, { restricted: [] });
+  await tx.audit({
+    action: 'migration.restore.complete',
+    target: { type: 'migration_job', id: job.id },
+    propertyId: job.propertyId,
+    reason: note ?? null,
+    after: { domains: job.restricted.map((r) => r.domain) },
+  });
+  return job;
 }

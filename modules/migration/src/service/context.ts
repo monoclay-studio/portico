@@ -59,6 +59,9 @@ export interface Job {
   certificate: Record<string, unknown> | null;
   transitionId: string | null;
   rollbackTransitionId: string | null;
+  /** Domains this migration restricted (made read-only in Portico) and their previous write mode (R-P2-1). */
+  restricted: Array<{ domain: string; writeMode: 'exclusive' | 'forward' | 'read_only' }>;
+  restoreTransitionId: string | null;
   cutoverPlannedAt: Date | null;
   frozenAt: Date | null;
   switchedAt: Date | null;
@@ -94,6 +97,8 @@ export function toJob(r: Selectable<JobsTable>): Job {
     certificate: (r.certificate ?? null) as Job['certificate'],
     transitionId: r.transition_id,
     rollbackTransitionId: r.rollback_transition_id,
+    restricted: (r.restricted ?? []) as Job['restricted'],
+    restoreTransitionId: r.restore_transition_id ?? null,
     cutoverPlannedAt: r.cutover_planned_at,
     frozenAt: r.frozen_at,
     switchedAt: r.switched_at,
@@ -146,6 +151,8 @@ export async function saveJob(
     certificate: Record<string, unknown> | null;
     transitionId: string | null;
     rollbackTransitionId: string | null;
+    restricted: Job['restricted'];
+    restoreTransitionId: string | null;
     cutoverPlannedAt: Date | null;
     frozenAt: Date | null;
     switchedAt: Date | null;
@@ -167,6 +174,8 @@ export async function saveJob(
     set.certificate = patch.certificate === null ? null : JSON.stringify(patch.certificate);
   if (patch.transitionId !== undefined) set.transition_id = patch.transitionId;
   if (patch.rollbackTransitionId !== undefined) set.rollback_transition_id = patch.rollbackTransitionId;
+  if (patch.restricted !== undefined) set.restricted = JSON.stringify(patch.restricted);
+  if (patch.restoreTransitionId !== undefined) set.restore_transition_id = patch.restoreTransitionId;
   if (patch.cutoverPlannedAt !== undefined) set.cutover_planned_at = patch.cutoverPlannedAt;
   if (patch.frozenAt !== undefined) set.frozen_at = patch.frozenAt;
   if (patch.switchedAt !== undefined) set.switched_at = patch.switchedAt;

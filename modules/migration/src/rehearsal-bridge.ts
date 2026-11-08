@@ -245,7 +245,9 @@ export function createRehearsalBridge(
     async close(live, input) {
       const d = deps();
       const ctx = await trialContext(database, d.ports, live, input.trialOrganizationId);
-      await withTenantTx(database, ctx, (tx) => endMirror(tx, input.liveJobId, input.outcome, 'The live migration ended.'));
+      await withTenantTx(database, ctx, (tx) =>
+        endMirror(tx, input.liveJobId, input.outcome, 'The live migration ended.'),
+      );
     },
   };
 }
