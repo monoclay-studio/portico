@@ -173,6 +173,12 @@
     6. Quality steward round 4 after items 1–2 report. Then UX full round 2 (34 tasks) after the real-data round.
     7. Channex R4 staging tests once the owner provides a staging key (`request_credential`, staging host only).
 
+- **2026-11-08 00:58 UTC: seven-day 94%.** The resume task is already scheduled for **2026-11-11 17:03 UTC** (scheduled
+  task "Resume Portico after weekly reset"). Plan:
+  - At 95%: `tools/checkpoint.sh`.
+  - At 97%: stop re-review #6 and commit its partial report as WIP.
+  - The resume order is the 22:55 entry above, with item 1 updated: re-review #6 is running on `333a83e`.
+
 ## 1. Owner, product and how to work with the owner
 
 - Owner: founder of **Monoclay LLC** (Delaware, Stripe Atlas), based in the Maldives. Product: **Portico** (final name).
