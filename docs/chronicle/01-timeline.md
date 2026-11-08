@@ -500,3 +500,13 @@ Each agent's brief and report are in `agents/`.
     step: distribution + Channex (`a8bd950`), day-close (`cb0fbf3`) and migration (`45be8b9`).
   - Fix round 6 progress: the R6-P1-1, R6-P1-2 and R6-P2-1 fixes are committed and pushed (`898a85e`, `50016a3`,
     `4822639`).
+- **05:32 — Integration-step fix round 6 done** <!-- t: agent-a29fdf2e9c7d0e9dc @ 2026-11-08T05:32:19.238Z (Integration step: bind module ports) -->; head `932e7c1`, pushed. Each fix was committed with its test.
+  - A capture is judged on the purpose where the money lands. The fact limits apply at capture under the collection
+    lock, and a hold's purpose never carries through.
+  - Finance provenance gives every non-zero posting an owner; an unknown origin fails closed.
+  - The no-show limit follows the ledger penalty.
+  - A forfeit of card money needs a recorded penalty.
+  - Deposit owed is summed per stay.
+  - The landing table covers 8 operations. Mutants R1–R6 were all killed; R2 survived at first and got a new test.
+  - Two stated proof gaps: the unknown-origin branch is unreachable today, and no test distinguishes deposit-per-stay.
+- **05:33 — Focused re-review #7 launched** <!-- t: now @ 2026-11-08T05:33:04Z -->. It must close the builder's proof gap on deposit-per-stay with a test.

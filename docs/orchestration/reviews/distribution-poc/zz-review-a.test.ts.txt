@@ -1,0 +1,234 @@
+/**
+ * Steward review probes (throwaway evidence; never committed).
+ *  A1/A2  "no polling": a revoked key or an external system of record with pending changes keeps the organization
+ *         due every second (the scheduler re-runs all connection work in a tight loop).
+ *  A3     revision ordering: two revisions of one booking with the same hub timestamp (ms precision) are ordered by
+ *         a HASH of the revision id; a modification ordered "before" its creation is acknowledged as stale (lost).
+ *  A4     no hub timestamp + reordered delivery: the creation waits forever behind its own parked cancellation.
+ *  A5     budget: two workers whose clocks differ — the later-clock worker's sends are pruned and overwritten.
+ */
+import { sql, withTenantTx } from '@portico/db';
+import { addDays, newId, sha256Hex } from '@portico/kernel';
+import { platform } from '@portico/platform';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import type { HubRevision } from '../src/domain/revisions';
+import * as svc from '../src/services';
+import { loadConnection } from '../src/service/common';
+import { BUSINESS_DATE, connect, type Harness, runFor, setupOrg, startHarness, sys, tick } from './harness';
+
+let h: Harness;
+beforeAll(async () => {
+  h = await startHarness();
+});
+afterAll(async () => h?.close());
+
+const d = (n: number) => addDays(BUSINESS_DATE, n);
+const tie = (id: string) => Number.parseInt(sha256Hex(id).slice(0, 6), 16) % 1000;
+
+function hubRev(externalPropertyId: string, o: Partial<HubRevision>): HubRevision {
+  const nights = (o.rooms?.[0]?.checkout ?? d(33)) === d(34) ? 4 : 3;
+  return {
+    revisionId: newId(),
+    bookingId: 'BK-REVIEW-1',
+    externalPropertyId,
+    status: 'new',
+    insertedAt: '2026-11-07T06:00:00Z',
+    otaName: 'Booking.com',
+    otaReservationCode: 'R1',
+    currency: 'USD',
+    customer: { firstName: 'Aiko', lastName: 'Tanaka', email: null, phone: null, country: 'JP' },
+    rooms: [
+      {
+        roomRef: '1',
+        channelRoomTypeId: 'RT-WV',
+        channelRatePlanId: 'RP-WV-BAR',
+        checkin: d(30),
+        checkout: nights === 4 ? d(34) : d(33),
+        adults: 2,
+        childrenAges: [],
+        nightly: Array.from({ length: nights }, (_, i) => ({ date: d(30 + i), amountMinor: 50_000 })),
+      },
+    ],
+    notes: null,
+    paymentCollect: 'ota',
+    ...o,
+  };
+}
+
+async function store(org: Awaited<ReturnType<typeof setupOrg>>, connectionId: string, rev: HubRevision) {
+  return withTenantTx(h.t.db, sys(org), async (tx) => {
+    const conn = await loadConnection(tx, connectionId);
+    return svc.storeRevision(tx, conn, rev, 'webhook');
+  });
+}
+
+const fakeBookings = (org: Awaited<ReturnType<typeof setupOrg>>) =>
+  org.run((tx) =>
+    sql<{ external_id: string; status: string; nights: number }>`select external_id, status, nights from fake_res.bookings`
+      .execute(tx.db)
+      .then((r) => r.rows),
+  );
+
+describe('A1/A2 — owner requirement 1 (no polling loops)', () => {
+  it('A1: a revoked key with a pending change keeps the organization due every second', async () => {
+    const org = await setupOrg(h);
+    const c = await connect(org);
+    await runFor(org, 5_000);
+    await org.run((tx) =>
+      svc.injectFault(tx, h.dist.deps, c.connectionId, { endpoint: 'any', kind: 'unauthorized', times: 1 }),
+    );
+    await org.run((tx) =>
+      h.rates.applyPriceUpdate(tx, {
+        propertyId: org.propertyId,
+        ratePlanId: org.bar,
+        unitTypeIds: [org.water],
+        ranges: [{ from: d(3), to: d(4) }],
+        set: { baseOccupancy: 2, baseAmountMinor: 61_100 },
+      }),
+    );
+    await h.drain();
+    await tick(org); // 401 → credentials invalid; status stays 'active'
+    const conn = await org.run((tx) => svc.getConnection(tx, h.dist.deps, c.connectionId));
+    expect(conn.status.credentials).toBe('invalid');
+    const gaps: number[] = [];
+    for (let i = 0; i < 10; i++) {
+      h.clock.advance(120_000);
+      const r = await tick(org);
+      gaps.push(Date.parse(r.nextDueAt) - h.clock.now().getTime());
+    }
+    // Nothing can progress until a person replaces the key: the next due instant should be far away (≥ 1 min).
+    // Observed: every pass schedules the next one 1 s later (all connection work re-runs every scheduler tick).
+    console.log('A1 gaps (ms):', gaps.join(','));
+    expect(Math.min(...gaps)).toBeGreaterThanOrEqual(60_000);
+  });
+
+  it('A2: an external system of record with a pending change keeps the organization due every second', async () => {
+    const org = await setupOrg(h);
+    const c = await connect(org);
+    await runFor(org, 5_000);
+    await withTenantTx(h.t.db, sys(org), (tx) =>
+      platform.setDataAuthority(tx, {
+        propertyId: org.propertyId,
+        domain: 'availability',
+        authority: 'external',
+        connectionId: newId(),
+        systemName: 'Legacy PMS',
+        writeMode: 'read_only',
+        reason: 'review probe',
+      }),
+    );
+    await h.drain();
+    await org.run((tx) =>
+      h.rates.applyPriceUpdate(tx, {
+        propertyId: org.propertyId,
+        ratePlanId: org.bar,
+        unitTypeIds: [org.water],
+        ranges: [{ from: d(3), to: d(4) }],
+        set: { baseOccupancy: 2, baseAmountMinor: 61_100 },
+      }),
+    );
+    await h.drain();
+    const gaps: number[] = [];
+    for (let i = 0; i < 10; i++) {
+      h.clock.advance(120_000);
+      const r = await tick(org);
+      gaps.push(Date.parse(r.nextDueAt) - h.clock.now().getTime());
+    }
+    const exc = await org.run((tx) => svc.listExceptions(tx, { connectionId: c.connectionId, status: 'open' }));
+    const blocked = exc.find((e) => e.code === 'publication_blocked');
+    console.log('A2 gaps (ms):', gaps.join(','), 'occurrences:', blocked?.occurrences);
+    expect(Math.min(...gaps)).toBeGreaterThanOrEqual(60_000);
+  });
+});
+
+describe('A3/A4 — revision ordering (owner requirement 3)', () => {
+  it('A3: same hub timestamp → hash tie-break orders the modification before its creation → acked as stale (lost)', async () => {
+    const org = await setupOrg(h);
+    const c = await connect(org);
+    await runFor(org, 3_000);
+    let createId = newId();
+    let modifyId = newId();
+    while (tie(modifyId) >= tie(createId)) {
+      createId = newId();
+      modifyId = newId();
+    }
+    // Hub timestamp with second precision (or two revisions inside one millisecond): identical instants.
+    await store(org, c.connectionId, hubRev(c.externalPropertyId, { revisionId: createId, status: 'new' }));
+    await runFor(org, 3_000);
+    expect(await fakeBookings(org)).toMatchObject([{ status: 'confirmed', nights: 3 }]);
+    // The guest extends by one night at the channel.
+    const mod = hubRev(c.externalPropertyId, {
+      revisionId: modifyId,
+      status: 'modified',
+      rooms: [{ ...hubRev(c.externalPropertyId, {}).rooms[0], checkout: d(34) } as HubRevision['rooms'][number]],
+    });
+    await store(org, c.connectionId, hubRev(c.externalPropertyId, { ...mod, rooms: mod.rooms }));
+    await runFor(org, 3_000);
+    const revs = await org.run((tx) => svc.listRevisions(tx, c.connectionId));
+    const m = revs.find((r) => r.revisionId === modifyId);
+    console.log('A3 modification:', m?.status, m?.note, 'bookings:', JSON.stringify(await fakeBookings(org)));
+    // Expected: the modification is applied (4 nights). Observed: 'stale' + acknowledged → the channel considers it
+    // delivered, Portico keeps 3 nights.
+    expect(m?.status.revision).toBe('applied');
+    expect((await fakeBookings(org))[0]?.nights).toBe(4);
+  });
+
+  it('A4: without a hub timestamp, cancel-before-create leaves the creation waiting forever behind the parked cancel', async () => {
+    const org = await setupOrg(h);
+    const c = await connect(org);
+    await runFor(org, 3_000);
+    const createId = newId();
+    const cancelId = newId();
+    await store(
+      org,
+      c.connectionId,
+      hubRev(c.externalPropertyId, { revisionId: cancelId, status: 'cancelled', insertedAt: null }),
+    );
+    await runFor(org, 2_000);
+    await store(
+      org,
+      c.connectionId,
+      hubRev(c.externalPropertyId, { revisionId: createId, status: 'new', insertedAt: null }),
+    );
+    await runFor(org, 20 * 60_000, 30_000);
+    const revs = await org.run((tx) => svc.listRevisions(tx, c.connectionId));
+    const create = revs.find((r) => r.revisionId === createId);
+    const cancel = revs.find((r) => r.revisionId === cancelId);
+    console.log('A4 create:', JSON.stringify(create?.status), create?.nextAttemptAt, 'cancel:', JSON.stringify(cancel?.status));
+    // Expected (spec S02/E02): the creation is applied, then the parked cancellation → one cancelled booking.
+    expect(cancel?.status.revision).toBe('applied');
+    expect(await fakeBookings(org)).toMatchObject([{ status: 'cancelled' }]);
+  });
+});
+
+describe('A5 — budget across workers with different clocks (owner requirement 2)', () => {
+  it('A5: a worker whose clock is behind prunes (and deletes) the sends of a worker whose clock is ahead', async () => {
+    const org = await setupOrg(h);
+    const c = await connect(org, { settings: { availabilityPerMinute: 10, restrictionsPerMinute: 10 } });
+    await runFor(org, 5_000);
+    h.clock.advance(120_000); // the resync's sends have left the window
+    const ahead = { ...h.t.db, clock: { now: () => new Date(h.clock.now().getTime() + 2_000) } };
+    const behind = h.t.db;
+    let granted = 0;
+    for (let i = 0; i < 10; i++) {
+      const r = await withTenantTx(ahead, sys(org), async (tx) =>
+        svc.reserveBudget(tx, await loadConnection(tx, c.connectionId), 'availability'),
+      );
+      if (r.ok) granted++;
+    }
+    for (let i = 0; i < 10; i++) {
+      const r = await withTenantTx(behind, sys(org), async (tx) =>
+        svc.reserveBudget(tx, await loadConnection(tx, c.connectionId), 'availability'),
+      );
+      if (r.ok) granted++;
+    }
+    const row = await h.t.admin.kysely
+      .selectFrom('distribution.ari_budget')
+      .select('sends')
+      .where('connection_id', '=', c.connectionId)
+      .where('kind', '=', 'availability')
+      .executeTakeFirstOrThrow();
+    console.log('A5 granted within 2 s of real time:', granted, 'stored sends:', (row.sends as unknown[]).length);
+    expect(granted).toBeLessThanOrEqual(10);
+  });
+});
