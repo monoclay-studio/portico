@@ -115,6 +115,14 @@ describe('P0-1: a package line moved by re-pricing is posted once, by what it is
     await requote(h, org, s.stayId, { arrival: D, departure: '2026-11-08', ...AI2 });
     await checkOut(org, s.stayId);
     expect((await close(org, 1)).runStatus).toBe('completed');
+    // Reconciled at the first close after the change, not when the stale expectation's old date comes round.
+    const out = await h.t.admin.kysely
+      .selectFrom('finance.journal_entries')
+      .select(['business_date'])
+      .where('tenant_id', '=', org.tenantId)
+      .where('idempotency_key', 'like', `inclusion:${s.stayId}:%:departure`)
+      .execute();
+    expect(out).toEqual([{ business_date: '2026-11-08' }]);
     expect((await close(org, 2)).runStatus).toBe('completed');
     const lines = await transfers(org, s.stayId);
     expect(lines).toHaveLength(2); // arrival + departure (the reviewed commit never charged the departure)
@@ -306,6 +314,13 @@ describe('P1-1: a night a person took over is a decision, never a gap the catch-
         occupancy: { adults: 2, childrenAges: [] },
       }),
     );
+    // Readiness does not announce the decided night as a gap Day Close will fill ("night not posted"): it asks.
+    const ready = await org.run((tx) => h.service.getReadiness(tx, org.propertyId), org.auditor);
+    expect([...ready.info, ...ready.warnings].filter((i) => i.code === 'night_not_posted')).toEqual([]);
+    expect(ready.blocking.find((b) => b.code === 'night_decision_needed')?.ref).toEqual({
+      type: 'stay',
+      id: bad.stayId,
+    });
     const next = await close(org, 1);
     // The next close stops on the decision instead of posting the night a second time.
     expect(next.runStatus).toBe('blocked');
