@@ -167,6 +167,19 @@ export async function folioProvenance(
     const amount = Number(p.amount_minor);
     if (amount === 0) continue;
     const root = await rootOf(tx, p);
+    // Re-review #7 R7-P1-2 (Amendment 6): a CREDIT moving between folios (money, or a debt reduction) leaves behind — or
+    // brings — a debit owned by whoever the credit benefits on the other side: the peer folio's owner. A credit moved
+    // back nets that owner out again.
+    const creditMoving =
+      (p.kind === 'transfer_out' && amount > 0) || (p.kind === 'transfer_in' && amount < 0);
+    if (creditMoving) {
+      const peer = p.transfer_peer_id ? await posting(tx, p.transfer_peer_id) : undefined;
+      const peerOwner = peer ? await folioOwner(tx, peer.folio_id) : null;
+      addDebt(peerOwner ?? { type: 'unknown_origin', id: p.id }, amount);
+      if (root.kind === 'payment') pays.set(root.id, (pays.get(root.id) ?? 0) + amount);
+      else if (root.kind === 'deposit') deps.set(root.bookingId, (deps.get(root.bookingId) ?? 0) + amount);
+      continue;
+    }
     if (root.kind === 'debt') addDebt(root.owner, amount);
     else if (root.kind === 'payment') pays.set(root.id, (pays.get(root.id) ?? 0) + amount);
     else if (root.kind === 'deposit') deps.set(root.bookingId, (deps.get(root.bookingId) ?? 0) + amount);

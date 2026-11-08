@@ -1251,6 +1251,17 @@ const TRANSFERABLE = [
   'transfer_in',
 ];
 
+/** How many of these postings are credits (negative amounts: money or a debt reduction). */
+async function creditItems(tx: TxContext, ids: string[]): Promise<number> {
+  if (ids.length === 0) return 0;
+  const rows = await db(tx)
+    .selectFrom('finance.postings')
+    .select('amount_minor')
+    .where('id', 'in', ids)
+    .execute();
+  return rows.filter((r) => Number(r.amount_minor) < 0).length;
+}
+
 /** Move postings (or an amount) between two folios of the same legal entity — traceable on both sides. */
 export async function transferPostings(
   tx: TxContext,
@@ -1405,6 +1416,24 @@ export async function transferPostings(
   }
   if (movedDebt.length > 0) {
     await assertDebtMayLand(tx, deps, to.id, movedDebt, 'transfer_not_covered_by_card_consent');
+  }
+  // Re-review #7 R7-P1-2: a credit leaving the source leaves a debit there owned by whoever the credit now benefits (the
+  // destination and every origin of its debt) — card money already on the source must cover them.
+  const creditLeaves = input.items
+    ? (await creditItems(
+        tx,
+        input.items.map((i) => i.postingId),
+      )) > 0
+    : false;
+  if (creditLeaves) {
+    const dest = await folioProvenance(tx, to.id);
+    await assertDebtMayLand(
+      tx,
+      deps,
+      from.id,
+      [dest.owner, ...dest.debtOwners],
+      'transfer_not_covered_by_card_consent',
+    );
   }
   const postings: PostingDraft[] = [];
   const lines: Array<LineDraft & { accountId?: string }> = [];

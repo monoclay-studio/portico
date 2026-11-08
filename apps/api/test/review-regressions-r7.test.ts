@@ -437,3 +437,142 @@ describe('R7-P2-1 / R7-P2-2 — the no-show limit is the penalty still owed on t
     expect(onMaster).toBeGreaterThan(0);
   });
 });
+
+describe('R7-P1-2 — a credit moved off a folio leaves a debit owned by whoever it now benefits', () => {
+  async function chequeOnOtto(org: ScenarioOrg, k: K, sameBooking = false) {
+    const { finance, reservations } = s.c.services;
+    const desk = org.staff('front_desk', 'Hassan', [k.id]);
+    const gm = org.staff('general_manager', 'GM', [k.id]);
+    const { profileId: vera } = await guestWithCard(s, org, k, { firstName: 'Vera', lastName: 'Visitor' });
+    const { profileId: otto, card } = await guestWithCard(
+      s,
+      org,
+      k,
+      { firstName: 'Otto', lastName: 'Owner' },
+      'pm_card_mastercard',
+    );
+    const y = await bookFor(org, k, desk, otto, '2027-06-10', '2027-06-12');
+    let otherStay: string;
+    if (sameBooking) {
+      const extra = bookingInput(k, {
+        arrival: '2027-06-10',
+        departure: '2027-06-12',
+        type: 'WV',
+        guestProfileId: vera,
+      }).stays[0];
+      const preview = await org.run(desk, (tx) =>
+        reservations.previewChange(tx, { kind: 'add_stay', bookingId: y.id, stay: extra } as never),
+      );
+      await reservations.commitChangeSafely(s.t.db, desk, { previewToken: preview.token });
+      const now = await org.run(desk, (tx) => reservations.getBooking(tx, y.id));
+      otherStay = now.stays.find((x) => x.id !== y.stays[0]?.id)?.id as string;
+    } else {
+      const v = await bookFor(org, k, desk, vera, '2027-06-10', '2027-06-12');
+      otherStay = v.stays[0]?.id as string;
+    }
+    await cardholderConfirms(s, org, card.id, y.id); // covers every stay of Otto's booking as it is now
+    const fv = await folioOfStay(org, k, otherStay, vera);
+    const fy = await folioOfStay(org, k, y.stays[0]?.id as string, otto);
+    await owe(org, k, desk, otherStay, 30_000, 'Vera minibar');
+    await owe(org, k, desk, y.stays[0]?.id as string, 30_000, 'Otto spa');
+    await org.run(desk, (tx) =>
+      finance.collectPayment(tx, {
+        folioId: fy,
+        tenders: [{ method: 'cheque', amount: usd(30_000), reference: `CHQ-${newId().slice(-6)}` }],
+        idempotencyKey: newId(),
+      }),
+    );
+    const cheque = (
+      await sql<{
+        id: string;
+      }>`select id from finance.postings where folio_id = ${fy} and kind = 'payment'`.execute(
+        s.t.admin.kysely,
+      )
+    ).rows[0]?.id as string;
+    const move = (from: string, to: string, postingId: string) =>
+      settle(
+        org.run(gm, (tx) =>
+          finance.transferPostings(tx, {
+            fromFolioId: from,
+            toFolioId: to,
+            items: [{ postingId }],
+            reason: 'Posted to the wrong folio',
+            idempotencyKey: newId(),
+          }),
+        ),
+      );
+    return { desk, card, fv, fy, cheque, move };
+  }
+
+  it('PoC R7-M1 flipped (move first): Otto’s cheque moved to Vera — Otto’s card does not refill it', async () => {
+    const org = await organization(s);
+    const k = await kandu(s, org, '2027-03-10');
+    const x = await chequeOnOtto(org, k);
+    expect(codeOf(await x.move(x.fy, x.fv, x.cheque))).toBe('accepted');
+    expect(await balanceOf(org, x.fy)).toBe(30_000);
+    const r = await cardCharge(x.desk, k, x.card.id, { type: 'folio', id: x.fy }, 30_000, 'balance');
+    expect(codeOf(r)).toBe('mandate_reference_not_covered'); // flipped FINDING
+  });
+
+  it('sibling (card first): with Otto’s card money on his folio, his cheque is not moved off to Vera', async () => {
+    const org = await organization(s);
+    const k = await kandu(s, org, '2027-03-10');
+    const x = await chequeOnOtto(org, k);
+    await owe(
+      org,
+      k,
+      x.desk,
+      (
+        await sql<{ owner_id: string }>`select owner_id from finance.folios where id = ${x.fy}`.execute(
+          s.t.admin.kysely,
+        )
+      ).rows[0]?.owner_id as string,
+      20_000,
+      'Otto dinner',
+    );
+    expect(
+      codeOf(await cardCharge(x.desk, k, x.card.id, { type: 'folio', id: x.fy }, 20_000, 'balance')),
+    ).toBe('accepted');
+    await s.drain();
+    expect(codeOf(await x.move(x.fy, x.fv, x.cheque))).toBe('transfer_not_covered_by_card_consent');
+  });
+
+  it('boundaries: a cheque moved to a folio of the same covered booking is fine; moved off and back nets out', async () => {
+    const org = await organization(s);
+    const k = await kandu(s, org, '2027-03-10');
+    const same = await chequeOnOtto(org, k, true);
+    expect(codeOf(await same.move(same.fy, same.fv, same.cheque))).toBe('accepted');
+    expect(
+      codeOf(await cardCharge(same.desk, k, same.card.id, { type: 'folio', id: same.fy }, 30_000, 'balance')),
+    ).toBe('accepted');
+    const org2 = await organization(s);
+    const k2 = await kandu(s, org2, '2027-03-10');
+    const back = await chequeOnOtto(org2, k2);
+    expect(codeOf(await back.move(back.fy, back.fv, back.cheque))).toBe('accepted');
+    const arrived = (
+      await sql<{
+        id: string;
+      }>`select id from finance.postings where folio_id = ${back.fv} and kind = 'transfer_in'`.execute(
+        s.t.admin.kysely,
+      )
+    ).rows[0]?.id as string;
+    expect(codeOf(await back.move(back.fv, back.fy, arrived))).toBe('accepted');
+    await owe(
+      org2,
+      k2,
+      back.desk,
+      (
+        await sql<{ owner_id: string }>`select owner_id from finance.folios where id = ${back.fy}`.execute(
+          s.t.admin.kysely,
+        )
+      ).rows[0]?.owner_id as string,
+      10_000,
+      'Otto bar',
+    );
+    expect(
+      codeOf(
+        await cardCharge(back.desk, k2, back.card.id, { type: 'folio', id: back.fy }, 10_000, 'balance'),
+      ),
+    ).toBe('accepted');
+  });
+});
