@@ -246,6 +246,14 @@ describe('postings arriving during the close (cut-over rule)', () => {
     const bar = report.restatementsSince.revenueDelta.find((d) => d.chargeCode === 'FB_ALACARTE');
     expect(bar).toBeDefined();
     expect((bar?.nowMinor ?? 0) - (bar?.closedMinor ?? 0)).toBe(7_000);
+    expect(bar?.cause).toBe('posted_after_close');
+    // Review P2-4: a named follow-up for finance on D, not only a delta in the report.
+    const issues = await org.run((tx) => h.service.listIssues(tx, org.propertyId, 'open'), auditor);
+    const after = issues.find((i) => i.code === 'posted_after_close');
+    expect(after).toMatchObject({ businessDate: D, owner: { kind: 'department', id: 'finance' } });
+    expect(after?.details.delta).toEqual([
+      { chargeCode: 'FB_ALACARTE', closedMinor: 5_000, nowMinor: 12_000 },
+    ]);
     await assertBooksBalance(h, org);
   });
 });

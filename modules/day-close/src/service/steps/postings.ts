@@ -95,6 +95,35 @@ async function grantAllowanceLine(
   return { entryId: g.entryId, replayed: g.replayed };
 }
 
+/** A line already charged once whose agreement changed since: never charged again, finance is told (P0-1). */
+async function flagPostedLineChanged(
+  s: PostCtx,
+  tx: TxContext,
+  stayId: string,
+  line: PostingLine,
+  prior: { service_date: string; amount_minor: number | string; currency: string; outcome: string },
+) {
+  if (prior.outcome !== 'posted') return;
+  if (prior.service_date === line.serviceDate && Number(prior.amount_minor) === line.amount.amountMinor)
+    return;
+  await upsertIssue(tx, {
+    propertyId: s.property.id,
+    businessDate: s.run.business_date,
+    runId: s.run.id,
+    code: 'posted_line_changed',
+    severity: 'warning',
+    dedupeKey: `posted_line_changed:${stayId}:${line.lineKey}:${line.serviceDate}:${line.amount.amountMinor}`,
+    ref: { type: 'stay', id: stayId },
+    message: `${line.chargeCode} was already charged once (service ${prior.service_date}, ${(Number(prior.amount_minor) / 100).toFixed(2)} ${prior.currency}); the agreement now says service ${line.serviceDate}, ${(line.amount.amountMinor / 100).toFixed(2)} ${line.amount.currency}. Day Close never charges it twice; correct the charge in finance if what was charged did not happen.`,
+    owner: { kind: 'department', id: 'finance' },
+    details: {
+      lineKey: line.lineKey,
+      postedServiceDate: prior.service_date,
+      nowServiceDate: line.serviceDate,
+    },
+  });
+}
+
 /**
  * Post one agreement line by its stable identity, inside a savepoint. Already registered → never re-sent (a change
  * since raises `posted_line_changed`). Finance holding the key with other content → recorded as `conflict` with a
@@ -116,24 +145,7 @@ async function postLine(
     .where('line_key', '=', line.lineKey)
     .executeTakeFirst();
   if (prior) {
-    if (prior.service_date !== line.serviceDate || Number(prior.amount_minor) !== line.amount.amountMinor) {
-      await upsertIssue(tx, {
-        propertyId,
-        businessDate: s.run.business_date,
-        runId: s.run.id,
-        code: 'posted_line_changed',
-        severity: 'warning',
-        dedupeKey: `posted_line_changed:${stay.stayId}:${line.lineKey}:${line.serviceDate}:${line.amount.amountMinor}`,
-        ref: { type: 'stay', id: stay.stayId },
-        message: `${line.chargeCode} was already charged once (service ${prior.service_date}, ${(Number(prior.amount_minor) / 100).toFixed(2)} ${prior.currency}); the agreement now says service ${line.serviceDate}, ${(line.amount.amountMinor / 100).toFixed(2)} ${line.amount.currency}. Day Close never charges it twice; correct the charge in finance if what was charged did not happen.`,
-        owner: { kind: 'department', id: 'finance' },
-        details: {
-          lineKey: line.lineKey,
-          postedServiceDate: prior.service_date,
-          nowServiceDate: line.serviceDate,
-        },
-      });
-    }
+    await flagPostedLineChanged(s, tx, stay.stayId, line, prior);
     return { outcome: 'already', entryId: prior.entry_id };
   }
   const register = (outcome: 'posted' | 'conflict', entryId: string | null) =>
@@ -229,7 +241,26 @@ async function syncExpectations(
     .forUpdate()
     .execute();
   const byKey = new Map(rows.map((p) => [p.line_key, p]));
+  const registered = future.length
+    ? await db(tx)
+        .selectFrom('day_close.line_postings')
+        .selectAll()
+        .where('stay_id', '=', stayId)
+        .where(
+          'line_key',
+          'in',
+          future.map((l) => l.lineKey),
+        )
+        .execute()
+    : [];
+  const charged = new Map(registered.map((r) => [r.line_key, r]));
   for (const l of future) {
+    const done = charged.get(l.lineKey);
+    if (done) {
+      // Already charged (e.g. the departure transfer before a weather extension): never again; say what changed.
+      await flagPostedLineChanged(s, tx, stayId, l, done);
+      continue;
+    }
     const row = byKey.get(l.lineKey);
     if (!row) {
       await db(tx)
