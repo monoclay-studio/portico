@@ -383,6 +383,42 @@ Breaking changes (no consumer outside the composition root, all bound in the sam
 - **finance:** `BalanceSyncResult.linkReady` / `oldLinkStopping` decide the late-charge item text (never "a link is
   open" before one exists).
 
+### Integration-step fix round 5 (re-review #5, ADR-0015 Amendment 4)
+
+- **Consent inputs are facts (rule 1).** The purpose of a collection is derived (`payments/service/purpose.ts`): a booking
+  collects a `deposit` up to the deposit its agreed payment schedule asks for (`ReferenceDirectoryPort.describeReference`
+  → `depositDue`, from rates `instantiatePaymentSchedule` over the live stays' agreed terms); a folio its `balance` up to
+  what it owes (`LedgerPort.balanceOf` − `depositsHeldFor` − payments not yet posted); `no_show` only on the folio of a
+  stay whose penalty reservations recorded (`describeReference` → `penalties`: the no-show penalty written by
+  `markNoShow`, the only writer, and the cancellation penalty now recorded on the cancelled stay, `stays.cancellation`,
+  reservations migration 0002), up to what it still owes (`payments.payments.purpose_basis`, payments migration 0005).
+  Client labels (`collectionLabel`) are display text; the one taxonomy is `collectionPurpose` (+ `guarantee`,
+  `incidentals` for holds in `mandatePurpose`). The limits are checked under the collection lock.
+- **Coverage where money lands (rule 2).** A booking-level reference (the booking, or a folio it owns) is covered only
+  while every current stay is in the consent's evidence (no stay list → not covered; the timestamp fallback is gone,
+  `ReferenceOwner.stayCreatedAt` removed). A folio is covered only if every owner of its debt is: finance's provenance
+  (`finance/service/provenance.ts`) follows transferred postings to the original, routed charges to their rule's owner,
+  balance transfers to the source folio's debt, and counts active routing rules into the folio
+  (`LedgerPort.debtOriginsOf`). Finance asks payments before it moves card money or debt — `PaymentsPort.cardMoneyMayMeet`
+  in `applyDeposits`, `transferPostings` (money onto, debt onto) and the billing-rule writers (create, update, merge) —
+  and refuses an uncovered move (`deposit_not_covered_by_card_consent`, `transfer_not_covered_by_card_consent`,
+  `routing_not_covered_by_card_consent`). Payments re-checks the destination under the collection lock (charge,
+  authorize, capture).
+- **Lock order (unchanged, one new edge):** authorization row → card row → collection lock → deposit account / folio →
+  payment request. Billing-rule writers take the owner's rule lock, then the destination's collection lock (no path
+  takes them the other way round).
+- **Staff agreements are capped (rule 3):** `createMethod` refuses an agreement recorded by staff without `maxAmount`
+  (`mandate_limit_required`); `scope.noLimitChosenByCardholder` only from the cardholder (guest actor); consent refuses an
+  uncapped staff agreement saved earlier (`mandate_limit_missing`). The stored mandate records `recordedBy`; evidence
+  `at` and `channel` are the server's (`staff_recorded`, `guest_self_service`, `hosted_entry`, `channel_virtual_card`),
+  the client's channel kept as `declaredChannel`.
+- **Stable cardholder:** `payments.payment_methods.cardholder_ref` (who the card was saved for; migration 0005) decides
+  the guest checks (customer-initiated use, `confirmCardForBooking`); a profile merge rewrites `owner_id` only.
+- **Finance owns money-risk states (rule 4):** `confirmLinkStopped(tx, { requestId, reason, expectedVersion })` needs
+  `payments.reconciliation.manage`, an open `payment_link_not_stopped` exception and the version (route If-Match);
+  a `completed` link is refused (`link_reported_paid`). "Already paid" is recorded only when the request's paid total
+  reaches the link's amount.
+
 ## Rules for changing a contract
 
 1. Update this file in the same commit as the provider change.
