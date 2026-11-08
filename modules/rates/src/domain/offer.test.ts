@@ -174,6 +174,9 @@ describe('offer assembly', () => {
     expect(plan[1]?.idempotencyKey).toBe('inclusion:stay-1:00000000-0000-7000-8000-00000000d001:2026-12-01');
     const sum = plan.reduce((s, l) => s + l.amount.amountMinor, 0);
     expect(sum).toBe(assembled.totals.net.amountMinor);
+    // Additive line identity: nightly lines keep their key; the identity never depends on anything else.
+    for (const l of plan) if (l.occurrence.rhythm === 'nightly') expect(l.lineKey).toBe(l.idempotencyKey);
+    expect(new Set(plan.map((l) => l.lineKey)).size).toBe(plan.length);
   });
 
   it('reports eligibility violations as not overridable', () => {

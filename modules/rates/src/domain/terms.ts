@@ -64,6 +64,41 @@ export interface PostingLine {
   bookingDate: LocalDate;
   /** Commercial rule versions of the agreement: pass as ChargeLine.agreedRuleVersionIds. */
   agreedRuleVersionIds: string[];
+  /**
+   * Additive (day-close review P0-1): what this line IS in the agreement, independent of the night it is allocated
+   * to. A re-price that moves a line to another night (extension, shortening) keeps its `lineKey`, so a consumer
+   * posting by `lineKey` never charges the same line twice and can see a line it has not posted yet.
+   *  - nightly room / inclusion / allowance: the night is the occurrence → equal to `idempotencyKey`;
+   *  - arrival / departure rhythm: once per stay → `inclusion:{stay}:{inclusion}:arrival|departure`;
+   *  - days-of-stay rhythm: the n-th night of the stay → `inclusion:{stay}:{inclusion}:stay-night-{n}`.
+   */
+  lineKey: string;
+  occurrence: { rhythm: 'nightly' | 'arrival' | 'departure' | 'days_of_stay'; stayNight: number };
+}
+
+/** Stable identity of a plan line (see `PostingLine.lineKey`). */
+function lineIdentity(
+  stayId: string,
+  kind: 'room' | 'inclusion' | 'allowance' | 'added',
+  inclusionId: string | null,
+  rhythm: InclusionSnapshot['rhythm'] | undefined,
+  nightDate: LocalDate,
+  stayNight: number,
+): { lineKey: string; occurrence: PostingLine['occurrence'] } {
+  if (kind === 'room' || !inclusionId)
+    return { lineKey: `room:${stayId}:${nightDate}`, occurrence: { rhythm: 'nightly', stayNight } };
+  const r = rhythm?.kind ?? 'nightly';
+  if (r === 'arrival' || r === 'departure')
+    return { lineKey: `inclusion:${stayId}:${inclusionId}:${r}`, occurrence: { rhythm: r, stayNight } };
+  if (r === 'days_of_stay')
+    return {
+      lineKey: `inclusion:${stayId}:${inclusionId}:stay-night-${stayNight}`,
+      occurrence: { rhythm: r, stayNight },
+    };
+  return {
+    lineKey: `inclusion:${stayId}:${inclusionId}:${nightDate}`,
+    occurrence: { rhythm: 'nightly', stayNight },
+  };
 }
 
 /**
@@ -88,6 +123,14 @@ export function postingPlan(terms: TermsSnapshot, stayId: string): PostingLine[]
         ...common,
         idempotencyKey:
           c.kind === 'room' ? `room:${stayId}:${n.date}` : `inclusion:${stayId}:${c.inclusionId}:${n.date}`,
+        ...lineIdentity(
+          stayId,
+          c.kind,
+          c.inclusionId,
+          inclusion?.rhythm,
+          n.date,
+          (index.get(n.date) ?? 0) + 1,
+        ),
         kind: c.kind,
         nightDate: n.date,
         serviceDate,
@@ -106,6 +149,14 @@ export function postingPlan(terms: TermsSnapshot, stayId: string): PostingLine[]
     out.push({
       ...common,
       idempotencyKey: `inclusion:${stayId}:${a.inclusionId}:${a.nightDate}`,
+      ...lineIdentity(
+        stayId,
+        'added',
+        a.inclusionId,
+        inclusion?.rhythm,
+        a.nightDate,
+        (index.get(a.nightDate) ?? 0) + 1,
+      ),
       kind: 'added',
       nightDate: a.nightDate,
       serviceDate: a.serviceDate,

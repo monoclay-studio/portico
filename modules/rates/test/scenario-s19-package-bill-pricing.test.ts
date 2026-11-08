@@ -190,5 +190,14 @@ describe('scenario S19 — pricing a bill with packages, allowances and differen
     expect(
       plan2.find((p) => p.chargeCode === 'TRANSFER_SEAPLANE' && p.nightDate === '2027-02-12')?.serviceDate,
     ).toBe('2027-02-13');
+    // Additive (day-close review P0-1): the departure transfer is identified by its occurrence, not by the night it
+    // is allocated to, so a re-price that moves it (extension, shortening) keeps the same line identity.
+    const out = plan2.find((p) => p.chargeCode === 'TRANSFER_SEAPLANE' && p.nightDate === '2027-02-12');
+    expect(out?.lineKey).toBe(`inclusion:stay-s19:${out?.inclusionId}:departure`);
+    expect(out?.occurrence).toEqual({ rhythm: 'departure', stayNight: 3 });
+    const arrivalTransfer = plan2.find(
+      (p) => p.chargeCode === 'TRANSFER_SEAPLANE' && p.nightDate === '2027-02-10',
+    );
+    expect(arrivalTransfer?.lineKey).toBe(`inclusion:stay-s19:${arrivalTransfer?.inclusionId}:arrival`);
   });
 });
