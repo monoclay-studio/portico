@@ -88,6 +88,7 @@ export function createFinance(ports: FinancePorts) {
     forfeitDeposit: bind(deps, deposits.forfeitDeposit),
     getDeposits: deposits.getDeposits,
     depositHeldMinor: deposits.depositHeldMinor,
+    depositReceivedMinor: deposits.depositReceivedMinor,
     folioProvenance: (tx: TxContext, folioId: string) => provenance.folioProvenance(tx, folioId),
     penaltyOn: (tx: TxContext, folioId: string, stayId: string) => provenance.penaltyOn(tx, folioId, stayId),
     importOpeningDeposits: bind(deps, deposits.importOpeningDeposits),
@@ -305,6 +306,8 @@ export function financeLedgerForPayments(service: FinanceService) {
     },
     /** R4-P3-3: deposits held for the booking, not applied to a folio yet. */
     depositsHeldFor: (tx: TxContext, bookingId: string) => service.depositHeldMinor(tx, bookingId),
+    /** R7 (Amendment 6): deposits received for the booking by any method, net of refunds. */
+    depositsReceivedFor: (tx: TxContext, bookingId: string) => service.depositReceivedMinor(tx, bookingId),
     /** Re-review #5 R5-P1-2: owners of the debt on a folio other than its own (transferred, routed, to be routed). */
     debtOriginsOf: async (tx: TxContext, folioId: string) =>
       (await service.folioProvenance(tx, folioId)).debtOwners,

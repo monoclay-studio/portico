@@ -190,8 +190,22 @@ export function fakeLedger(controls: LedgerControls): LedgerPort {
     async debtOriginsOf(_tx, folioId) {
       return controls.debtOrigins.get(folioId) ?? [];
     },
-    async penaltyOwedOn(_tx, folioId) {
-      return controls.ledgerPenalty.get(folioId) ?? 10_000_000;
+    async depositsReceivedFor(tx, bookingId) {
+      // The fake world: deposits received = the payments module's own deposit money on the booking.
+      const r = await sql<{ n: string }>`select coalesce(sum(amount_minor - refunded_minor), 0) as n
+        from payments.payments where ref_type = 'booking' and ref_id = ${bookingId}
+        and status in ('succeeded', 'recorded_unverified', 'recorded_verified')`.execute(tx.db);
+      return Number(r.rows[0]?.n ?? 0);
+    },
+    async penaltyOwedOn(tx, folioId, stayId) {
+      // The fake world: the penalty on the ledger (default: as recorded), less every posted payment on the folio.
+      const recorded = (controls.penalties.get(stayId) ?? []).reduce((n, p) => n + p.amount.amountMinor, 0);
+      const onLedger = controls.ledgerPenalty.get(folioId) ?? recorded;
+      const r = await sql<{ n: string }>`select coalesce(sum(amount_minor - refunded_minor), 0) as n
+        from payments.payments where ref_type = 'folio' and ref_id = ${folioId} and ledger_status = 'posted'`.execute(
+        tx.db,
+      );
+      return Math.max(0, onLedger - Number(r.rows[0]?.n ?? 0));
     },
     // The same predicate the fake uses when posting (review R2-P1-3): unknown → refused; other scope → refused.
     async assertTargetUsable(tx, ref, scope) {

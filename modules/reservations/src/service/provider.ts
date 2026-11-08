@@ -36,14 +36,21 @@ export async function describeBooking(
   _deps: Deps,
   tx: TxContext,
   bookingId: string,
-): Promise<{ propertyId: string; status: string } | null> {
+): Promise<{ propertyId: string; status: string; stayIds: string[] } | null> {
   if (!UUID.test(bookingId)) return null;
   const row = await db(tx)
     .selectFrom('reservations.bookings')
     .select(['property_id', 'status'])
     .where('id', '=', bookingId)
     .executeTakeFirst();
-  return row ? { propertyId: row.property_id, status: row.status } : null;
+  if (!row) return null;
+  // R7 (Amendment 6): the booking's stays, so finance can find the penalties a forfeit settles.
+  const stays = await db(tx)
+    .selectFrom('reservations.stays')
+    .select('id')
+    .where('booking_id', '=', bookingId)
+    .execute();
+  return { propertyId: row.property_id, status: row.status, stayIds: stays.map((x) => x.id) };
 }
 
 /** A penalty reservations recorded for a stay (no-show at the night audit, or a cancellation), from agreed terms. */

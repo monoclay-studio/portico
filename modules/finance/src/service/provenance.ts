@@ -251,12 +251,7 @@ export async function assertDebtMayLand(
   );
 }
 
-/**
- * Re-review #6 R6-P2-1 (Amendment 5 rule 3): what the no-show / cancellation penalty of `stayId` still amounts to ON
- * this folio — the penalty postings (journal entries `penalty:no_show:<stay>` / `penalty:cancellation:<stay>`, with
- * their taxes) followed through corrections and transfers: posted, less credited, less moved off, plus moved on.
- */
-export async function penaltyOn(tx: TxContext, folioId: string, stayId: string): Promise<number> {
+async function penaltyRoots(tx: TxContext, stayId: string): Promise<Set<string>> {
   const keys = [`penalty:no_show:${stayId}`, `penalty:cancellation:${stayId}`];
   const roots = await db(tx)
     .selectFrom('finance.postings as p')
@@ -264,29 +259,70 @@ export async function penaltyOn(tx: TxContext, folioId: string, stayId: string):
     .select('p.id')
     .where('e.idempotency_key', 'in', keys)
     .execute();
-  if (roots.length === 0) return 0;
-  const rootIds = new Set(roots.map((r) => r.id));
+  return new Set(roots.map((r) => r.id));
+}
+
+/** The original posting a line stands for (through transfers, corrections and taxes), or undefined. */
+async function rootRow(tx: TxContext, p0: PostingLite): Promise<PostingLite | undefined> {
+  let p: PostingLite | undefined = p0;
+  for (let hop = 0; p && hop < 64; hop++) {
+    const next: string | null =
+      p.kind === 'transfer_in' || p.kind === 'transfer_out' || p.kind === 'adjustment'
+        ? p.corrects_posting_id
+        : p.kind === 'tax'
+          ? p.parent_posting_id
+          : null;
+    if (!next) return p;
+    p = await posting(tx, next);
+  }
+  return undefined;
+}
+
+/**
+ * Re-review #6 R6-P2-1 and #7 R7-P1-1 / R7-P2-1 (Amendment 6 rule 1: one balance per obligation): what the stay's
+ * no-show / cancellation penalty STILL OWES on this folio, as the ledger stands —
+ *  - the penalty postings (journal entries `penalty:no_show:<stay>` / `penalty:cancellation:<stay>`, with taxes) on the
+ *    folio, followed through corrections and transfers: posted, less credited, less moved off, plus moved on;
+ *  - less every money posting on the folio, by any method (card, cash, cheque, terminal, link, deposit applied —
+ *    including a forfeited deposit, which is applied to the penalty), net of refunds: money on a folio that carries a
+ *    penalty pays the penalty first.
+ * Floored at 0, never more than the penalty on the folio.
+ */
+export async function penaltyOn(tx: TxContext, folioId: string, stayId: string): Promise<number> {
+  const rootIds = await penaltyRoots(tx, stayId);
+  if (rootIds.size === 0) return 0;
   const rows = await db(tx)
     .selectFrom('finance.postings')
     .select(COLUMNS)
     .where('folio_id', '=', folioId)
     .execute();
-  let total = 0;
+  let penalty = 0;
+  let money = 0;
   for (const p0 of rows) {
-    let p: PostingLite | undefined = p0;
-    for (let hop = 0; p && hop < 64; hop++) {
-      if (rootIds.has(p.id)) {
-        total += Number(p0.amount_minor);
-        break;
-      }
-      const next: string | null =
-        p.kind === 'transfer_in' || p.kind === 'transfer_out' || p.kind === 'adjustment'
-          ? p.corrects_posting_id
-          : p.kind === 'tax'
-            ? p.parent_posting_id
-            : null;
-      p = next ? await posting(tx, next) : undefined;
-    }
+    const amount = Number(p0.amount_minor);
+    const root = await rootRow(tx, p0);
+    if (!root) continue;
+    if (rootIds.has(root.id)) penalty += amount;
+    else if (root.kind === 'payment' || root.kind === 'deposit_application' || root.kind === 'refund')
+      money -= amount;
   }
-  return Math.max(0, total);
+  return Math.max(0, Math.min(penalty, penalty - money));
+}
+
+/** The folios a stay's penalty postings sit on now (where posted, and wherever they were moved). */
+export async function penaltyFoliosOfStay(tx: TxContext, stayId: string): Promise<string[]> {
+  let ids = [...(await penaltyRoots(tx, stayId))];
+  const folios = new Set<string>();
+  const seen = new Set<string>(ids);
+  for (let hop = 0; ids.length > 0 && hop < 8; hop++) {
+    const rows = await db(tx)
+      .selectFrom('finance.postings')
+      .select(['id', 'folio_id'])
+      .where((eb) => eb.or([eb('id', 'in', ids), eb('corrects_posting_id', 'in', ids)]))
+      .execute();
+    for (const r of rows) folios.add(r.folio_id);
+    ids = rows.map((r) => r.id).filter((id) => !seen.has(id));
+    for (const id of ids) seen.add(id);
+  }
+  return [...folios];
 }

@@ -423,12 +423,11 @@ export async function assertWithinConsent(
 }
 
 /**
- * Re-review #6 R6-P3-1 (Amendment 5 rule 1): a card-funded booking deposit is kept as revenue only up to the penalties
- * reservations recorded for the booking's stays (no-show, cancellation). Null when no card money is in the deposit or
- * the recorded penalties cover the amount.
+ * Re-review #6 R6-P3-1 / #7 R7-P1-1: finance asks this only when no penalty is owed on the booking's folios (a forfeit
+ * with a penalty owed settles that penalty instead). Card-funded deposit money is then not kept as revenue. Null when
+ * no card money is in the deposit.
  */
 export async function cardDepositForfeitProblem(
-  d: PaymentsDeps,
   tx: TxContext,
   input: { bookingId: string; amountMinor: number },
 ): Promise<string | null> {
@@ -446,13 +445,6 @@ export async function cardDepositForfeitProblem(
     .where('status', 'in', ['processing', 'pending_verification', 'succeeded'])
     .executeTakeFirstOrThrow();
   if (Number(card.n) <= 0) return null;
-  const booking = await referenceContext(d, tx, { type: 'booking', id: input.bookingId });
-  let recorded = 0;
-  for (const stayId of booking.bookingStayIds ?? []) {
-    const st = await referenceContext(d, tx, { type: 'stay', id: stayId });
-    recorded += st.penalties.reduce((n, p) => n + p.amount.amountMinor, 0);
-  }
-  if (input.amountMinor <= recorded) return null;
-  const currency = booking.depositDue?.currency ?? 'USD';
-  return `Part of this deposit was taken from a saved card under its cardholder’s agreement. It can be kept only up to the no-show or cancellation penalty recorded for the booking (${formatMoney(money(recorded, currency))}); refund the rest, or record the no-show or cancellation first.`;
+  // Re-review #7 R7-P1-1: finance asks only when no penalty is owed on the ledger — then card money is not kept.
+  return 'Part of this deposit was taken from a saved card under its cardholder’s agreement, and no no-show or cancellation penalty is owed on the booking’s folios. Refund it, or record the no-show or cancellation first (a forfeit then settles that penalty).';
 }

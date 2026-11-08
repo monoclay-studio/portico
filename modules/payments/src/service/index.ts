@@ -292,7 +292,7 @@ export function createPaymentsService(input: PaymentsServiceDeps) {
         consent.cardMoneyMayMeet(d, tx, i),
       /** Re-review #6 R6-P3-1: a card-funded deposit is forfeited only up to the recorded penalties. */
       cardDepositForfeitProblem: (tx: TxContext, i: { bookingId: string; amountMinor: number }) =>
-        consent.cardDepositForfeitProblem(d, tx, i),
+        consent.cardDepositForfeitProblem(tx, i),
       /**
        * Review R2-P1-2: keep the ONE open balance request of a departed folio equal to what the folio owes (finance
        * calls it under its folio lock after every balance change). Intent only; links are made after commit.

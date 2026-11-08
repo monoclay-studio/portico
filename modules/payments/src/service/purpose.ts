@@ -61,25 +61,6 @@ export async function derivePurpose(
   return ref.type === 'booking' ? { purpose: 'deposit', basis: null } : { purpose: 'balance', basis: null };
 }
 
-async function collectedMinor(
-  tx: TxContext,
-  where: { refType?: 'folio' | 'booking'; refId?: string; purpose?: CollectionPurpose; basis?: string },
-): Promise<number> {
-  let q = db(tx)
-    .selectFrom('payments.payments')
-    .select((eb) =>
-      eb.fn
-        .coalesce(eb.fn.sum<string>(eb('amount_minor', '-', eb.ref('refunded_minor'))), eb.val('0'))
-        .as('n'),
-    )
-    .where('status', 'in', [...COLLECTED]);
-  if (where.refType) q = q.where('ref_type', '=', where.refType);
-  if (where.refId) q = q.where('ref_id', '=', where.refId);
-  if (where.purpose) q = q.where('purpose', '=', where.purpose);
-  if (where.basis) q = q.where('purpose_basis', '=', where.basis);
-  return Number((await q.executeTakeFirstOrThrow()).n);
-}
-
 /**
  * What a folio still owes for a card to take now: its ledger balance, less deposits held for its booking (not yet
  * applied) and less money taken on it that the ledger has not posted yet (in flight, or confirmed and waiting to post).
@@ -122,13 +103,17 @@ export async function assertWithinFact(
   if ((method.mandate as { kind?: string } | null)?.kind === 'ota_virtual_card') return;
   const ctx = await referenceContext(d, tx, ref);
   const fmt = (n: number) => formatMoney(money(Math.max(0, n), amount.currency));
+  // Re-review #7 (ADR-0015 Amendment 6 rule 1): each obligation is ONE balance on the ledger, drawn down by every
+  // method; the limit is what it still owes there, less money taken towards it that the ledger has not posted yet.
   if (fact.purpose === 'deposit') {
     const due = ctx.depositDue?.currency === amount.currency ? ctx.depositDue.amountMinor : 0;
-    const collected = await collectedMinor(tx, { refType: 'booking', refId: ref.id, purpose: 'deposit' });
+    const received = await d.ledger.depositsReceivedFor(tx, ref.id);
+    const inFlight = await unpostedOn(tx, ref);
+    const collected = received + inFlight;
     if (amount.amountMinor > due - collected) {
       throw new BusinessRuleError(
         'deposit_not_due',
-        `The agreed terms of this booking ask for a deposit of ${fmt(due)}; ${fmt(collected)} is already collected or in progress, so at most ${fmt(due - collected)} can be taken from the saved card as a deposit. Collect the rest against the folio when it is owed, or send a payment link.`,
+        `The agreed terms of this booking ask for a deposit of ${fmt(due)}; ${fmt(collected)} is already received by any method or in progress, so at most ${fmt(due - collected)} can be taken from the saved card as a deposit. Collect the rest against the folio when it is owed, or send a payment link.`,
         { dueMinor: due, collectedMinor: collected },
       );
     }
@@ -145,18 +130,33 @@ export async function assertWithinFact(
     }
     return;
   }
-  const penalty = ctx.penalties
-    .filter((p) => p.amount.currency === amount.currency)
-    .reduce((n, p) => n + p.amount.amountMinor, 0);
-  // Amendment 5 rule 3 (R6-P2-1): the penalty as it stands on the ledger (posted − credited), never the record alone.
-  const onLedger = ctx.stayId ? await d.ledger.penaltyOwedOn(tx, ref.id, ctx.stayId) : 0;
-  const collected = await collectedMinor(tx, { basis: fact.basis as string });
-  const left = Math.min(Math.min(penalty, onLedger) - collected, owedNow);
+  // The penalty as it still owes on this folio's ledger: posted − credited ± moved, less every payment on the folio by
+  // any method (card, cash, cheque, terminal, link, deposit applied or forfeited) — never the reservations record.
+  const stillOwed = ctx.stayId ? await d.ledger.penaltyOwedOn(tx, ref.id, ctx.stayId) : 0;
+  const inFlight = await unpostedOn(tx, ref);
+  const left = Math.min(stillOwed - inFlight, owedNow);
   if (amount.amountMinor > left) {
     throw new BusinessRuleError(
       'no_show_penalty_exceeded',
-      `The penalty for this stay is ${fmt(Math.min(penalty, onLedger))} as it stands on the folio (recorded ${fmt(penalty)}, less any credit); ${fmt(collected)} of it is already collected and the folio owes ${fmt(owedNow)} now, so at most ${fmt(left)} can be taken as the no-show or cancellation fee.`,
-      { penaltyMinor: penalty, onLedgerMinor: onLedger, collectedMinor: collected, owedMinor: owedNow },
+      `The penalty for this stay still owes ${fmt(stillOwed)} on the folio (after credits and everything already paid towards it, by any method); ${fmt(inFlight)} more is in progress and the folio owes ${fmt(owedNow)} now, so at most ${fmt(left)} can be taken as the no-show or cancellation fee.`,
+      { stillOwedMinor: stillOwed, inFlightMinor: inFlight, owedMinor: owedNow },
     );
   }
+}
+
+/** Money taken on this reference that the ledger has not posted yet (in flight, or confirmed and waiting to post). */
+async function unpostedOn(tx: TxContext, ref: { type: 'folio' | 'booking'; id: string }): Promise<number> {
+  const r = await db(tx)
+    .selectFrom('payments.payments')
+    .select((eb) => eb.fn.coalesce(eb.fn.sum<string>('amount_minor'), eb.val('0')).as('n'))
+    .where('ref_type', '=', ref.type)
+    .where('ref_id', '=', ref.id)
+    .where((eb) =>
+      eb.or([
+        eb('status', 'in', ['processing', 'pending_verification']),
+        eb.and([eb('status', 'in', [...COLLECTED]), eb('ledger_status', '!=', 'posted')]),
+      ]),
+    )
+    .executeTakeFirstOrThrow();
+  return Number(r.n);
 }

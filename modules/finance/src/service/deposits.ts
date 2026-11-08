@@ -19,7 +19,7 @@ import type { DepositAccountsTable } from '../tables';
 import { syncDepartedFolios } from './departed-folios';
 import { prepareDestination } from './folios';
 import { assertTargetInScope, describeTarget } from './ledger-port';
-import { assertMoneyMayLand } from './provenance';
+import { assertMoneyMayLand, penaltyFoliosOfStay, penaltyOn } from './provenance';
 import { chargeCodeByCode } from './setup';
 import {
   accountId,
@@ -736,9 +736,58 @@ export async function forfeitDeposit(
     idempotencyKey: string;
   },
 ): Promise<{ entryId: string; balance: Money; replayed: boolean }> {
-  // Re-review #6 R6-P3-1 (Amendment 5 rule 1): keeping a card-funded deposit as revenue rests on a recorded no-show or
-  // cancellation penalty of the booking's stays, never on a charge code and a free-text reason.
+  // Re-review #7 R7-P1-1 (ADR-0015 Amendment 6 rule 1): a penalty is one balance. When the booking's stays owe a no-show
+  // or cancellation penalty on the ledger, forfeiting the deposit SETTLES that penalty — the deposit is applied to the
+  // folios that carry it, under their collection locks — and only up to what it still owes (every collection by any
+  // method already counted). It is never kept as revenue next to a penalty that stays owed.
   const amountMinor = input.amountMinor ?? (await depositHeldMinor(tx, input.bookingId));
+  const booking = await deps.ports.bookings.describeBooking(tx, input.bookingId);
+  const carriers: Array<{ folioId: string; stayId: string }> = [];
+  for (const stayId of booking?.stayIds ?? []) {
+    for (const folioId of await penaltyFoliosOfStay(tx, stayId)) carriers.push({ folioId, stayId });
+  }
+  if (carriers.length > 0) {
+    await deps.ports.payments.lockCollections(tx, {
+      folioIds: [...new Set(carriers.map((c) => c.folioId))].sort(),
+    });
+  }
+  const owed: Array<{ folioId: string; minor: number }> = [];
+  for (const c of carriers)
+    owed.push({ folioId: c.folioId, minor: await penaltyOn(tx, c.folioId, c.stayId) });
+  const total = owed.reduce((n, o) => n + o.minor, 0);
+  if (total > 0) {
+    if (amountMinor > total) {
+      throw new BusinessRuleError(
+        'forfeit_exceeds_penalty_owed',
+        `The booking's penalty still owes ${total} (minor units) on its folios, after everything already paid towards it. Keep at most that much of the deposit; refund the rest.`,
+        { owedMinor: total },
+      );
+    }
+    let left = amountMinor;
+    let last: { entryId: string | null; replayed: boolean } | null = null;
+    for (const o of owed) {
+      if (left <= 0 || o.minor <= 0) continue;
+      const take = Math.min(o.minor, left);
+      last = await applyDeposits(tx, deps, {
+        bookingId: input.bookingId,
+        toFolioId: o.folioId,
+        amountMinor: take,
+        idempotencyKey: `${input.idempotencyKey}:${o.folioId}`,
+      });
+      left -= take;
+    }
+    const acct = await db(tx)
+      .selectFrom('finance.deposit_accounts')
+      .select(['balance_minor', 'currency'])
+      .where('booking_id', '=', input.bookingId)
+      .executeTakeFirstOrThrow();
+    return {
+      entryId: last?.entryId ?? '',
+      balance: money(Number(acct.balance_minor), acct.currency),
+      replayed: last?.replayed ?? false,
+    };
+  }
+  // No penalty owed on the ledger: card-funded deposit money is not kept (Amendment 5 rule 1); other deposits may be.
   const problem = await deps.ports.payments.cardDepositForfeitProblem(tx, {
     bookingId: input.bookingId,
     amountMinor,
@@ -979,6 +1028,20 @@ export async function depositHeldMinor(tx: TxContext, bookingId: string): Promis
     .where('booking_id', '=', bookingId)
     .executeTakeFirst();
   return Math.max(0, Number(acct?.balance_minor ?? 0));
+}
+
+/**
+ * Re-review #7 (Amendment 6 rule 1): deposits received for a booking by any method (card, link, cash, transfer), net of
+ * refunds — whatever was later applied or forfeited. The deposit owed is drawn down by this, not by a payments record.
+ */
+export async function depositReceivedMinor(tx: TxContext, bookingId: string): Promise<number> {
+  const r = await db(tx)
+    .selectFrom('finance.deposit_movements')
+    .select((eb) => eb.fn.coalesce(eb.fn.sum<string>('amount_minor'), eb.val('0')).as('n'))
+    .where('booking_id', '=', bookingId)
+    .where('kind', 'not in', ['applied', 'forfeited'])
+    .executeTakeFirstOrThrow();
+  return Math.max(0, Number(r.n));
 }
 
 export async function getDeposits(tx: TxContext, bookingId: string): Promise<DepositSummary | null> {

@@ -192,7 +192,10 @@ export interface PayerDirectoryPort {
  * booking of another property is refused before anything is posted.
  */
 export interface BookingDirectoryPort {
-  describeBooking(tx: TxContext, bookingId: string): Promise<{ propertyId: string; status: string } | null>;
+  describeBooking(
+    tx: TxContext,
+    bookingId: string,
+  ): Promise<{ propertyId: string; status: string; stayIds?: string[] } | null>;
 }
 
 export interface FinancePorts {

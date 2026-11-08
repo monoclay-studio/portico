@@ -70,6 +70,8 @@ export interface LedgerPort {
    * folio's balance does not net them until they are applied, so a balance charge may take only owed − held freely.
    */
   depositsHeldFor(tx: TxContext, bookingId: string): Promise<number>;
+  /** R7 (Amendment 6 rule 1): deposits received for the booking by any method, net of refunds (the deposit drawn down). */
+  depositsReceivedFor(tx: TxContext, bookingId: string): Promise<number>;
   /**
    * ADR-0015 Amendment 4 rule 2: where the debt on a folio comes from, other than the folio's own owner — the owner of
    * every charge transferred or routed onto it (followed to the original posting), and the owner of every active
