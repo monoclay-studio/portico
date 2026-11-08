@@ -56,6 +56,9 @@ usage, which is billed beyond the plan, on the owner's direction ("let's keep go
 - Every usage check pushes the active branches.
 - The owner was told plainly that extra usage is in use and can set a cap or say stop.
 - If overage is ever refused (`overageStatus` not `allowed`), go straight to CHECKPOINT and the scheduled resume.
+- **Owner scope on extra usage (2026-11-08):** finish the current wave only (integration-step, distribution, day-close,
+  migration to merge), and add nothing else. When it is done, checkpoint and pause until the Wednesday 2026-11-11 17:00
+  UTC reset.
 
 ## Resume messages (orchestrator v3)
 When resuming an agent after a checkpoint, say: "your WIP was committed and pushed as `<sha>`; build on top of it;

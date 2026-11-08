@@ -207,6 +207,15 @@
     - fix rounds for the three modules after their reviews;
     - then the STATUS 22:55 order item 4 onward.
 
+- **2026-11-08 05:4x UTC — OWNER DIRECTION:** "let's do this current wave of tasks you are on right now. feel free to
+  introduce anything new to finish it. don't add any more on extra usage. finish when done until wednesday reset".
+  - **Scope on extra usage:** integration-step (re-review #7 → fix if needed → merge); distribution, day-close and
+    migration (reviews running → fix rounds → focused re-checks → merge). Anything required to finish them is allowed.
+  - **Not before the Wednesday reset (2026-11-11 17:00 UTC):** new modules, UX rounds, the quality steward round 4,
+    M15, and the backoffice real-data round.
+  - **When the wave is done:** `tools/checkpoint.sh`, disable the usage-check chain, and leave the 17:03 Wednesday
+    resume task to continue the order above.
+
 ## 1. Owner, product and how to work with the owner
 
 - Owner: founder of **Monoclay LLC** (Delaware, Stripe Atlas), based in the Maldives. Product: **Portico** (final name).

@@ -510,3 +510,11 @@ Each agent's brief and report are in `agents/`.
   - The landing table covers 8 operations. Mutants R1–R6 were all killed; R2 survived at first and got a new test.
   - Two stated proof gaps: the unknown-origin branch is unreachable today, and no test distinguishes deposit-per-stay.
 - **05:33 — Focused re-review #7 launched** <!-- t: now @ 2026-11-08T05:33:04Z -->. It must close the builder's proof gap on deposit-per-stay with a test.
+- **05:37 — Owner: finish the current wave on extra usage, add nothing more, then stop until the Wednesday reset** <!-- t: owner:4f98af2a @ 2026-11-08T05:37:56.652Z -->.
+  - Scope of "this wave":
+    - integration-step: re-review #7 → fix → merge;
+    - distribution + Channex, day-close and migration: steward review → fix rounds → re-check → merge;
+    - whatever is needed to finish those, such as an extra fix round or re-review.
+  - Out of scope until the reset (2026-11-11 17:00 UTC, Wednesday): new modules, UX rounds, the quality steward round,
+    the partner platform, and the backoffice real-data round.
+  - When the wave is done: checkpoint, then pause. The 17:03 Wednesday resume task picks up the STATUS order.
