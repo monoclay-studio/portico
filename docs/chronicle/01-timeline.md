@@ -528,3 +528,16 @@ Each agent's brief and report are in `agents/`.
   - **P1-2:** revision ordering on `Date.parse` and arrival time could lose a modification or strand a creation.
   - The reviewer's own mutant survived: the per-booking ordered wait was untested.
   - Fix round 1 went to the distribution builder with self-check v6.
+- **05:46 — Migration steward review: do not merge** <!-- t: agent-a0853e1c7d151d830 @ 2026-11-08T05:46:35.240Z (Steward review: migration) --> (P0 1 · P1 8 · P2 9 · P3 12).
+  - **P0:** the card-number check misses ordinary spellings (spaced, dotted, full-width digits, numbers inside text,
+    header cells), so such files are stored. Payments' `pci.ts` on main has the same flaw.
+  - **P1s:**
+    - a 939-byte workbook crashes the API with out-of-memory;
+    - the cutover accepted a rehearsal of different data;
+    - reconciliation ran one way only;
+    - the post-switch sweep imports re-keyed records as duplicates;
+    - the purge misses the trial copy.
+  - The builder's M1 and M2 mutants were killed. The reviewer's M3 (simulator refused in live at extraction) survived.
+  - Fix round 1 went to the migration builder: one pure kernel card-number detector, a hostile-file-safe XLSX reader,
+    and a fingerprinted rehearsal certificate. Payments switches to the kernel detector after both merge.
+  - A focused re-review follows.

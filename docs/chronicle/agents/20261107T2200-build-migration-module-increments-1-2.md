@@ -1,6 +1,6 @@
 # Agent run: Build migration module (increments 1–2)
 
-- Started: 2026-11-07T22:00:30.646Z · last activity: 2026-11-07T23:27:11.489Z
+- Started: 2026-11-07T22:00:30.646Z · last activity: 2026-11-08T05:47:15.329Z
 - Turns: 260 · tool uses: 288 · output tokens: 496,136
 - Type: general-purpose
 
@@ -63,6 +63,66 @@ Reply with:
 - the next increment (OPERA).
 
 A steward review will follow.
+````
+
+## Follow-up message (2026-11-08T05:47:15.300Z)
+
+````text
+The coordinator sent a message while you were working:
+Migration fix round 1. The steward review says **do not merge**: P0 1, P1 8, P2 9, P3 12. The core design holds up: your M1 and M2 mutants were both killed, and the gates pass. The defects below are real, though, and each one has a reproducing test.
+
+**Read first, all on main:**
+- `docs/orchestration/reviews/review-migration.md`, including its claims section;
+- the probes in `docs/orchestration/reviews/migration-poc/zz-review-{domain,integration,xlsx-oom}.test.ts.txt`;
+- the "migration fix round 1" line in `docs/orchestration/pending-fixes.md`.
+
+Merge main into `feat/migration` first.
+
+**Fix in this order:**
+1. **R-P0-1: card-number detection misses ordinary spellings.** These all get through and are stored:
+   - `4111 1111 1111 1111 12/27` and `room 12 4111…`;
+   - double, dotted, non-breaking-space and full-width-digit forms;
+   - header cells, which are never scanned.
+
+   Build **one pure detector in `packages/kernel`** (no IO), Luhn-aware and with documented false-positive behaviour, and test it exhaustively against every spelling in the review and more. Migration must use it on every cell, header and shared string.
+   - Do **not** change `modules/payments/src/domain/pci.ts` on your branch, even though it has the same flaw. The orchestrator will switch payments to your detector after both branches merge.
+2. **R-P1-1: the XLSX reader must be safe on hostile files.** The review's 939-byte workbook makes Node run out of memory.
+   - Never trust the sizes a zip entry declares.
+   - Reject overlapping entries.
+   - Cap the decompressed bytes, the rows, the columns and the cells.
+   - Such a file is refused with a plain-language error, never an OOM.
+3. **R-P1-2:** cutover requires a rehearsal certificate whose extract fingerprint matches exactly what is cut over. Data uploaded during sync must be rehearsed again.
+4. **R-P1-3:** reconciliation runs in both directions. Extras and duplicates in Portico are flagged, and control totals are compared.
+5. **R-P1-4:** decisions (exclude, import as is) count in the final-capture gate. A decided record must never block the cutover forever.
+6. **R-P1-5:** the post-switch sweep runs the same quality checks and dedupes on business identity, such as the channel booking id. It never imports re-keyed records as new.
+7. **R-P1-6:** the 30-day purge (Q162) also reaches the trial-org rehearsal copy.
+8. **R-P1-7:** a second production migration of the same property is refused, or deduped against the first.
+9. **R-P1-8:** opening money posted through the sweep needs finance sign-off ("money decisions belong to finance").
+10. **The P2s:**
+    - P2-1: the read-only switch at planning needs a second person, and cancelling undoes it.
+    - P2-2: the gate is re-checked at the switch itself.
+    - P2-3: the rollback worklist excludes the sweep's own imports and cannot be hidden by a client `X-Request-Id`.
+    - P2-4: column confirmation on every upload.
+    - P2-5: multi-room bookings under one confirmation number.
+    - P2-6: the 1904 date system, and dates of birth before 1980.
+    - P2-7: the housekeeping job is fair across tenants and alarms on the age of its last success.
+    - P2-8: "Mark resolved" re-opens if the problem is still there.
+    - P2-9: correct the parity rows the review disproved, and add the missing capabilities.
+11. **Cheap P3s**, including a test for the "simulator never in live" refusal at extraction (the reviewer's M3 survived).
+
+**Self-check v6** (`docs/quality/playbooks/module-builder-self-check.md`). Include the tables:
+- § 5.1 state machines for a job and for the system-of-record switch, with external holders (the old system);
+- pasted writer searches;
+- the control-fact grid with an input-source column;
+- the § 5.4 mutation table for every P0/P1 guard;
+- the § 6 claim ledger. The review lists six claims as false or only partly true; each must end up true and backed by a test, or be rewritten.
+
+**Rules:**
+- Commit after every meaningful step. Do not push. Never amend or rewrite commits.
+- Gates: `pnpm lint`, `pnpm turbo run typecheck --force` and `pnpm turbo run test --force --concurrency=2`, all exit 0.
+- A focused re-review follows, because a P0 was raised.
+
+Address this before completing your current task.
 ````
 
 ## Report (2026-11-07T23:27:11.349Z)
