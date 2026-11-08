@@ -531,7 +531,14 @@ export async function capture(
   },
 ): Promise<Started> {
   const businessKey = `capture:${input.businessKey}`;
-  const hash = requestHash({ a: input.authorizationId, m: input.amount ?? null, r: input.ledgerRef ?? null });
+  // R7-P3-1: the label decides where the money lands (no_show or balance), so it is part of the request.
+  const hash = requestHash({
+    a: input.authorizationId,
+    m: input.amount ?? null,
+    r: input.ledgerRef ?? null,
+    u: input.purpose ?? null,
+    x: input.separateCollection?.reason ?? null,
+  });
   const existing = await db(tx)
     .selectFrom('payments.payments')
     .select(['id', 'request_hash'])
@@ -645,10 +652,10 @@ export async function capture(
   }
   // Amendments 4 and 5, under the collection lock: the fact the landing purpose rests on still allows this amount
   // (deposit due, folio owed, penalty owed), and the destination is still covered.
-  if (holdMethod && a.initiator === 'merchant') {
-    await assertWithinFact(d, tx, holdMethod, fact, ref, { amountMinor, currency: a.currency });
+  // R7-P3-2 (Amendment 5 rule 1): the fact limit applies to EVERY capture, whoever's hold it was.
+  if (holdMethod) await assertWithinFact(d, tx, holdMethod, fact, ref, { amountMinor, currency: a.currency });
+  if (holdMethod && a.initiator === 'merchant')
     await assertDestinationCovered(d, tx, holdMethod, property, ref);
-  }
   await assertBreakerAllows(d, tx, account);
   const id = newId(tx.now.getTime());
   const inserted = await insertPayment(
@@ -1142,6 +1149,28 @@ export async function recordPayment(
     assertOpenAuthorization(authorization, 'complete the hold');
     if (authorization.currency !== input.amount.currency) {
       throw new ValidationError('currency_mismatch', 'The payment currency differs from the hold.');
+    }
+    // R7-P3-3: the recorded hold is this property's, of the same booking family, and covers the amount.
+    const [held, target] = [
+      await referenceContext(d, tx, { type: authorization.ref_type, id: authorization.ref_id }),
+      await referenceContext(d, tx, input.ref),
+    ];
+    const sameFamily =
+      (authorization.ref_type === input.ref.type && authorization.ref_id === input.ref.id) ||
+      (held.bookingId !== null && held.bookingId === target.bookingId);
+    if (authorization.property_id !== input.propertyId || !sameFamily) {
+      throw new BusinessRuleError(
+        'authorization_other_reference',
+        'This recorded hold belongs to another property or booking. Record the payment against the bill the hold was taken for.',
+      );
+    }
+    const remaining =
+      authorization.amount_minor - authorization.captured_minor - authorization.capture_reserved_minor;
+    if (input.amount.amountMinor > remaining) {
+      throw new BusinessRuleError(
+        'capture_exceeds_hold',
+        `Only ${formatMoney(money(remaining, authorization.currency))} remains on this recorded hold. Record that amount and take the rest as a separate payment.`,
+      );
     }
   }
   // P1-7: a bank transfer is only EXPECTED until receipt is confirmed (statement match or authorized staff).
