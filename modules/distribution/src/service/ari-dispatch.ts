@@ -659,14 +659,8 @@ async function record(
         `ari_delivery:${kind}`,
         `The channel accepted the update at ${tx.now.toISOString()}.`,
       );
-      await autoResolve(tx, conn.id, 'credentials_invalid', 'The hub accepted the API key again.');
-      if (conn.credential_state !== 'valid') {
-        await db(tx)
-          .updateTable('distribution.connections')
-          .set({ credential_state: 'valid' })
-          .where('id', '=', conn.id)
-          .execute();
-      }
+      // Verify is the ONLY path to a valid key (P2-6): a send claimed with the old key never validates a key that was
+      // replaced or refused meanwhile.
       if (refused.length) {
         await raiseException(tx, {
           connectionId: conn.id,

@@ -147,3 +147,40 @@ describe('P3-7 and P3-8', () => {
     );
   });
 });
+
+describe('P2-6 sibling: only Verify validates a key', () => {
+  it('a send claimed with the old key does not validate a key replaced while it was in flight', async () => {
+    const org = await setupOrg(h);
+    const c = await connect(org);
+    await runFor(org, 61_000, 61_000);
+    await org.run((tx) =>
+      h.rates.applyPriceUpdate(tx, {
+        propertyId: org.propertyId,
+        ratePlanId: org.bar,
+        unitTypeIds: [org.water],
+        ranges: [{ from: addDays(BUSINESS_DATE, 9), to: addDays(BUSINESS_DATE, 10) }],
+        set: { baseOccupancy: 2, baseAmountMinor: 61_100 },
+      }),
+    );
+    await h.drain();
+    const racing = {
+      ...h.dist.deps,
+      hub: {
+        ...h.dist.deps.hub,
+        async pushRestrictions(...args: Parameters<typeof h.dist.deps.hub.pushRestrictions>) {
+          // A person replaces the key while the request is in flight.
+          await withTenantTx(h.t.db, sys(org), (tx) =>
+            sql`update distribution.connections set credential_state = 'unverified' where id = ${c.connectionId}::uuid`.execute(
+              tx.db,
+            ),
+          );
+          return h.dist.deps.hub.pushRestrictions(...args);
+        },
+      },
+    };
+    const r = await svc.dispatchKind(h.t.db, racing, sys(org), c.connectionId, 'restrictions');
+    expect(r.outcome).toBe('accepted');
+    const view = await org.run((tx) => svc.getConnection(tx, h.dist.deps, c.connectionId));
+    expect(view.status.credentials).toBe('unverified');
+  });
+});
