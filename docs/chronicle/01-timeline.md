@@ -414,3 +414,130 @@ Each agent's brief and report are in `agents/`.
   - 87 module tests and 2 HTTP tests. The § 5.4 mutation table has 22 guards, all red.
   - P0 parity rows still open: 57 → 11.
   - 17 contract requests went to the other modules. The steward review waits for the usage rule.
+- **23:27 — Migration module ("Move to Portico") increments 1–2 built** <!-- t: agent-ac5ae1ef01ad9bd99 @ 2026-11-07T23:27:11.349Z (Build migration module (increments 1–2)) -->; branch `feat/migration` pushed, every gate green.
+  - **Decision:** a new module (`modules/migration`), not part of integration. It writes into every data-owning
+    module, so it uses integration only through ports.
+  - **Proven in tests:**
+    - The same-day guesthouse path: rehearse in a trial org, reconcile twice, second-person authorization and switch,
+      cutover, rollback window.
+    - Zero duplicate reservations, guarded by a database unique key per source key and tested with five racing
+      importers, crash resume and delta sync.
+    - A card number in any cell refuses the whole upload.
+  - 95 module tests and 3 HTTP tests.
+  - **Limits:**
+    - Reservations has no migration import yet (MIG-CR-1), so a real run stops honestly at that step.
+    - The vendor export layouts (Little Hotelier, Cloudbeds, eZee) are unverified.
+    - The parity gate fails on 3 P0 rows that need the real contracts.
+  - The agent's open questions became Q162 (source-data retention, default 30 days; Monoclay co-sign).
+  - The steward review waits for the usage rule.
+- **23:35 — Integration-step fix round 4 done** <!-- t: agent-a29fdf2e9c7d0e9dc @ 2026-11-07T23:35:19.754Z (Integration step: bind module ports) -->; head `a1bdd70`, pushed. The first fix round run under self-check v6.
+  - A saved card pays only for the bookings and folios its agreement names. The stays at consent are recorded server
+    side, so a stay added later is not covered until the cardholder confirms again.
+  - The running total is read under the card row lock. Open holds and increases still in flight count.
+  - The over-collected refund is the exact amount.
+  - A provider deactivation that is never confirmed becomes an owned, urgent exception, with an audited "link
+    stopped" route.
+  - The § 5.4 table holds 11 mutants, all killed. The round-3 E-114 survivor (the collection lock) is now killed.
+  - § 6 rewrote two claims and removed one.
+- **23:36 — Focused re-review #5 launched** <!-- t: now @ 2026-11-07T23:36:25Z -->: a critical-path merge check (seven-day 90%, the ≥ 85% rule allows it).
+  - Steward v2.1 with the queued v3 "verify the proof" step promoted for this run: re-run 2 builder mutants and
+    plant 1 of its own.
+  - Its focus is staff-editable paths into card coverage, the running total at N=10, and the new link-stopped
+    route.
+- **23:54 — Integration-step re-review #5: merge after fixes** <!-- t: agent-a9d7a144efc35a5f6 @ 2026-11-07T23:54:57.000Z (Focused re-review #5: integration-step) --> (P0 0 · P1 2 · P2 2 · P3 4).
+  - Round 4 held: N=10 concurrency was clean, there was no lock-order cycle, and the builder's M6 and M9 mutants were
+    confirmed killed.
+  - The reviewer planted 2 mutants of its own; 1 survived (`pending_verification` not counted).
+  - Both P1s are the same class one step beyond: the `no_show` purpose was a label the desk types, and a
+    booking-level deposit was later applied to a stay added after consent.
+  - Orchestrator decision, ADR-0015 Amendment 4, closes the class rather than the path:
+    - every consent input is a cardholder or server fact, never a client label;
+    - coverage is checked where money lands, including deposit application, transfers and routing;
+    - staff-recorded agreements require an amount limit (Q160 update);
+    - staff cannot clear finance-owned money-risk states.
+  - Escape note for quality round 4: four rounds of "one step beyond" in consent. The builder's control-fact grid had
+    no input-source column.
+- **23:55 — Fix round 5 sent** <!-- t: now @ 2026-11-07T23:55:55Z --> with self-check v6 plus an input-source column and a list of every money-moving writer.
+- **00:50 — Integration-step fix round 5 done** <!-- t: agent-a29fdf2e9c7d0e9dc @ 2026-11-08T00:50:31.897Z (Integration step: bind module ports) -->; head `333a83e`, pushed. The class was closed, not the path.
+  - Purposes are derived from facts: the deposit schedule, the folio balance, and a no-show or cancellation penalty
+    that reservations recorded.
+  - Finance tracks each folio's debt origins through transfers and routing. It asks payments before applying deposits,
+    transfers or routes. Payments re-checks the destination under the collection lock.
+  - Staff agreements need an amount limit.
+  - Link-stopped is finance-only, needs an open exception and If-Match, and never applies to a "completed" link.
+  - The input-source grid has no client-label cell. 26 mutants, all killed; M6 is now deterministic.
+  - The residuals are recorded, each bounded by `maxAmount`.
+- **00:51 — Focused re-review #6 launched** <!-- t: now @ 2026-11-08T00:51:16Z --> (seven-day ≈ 93%). Budget-capped; the report is written incrementally, so a stop loses nothing.
+  - Focus: regressions in normal front-desk flows caused by the stricter consent model.
+  - Rationale: whatever is unused at the weekly reset is lost, and merging integration-step before the pause lets the
+    restart begin with downstream work.
+- **01:07 — Integration-step re-review #6: merge after fixes** <!-- t: agent-a05151b1b0071532a @ 2026-11-08T01:07:44.581Z (Focused re-review #6: integration-step) --> (P0 0 · P1 2 · P2 1 · P3 3).
+  - The r5 attacks are all refused. No front-desk regressions: walk-in at the terminal, a corporate card via a master
+    folio, a deposit by link, and a no-show fee after night audit all work.
+  - The builder's N7 and N8 mutants were confirmed killed.
+  - Two more siblings of the consent class:
+    - a capture judged as "guarantee" but landing as a folio balance;
+    - a refund posting with no provenance, moved onto a covered folio and then charged.
+  - Orchestrator: ADR-0015 Amendment 5 (judge the purpose where money lands; every posting has an owner; the no-show
+    fee rests on the ledger penalty).
+  - Fix round 6 was written up for the resume, not sent: seven-day ≈ 95%, and a round costs about 4–5 points.
+- **01:08 — Data-safety checkpoint (seven-day ≈ 95%)** <!-- t: now @ 2026-11-08T01:08:32Z -->.
+  - `tools/checkpoint.sh` pushes every branch. The resume is already scheduled for 2026-11-11 17:03 UTC.
+  - Built and waiting: distribution, day-close and migration reviews; integration-step fix round 6.
+  - Lesson for quality round 4: six review rounds on one consent model. Each fix closed the named path, and the next
+    review found the sibling. Amendments 4 and 5 now state the class as rules.
+- **05:04 — Owner: "let's keep going"** <!-- t: owner:4f98af2a @ 2026-11-08T05:04:29.835Z -->. Work resumed from the pause, using the remaining weekly allowance (≈ 6% at 01:10) on the
+  critical path.
+  - Integration-step fix round 6 was sent at once (ADR-0015 Amendment 5; lean, a commit after every step).
+  - The usage-check chain was re-enabled. Each check pushes the branch so a hard stop loses at most one step, and runs
+    `checkpoint.sh` at 97%.
+  - The UX heartbeat stays off (no UX rounds at this usage level).
+  - The 2026-11-11 17:03 resume task stays as the fallback.
+- **05:17 — Extra usage in use; the three steward reviews launched** <!-- t: now @ 2026-11-08T05:17:16Z -->.
+  - The 05:08 rate-limit event shows seven-day at 100% (`rejected`), with overage allowed and in use (it resets
+    12-01). Work continues on billed extra usage per the owner's "let's keep going". The owner was told.
+  - Launched in parallel with fix round 6, each steward v2.1 with an incremental report and a "verify the proof" mutant
+    step: distribution + Channex (`a8bd950`), day-close (`cb0fbf3`) and migration (`45be8b9`).
+  - Fix round 6 progress: the R6-P1-1, R6-P1-2 and R6-P2-1 fixes are committed and pushed (`898a85e`, `50016a3`,
+    `4822639`).
+- **05:32 — Integration-step fix round 6 done** <!-- t: agent-a29fdf2e9c7d0e9dc @ 2026-11-08T05:32:19.238Z (Integration step: bind module ports) -->; head `932e7c1`, pushed. Each fix was committed with its test.
+  - A capture is judged on the purpose where the money lands. The fact limits apply at capture under the collection
+    lock, and a hold's purpose never carries through.
+  - Finance provenance gives every non-zero posting an owner; an unknown origin fails closed.
+  - The no-show limit follows the ledger penalty.
+  - A forfeit of card money needs a recorded penalty.
+  - Deposit owed is summed per stay.
+  - The landing table covers 8 operations. Mutants R1–R6 were all killed; R2 survived at first and got a new test.
+  - Two stated proof gaps: the unknown-origin branch is unreachable today, and no test distinguishes deposit-per-stay.
+- **05:33 — Focused re-review #7 launched** <!-- t: now @ 2026-11-08T05:33:04Z -->. It must close the builder's proof gap on deposit-per-stay with a test.
+- **05:37 — Owner: finish the current wave on extra usage, add nothing more, then stop until the Wednesday reset** <!-- t: owner:4f98af2a @ 2026-11-08T05:37:56.652Z -->.
+  - Scope of "this wave":
+    - integration-step: re-review #7 → fix → merge;
+    - distribution + Channex, day-close and migration: steward review → fix rounds → re-check → merge;
+    - whatever is needed to finish those, such as an extra fix round or re-review.
+  - Out of scope until the reset (2026-11-11 17:00 UTC, Wednesday): new modules, UX rounds, the quality steward round,
+    the partner platform, and the backoffice real-data round.
+  - When the wave is done: checkpoint, then pause. The 17:03 Wednesday resume task picks up the STATUS order.
+- **05:38 — Owner: "don't let it effect your current work though. AT ALL"** <!-- t: owner:4f98af2a @ 2026-11-08T05:38:33.867Z -->. The scope limit never lowers the rigor of the current wave: full reviews,
+  full fix rounds with self-check v6, re-reviews until clean, and the full merge procedure.
+- **05:44 — Distribution steward review: merge after fixes** <!-- t: agent-a45cae866e44c3c5b @ 2026-11-08T05:44:39.770Z (Steward review: distribution + Channex) --> (P0 0 · P1 2 · P2 9 · P3 9).
+  - Held under attack: the budget under real concurrency, a 429 storm, durable storage before the 200, ack after
+    commit, environment safety and live refusal, isolation, secrets.
+  - **P1-1:** a revoked key or external authority made the org re-run its work every second forever. That breaks the
+    owner's "no polling loops" requirement.
+  - **P1-2:** revision ordering on `Date.parse` and arrival time could lose a modification or strand a creation.
+  - The reviewer's own mutant survived: the per-booking ordered wait was untested.
+  - Fix round 1 went to the distribution builder with self-check v6.
+- **05:46 — Migration steward review: do not merge** <!-- t: agent-a0853e1c7d151d830 @ 2026-11-08T05:46:35.240Z (Steward review: migration) --> (P0 1 · P1 8 · P2 9 · P3 12).
+  - **P0:** the card-number check misses ordinary spellings (spaced, dotted, full-width digits, numbers inside text,
+    header cells), so such files are stored. Payments' `pci.ts` on main has the same flaw.
+  - **P1s:**
+    - a 939-byte workbook crashes the API with out-of-memory;
+    - the cutover accepted a rehearsal of different data;
+    - reconciliation ran one way only;
+    - the post-switch sweep imports re-keyed records as duplicates;
+    - the purge misses the trial copy.
+  - The builder's M1 and M2 mutants were killed. The reviewer's M3 (simulator refused in live at extraction) survived.
+  - Fix round 1 went to the migration builder: one pure kernel card-number detector, a hostile-file-safe XLSX reader,
+    and a fingerprinted rehearsal certificate. Payments switches to the kernel detector after both merge.
+  - A focused re-review follows.

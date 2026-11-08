@@ -158,10 +158,14 @@
     - `feat/distribution-channex` @ a8bd950: R3 against the simulator; blocked on rates `termsFromChannelPrices`;
     - `feat/day-close` @ cb0fbf3: 22 mutants red; 17 contract requests.
   - **RESUME ORDER** (each from its latest playbook; every brief requires self-check v6):
-    1. If the integration-step fix round 4 reported: a focused re-review #5 (steward v2.1, re-review variant), then
-       merge if clean. Otherwise resume it with "your WIP was committed and pushed as `<sha>`; build on top of it".
+    1. Integration-step: re-review #5 said merge after fixes (2 P1, the same consent class). Fix round 5 (ADR-0015
+       Amendment 4) DONE at 333a83e (pushed). Re-review #6 (01:13) says merge after fixes: 2 P1 of the same class (a capture's
+       purpose; refund postings with no provenance). No front-desk regressions. ADR-0015 Amendment 5 written. **ON RESUME: send
+       fix round 6** (the pending-fixes line "integration-step fix round 6") to the integration-step author, with self-check v6
+       plus the landing table. Then focused re-review #7, and merge if clean. Quality round 4 input:
+       four rounds of "one step beyond" in consent; the builder grid lacked an input-source column.
     2. Steward reviews of distribution and day-close (in parallel). Then fix rounds, then merge.
-    3. Migration: resume or review, depending on its report.
+    3. Steward review of migration (`feat/migration` @ 45be8b9, built 23:27: 95 module tests, gates green; MIG-CR-1 blocks real runs), in parallel with item 2.
     4. After integration-step merges:
        - the backoffice real-data round (the pending-fixes UX 2a lines);
        - payments collection plans with finance receipts (MIRA 3-day rule);
@@ -170,6 +174,49 @@
     5. Partner platform and open API (M15, D14).
     6. Quality steward round 4 after items 1–2 report. Then UX full round 2 (34 tasks) after the real-data round.
     7. Channex R4 staging tests once the owner provides a staging key (`request_credential`, staging host only).
+
+- **2026-11-08 00:58 UTC: seven-day 94%.** The resume task is already scheduled for **2026-11-11 17:03 UTC** (scheduled
+  task "Resume Portico after weekly reset"). Plan:
+  - At 95%: `tools/checkpoint.sh`.
+  - At 97%: stop re-review #6 and commit its partial report as WIP.
+  - The resume order is the 22:55 entry above, with item 1 updated: re-review #6 is running on `333a83e`.
+
+- **2026-11-08 01:11 UTC — PAUSED for the weekly reset (seven-day ≈ 95%).**
+  - `tools/checkpoint.sh` pushed every branch. The one exception is `ux/lab`: a disposable lab branch whose remote
+    diverged. It is not force-pushed; `tools/ux-lab.sh refresh` rebuilds it.
+  - No agents are running.
+  - The usage-check task and the 3-hour UX heartbeat are **disabled**, so they spend nothing while paused. Re-enable
+    both on resume: the heartbeat is "Portico continuous UX loop heartbeat"; the usage-check chain is "Usage guardrail
+    check", restarted with a new time.
+  - The resume task fires at **2026-11-11 17:03 UTC**.
+  - **First action on resume:** send integration-step fix round 6 (pending-fixes line; ADR-0015 Amendment 5). In
+    parallel, the steward reviews of distribution, day-close and migration.
+
+- **2026-11-08 05:05 UTC — RESUMED on the owner's direction ("let's keep going").**
+  - Integration-step fix round 6 was sent to the integration-step author (lean, a commit after every step).
+  - The usage-check chain was re-enabled (each check pushes `feat/integration-step`; `checkpoint.sh` at 97%; stop at 99%).
+  - The UX heartbeat stays disabled.
+  - If the weekly allowance runs out, the 2026-11-11 17:03 resume task continues from this log.
+
+- **2026-11-08 05:2x UTC — extra (overage) usage in use** (seven-day 100%, overage allowed until 12-01; owner told).
+  - Running:
+    - integration-step fix round 6 (P1/P2 fixes pushed at 4822639);
+    - steward reviews of distribution, day-close and migration (reports in `docs/orchestration/reviews/review-{distribution,day-close,migration}.md`, written incrementally).
+  - Next:
+    - re-review #7 after fix round 6;
+    - fix rounds for the three modules after their reviews;
+    - then the STATUS 22:55 order item 4 onward.
+
+- **2026-11-08 05:4x UTC — OWNER DIRECTION:** "let's do this current wave of tasks you are on right now. feel free to
+  introduce anything new to finish it. don't add any more on extra usage. finish when done until wednesday reset".
+  - **Scope on extra usage:** integration-step (re-review #7 → fix if needed → merge); distribution, day-close and
+    migration (reviews running → fix rounds → focused re-checks → merge). Anything required to finish them is allowed.
+  - **Not before the Wednesday reset (2026-11-11 17:00 UTC):** new modules, UX rounds, the quality steward round 4,
+    M15, and the backoffice real-data round.
+  - **When the wave is done:** `tools/checkpoint.sh`, disable the usage-check chain, and leave the 17:03 Wednesday
+    resume task to continue the order above.
+  - **Owner, 05:4x:** "don't let it effect your current work though. AT ALL". The scope limit never reduces the rigor
+    of this wave: full reviews, full fix rounds with self-check v6, re-reviews until clean, and the full merge procedure.
 
 ## 1. Owner, product and how to work with the owner
 
