@@ -1,7 +1,7 @@
 # Agent run: Parity: finance, payments, POS, accounting
 
 - Started: 2026-11-07T08:12:22.021Z · last activity: 2026-11-07T11:42:41.944Z
-- Turns: 239 · tool uses: 154 · output tokens: 562,119
+- Turns: 125 · tool uses: 154 · output tokens: 233,253
 - Type: general-purpose
 
 ## Brief (2026-11-07T08:12:22.021Z)

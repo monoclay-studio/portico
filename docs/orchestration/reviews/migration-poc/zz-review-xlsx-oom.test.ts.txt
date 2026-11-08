@@ -1,0 +1,23 @@
+// Run (not a vitest file): from modules/migration in a merged copy,
+//   node <tsx>/dist/cli.mjs zz-review/xlsx-oom.ts ZZZZZ 40   → FATAL heap out of memory, exit 134 (939-byte workbook)
+//   node <tsx>/dist/cli.mjs zz-review/xlsx-oom.ts ZZZZZZ 1   → RangeError: Invalid array length (a 500)
+//   node <tsx>/dist/cli.mjs zz-review/xlsx-oom.ts AAAAA 1    → 475,255-column table accepted
+// Steward review PoC (R-P1-1): one ~500-byte workbook makes readXlsx allocate until the process dies.
+import { readXlsx, zip } from '../src/domain/xlsx';
+const col = process.argv[2] ?? "ZZZZZZ";
+const rowsN = Number(process.argv[3] ?? 1);
+const ns = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
+const rel = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+const wb = zip([
+  { name: 'xl/workbook.xml', data: Buffer.from(`<workbook xmlns="${ns}" xmlns:r="${rel}"><sheets><sheet name="reservations" sheetId="1" r:id="rId1"/></sheets></workbook>`) },
+  { name: 'xl/_rels/workbook.xml.rels', data: Buffer.from(`<Relationships><Relationship Id="rId1" Type="${rel}/worksheet" Target="worksheets/sheet1.xml"/></Relationships>`) },
+  { name: 'xl/worksheets/sheet1.xml', data: Buffer.from(`<worksheet><sheetData>${Array.from({ length: rowsN }, (_, i) => `<row r="${i + 1}"><c r="${col}${i + 1}" t="inlineStr"><is><t>x</t></is></c></row>`).join("")}</sheetData></worksheet>`) },
+]);
+console.log(`upload size: ${wb.length} bytes (base64 ${wb.toString('base64').length})`);
+const t0 = Date.now();
+try {
+  const t = readXlsx(wb);
+  console.log(`returned after ${Date.now() - t0} ms, headers=${t.get('reservations')?.headers.length}`);
+} catch (e) {
+  console.log(`threw after ${Date.now() - t0} ms: ${(e as Error).name}: ${(e as Error).message}`);
+}

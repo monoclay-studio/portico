@@ -1,0 +1,48 @@
+/** Steward review probe (AP-17): guest names copied into Day Close's immutable report pack. Throwaway evidence. */
+import { sql } from '@portico/db';
+import { money, newId } from '@portico/kernel';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { D, type Harness, nightAudit, setupOrg, startHarness } from './harness';
+
+let h: Harness;
+beforeAll(async () => {
+  h = await startHarness();
+});
+afterAll(async () => h?.close());
+
+describe('R-PII', () => {
+  it("a departed guest's name from finance's check ends up in the append-only day report and the step detail", async () => {
+    const org = await setupOrg(h);
+    const stayId = newId();
+    await org.run(async (tx) => {
+      await h.finance.openFolio(tx, {
+        propertyId: org.propertyId,
+        owner: { type: 'stay', id: stayId },
+        payer: { type: 'guest', id: newId(), name: 'Aishath Zz-Unique Rasheed' },
+      });
+      await h.finance.postCharge(tx, {
+        propertyId: org.propertyId,
+        target: { type: 'stay', id: stayId },
+        chargeCode: 'FB_ALACARTE',
+        amount: money(4_000, 'USD'),
+        serviceDate: D,
+        description: 'Minibar',
+        sourceRef: { type: 'pos_check', id: newId() },
+        idempotencyKey: `pos:${stayId}`,
+      });
+      await h.finance.markOwnerDeparted(tx, { propertyId: org.propertyId, owner: { type: 'stay', id: stayId }, departedOn: D });
+    });
+    const run = await h.service.startRun(h.t.db, nightAudit(h, org), { propertyId: org.propertyId });
+    expect(run.runStatus).toBe('completed');
+    const r = await sql<{ n: number }>`select count(*)::int as n from day_close.day_reports
+      where tenant_id = ${org.tenantId} and pack::text like '%Zz-Unique%'`.execute(h.t.admin.kysely);
+    const s = await sql<{ n: number }>`select count(*)::int as n from day_close.steps
+      where tenant_id = ${org.tenantId} and detail::text like '%Zz-Unique%'`.execute(h.t.admin.kysely);
+    console.log('R-PII rows with the guest name: day_reports', r.rows[0]?.n, 'steps', s.rows[0]?.n);
+    expect(r.rows[0]?.n).toBe(1);
+    // and the pack cannot be changed (append-only): erasure cannot remove it
+    await expect(
+      sql`update day_close.day_reports set pack = '{}'::jsonb where tenant_id = ${org.tenantId}`.execute(h.t.admin.kysely),
+    ).rejects.toThrow();
+  });
+});

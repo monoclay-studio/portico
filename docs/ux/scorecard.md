@@ -32,11 +32,24 @@ zero-knowledge personas (no build context, no prior Portico use).
 | Screens whose help panel has content (%) | 100 | **0** | | |
 | Roles able to open a training organization in 1 click | all | **1 of 3 tested** | | |
 
+## Evidence and handling (added in round 2a)
+
+Focused rounds (2a, 2b…) re-test only the changed screens, so they do not fill the core columns above. Their
+evidence quality and handling are measured here.
+
+| Metric | Target | R1 | R2a |
+|---|---|---|---|
+| Cited evidence files present after hand-off | all | n/a (not checked) | **74 of 74** |
+| Findings with a stable ID | all | 0 (none had IDs) | **49 of 49** |
+| Earlier "Done" decisions refuted on re-test | 0 | n/a | **4 of 7** (NAV-07, NAV-08, C3/C9, FD-13/C4; `docs/quality/scorecard.md` § 4.1) |
+| Findings with a disposition (`tools/quality/dispositions.py`) | all | n/a | **49 of 49** (2026-11-07, after quality round 3) |
+
 ## Round log
 
 | Round | Date | Tester | Refinements | Decisions |
 |---|---|---|---|---|
 | R1 | 2026-11-07 | 9 personas, 34 tasks, 70 screenshots (`round-1/blackbox-findings.md`) | 83 in `round-1/refinements/`: 44 (a) wiring · 6 (b) missing · 33 (c) design; 23 blocker · 46 major · 14 minor | pending (`round-1/decisions/`) |
+| R2a (focused) | 2026-11-07 | 4 personas, changed screens only, 74 cited files (`round-2a/blackbox-findings.md`) | none (triage-only, routed by cause) | 49 of 49 dispositioned in `docs/orchestration/pending-fixes.md` |
 
 ## R1 baselines: how they were measured
 

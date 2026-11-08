@@ -34,6 +34,11 @@ orchestrator runs hand-off checks H-1 to H-4 from the refiner playbook:
 
 The refiner verifies every screenshot it cites and returns its summary in its final reply.
 
+**Focused rounds (round 2a onwards; quality round 3).** A focused round without a full refiner runs refiner v2.1's
+triage-only variant. Findings are routed by cause, not by the SIM/LIVE badge. The round is handled when the
+disposition check passes: `python3 -I tools/quality/dispositions.py docs/ux/round-N/blackbox-findings.md
+docs/orchestration/pending-fixes.md docs/ux/round-1/decisions/backoffice.md` reports every finding.
+
 1. **Black-box tester ("mystery user").** Uses the running product only through the browser, as different hotels and
    roles (12-room guesthouse owner on a phone, 120-villa resort front desk at the morning rush, reservations,
    housekeeping on a tablet, night audit, finance, multi-property group director, IT admin, a brand-new hire).

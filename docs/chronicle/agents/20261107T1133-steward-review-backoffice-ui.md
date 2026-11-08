@@ -1,7 +1,7 @@
 # Agent run: Steward review: backoffice UI
 
 - Started: 2026-11-07T11:33:42.446Z · last activity: 2026-11-07T12:02:00.528Z
-- Turns: 289 · tool uses: 173 · output tokens: 232,105
+- Turns: 163 · tool uses: 173 · output tokens: 114,193
 - Type: general-purpose
 
 ## Brief (2026-11-07T11:33:42.446Z)

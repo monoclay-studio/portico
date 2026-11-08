@@ -1,0 +1,240 @@
+/**
+ * Steward review probes, set B (throwaway evidence; never committed).
+ *  B1  two scheduler workers at once over a sustained burst → per-kind requests per 60 s at the hub, every change arrives.
+ *  B2  a 429 storm (5 consecutive 429s on restrictions) → nothing sent while paused, every change arrives.
+ *  B3  budgets of two connections are independent under concurrency.
+ *  B4  a 2xx ARI answer whose warning has no index is recorded as fully ACCEPTED (unverified shape fails open).
+ *  B5  zero margin: reservation instants obey the limit, arrival instants at the hub do not (latency jitter).
+ *  B6  unauthenticated webhook flood → one append-only row per request in the victim organization.
+ *  B7  a live organization claims another hotel's production hub property at creation, before any proof.
+ *  B8  same revision id, different content: webhook first, then the feed's version → conflict; the webhook's stands.
+ */
+import { sql, withTenantTx } from '@portico/db';
+import { addDays, newId } from '@portico/kernel';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { parseAriSuccess, toDecimalString } from '../src/adapters/channex/wire';
+import { maxInAnyWindow, reserveSlot } from '../src/domain/budget';
+import type { HubRevision } from '../src/domain/revisions';
+import { loadConnection } from '../src/service/common';
+import * as svc from '../src/services';
+import {
+  BUSINESS_DATE,
+  connect,
+  type Harness,
+  maxPerMinute,
+  runFor,
+  setupOrg,
+  simState,
+  startHarness,
+  sys,
+  tick,
+} from './harness';
+
+let h: Harness;
+beforeAll(async () => {
+  h = await startHarness();
+});
+afterAll(async () => h?.close());
+
+const d = (n: number) => addDays(BUSINESS_DATE, n);
+
+async function setPrice(org: Awaited<ReturnType<typeof setupOrg>>, unitTypeId: string, n: number, amount: number) {
+  await org.run((tx) =>
+    h.rates.applyPriceUpdate(tx, {
+      propertyId: org.propertyId,
+      ratePlanId: org.bar,
+      unitTypeIds: [unitTypeId],
+      ranges: [{ from: d(n), to: d(n + 1) }],
+      set: { baseOccupancy: 2, baseAmountMinor: amount },
+    }),
+  );
+}
+
+describe('B — owner requirement 2 under real concurrency', () => {
+  it('B1: two workers ticking the same organization concurrently never exceed 10/min per kind; all changes arrive', async () => {
+    const org = await setupOrg(h);
+    const c = await connect(org, { settings: { maxCellsPerMessage: 50 } });
+    await runFor(org, 60_000, 2_000);
+    for (let i = 0; i < 60; i++) {
+      await setPrice(org, org.beach, 100 + i, 70_000 + i);
+      await h.drain();
+      h.clock.advance(1_000);
+      await Promise.all([tick(org), tick(org), tick(org)]);
+    }
+    for (let i = 0; i < 40; i++) {
+      h.clock.advance(5_000);
+      await Promise.all([tick(org), tick(org)]);
+    }
+    const s = await simState(org, c);
+    console.log('B1 max/min restrictions:', maxPerMinute(s, 'restrictions'), 'availability:', maxPerMinute(s, 'availability'),
+      '429s:', s.log.filter((l) => l.status === 429).length);
+    expect(maxPerMinute(s, 'restrictions')).toBeLessThanOrEqual(10);
+    expect(maxPerMinute(s, 'availability')).toBeLessThanOrEqual(10);
+    expect(s.log.filter((l) => l.status === 429)).toHaveLength(0);
+    for (let i = 0; i < 60; i++)
+      expect(s.restrictions['RP-BV-BAR']?.[d(100 + i)]?.rate).toBe(toDecimalString(70_000 + i, 'USD'));
+  });
+
+  it('B2: a 429 storm — nothing is sent during the pause, every change still arrives', async () => {
+    const org = await setupOrg(h);
+    const c = await connect(org);
+    await runFor(org, 60_000, 5_000);
+    await org.run((tx) =>
+      svc.injectFault(tx, h.dist.deps, c.connectionId, { endpoint: 'restrictions', kind: 'rate_limit', times: 5 }),
+    );
+    for (let i = 0; i < 10; i++) {
+      await setPrice(org, org.water, 10 + i, 55_500 + i);
+      await h.drain();
+      h.clock.advance(3_000);
+      await tick(org);
+    }
+    await runFor(org, 8 * 60_000, 5_000);
+    const s = await simState(org, c);
+    const rl = s.log.filter((l) => l.endpoint === 'restrictions');
+    // Gap after each 429 must be ≥ 60 s.
+    const gaps: number[] = [];
+    for (let i = 1; i < rl.length; i++)
+      if (rl[i - 1]?.status === 429) gaps.push(Date.parse(rl[i]?.at as string) - Date.parse(rl[i - 1]?.at as string));
+    console.log('B2 gaps after 429 (ms):', gaps.join(','), 'max/min:', maxPerMinute(s, 'restrictions'));
+    expect(Math.min(...gaps)).toBeGreaterThanOrEqual(60_000);
+    for (let i = 0; i < 10; i++)
+      expect(s.restrictions['RP-WV-BAR']?.[d(10 + i)]?.rate).toBe(toDecimalString(55_500 + i, 'USD'));
+  });
+
+  it('B3: two connections reserve concurrently; each gets exactly its own limit', async () => {
+    const a = await setupOrg(h);
+    const b = await setupOrg(h);
+    const ca = await connect(a, { activate: false });
+    const cb = await connect(b, { activate: false });
+    const reserve = (org: typeof a, id: string) =>
+      withTenantTx(h.t.db, sys(org), async (tx) => svc.reserveBudget(tx, await loadConnection(tx, id), 'restrictions'));
+    const results = await Promise.all([
+      ...Array.from({ length: 15 }, () => reserve(a, ca.connectionId)),
+      ...Array.from({ length: 15 }, () => reserve(b, cb.connectionId)),
+    ]);
+    const okA = results.slice(0, 15).filter((r) => r.ok).length;
+    const okB = results.slice(15).filter((r) => r.ok).length;
+    expect([okA, okB]).toEqual([10, 10]);
+  });
+});
+
+describe('B — wire assumptions that fail open (focus f) and the budget margin', () => {
+  it('B4: a warning without an index (or a 200 with an errors body) is recorded as fully accepted', () => {
+    const noIndex = parseAriSuccess(
+      JSON.stringify({ data: [{ id: 't1', type: 'task' }], meta: { warnings: [{ warning: 'rate_plan_id is invalid' }] } }),
+    );
+    const errors200 = parseAriSuccess(JSON.stringify({ errors: { code: 'validation_error', title: 'Invalid' } }));
+    console.log('B4', JSON.stringify(noIndex), JSON.stringify(errors200));
+    // Safe behaviour: an unrecognised refusal makes the outcome uncertain, never "accepted".
+    expect(noIndex.refused.length + (noIndex.unrecognized ? 1 : 0)).toBeGreaterThan(0);
+    expect(errors200.unrecognized).toBe(true); // recorded as unrecognised …
+  });
+
+  it('B5: the budget counts reservation instants; arrival instants at the hub can exceed the limit', () => {
+    const t0 = Date.parse('2026-11-07T06:00:00Z');
+    let state = { sends: [] as Date[], pausedUntil: null as Date | null };
+    const reserved: number[] = [];
+    for (let i = 0; i < 10; i++) {
+      const r = reserveSlot(state, new Date(t0 + i * 100), 10);
+      expect(r.ok).toBe(true);
+      state = { sends: r.sends, pausedUntil: null };
+      reserved.push(t0 + i * 100);
+    }
+    const eleventh = reserveSlot(state, new Date(t0 + 60_000), 10);
+    expect(eleventh.ok).toBe(true); // the first slot returns at exactly +60 s
+    reserved.push(t0 + 60_000);
+    // Request 1 meets a cold TLS handshake (+300 ms); request 11 reuses a warm connection (+20 ms).
+    const latency = reserved.map((_, i) => (i === 0 ? 300 : 20));
+    const arrivals = reserved.map((t, i) => new Date(t + (latency[i] as number)));
+    console.log('B5 max in any 60 s at the hub:', maxInAnyWindow(arrivals));
+    expect(maxInAnyWindow(arrivals)).toBeLessThanOrEqual(10);
+  });
+});
+
+describe('B — webhook security (focus d)', () => {
+  it('B6: unauthenticated posts to a known endpoint each write an append-only row in the organization', async () => {
+    const org = await setupOrg(h);
+    const c = await connect(org);
+    for (let i = 0; i < 50; i++)
+      await svc.receiveWebhook(h.t.db, h.dist.deps, {
+        endpointId: c.endpointId,
+        headers: { 'x-portico-webhook-token': `guess-${i}` },
+        rawBody: 'x'.repeat(10),
+      });
+    const n = await h.t.admin.kysely
+      .selectFrom('distribution.inbound_deliveries')
+      .select(sql<number>`count(*)::int`.as('n'))
+      .where('connection_id', '=', c.connectionId)
+      .where('outcome', '=', 'unauthenticated')
+      .executeTakeFirstOrThrow();
+    console.log('B6 unauthenticated rows:', n.n);
+    expect(n.n).toBeLessThan(50);
+  });
+
+  it('B7: a live organization claims another hotel production hub property at creation (no proof of access)', async () => {
+    const squatter = await setupOrg(h, { environment: 'live' });
+    const hotel = await setupOrg(h, { environment: 'live' });
+    await squatter.run((tx) =>
+      svc.createConnection(tx, h.dist.deps, {
+        propertyId: squatter.propertyId,
+        name: 'Squat',
+        externalPropertyId: 'real-hotel-channex-property',
+        apiKey: 'any-invalid-key',
+      }),
+    );
+    const res = await hotel
+      .run((tx) =>
+        svc.createConnection(tx, h.dist.deps, {
+          propertyId: hotel.propertyId,
+          name: 'Channex',
+          externalPropertyId: 'real-hotel-channex-property',
+          apiKey: 'the-real-key',
+        }),
+      )
+      .then(() => 'created', (e: { code?: string }) => e.code);
+    console.log('B7 real hotel:', res);
+    expect(res).toBe('created');
+  });
+
+  it('B8: same revision id with different content — the first delivery (webhook) stands over the hub feed', async () => {
+    const org = await setupOrg(h);
+    const c = await connect(org);
+    await runFor(org, 3_000);
+    const base: HubRevision = {
+      revisionId: newId(),
+      bookingId: 'BK-B8',
+      externalPropertyId: c.externalPropertyId,
+      status: 'new',
+      insertedAt: '2026-11-07T06:00:00.000Z',
+      otaName: 'Booking.com',
+      otaReservationCode: 'B8',
+      currency: 'USD',
+      customer: { firstName: 'A', lastName: 'B', email: null, phone: null, country: null },
+      rooms: [
+        {
+          roomRef: '1',
+          channelRoomTypeId: 'RT-WV',
+          channelRatePlanId: 'RP-WV-BAR',
+          checkin: d(30),
+          checkout: d(31),
+          adults: 2,
+          childrenAges: [],
+          nightly: [{ date: d(30), amountMinor: 1_00 }],
+        },
+      ],
+      notes: null,
+      paymentCollect: 'ota',
+    };
+    const store = (rev: HubRevision, via: 'webhook' | 'feed') =>
+      withTenantTx(h.t.db, sys(org), async (tx) => svc.storeRevision(tx, await loadConnection(tx, c.connectionId), rev, via));
+    expect((await store(base, 'webhook')).outcome).toBe('stored');
+    const feedVersion = { ...base, rooms: [{ ...base.rooms[0], nightly: [{ date: d(30), amountMinor: 500_00 }] }] } as HubRevision;
+    expect((await store(feedVersion, 'feed')).outcome).toBe('conflict');
+    await runFor(org, 3_000);
+    const call = h.reservations.calls.find((x) => x.externalId === 'BK-B8');
+    const stored = await org.run((tx) =>
+      tx.db.selectFrom('distribution.inbound_revisions').select('payload').where('channel_booking_id', '=', 'BK-B8').executeTakeFirstOrThrow(),
+    );
+    console.log('B8 applied price minor:', (stored.payload as HubRevision).rooms[0]?.nightly[0]?.amountMinor, 'calls:', !!call);
+  });
+});

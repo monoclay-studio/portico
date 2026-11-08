@@ -1,7 +1,7 @@
 # Agent run: Steward review: reservations module
 
 - Started: 2026-11-07T11:19:20.140Z · last activity: 2026-11-07T11:38:54.448Z
-- Turns: 301 · tool uses: 179 · output tokens: 251,546
+- Turns: 171 · tool uses: 179 · output tokens: 115,946
 - Type: general-purpose
 
 ## Brief (2026-11-07T11:19:20.140Z)

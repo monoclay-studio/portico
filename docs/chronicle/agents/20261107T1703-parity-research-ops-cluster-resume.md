@@ -1,7 +1,7 @@
 # Agent run: Parity research: ops cluster (resume)
 
 - Started: 2026-11-07T17:03:56.030Z · last activity: 2026-11-07T18:02:35.046Z
-- Turns: 387 · tool uses: 197 · output tokens: 989,478
+- Turns: 168 · tool uses: 197 · output tokens: 336,587
 - Type: general-purpose
 
 ## Brief (2026-11-07T17:03:56.030Z)

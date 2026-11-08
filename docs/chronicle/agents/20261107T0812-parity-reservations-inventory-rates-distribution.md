@@ -1,7 +1,7 @@
 # Agent run: Parity: reservations, inventory, rates, distribution
 
 - Started: 2026-11-07T08:12:22.012Z · last activity: 2026-11-07T11:30:38.229Z
-- Turns: 169 · tool uses: 103 · output tokens: 360,288
+- Turns: 95 · tool uses: 103 · output tokens: 180,026
 - Type: general-purpose
 
 ## Brief (2026-11-07T08:12:22.012Z)

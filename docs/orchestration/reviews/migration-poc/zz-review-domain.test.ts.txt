@@ -1,0 +1,276 @@
+/**
+ * Steward review PoCs (domain level, no database). Each `it` asserts the DEFECT: it passes on 45be8b9 and must fail
+ * (be inverted) once the finding is fixed.
+ */
+import { describe, expect, it } from 'vitest';
+import { sourceAdapter } from '../sources/adapters';
+import { readPack } from '../sources/files';
+import { parseCsv, toCsv } from './csv';
+import { buildPack } from './pack';
+import { type LedgerEntry, type PorticoReadBack, reconcile } from './reconcile';
+import type { ReservationRecord, SourceRecord } from './records';
+import { findCardNumbers } from './sensitive';
+import { readXlsx, zip } from './xlsx';
+
+const PAN = '4111111111111111'; // Visa test PAN (Luhn-valid)
+
+describe('R-P0-1 card-number guard: a PAN in a cell is NOT refused when written in common ways', () => {
+  const scan = (cell: string) => findCardNumbers(['notes'], [[cell]]).length;
+
+  it('control: the plain and single-separated forms are refused', () => {
+    expect(scan(PAN)).toBe(1);
+    expect(scan('4111 1111 1111 1111')).toBe(1);
+    expect(scan('4111-1111-1111-1111')).toBe(1);
+  });
+
+  it('a PAN followed by its expiry month (the usual way staff note a card) is not seen', () => {
+    expect(scan('4111 1111 1111 1111 12/27')).toBe(0);
+    expect(scan('Visa 4111111111111111 1227 cvv in safe')).toBe(0);
+  });
+
+  it('a PAN preceded by another number is not seen (greedy match swallows it)', () => {
+    expect(scan('room 12 4111111111111111')).toBe(0);
+    expect(scan('2 4111-1111-1111-1111')).toBe(0);
+  });
+
+  it('other separators are not seen: double spaces, dots, no-break spaces, " - ", full-width digits', () => {
+    expect(scan('4111  1111  1111  1111')).toBe(0);
+    expect(scan('4111.1111.1111.1111')).toBe(0);
+    expect(scan('4111 1111 1111 1111')).toBe(0);
+    expect(scan('4111 - 1111 - 1111 - 1111')).toBe(0);
+    expect(scan('４１１１１１１１１１１１１１１１')).toBe(0);
+  });
+
+  it('a PAN in a header cell is never scanned (headers are stored with the extract)', () => {
+    expect(findCardNumbers([PAN], [['x']])).toEqual([]);
+  });
+
+  it('the whole upload path (readPack) accepts such a file, so it would be stored', () => {
+    const adapter = sourceAdapter('portico.pack.v1');
+    if (!adapter) throw new Error('adapter');
+    const csv = toCsv(
+      ['confirmation', 'status', 'arrival', 'departure', 'unit_type_code', 'guest_name', 'room_total', 'notes'],
+      [['CN1', 'Confirmed', '2026-12-03', '2026-12-05', 'DBL', 'A B', '100.00', 'card 4111 1111 1111 1111 12/27']],
+    );
+    const pack = readPack([{ name: 'reservations.csv', content: csv }], adapter);
+    const stored = JSON.stringify(pack.tables.map((t) => t.table.rows));
+    expect(stored).toContain('4111 1111 1111 1111 12/27');
+  });
+});
+
+function sheetWorkbook(sheetXml: string): Buffer {
+  const ns = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
+  const rel = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+  return zip([
+    {
+      name: 'xl/workbook.xml',
+      data: Buffer.from(
+        `<workbook xmlns="${ns}" xmlns:r="${rel}"><sheets><sheet name="reservations" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+      ),
+    },
+    {
+      name: 'xl/_rels/workbook.xml.rels',
+      data: Buffer.from(
+        `<Relationships><Relationship Id="rId1" Type="${rel}/worksheet" Target="worksheets/sheet1.xml"/></Relationships>`,
+      ),
+    },
+    { name: 'xl/worksheets/sheet1.xml', data: Buffer.from(sheetXml) },
+  ]);
+}
+
+describe('R-P1-1 XLSX reader has no column bound (a ~500-byte workbook allocates an arbitrarily wide row)', () => {
+  it('one cell at column AAAAA (index 475,254) yields a 475k-cell row; CSV refuses > 200 columns', () => {
+    const wb = sheetWorkbook(
+      '<worksheet><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>confirmation</t></is></c><c r="AAAAA1" t="inlineStr"><is><t>x</t></is></c></row></sheetData></worksheet>',
+    );
+    expect(wb.length).toBeLessThan(1000);
+    const t = readXlsx(wb).get('reservations');
+    expect(t?.headers.length).toBeGreaterThan(475_000);
+    // the same width as CSV is refused by CSV_LIMITS.maxColumns (200)
+    expect(() => parseCsv(`${'a,'.repeat(300)}a\n`)).toThrow(/more than 200 columns/);
+  });
+});
+
+describe('R-P1-1 XLSX reader: declared sizes are trusted and entries may overlap (zip bomb not bounded)', () => {
+  it('N central-directory entries pointing at ONE deflated part each inflate in full', () => {
+    const base = sheetWorkbook('<worksheet><sheetData></sheetData></worksheet>');
+    // Rebuild: one big local part (8 MiB of spaces, compresses to ~8 KiB) referenced by 6 directory entries
+    // that declare uncompressed size 0, so the total-size and ratio guards never trigger.
+    const big = Buffer.alloc(8 * 1024 * 1024, 0x20);
+    const one = zip([{ name: 'xl/a.xml', data: big }]);
+    const localLen = one.readUInt32LE(one.length - 22 + 16); // central dir offset = end of locals
+    const local = one.subarray(0, localLen);
+    const compSize = local.readUInt32LE(18);
+    const centrals: Buffer[] = [];
+    const N = 6;
+    for (let i = 0; i < N; i++) {
+      const name = Buffer.from(`xl/p${i}.xml`);
+      const c = Buffer.alloc(46);
+      c.writeUInt32LE(0x02014b50, 0);
+      c.writeUInt16LE(8, 10); // deflate
+      c.writeUInt32LE(compSize, 20);
+      c.writeUInt32LE(0, 24); // declared uncompressed size: 0
+      c.writeUInt16LE(name.length, 28);
+      c.writeUInt32LE(0, 42); // every entry points at the same local header
+      centrals.push(c, name);
+    }
+    const cd = Buffer.concat(centrals);
+    const end = Buffer.alloc(22);
+    end.writeUInt32LE(0x06054b50, 0);
+    end.writeUInt16LE(N, 8);
+    end.writeUInt16LE(N, 10);
+    end.writeUInt32LE(cd.length, 12);
+    end.writeUInt32LE(local.length, 16);
+    const bomb = Buffer.concat([local, cd, end]);
+    expect(bomb.length).toBeLessThan(64 * 1024);
+    const before = process.memoryUsage().arrayBuffers;
+    let peak = before;
+    const t0 = Date.now();
+    try {
+      readXlsx(bomb);
+    } catch {
+      peak = Math.max(peak, process.memoryUsage().arrayBuffers);
+    }
+    const inflatedMiB = (peak - before) / 1024 / 1024;
+    // 6 × 8 MiB were inflated and held at once from a < 64 KiB upload (maxEntries allows 2000 such entries,
+    // maxOutputLength allows 60 MiB each → ~117 GiB from a ~120 KiB file).
+    expect(inflatedMiB).toBeGreaterThan(40);
+    void base;
+    void t0;
+  });
+});
+
+const BD = '2026-12-01';
+const res = (key: string, status: ReservationRecord['status'] = 'confirmed'): SourceRecord => ({
+  dataClass: 'reservation',
+  key,
+  payload: {
+    status,
+    sourceStatus: status,
+    arrival: '2026-12-03',
+    departure: '2026-12-05',
+    unitTypeCode: 'DBL',
+    unitNumber: null,
+    guestKey: null,
+    guestName: 'A B',
+    adults: 2,
+    children: 0,
+    ratePlanCode: null,
+    currency: 'USD',
+    nightly: null,
+    roomTotalMinor: 20000,
+    taxes: [],
+    taxInclusive: false,
+    totalMinor: 20000,
+    channel: null,
+    guarantee: 'none',
+  },
+  origin: { file: 'r.csv', row: 1 },
+  problems: [],
+});
+const readBack = (sourceKey: string, bookingId: string, status = 'departed') => ({
+  sourceKey,
+  bookingId,
+  status,
+  arrival: '2026-11-03',
+  departure: '2026-11-05',
+  unitTypeId: 'ut-dbl',
+  currency: 'USD',
+  roomTotalMinor: 20000,
+  taxTotalMinor: 0,
+  totalMinor: 20000,
+  nightly: null,
+});
+
+describe('R-P1-3 reconciliation only walks source → Portico: extra or duplicate records in Portico are invisible', () => {
+  const ledger: LedgerEntry[] = [{ dataClass: 'reservation', key: 'H1', state: 'imported', targetId: 'b1' }];
+  const base = {
+    records: [{ ...res('H1', 'departed'), payload: { ...(res('H1').payload as ReservationRecord), status: 'departed' as const, arrival: '2026-11-03', departure: '2026-11-05' } }],
+    ledger,
+    controlTotals: [{ dataClass: 'reservation' as const, currency: null, count: 1, amountMinor: null }],
+    businessDate: BD,
+    scope: new Set(['reservation'] as const),
+    unitTypeIdByCode: new Map([['DBL', 'ut-dbl']]),
+  };
+  const portico = (reservations: PorticoReadBack['reservations']): PorticoReadBack => ({
+    unitTypes: [{ code: 'DBL', id: 'ut-dbl' }],
+    units: [],
+    existingGuestIds: new Set(),
+    reservations,
+    sold: [],
+    deposits: [],
+    inHouse: [],
+    receivables: [],
+    unavailable: [],
+  });
+
+  it('control: one booking in, one booking held → exact', () => {
+    expect(reconcile({ ...base, portico: portico([readBack('H1', 'b1')]) }).exact).toBe(true);
+  });
+
+  it('reservations holds TWO bookings for the one source booking (a duplicate) → still "exact"', () => {
+    const r = reconcile({
+      ...base,
+      portico: portico([readBack('H1', 'b1'), readBack('H1', 'b2')]),
+    });
+    expect(r.exact).toBe(true);
+    expect(r.differences).toEqual([]);
+  });
+
+  it('reservations holds a booking the source never had (re-keyed copy, history) → still "exact"', () => {
+    const r = reconcile({
+      ...base,
+      portico: portico([readBack('H1', 'b1'), readBack('00H1', 'b9')]),
+    });
+    expect(r.exact).toBe(true);
+    // the count by status × arrival month compares matched pairs only, so it cannot see the extra
+    expect(r.measures.find((m) => m.measure.startsWith('count departed'))).toMatchObject({ source: 1, portico: 1 });
+  });
+
+  it('the source control total says 1 reservation, Portico holds 2: control counts are never compared', () => {
+    const r = reconcile({ ...base, portico: portico([readBack('H1', 'b1'), readBack('H1', 'b2')]) });
+    expect(r.controlTotals.filter((c) => c.dataClass === 'reservation')).toEqual([]);
+  });
+});
+
+describe('R-P2 duplicate keys: the second row with the same confirmation is dropped from the source state', () => {
+  it('two rows (a two-room booking under one confirmation) → two records built, quality calls it a conflict', () => {
+    const t = parseCsv(
+      toCsv(
+        ['confirmation', 'status', 'arrival', 'departure', 'unit_type_code', 'guest_name', 'room_total'],
+        [
+          ['CN9', 'Confirmed', '2026-12-03', '2026-12-05', 'DBL', 'A B', '100.00'],
+          ['CN9', 'Confirmed', '2026-12-03', '2026-12-05', 'TWN', 'A B', '120.00'],
+        ],
+      ),
+    );
+    const pack = buildPack(
+      [
+        {
+          name: 'reservations.csv',
+          kind: 'reservations',
+          table: t,
+          spreadsheet: false,
+          columns: t.headers.map((h, i) => ({ header: h, field: h, index: i, confidence: 1 })) as never,
+        },
+      ],
+      { defaultCurrency: 'USD' },
+    );
+    expect(pack.records.filter((r) => r.key === 'CN9')).toHaveLength(2);
+  });
+});
+
+describe('R-P2 XLSX 1904 date system is ignored: every date in a Mac-origin workbook shifts by 4 years and a day', () => {
+  it('serial 46000 in a date1904 workbook is 2029-12-10; the reader yields 2025-12-09', async () => {
+    const { parseDate } = await import('./normalize');
+    const ns = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
+    const rel = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+    const wb = zip([
+      { name: 'xl/workbook.xml', data: Buffer.from(`<workbook xmlns="${ns}" xmlns:r="${rel}"><workbookPr date1904="1"/><sheets><sheet name="reservations" sheetId="1" r:id="rId1"/></sheets></workbook>`) },
+      { name: 'xl/_rels/workbook.xml.rels', data: Buffer.from(`<Relationships><Relationship Id="rId1" Type="${rel}/worksheet" Target="worksheets/sheet1.xml"/></Relationships>`) },
+      { name: 'xl/worksheets/sheet1.xml', data: Buffer.from('<worksheet><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>arrival</t></is></c></row><row r="2"><c r="A2"><v>46000</v></c></row></sheetData></worksheet>') },
+    ]);
+    const cell = readXlsx(wb).get('reservations')?.rows[0]?.[0] as string;
+    expect(parseDate(cell, { spreadsheet: true })).toEqual({ ok: true, date: '2025-12-09' });
+  });
+});

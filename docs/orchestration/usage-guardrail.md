@@ -41,6 +41,25 @@ days, so pace against it as well:
   at most 3 agents at once; the UX heartbeat and research pause until the window resets.
 - **≥ 92% seven-day:** PAUSE + CHECKPOINT as for the 5-hour window and schedule the resume at the seven-day reset.
 
+**Hard-stop note (2026-11-07 22:38 UTC).** Pacing still follows the 5-hour window only, per the owner. The seven-day
+allowance is a hard stop with no overage, though: at 100% all work stops until it resets. So two safety rules stay:
+- **≥ 85% seven-day:** only critical-path finishing work starts (fix rounds and merges of branches already in flight).
+  No new modules or new reviews.
+- **≥ 95% seven-day:** CHECKPOINT (`tools/checkpoint.sh`, STATUS resume log), then schedule the resume at the
+  seven-day reset. This is for data safety, not pacing.
+
+**Extra usage is on (2026-11-08 05:08 UTC).** The seven-day allowance reached 100% (`status: rejected`). The account
+now reports `overageStatus: allowed` and `overageInUse: true`, and overage resets 2026-12-01. Work continues on extra
+usage, which is billed beyond the plan, on the owner's direction ("let's keep going", 05:04).
+- Pacing follows the 5-hour window only (owner direction). The seven-day rules above are suspended while overage is
+  allowed.
+- Every usage check pushes the active branches.
+- The owner was told plainly that extra usage is in use and can set a cap or say stop.
+- If overage is ever refused (`overageStatus` not `allowed`), go straight to CHECKPOINT and the scheduled resume.
+- **Owner scope on extra usage (2026-11-08):** finish the current wave only (integration-step, distribution, day-close,
+  migration to merge), and add nothing else. When it is done, checkpoint and pause until the Wednesday 2026-11-11 17:00
+  UTC reset.
+
 ## Resume messages (orchestrator v3)
 When resuming an agent after a checkpoint, say: "your WIP was committed and pushed as `<sha>`; build on top of it;
 never amend, reset or rebase it". Never force-push; reconcile diverged branches with a normal merge or `git merge -s ours`.

@@ -10,3 +10,22 @@ updates:
   - package-ecosystem: github-actions
     directory: "/"
     schedule: { interval: weekly }
+  # Base images are pinned by digest (review P2-7): these PRs are how they receive security fixes — never ignore them.
+  - package-ecosystem: docker
+    directories: ["/apps/api", "/apps/worker", "/infra/restore-drill"]
+    schedule: { interval: weekly }
+  # The lockfile-pinned TypeScript loader shipped inside the images.
+  - package-ecosystem: npm
+    directory: "/infra/docker/tsx-runtime"
+    schedule: { interval: weekly }
+  # Terraform providers (lock files of the env roots).
+  - package-ecosystem: terraform
+    directories:
+      [
+        "/infra/terraform/envs/bootstrap",
+        "/infra/terraform/envs/demo",
+        "/infra/terraform/envs/staging",
+        "/infra/terraform/envs/production",
+        "/infra/terraform/envs/github",
+      ]
+    schedule: { interval: weekly }
