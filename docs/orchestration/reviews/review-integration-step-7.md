@@ -11,7 +11,7 @@
 
 Counts: **P0 0 · P1 2 · P2 2 · P3 5.**
 
-Coverage: focused re-review. Checklist: 15 items — 7 probed, 6 code-read, 3 not applicable, 3 not probed with reasons
+Coverage: focused re-review. Checklist: 15 items — 3 probed, 7 code-read only, 3 not applicable, 2 not probed with reasons
 (§ 6). The focused pattern subset is in § 6. The branch did not move during the run (`932e7c1`); the worktree
 `/home/user/wt/integration-step` was not modified. I drafted the attack plan from Amendment 5 and the round-6 diff
 **before** reading the builder's report.
@@ -240,7 +240,7 @@ The source was restored with `git checkout` after each mutant; the copy's tree w
 
 | # | Item | Status |
 |---|---|---|
-| 1 | Tenant isolation | not probed (no new tables or queries outside RLS-scoped `db(tx)`; new SQL in `penaltyOn` and `cardDepositForfeitProblem` runs through the tenant transaction) — code-read only |
+| 1 | Tenant isolation | code-read only (no new tables or queries outside RLS-scoped `db(tx)`; new SQL in `penaltyOn` and `cardDepositForfeitProblem` runs through the tenant transaction) |
 | 2 | Authorization | code-read only: forfeit needs `finance.posting.create` (front desk holds it; relevant to R7-P1-1 severity); transfers `finance.posting.transfer`; capture `payments.payment.collect`. R7-P3-3 (property scope of a recorded hold) |
 | 3 | Money and finance principles | probed — findings R7-P1-1, R7-P1-2, R7-P2-1 |
 | 4 | Idempotency and concurrency | code-read — R7-P3-1 (capture hash). Concurrency of two forfeits not probed (the R7-P1-1 fix names the lock) |
