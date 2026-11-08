@@ -1,0 +1,442 @@
+/**
+ * Re-review #6 probes (steward). FINDING tests assert the defect (they pass while it exists).
+ * Every FINDING PoC of integration-step-poc/r5-fix-attacks.test.ts.txt is flipped to assert the refusal; the class is
+ * closed, not the path — each rule has a test per entry point that moves card money or the debt it may pay, the reverse
+ * orders included, and the lock guards are proven with the competing writer INSIDE the holder's window.
+ */
+import { sql } from '@portico/db';
+import { financeForReservations } from '@portico/finance';
+import { newId, type RequestContext } from '@portico/kernel';
+import { platform } from '@portico/platform';
+import type { Booking } from '@portico/reservations';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import {
+  applied,
+  bookingInput,
+  bookWithCard,
+  cardholderConfirms,
+  guestWithCard,
+  kandu,
+  organization,
+  readyUnit,
+  type Scenario,
+  type ScenarioOrg,
+  startScenario,
+} from './scenarios/harness';
+
+let s: Scenario;
+beforeAll(async () => {
+  s = await startScenario();
+});
+afterAll(async () => s?.close());
+
+const settle = <T>(p: Promise<T>) =>
+  p.then(
+    (v) => ({ ok: true as const, v }),
+    (e: unknown) => ({
+      ok: false as const,
+      e: e as { code?: string; message?: string; status?: number; details?: Record<string, unknown> },
+    }),
+  );
+const codeOf = (r: { ok: boolean; e?: { code?: string } }) => (r.ok ? 'accepted' : (r.e?.code as string));
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+type K = Awaited<ReturnType<typeof kandu>>;
+const usd = (amountMinor: number) => ({ amountMinor, currency: 'USD' });
+function gate() {
+  let open: () => void = () => undefined;
+  const p = new Promise<void>((r) => {
+    open = r;
+  });
+  return { p, open };
+}
+
+const simAccount = async (org: ScenarioOrg, legalEntityId: string) =>
+  org.run(org.setup, async (tx) => {
+    const a = (await s.c.services.payments.tx.listAccounts(tx, legalEntityId)).find(
+      (x) => x.provider === 'simulator',
+    );
+    if (!a) throw new Error('no simulator account');
+    return a.id;
+  });
+const requestsOn = async (refId: string) =>
+  (
+    await sql<{ id: string; amount_minor: number; paid_minor: number; status: string; version: number }>`
+      select id, amount_minor::int, paid_minor::int, status, version from payments.payment_requests
+       where ref_id = ${refId} order by created_at`.execute(s.t.admin.kysely)
+  ).rows;
+const paymentsOn = async (refId: string) =>
+  (
+    await sql<{ amount_minor: number; status: string; purpose: string }>`
+      select amount_minor::int, status, purpose from payments.payments where ref_id = ${refId}
+       order by created_at`.execute(s.t.admin.kysely)
+  ).rows;
+const linkStates = async (refId: string) =>
+  (
+    await sql<{
+      id: string;
+      status: string;
+      link_status: string;
+      amount_minor: number;
+      link_url: string | null;
+    }>`
+      select id, status, link_status, amount_minor::int, link_url from payments.payment_requests
+       where ref_id = ${refId} order by created_at`.execute(s.t.admin.kysely)
+  ).rows;
+const payExceptions = async (org: ScenarioOrg) =>
+  (
+    await sql<{ kind: string; status: string }>`select kind, status from payments.exceptions
+       where tenant_id = ${org.tenantId} order by created_at`.execute(s.t.admin.kysely)
+  ).rows;
+const methodFor = async (
+  org: ScenarioOrg,
+  k: K,
+  owner: { type: 'guest_profile' | 'booking'; id: string },
+  scope: Record<string, unknown>,
+  token = 'pm_card_amex',
+) =>
+  org.run(org.setup, async (tx) =>
+    s.c.services.payments.tx.createMethod(tx, {
+      accountId: await simAccount(org, k.legalEntityId),
+      propertyId: k.id,
+      kind: 'card',
+      providerToken: token,
+      brand: 'amex',
+      last4: '8431',
+      owner,
+      mitAgreement: true,
+      mandate: {
+        termsVersion: 'card-on-file-2027-01',
+        acceptedAt: s.clock.now().toISOString(),
+        channel: 'front_desk',
+        scope: { legalEntityId: k.legalEntityId, maxAmount: usd(5_000_000), ...scope } as never,
+      },
+    }),
+  );
+const bookFor = async (
+  org: ScenarioOrg,
+  k: K,
+  ctx: RequestContext,
+  profileId: string,
+  arrival: string,
+  departure: string,
+  type = 'BV',
+) =>
+  applied<Booking>(
+    await org.run(ctx, (tx) =>
+      s.c.services.reservations.createBooking(
+        tx,
+        bookingInput(k, { arrival, departure, guestProfileId: profileId, type }),
+      ),
+    ),
+  );
+const folioOfStay = async (org: ScenarioOrg, k: K, stayId: string, payer: string) =>
+  (
+    await org.run(org.setup, (tx) =>
+      financeForReservations(s.c.services.finance).openFolio(tx, {
+        propertyId: k.id,
+        owner: { type: 'stay', id: stayId },
+        payer: { type: 'profile', id: payer },
+      }),
+    )
+  ).folioId;
+const owe = (
+  org: ScenarioOrg,
+  k: K,
+  ctx: RequestContext,
+  stayId: string,
+  amountMinor: number,
+  what = 'Dinner',
+) =>
+  org.run(ctx, (tx) =>
+    s.c.services.finance.postCharge(tx, {
+      propertyId: k.id,
+      target: { type: 'stay', id: stayId },
+      chargeCode: 'MISC',
+      amount: usd(amountMinor),
+      priceMode: 'inclusive',
+      description: what,
+      serviceDate: '2027-03-10',
+      sourceRef: { type: 'pos_check', id: newId() },
+      idempotencyKey: `pos:${newId()}`,
+    }),
+  );
+const balanceOf = async (org: ScenarioOrg, folioId: string) =>
+  (await org.run(org.setup, (tx) => s.c.services.finance.getFolio(tx, folioId))).balance.amountMinor;
+const cardCharge = (
+  ctx: RequestContext,
+  k: K,
+  methodId: string,
+  ref: { type: 'folio' | 'booking'; id: string },
+  amountMinor: number,
+  purpose?: 'balance' | 'deposit' | 'no_show' | 'custom' | 'incidentals',
+) =>
+  settle(
+    s.c.services.payments.chargeNow(ctx, {
+      propertyId: k.id,
+      methodId,
+      amount: usd(amountMinor),
+      ref,
+      ...(purpose ? { purpose } : {}),
+      businessKey: newId(),
+    }),
+  );
+async function addStay(
+  org: ScenarioOrg,
+  k: K,
+  ctx: RequestContext,
+  booking: Booking,
+  guestProfileId: string,
+) {
+  const { reservations } = s.c.services;
+  const extra = bookingInput(k, {
+    arrival: booking.stays[0]?.arrival as string,
+    departure: booking.stays[0]?.departure as string,
+    type: 'WV',
+    guestProfileId,
+  }).stays[0];
+  const preview = await org.run(ctx, (tx) =>
+    reservations.previewChange(tx, { kind: 'add_stay', bookingId: booking.id, stay: extra } as never),
+  );
+  await reservations.commitChangeSafely(s.t.db, ctx, { previewToken: preview.token });
+  const now = await org.run(ctx, (tx) => reservations.getBooking(tx, booking.id));
+  return now.stays.find((x) => x.id !== booking.stays[0]?.id)?.id as string;
+}
+const paidDepositLink = async (
+  org: ScenarioOrg,
+  k: K,
+  bookingId: string,
+  profileId: string,
+  amountMinor: number,
+) => {
+  const { payments } = s.c.services;
+  const desk = org.staff('front_desk', 'Hassan', [k.id]);
+  const gm = org.staff('general_manager', 'GM', [k.id]);
+  const req = await org.run(desk, (tx) =>
+    payments.tx.createPaymentRequest(tx, {
+      propertyId: k.id,
+      payer: { type: 'guest_profile', id: profileId, name: 'Guest' },
+      amount: usd(amountMinor),
+      purpose: 'deposit',
+      ref: { type: 'booking', id: bookingId },
+      expiresAt: new Date(s.clock.now().getTime() + 86_400_000).toISOString(),
+      businessKey: newId(),
+    }),
+  );
+  await payments.ensurePaymentLink(gm, req.id);
+  await payments.simulateRequestPayment(gm, req.id);
+  await payments.deliverSimulatorWebhooks(gm, await simAccount(org, k.legalEntityId));
+  await s.drain();
+};
+
+// ───────────────────────── R5-P1-1: purposes are facts ─────────────────────────
+
+describe('R6-A — a capture pays an ordinary bill under a guarantee + no-show agreement', () => {
+  it('FINDING R6-A: balance is refused, but hold + capture of the same USD 2,500 onto the folio is accepted', async () => {
+    const org = await organization(s);
+    const k = await kandu(s, org, '2027-03-10');
+    const desk = org.staff('front_desk', 'Hassan', [k.id]);
+    const gm = org.staff('general_manager', 'GM', [k.id]);
+    const { profileId } = await guestWithCard(s, org, k);
+    const b = await bookFor(org, k, desk, profileId, '2027-03-10', '2027-03-14');
+    const stayId = b.stays[0]?.id as string;
+    const folioId = await folioOfStay(org, k, stayId, profileId);
+    const card = await methodFor(
+      org,
+      k,
+      { type: 'guest_profile', id: profileId },
+      { purposes: ['guarantee', 'no_show'], bookingIds: [b.id] },
+    );
+    await owe(org, k, desk, stayId, 250_000, 'Ordinary bill');
+    await s.drain();
+    const folio = { type: 'folio' as const, id: folioId };
+    expect(codeOf(await cardCharge(desk, k, card.id, folio, 250_000, 'balance'))).toBe(
+      'mandate_purpose_not_covered',
+    );
+    const hold = await settle(
+      org.run(desk, (tx) =>
+        s.c.services.payments.tx.authorize(tx, {
+          propertyId: k.id,
+          methodId: card.id,
+          amount: usd(250_000),
+          ref: folio,
+          businessKey: newId(),
+        } as never),
+      ),
+    );
+    expect(codeOf(hold)).toBe('accepted');
+    await s.c.services.payments.deliverSimulatorWebhooks(gm, await simAccount(org, k.legalEntityId));
+    await s.drain();
+    const cap = await settle(
+      org.run(desk, (tx) =>
+        s.c.services.payments.tx.capture(tx, {
+          authorizationId: hold.ok ? (hold.v as { id: string }).id : '',
+          businessKey: newId(),
+        }),
+      ),
+    );
+    expect(codeOf(cap)).toBe('accepted'); // FINDING
+    await s.c.services.payments.deliverSimulatorWebhooks(gm, await simAccount(org, k.legalEntityId));
+    await s.drain();
+    expect(await balanceOf(org, folioId)).toBe(0); // FINDING: the guarantee card paid the ordinary bill
+    expect((await paymentsOn(folioId)).map((p) => `${p.purpose}:${p.status}`)).toContain('balance:succeeded');
+  });
+});
+
+describe('R6-B — a refund posting is neither money nor debt to the provenance, so it moves freely', () => {
+  it('FINDING R6-B: Otto’s refund moved onto Vera’s covered folio is paid by Vera’s card; Otto keeps his charges paid and his money back', async () => {
+    const org = await organization(s);
+    const k = await kandu(s, org, '2027-03-10');
+    const { finance, payments } = s.c.services;
+    const desk = org.staff('front_desk', 'Hassan', [k.id]);
+    const gm = org.staff('general_manager', 'GM', [k.id]);
+    const { profileId: vera, card } = await guestWithCard(s, org, k, { firstName: 'Vera', lastName: 'Victim' });
+    const { profileId: otto } = await guestWithCard(
+      s,
+      org,
+      k,
+      { firstName: 'Otto', lastName: 'Other' },
+      'pm_card_mastercard',
+    );
+    const v1 = await bookFor(org, k, desk, vera, '2027-06-10', '2027-06-12');
+    const y = await bookFor(org, k, desk, otto, '2027-06-10', '2027-06-12');
+    await cardholderConfirms(s, org, card.id, v1.id);
+    const f1 = await folioOfStay(org, k, v1.stays[0]?.id as string, vera);
+    const fy = await folioOfStay(org, k, y.stays[0]?.id as string, otto);
+    await owe(org, k, desk, y.stays[0]?.id as string, 30_000, 'Otto spa');
+    const acct = await simAccount(org, k.legalEntityId);
+    const req = await org.run(desk, (tx) =>
+      payments.tx.createPaymentRequest(tx, {
+        propertyId: k.id,
+        payer: { type: 'guest_profile', id: otto, name: 'Otto' },
+        amount: usd(30_000),
+        purpose: 'balance',
+        ref: { type: 'folio', id: fy },
+        expiresAt: new Date(s.clock.now().getTime() + 86_400_000).toISOString(),
+        businessKey: newId(),
+      }),
+    );
+    await payments.ensurePaymentLink(gm, req.id);
+    await payments.simulateRequestPayment(gm, req.id);
+    await payments.deliverSimulatorWebhooks(gm, acct);
+    await s.drain();
+    expect(await balanceOf(org, fy)).toBe(0);
+    const pid = (
+      await sql<{ id: string }>`select id from payments.payments where ref_id = ${fy} and status = 'succeeded'`.execute(
+        s.t.admin.kysely,
+      )
+    ).rows[0]?.id as string;
+    await org.run(gm, (tx) =>
+      payments.tx.refund(tx, { paymentId: pid, amount: usd(30_000), reason: 'Goodwill', businessKey: newId() }),
+    );
+    await payments.deliverSimulatorWebhooks(gm, acct);
+    await s.drain();
+    expect(await balanceOf(org, fy)).toBe(30_000);
+    const refundPosting = (
+      await sql<{ id: string }>`select id from finance.postings where folio_id = ${fy} and kind = 'refund'`.execute(
+        s.t.admin.kysely,
+      )
+    ).rows[0]?.id as string;
+    expect(refundPosting).toBeTruthy();
+    const t = await settle(
+      org.run(gm, (tx) =>
+        finance.transferPostings(tx, {
+          fromFolioId: fy,
+          toFolioId: f1,
+          items: [{ postingId: refundPosting }],
+          reason: 'Guest asked',
+          idempotencyKey: newId(),
+        }),
+      ),
+    );
+    expect(codeOf(t)).toBe('accepted'); // FINDING: no money and no debt owner seen
+    expect(await balanceOf(org, fy)).toBe(0); // Otto's spa now "paid" by a payment he got back
+    expect(await balanceOf(org, f1)).toBe(30_000);
+    expect(codeOf(await cardCharge(desk, k, card.id, { type: 'folio', id: f1 }, 30_000))).toBe('accepted'); // FINDING
+  });
+});
+
+describe('R6-C — corporate card named for the booking pays the master folio its stay is routed to (regression check)', () => {
+  it('CLEAN R6-C: routing the stay to its booking’s master folio, then charging the named card there, is accepted', async () => {
+    const org = await organization(s);
+    const k = await kandu(s, org, '2027-03-10');
+    const desk = org.staff('front_desk', 'Hassan', [k.id]);
+    const gm = org.staff('general_manager', 'GM', [k.id]);
+    const { profileId: booker } = await guestWithCard(s, org, k);
+    const b = await bookFor(org, k, desk, booker, '2027-03-10', '2027-03-14');
+    const stayId = b.stays[0]?.id as string;
+    await folioOfStay(org, k, stayId, booker);
+    const master = (
+      await org.run(org.setup, (tx) =>
+        financeForReservations(s.c.services.finance).openFolio(tx, {
+          propertyId: k.id,
+          owner: { type: 'booking', id: b.id },
+          payer: { type: 'profile', id: booker },
+        }),
+      )
+    ).folioId;
+    const card = await methodFor(
+      org,
+      k,
+      { type: 'guest_profile', id: booker },
+      { purposes: ['guarantee', 'balance'], bookingIds: [b.id] },
+      'pm_card_mastercard',
+    );
+    const r = await settle(
+      org.run(gm, (tx) =>
+        s.c.services.finance.createBillingRule(tx, {
+          propertyId: k.id,
+          owner: { type: 'stay', id: stayId },
+          destinationFolioId: master,
+          label: 'Company pays extras',
+          selector: { chargeGroups: ['misc'] },
+        }),
+      ),
+    );
+    expect(codeOf(r)).toBe('accepted');
+    await owe(org, k, desk, stayId, 40_000, 'Dinner');
+    await s.drain();
+    expect(await balanceOf(org, master)).toBe(40_000);
+    expect(codeOf(await cardCharge(desk, k, card.id, { type: 'folio', id: master }, 40_000))).toBe('accepted');
+  });
+});
+
+describe('R6-D — the recorded penalty is not reconciled with the ledger', () => {
+  it('FINDING R6-D: penalty posted, then credited off; an ordinary charge is then taken as `no_show` from a guarantee + no-show card', async () => {
+    const org = await organization(s);
+    const k = await kandu(s, org, '2027-03-10');
+    const { reservations, finance } = s.c.services;
+    const desk = org.staff('front_desk', 'Hassan', [k.id]);
+    const gm = org.staff('general_manager', 'GM', [k.id]);
+    const auditor = org.staff('night_auditor', 'Night audit', [k.id]);
+    const { profileId } = await guestWithCard(s, org, k);
+    const b = await bookFor(org, k, desk, profileId, '2027-03-10', '2027-03-14');
+    const stayId = b.stays[0]?.id as string;
+    const folioId = await folioOfStay(org, k, stayId, profileId);
+    const card = await methodFor(
+      org,
+      k,
+      { type: 'guest_profile', id: profileId },
+      { purposes: ['guarantee', 'no_show'], bookingIds: [b.id] },
+    );
+    const noShow = await org.run(auditor, (tx) => reservations.markNoShow(tx, { stayId, idempotencyKey: newId() }));
+    const penalty = noShow.penalty.amountMinor;
+    await s.drain();
+    const postingId = noShow.penaltyPostingIds[0] as string;
+    const adj = await settle(
+      org.run(gm, (tx) =>
+        finance.adjustPosting(tx, {
+          postingId,
+          reasonCode: 'goodwill',
+          note: 'Penalty waived as goodwill',
+          idempotencyKey: newId(),
+        } as never),
+      ),
+    );
+    expect(codeOf(adj)).toBe('accepted');
+    expect(await balanceOf(org, folioId)).toBe(0);
+    await owe(org, k, desk, stayId, penalty, 'Minibar and laundry');
+    await s.drain();
+    const r = await cardCharge(desk, k, card.id, { type: 'folio', id: folioId }, penalty, 'no_show');
+    expect(codeOf(r)).toBe('accepted'); // FINDING: the waived penalty still justifies taking an ordinary bill
+  });
+});

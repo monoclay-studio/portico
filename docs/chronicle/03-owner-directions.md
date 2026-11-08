@@ -1063,3 +1063,21 @@ short answer. in your honest review, can this product once it hit the market com
 and for your question. should I add the partner platform after Channex. yes and anything else that you think is going to be helpful and make the product better. open api. i don't care how long the whole project takes, as long as the final product is in it's most powerful form to compete with opera, cloudbeds, mews etc.. keep adding on if it's not overkill for where we are going and where our vision is
 ````
 
+## 2026-11-08 05:04 UTC — Owner
+
+````text
+let's keep going
+````
+
+## 2026-11-08 05:37 UTC — Owner
+
+````text
+let's do this current wave of tasks you are on right now. feel free to introduce anything new to finish it. don't add any more on extra usage. finish when done until wednesday reset
+````
+
+## 2026-11-08 05:38 UTC — Owner
+
+````text
+don't let it effect your current work though. AT ALL
+````
+

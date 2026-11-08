@@ -1,0 +1,267 @@
+/**
+ * Steward review probes (money / zero-duplicates). Throwaway; kept as evidence in
+ * docs/orchestration/reviews/day-close-poc/.
+ */
+import { sql } from '@portico/db';
+import { money, newId, type Occupancy } from '@portico/kernel';
+import type { Offer } from '@portico/rates';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import {
+  addStay,
+  checkOut,
+  D,
+  entriesByKey,
+  type Harness,
+  NIGHT,
+  nightAudit,
+  type Org,
+  setupOrg,
+  startHarness,
+} from './harness';
+
+let h: Harness;
+beforeAll(async () => {
+  h = await startHarness();
+});
+afterAll(async () => h?.close());
+
+const DAY = 86_400_000;
+const nightOf = (offset: number) => new Date(new Date(NIGHT).getTime() + offset * DAY).toISOString();
+
+/** Re-confirm a stay's price (what reservations does on a rate correction, occupancy change or extension). */
+async function requote(
+  org: Org,
+  stayId: string,
+  o: { arrival: string; departure: string; occupancy: Occupancy; plan?: 'BAR' | 'AI'; unitType?: 'BV' | 'WV' },
+) {
+  const unitType = org.unitTypes.find((u) => u.code === (o.unitType ?? 'BV'));
+  const planId = org.seeded.ratePlans[o.plan ?? 'BAR'] as string;
+  const quoted = await org.run((tx) =>
+    h.rates.quoteDetailed(tx, {
+      propertyId: org.propertyId,
+      nights: { from: o.arrival, to: o.departure },
+      occupancy: o.occupancy,
+      ratePlanIds: [planId],
+      unitTypeIds: [unitType?.id as string],
+      bookingDate: '2026-10-15',
+    }),
+  );
+  const offer = quoted.offers[0] as Offer;
+  if (!offer?.bookable) throw new Error('not bookable');
+  await org.run((tx) =>
+    sql`update dcl_fake.stays set departure = ${o.departure}::date, occupancy = ${JSON.stringify(o.occupancy)}::jsonb,
+        segments = ${JSON.stringify([{ from: o.arrival, to: o.departure, terms: offer.terms }])}::jsonb
+        where id = ${stayId}`.execute(tx.db),
+  );
+  return offer.terms;
+}
+
+async function folioLines(org: Org, stayId: string) {
+  const { rows } = await sql<{ charge_code: string | null; kind: string; amount: string; key: string }>`
+    select p.charge_code, p.kind, p.amount_minor::text as amount, e.idempotency_key as key
+      from finance.postings p
+      join finance.folios f on f.id = p.folio_id
+      join finance.journal_entries e on e.id = p.entry_id
+     where f.tenant_id = ${org.tenantId} and f.owner_type = 'stay' and f.owner_id = ${stayId}
+     order by e.idempotency_key`.execute(h.t.admin.kysely);
+  return rows;
+}
+
+describe('R-PREGRANT: the pre-granted allowance and later changes to the stay', () => {
+  it('an occupancy correction after the pre-grant makes the next night unpostable (idempotency conflict)', async () => {
+    const org = await setupOrg(h);
+    const s = await addStay(h, org, {
+      arrival: D,
+      departure: '2026-11-10',
+      plan: 'AI',
+      unitType: 'WV',
+      occupancy: { adults: 2, childrenAges: [] },
+    });
+    const auditor = nightAudit(h, org);
+    const r1 = await h.service.startRun(h.t.db, auditor, { propertyId: org.propertyId });
+    expect(r1.runStatus).toBe('completed');
+    expect(r1.steps.find((x) => x.key === 'post_advance')?.detail.allowances).toMatchObject({ granted: 1 });
+    // Day D+1: one adult leaves; reservations re-confirms the price for 1 adult (dining credit 50 instead of 100).
+    await requote(org, s.stayId, {
+      arrival: D,
+      departure: '2026-11-10',
+      occupancy: { adults: 1, childrenAges: [] },
+      plan: 'AI',
+      unitType: 'WV',
+    });
+    h.clock.set(nightOf(1));
+    const r2 = await h.service.startRun(h.t.db, auditor, { propertyId: org.propertyId });
+    const step = r2.steps.find((x) => x.key === 'room_and_package_postings');
+    console.log('R-PREGRANT-1', r2.runStatus, JSON.stringify(r2.failure), JSON.stringify(step?.failedItems));
+    expect(r2.runStatus).toBe('failed');
+    expect(step?.failedItems?.[0]).toMatchObject({ code: 'idempotency_conflict', retryable: true });
+    // The whole night is rolled back with it: no room charge for 2026-11-08.
+    expect(await entriesByKey(h, org.tenantId, `room:${s.stayId}:2026-11-08`)).toEqual([]);
+    // Resume fails identically (deterministic) — "retryable" is wrong.
+    const again = await h.service.resumeRun(h.t.db, auditor, r2.id, r2.version);
+    expect(again.runStatus).toBe('failed');
+    // The only way forward is the override, which skips the ROOM night too (revenue silently not posted).
+    const ov = await org.run(
+      (tx) =>
+        h.service.overrideItem(tx, r2.id, {
+          itemKey: `item:room_and_package_postings:night:${s.stayId}:2026-11-08`,
+          reason: 'allowance conflict',
+        }),
+      auditor,
+    );
+    const done = await h.service.resumeRun(h.t.db, auditor, r2.id, ov.version);
+    expect(done.runStatus).toBe('completed');
+    expect(await entriesByKey(h, org.tenantId, `room:${s.stayId}:2026-11-08`)).toEqual([]);
+    // And the next close fails again on the catch-up of that night.
+    h.clock.set(nightOf(2));
+    const r3 = await h.service.startRun(h.t.db, auditor, { propertyId: org.propertyId });
+    console.log('R-PREGRANT-1 next close', r3.runStatus, JSON.stringify(r3.failure));
+    expect(r3.runStatus).toBe('failed');
+  });
+
+  it('an early departure after the pre-grant leaves a charge for a night that is not part of the stay', async () => {
+    const org = await setupOrg(h);
+    const s = await addStay(h, org, {
+      arrival: D,
+      departure: '2026-11-10',
+      plan: 'AI',
+      unitType: 'WV',
+      occupancy: { adults: 2, childrenAges: [] },
+    });
+    const auditor = nightAudit(h, org);
+    expect((await h.service.startRun(h.t.db, auditor, { propertyId: org.propertyId })).runStatus).toBe(
+      'completed',
+    );
+    // Day D+1, 10:00: the guests leave early (stay shortened to one night) and check out.
+    await requote(org, s.stayId, {
+      arrival: D,
+      departure: '2026-11-08',
+      occupancy: { adults: 2, childrenAges: [] },
+      plan: 'AI',
+      unitType: 'WV',
+    });
+    await checkOut(org, s.stayId);
+    // finance's own checkout consumer (reservations.stay.checkedOut) closes every allowance of the stay:
+    await org.run((tx) => h.finance.closeAllowances(tx, { stayId: s.stayId, upTo: '9999-12-31' }));
+    const lines = await folioLines(org, s.stayId);
+    console.log('R-PREGRANT-2 folio', JSON.stringify(lines, null, 1));
+    const night2 = lines.filter((l) => l.key.endsWith(':2026-11-08') && l.charge_code === 'ALLOWANCE_DINING');
+    // The guest owes a dining credit for the night of 8 Nov, which is not part of the (shortened) stay ...
+    expect(night2.reduce((a, l) => a + Number(l.amount), 0)).toBeGreaterThan(0);
+    // ... and finance forfeited it to breakage revenue.
+    const breakage = await entriesByKey(h, org.tenantId, 'breakage:');
+    console.log('R-PREGRANT-2 breakage', JSON.stringify(breakage));
+    expect(breakage.length).toBe(2);
+  });
+});
+
+describe('R-DEFER: a deferred departure line and an extension', () => {
+  it('a cancelled seaplane (stay extended after the last night closed) charges the departure transfer twice', async () => {
+    const org = await setupOrg(h);
+    const s = await addStay(h, org, {
+      arrival: D,
+      departure: '2026-11-09',
+      plan: 'AI',
+      unitType: 'WV',
+      occupancy: { adults: 2, childrenAges: [] },
+    });
+    const auditor = nightAudit(h, org);
+    expect((await h.service.startRun(h.t.db, auditor, { propertyId: org.propertyId })).runStatus).toBe(
+      'completed',
+    );
+    h.clock.set(nightOf(1));
+    expect((await h.service.startRun(h.t.db, auditor, { propertyId: org.propertyId })).runStatus).toBe(
+      'completed',
+    );
+    // Departure day 9 Nov: the seaplane is cancelled (weather); front office extends the stay by one night,
+    // exactly as Day Close's own readiness message suggests, and reservations re-confirms the price.
+    await requote(org, s.stayId, {
+      arrival: D,
+      departure: '2026-11-10',
+      occupancy: { adults: 2, childrenAges: [] },
+      plan: 'AI',
+      unitType: 'WV',
+    });
+    h.clock.set(nightOf(2));
+    expect((await h.service.startRun(h.t.db, auditor, { propertyId: org.propertyId })).runStatus).toBe(
+      'completed',
+    );
+    await checkOut(org, s.stayId); // leaves on 10 Nov on the rebooked seaplane
+    h.clock.set(nightOf(3));
+    expect((await h.service.startRun(h.t.db, auditor, { propertyId: org.propertyId })).runStatus).toBe(
+      'completed',
+    );
+    const lines = await folioLines(org, s.stayId);
+    const transfers = lines.filter((l) => l.charge_code === 'TRANSFER_SEAPLANE' && l.kind === 'charge');
+    console.log('R-DEFER transfers', JSON.stringify(transfers));
+    const deferred = await h.t.admin.kysely
+      .selectFrom('day_close.deferred_lines')
+      .select(['idempotency_key', 'service_date', 'status'])
+      .where('stay_id', '=', s.stayId)
+      .execute();
+    console.log('R-DEFER deferred', JSON.stringify(deferred));
+    // One arrival seaplane + one departure seaplane were flown; three were charged.
+    expect(transfers.length).toBe(3);
+  });
+});
+
+describe('R-CATCHUP: an overridden night and the catch-up', () => {
+  it('a night overridden "to be posted by hand" is posted again by the next close once the price is re-confirmed', async () => {
+    const org = await setupOrg(h);
+    const bad = await addStay(h, org, {
+      arrival: '2026-11-06',
+      departure: '2026-11-10',
+      mutateTerms: (t) => ({
+        ...t,
+        nights: t.nights.map((n) => ({ ...n, amount: { ...n.amount, amountMinor: 1 } })),
+      }),
+    });
+    const auditor = nightAudit(h, org);
+    const run = await h.service.startRun(h.t.db, auditor, { propertyId: org.propertyId });
+    expect(run.runStatus).toBe('failed');
+    const ov = await org.run(
+      (tx) =>
+        h.service.overrideItem(tx, run.id, {
+          itemKey: `item:room_and_package_postings:night:${bad.stayId}:${D}`,
+          // The builder's own test uses this reason.
+          reason: 'Price under review by revenue; the night will be posted by hand tomorrow',
+        }),
+      auditor,
+    );
+    expect((await h.service.resumeRun(h.t.db, auditor, run.id, ov.version)).runStatus).toBe('completed');
+    // Next morning: revenue posts the night by hand (as the failed item told them to) ...
+    const desk = org.as(['finance.posting.create', 'finance.folio.read']);
+    await org.run(
+      (tx) =>
+        h.finance.postCharge(tx, {
+          propertyId: org.propertyId,
+          target: { type: 'stay', id: bad.stayId },
+          chargeCode: 'ROOM',
+          amount: money(50_000, 'USD'),
+          serviceDate: D,
+          description: `Room — night ${D} (posted by hand after Day Close override)`,
+          sourceRef: { type: 'manual', id: newId() },
+          idempotencyKey: `manual:${bad.stayId}:${D}`,
+          reason: 'Night skipped by Day Close override; posted by hand',
+          occupancy: { adults: 2, childrenAges: [] },
+        }),
+      desk,
+    );
+    // ... and front office re-confirms the price (valid seal again).
+    await requote(org, bad.stayId, {
+      arrival: '2026-11-06',
+      departure: '2026-11-10',
+      occupancy: { adults: 2, childrenAges: [] },
+    });
+    h.clock.set(nightOf(1));
+    const next = await h.service.startRun(h.t.db, auditor, { propertyId: org.propertyId });
+    expect(next.runStatus).toBe('completed');
+    const lines = await folioLines(org, bad.stayId);
+    const nightD = lines.filter(
+      (l) => l.charge_code === 'ROOM' && l.kind === 'charge' && (l.key.endsWith(`:${D}`) || l.key === `manual:${bad.stayId}:${D}`),
+    );
+    console.log('R-CATCHUP night D room charges', JSON.stringify(nightD));
+    // Two room charges for one night.
+    expect(nightD.length).toBe(2);
+  });
+});

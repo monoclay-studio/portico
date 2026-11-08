@@ -1,0 +1,187 @@
+/**
+ * Steward review probes (RLS, property scope on every entry point, integrity bypass attempts). Throwaway evidence.
+ */
+import { sql, withTenantTx } from '@portico/db';
+import { newId } from '@portico/kernel';
+import { platform } from '@portico/platform';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import {
+  addStay,
+  businessDate,
+  D,
+  type Harness,
+  nightAudit,
+  setupOrg,
+  startHarness,
+} from './harness';
+
+let h: Harness;
+beforeAll(async () => {
+  h = await startHarness();
+});
+afterAll(async () => h?.close());
+
+describe('R-RLS', () => {
+  it('every day_close table has tenant_id, RLS enabled AND forced, and a policy', async () => {
+    const { rows } = await sql<{ relname: string; rls: boolean; forced: boolean; policies: number; has_tenant: boolean }>`
+      select c.relname, c.relrowsecurity as rls, c.relforcerowsecurity as forced,
+             (select count(*)::int from pg_policy p where p.polrelid = c.oid) as policies,
+             exists (select 1 from information_schema.columns k where k.table_schema = 'day_close'
+                       and k.table_name = c.relname and k.column_name = 'tenant_id') as has_tenant
+        from pg_class c join pg_namespace n on n.oid = c.relnamespace
+       where n.nspname = 'day_close' and c.relkind = 'r' order by c.relname`.execute(h.t.admin.kysely);
+    console.log('R-RLS', JSON.stringify(rows));
+    expect(rows).toHaveLength(11);
+    for (const r of rows) expect(r).toMatchObject({ rls: true, forced: true, has_tenant: true });
+    for (const r of rows) expect(r.policies).toBeGreaterThan(0);
+  });
+
+  it('another tenant sees zero rows of every day_close table even with a raw SELECT', async () => {
+    const a = await setupOrg(h);
+    await addStay(h, a, { arrival: '2026-11-06', departure: '2026-11-09' });
+    const run = await h.service.startRun(h.t.db, nightAudit(h, a), { propertyId: a.propertyId });
+    expect(run.runStatus).toBe('completed');
+    const b = await setupOrg(h);
+    const tables = [
+      'runs', 'steps', 'step_items', 'night_postings', 'deferred_lines', 'overrides', 'issues', 'day_facts',
+      'day_reports', 'schedules', 'schedule_log',
+    ];
+    for (const t of tables) {
+      const n = await withTenantTx(h.t.db, b.admin, async (tx) => {
+        const r = await sql<{ n: number }>`select count(*)::int as n from ${sql.table(`day_close.${t}`)}`.execute(tx.db);
+        return r.rows[0]?.n;
+      });
+      expect([t, n]).toEqual([t, 0]);
+    }
+  });
+});
+
+describe('R-SCOPE: a person with every Day Close permission at property A, against property B of the same organization', () => {
+  it('every entry point refuses (or hides) property B', async () => {
+    const org = await setupOrg(h);
+    // A second property in the same organization.
+    const pB = await org.run((tx) =>
+      platform.createProperty(tx, {
+        code: `B${newId().slice(-6).toUpperCase()}`,
+        name: 'Second Resort',
+        profile: 'resort',
+        legalEntityId: org.legalEntityId,
+        countryCode: 'MV',
+        timezone: 'Indian/Maldives',
+        baseCurrency: 'USD',
+        businessDate: D,
+        classification: { 'mv.establishmentType': 'resort', 'mv.inhabitedIsland': false, 'mv.registeredRooms': 50 },
+      }),
+    );
+    nightAudit(h, org);
+    const fullB = org.as(['dayClose.*', 'platform.businessDate.advance'], [pB.id], 'Auditor B');
+    // A run on B (not executed) and one follow-up on B, so there is something to resume, cancel, override, resolve.
+    const runB = await h.service.startRun(h.t.db, fullB, { propertyId: pB.id, execute: false });
+    expect(runB.runStatus).toBe('preflight');
+    await sql`insert into day_close.issues (id, tenant_id, property_id, business_date, code, severity, dedupe_key,
+      message, status, created_at) values (${newId()}, ${org.tenantId}, ${pB.id}, ${D}, 'no_show_fee_to_collect',
+      'warning', ${`probe:${pB.id}`}, 'probe', 'open', now())`.execute(h.t.admin.kysely);
+    const issuesB = await org.run((tx) => h.service.listIssues(tx, pB.id), fullB);
+    const onlyA = org.as(['dayClose.*', 'platform.businessDate.advance'], [org.propertyId], 'Auditor A');
+    const tryIt = async (name: string, fn: () => Promise<unknown>) => {
+      try {
+        await fn();
+        return [name, 'ALLOWED'];
+      } catch (e) {
+        return [name, (e as { code?: string }).code ?? (e as Error).message];
+      }
+    };
+    const results = [
+      await tryIt('getReadiness', () => org.run((tx) => h.service.getReadiness(tx, pB.id), onlyA)),
+      await tryIt('createRun', () => org.run((tx) => h.service.createRun(tx, { propertyId: pB.id }), onlyA)),
+      await tryIt('getRun', () => org.run((tx) => h.service.getRun(tx, runB.id), onlyA)),
+      await tryIt('listRuns', () => org.run((tx) => h.service.listRuns(tx, pB.id, { limit: 5 }), onlyA)),
+      await tryIt('executeRun', () => h.service.executeRun(h.t.db, onlyA, runB.id)),
+      await tryIt('resumeRun', () => h.service.resumeRun(h.t.db, onlyA, runB.id, runB.version)),
+      await tryIt('cancelRun', () => org.run((tx) => h.service.cancelRun(tx, runB.id, runB.version, 'x y z'), onlyA)),
+      await tryIt('overrideItem', () =>
+        org.run(
+          (tx) =>
+            h.service.overrideItem(tx, runB.id, { itemKey: runB.failure?.blockers?.[0] ?? 'x', reason: 'x y z' }),
+          onlyA,
+        ),
+      ),
+      await tryIt('listIssues', () => org.run((tx) => h.service.listIssues(tx, pB.id), onlyA)),
+      await tryIt('resolveIssue', async () => {
+        const i = issuesB[0];
+        if (!i) throw Object.assign(new Error('no issue on B'), { code: 'no_issue_to_try' });
+        return org.run((tx) => h.service.resolveIssue(tx, i.id, i.version, 'x'), onlyA);
+      }),
+      await tryIt('getReport', () => org.run((tx) => h.service.getReport(tx, pB.id, D), onlyA)),
+      await tryIt('getFacts', () => org.run((tx) => h.service.getFacts(tx, pB.id, D), onlyA)),
+      await tryIt('getPolicy', () => org.run((tx) => h.service.getPolicy(tx, pB.id), onlyA)),
+      await tryIt('updatePolicy', () =>
+        org.run((tx) => h.service.updatePolicy(tx, pB.id, { policy: {}, reason: 'x' }, 0), onlyA),
+      ),
+      await tryIt('skipToday', () => org.run((tx) => h.service.skipToday(tx, pB.id, 'x y z'), onlyA)),
+    ];
+    const board = await org.run((tx) => h.service.portfolio(tx), onlyA);
+    console.log('R-SCOPE', JSON.stringify(results), 'portfolio', JSON.stringify(board.properties.map((p) => p.propertyId)));
+    for (const [name, outcome] of results) expect([name, outcome]).not.toEqual([name, 'ALLOWED']);
+    expect(board.properties.map((p) => p.propertyId)).toEqual([org.propertyId]);
+  });
+});
+
+describe('R-INTEGRITY: trying to get past the integrity gate', () => {
+  it('an organization-level policy written straight through platform cannot demote integrity codes', async () => {
+    const org = await setupOrg(h);
+    await addStay(h, org, { arrival: '2026-11-06', departure: '2026-11-09' });
+    await org.run((tx) =>
+      platform.setPolicy(tx, {
+        key: 'dayClose.policy',
+        scopeType: 'organization',
+        scopeId: org.tenantId,
+        value: { warningCodes: ['integrity_failed', 'folio_ledger_mismatch', 'policy_invalid'] },
+        reason: 'bypass attempt',
+      }),
+    );
+    const auditor = nightAudit(h, org);
+    const ready = await org.run((tx) => h.service.getReadiness(tx, org.propertyId), auditor);
+    const pi = ready.blocking.find((i) => i.code === 'policy_invalid');
+    console.log('R-INTEGRITY policy_invalid', JSON.stringify(pi && { overridable: pi.overridable, msg: pi.message }));
+    expect(pi?.overridable).toBe(false);
+    const run = await h.service.startRun(h.t.db, auditor, { propertyId: org.propertyId });
+    expect(run.runStatus).toBe('blocked');
+    await expect(
+      org.run((tx) => h.service.overrideItem(tx, run.id, { itemKey: pi?.key as string, reason: 'go anyway' }), auditor),
+    ).rejects.toMatchObject({ code: 'integrity_not_overridable' });
+    expect(await businessDate(org)).toBe(D);
+  });
+
+  it('after an integrity failure: no override of the step, no cancel, no new run, no resolve', async () => {
+    const org = await setupOrg(h);
+    await addStay(h, org, { arrival: '2026-11-06', departure: '2026-11-09' });
+    const auditor = nightAudit(h, org);
+    h.fakes.inventory.discrepancies = [{ unitTypeId: newId(), night: D, sold: 3, consumed: 2 }];
+    try {
+      const run = await h.service.startRun(h.t.db, auditor, { propertyId: org.propertyId });
+      expect(run.failure).toMatchObject({ step: 'integrity', integrity: true });
+      const attempts = [] as unknown[];
+      for (const key of ['item:integrity:integrity', 'item:integrity:inventory_ledger', 'item:advance:integrity']) {
+        attempts.push(
+          await org
+            .run((tx) => h.service.overrideItem(tx, run.id, { itemKey: key, reason: 'push it through' }), auditor)
+            .then(() => 'ALLOWED', (e) => e.code),
+        );
+      }
+      attempts.push(
+        await org
+          .run((tx) => h.service.cancelRun(tx, run.id, run.version, 'start again clean'), auditor)
+          .then(() => 'ALLOWED', (e) => e.code),
+      );
+      const again = await h.service.startRun(h.t.db, auditor, { propertyId: org.propertyId });
+      attempts.push(again.alreadyActive ? 'same run returned' : 'NEW RUN');
+      console.log('R-INTEGRITY attempts', JSON.stringify(attempts));
+      expect(attempts).not.toContain('ALLOWED');
+      expect(attempts).not.toContain('NEW RUN');
+      expect(await businessDate(org)).toBe(D);
+    } finally {
+      h.fakes.inventory.discrepancies = [];
+    }
+  });
+});
