@@ -227,6 +227,14 @@ export interface RevisionProcessingTable {
   version: Generated<number>;
 }
 
+export interface WebhookRejectionsTable {
+  connection_id: string;
+  tenant_id: string;
+  rejected_total: number;
+  first_rejected_at: Ts;
+  last_rejected_at: Ts;
+}
+
 export interface InboundDeliveriesTable {
   id: string;
   tenant_id: string;
@@ -328,6 +336,7 @@ export interface DistributionDB {
   'distribution.inbound_revisions': InboundRevisionsTable;
   'distribution.revision_processing': RevisionProcessingTable;
   'distribution.inbound_deliveries': InboundDeliveriesTable;
+  'distribution.webhook_rejections': WebhookRejectionsTable;
   'distribution.exchange_log': ExchangeLogTable;
   'distribution.exceptions': ExceptionsTable;
   'distribution.discrepancies': DiscrepanciesTable;

@@ -528,7 +528,9 @@ export function distributionHttp(input: { database: PorticoDatabase; deps: Distr
         scope.post(
           '/distribution/webhooks/channex/:endpointId',
           {
-            config: { public: true, rateLimit: { max: 600, timeWindow: '1 minute' } },
+            // No per-IP limit (P2-5): the hub delivers every hotel's webhooks from a few addresses. The receiver
+            // limits REFUSED requests per endpoint (and unknown endpoints per source) and never a valid delivery.
+            config: { public: true, rateLimit: false },
             schema: { tags: ['Distribution webhooks'] },
           },
           async (req, reply) => {
@@ -540,6 +542,7 @@ export function distributionHttp(input: { database: PorticoDatabase; deps: Distr
               endpointId: typeof params.endpointId === 'string' ? params.endpointId : '',
               headers,
               rawBody: typeof req.body === 'string' ? req.body : '',
+              ip: req.ip,
             });
             return reply.status(r.status).send(r.body);
           },

@@ -27,6 +27,8 @@ export interface WebhookRequest {
   endpointId: string;
   headers: Record<string, string | undefined>;
   rawBody: string;
+  /** Source address (only used to limit requests to UNKNOWN endpoints). */
+  ip?: string;
 }
 
 export interface WebhookAnswer {
@@ -35,6 +37,41 @@ export interface WebhookAnswer {
 }
 
 const SIGNATURE_TOLERANCE_S = 300;
+
+/**
+ * Abuse limits of the public receiver (P2-5), keyed on what identifies the PROTECTED RESOURCE, not on who sends:
+ * Channex delivers every hotel's webhooks from a few egress IPs, so a per-IP limit would make tenants share one
+ * bucket. A request that passes the token check is NEVER limited. Refused requests are counted per endpoint (and
+ * per source address for unknown endpoints); past the limit they are answered 429 with nothing written. In memory,
+ * per API process (several processes multiply the limits; storage stays bounded either way).
+ */
+export class WebhookAbuseGuard {
+  private readonly hits = new Map<string, number[]>();
+  constructor(
+    readonly limits: { refusedPerEndpoint: number; unknownPerSource: number; windowMs: number } = {
+      refusedPerEndpoint: 30,
+      unknownPerSource: 60,
+      windowMs: 60_000,
+    },
+    private readonly now: () => number = Date.now,
+  ) {}
+
+  /** Count one refused request under `key`; true when the key is over `limit` in the window. */
+  over(key: string, limit: number): boolean {
+    const t = this.now();
+    const floor = t - this.limits.windowMs;
+    const list = (this.hits.get(key) ?? []).filter((x) => x > floor);
+    list.push(t);
+    this.hits.set(key, list.slice(-(limit + 1)));
+    if (this.hits.size > 50_000) {
+      for (const [k, v] of this.hits) if ((v[v.length - 1] ?? 0) <= floor) this.hits.delete(k);
+    }
+    return list.length > limit;
+  }
+}
+
+const defaultGuard = new WebhookAbuseGuard();
+const tooMany: WebhookAnswer = { status: 429, body: { error: 'too_many_refused_requests' } };
 
 export interface WebhookVerifier {
   verify(tx: TxContext, deps: DistributionDeps, conn: ConnectionRow, req: WebhookRequest): Promise<boolean>;
@@ -79,17 +116,23 @@ export async function receiveWebhook(
   database: PorticoDatabase,
   deps: DistributionDeps,
   req: WebhookRequest,
+  guard: WebhookAbuseGuard = defaultGuard,
 ): Promise<WebhookAnswer> {
-  if (!/^[0-9a-f-]{36}$/i.test(req.endpointId)) return { status: 404, body: { error: 'not_found' } };
+  const unknown = (): WebhookAnswer =>
+    guard.over(`source:${req.ip ?? 'unknown'}`, guard.limits.unknownPerSource)
+      ? tooMany
+      : { status: 404, body: { error: 'not_found' } };
+  if (!/^[0-9a-f-]{36}$/i.test(req.endpointId)) return unknown();
   const { rows } = await sql<{ tenant_id: string; connection_id: string; environment: TenantEnvironment }>`
     select * from distribution.route_webhook(${req.endpointId}::uuid)`.execute(database.kysely);
   const route = rows[0];
-  if (!route) return { status: 404, body: { error: 'not_found' } };
+  if (!route) return unknown();
   const ctx = systemContext(route.tenant_id, 'distribution-webhook', route.environment, newId());
   return withTenantTx(database, ctx, async (tx) => {
     const conn = await loadConnection(tx, route.connection_id);
     if (!(await VERIFIERS[conn.webhook_verifier].verify(tx, deps, conn, req))) {
-      await logDelivery(tx, { connectionId: conn.id, via: 'webhook', outcome: 'unauthenticated' });
+      if (guard.over(`endpoint:${req.endpointId}`, guard.limits.refusedPerEndpoint)) return tooMany;
+      await recordRejection(tx, conn);
       return { status: 401, body: { error: 'unauthenticated' } };
     }
     let notice: ReturnType<typeof deps.hub.parseWebhook>;
@@ -166,6 +209,33 @@ export async function receiveWebhook(
     await scheduleTenant(tx, tx.now);
     return { status: 200, body: { received: true, outcome: 'pull_scheduled' } };
   });
+}
+
+/** One refused request: an aggregated counter (bounded storage) and one standing exception. */
+async function recordRejection(tx: TxContext, conn: ConnectionRow): Promise<void> {
+  await sql`insert into distribution.webhook_rejections (connection_id, tenant_id, rejected_total, first_rejected_at, last_rejected_at)
+            values (${conn.id}::uuid, ${tx.tenantId}::uuid, 1, ${tx.now}, ${tx.now})
+            on conflict (connection_id) do update
+              set rejected_total = distribution.webhook_rejections.rejected_total + 1,
+                  last_rejected_at = excluded.last_rejected_at`.execute(tx.db);
+  await raiseException(
+    tx,
+    {
+      connectionId: conn.id,
+      propertyId: conn.property_id,
+      code: 'webhook_rejected',
+      dedupeKey: 'webhook_rejected',
+      severity: 'routine',
+      problem:
+        'Notifications with a missing or wrong token are reaching this connection’s webhook address (refused; nothing was stored).',
+      businessImpact:
+        'None while the hub uses the right token. If the hub itself is refused, bookings arrive by the 15-minute pull instead.',
+      responsibleParty: 'monoclay',
+      nextStep:
+        'If the hub’s notifications are refused, rotate the webhook token and verify the connection; otherwise someone is probing the address.',
+    },
+    { standing: true },
+  );
 }
 
 /** Endpoint id from a callback URL (`…/v1/distribution/webhooks/channex/<endpointId>`). */

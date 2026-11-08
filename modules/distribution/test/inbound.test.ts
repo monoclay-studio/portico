@@ -96,7 +96,14 @@ describe('webhook endpoint: authenticate, parse, store durably', () => {
       await send('01a1b49d-0000-7000-8000-000000000000', { 'x-portico-webhook-token': c.webhookToken }),
     ).toMatchObject({ status: 404 });
     expect(await revisions(org, c)).toHaveLength(0);
-    expect((await deliveries(org, c)).map((x) => x.outcome)).toEqual(['unauthenticated', 'unauthenticated']);
+    // P2-5: refused requests are counted on one aggregated row, never logged one append-only row each.
+    expect(await deliveries(org, c)).toEqual([]);
+    const rejected = await org.run((tx) =>
+      sql<{ rejected_total: number }>`select rejected_total from distribution.webhook_rejections`
+        .execute(tx.db)
+        .then((r) => r.rows),
+    );
+    expect(rejected).toEqual([{ rejected_total: 2 }]);
     const other = await svc.receiveWebhook(h.t.db, h.dist.deps, {
       endpointId: c.endpointId,
       headers: { 'x-portico-webhook-token': c.webhookToken },

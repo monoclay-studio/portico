@@ -302,7 +302,19 @@ create index revision_processing_booking_idx on distribution.revision_processing
   (tenant_id, connection_id, channel_booking_id);
 select core.enable_tenant_isolation('distribution.revision_processing');
 
--- Every delivery (webhook, feed pull, recovery), including duplicates and refused ones: append-only.
+-- Webhook requests refused for a wrong or missing token (P2-5): ONE aggregated row per connection, never a row per
+-- request (refused requests cost a bounded amount of storage; the in-memory guard answers 429 past its limit).
+create table distribution.webhook_rejections (
+  connection_id         uuid primary key references distribution.connections(id),
+  tenant_id             uuid not null,
+  rejected_total        bigint not null default 0,
+  first_rejected_at     timestamptz not null,
+  last_rejected_at      timestamptz not null
+);
+select core.enable_tenant_isolation('distribution.webhook_rejections');
+
+-- Every authenticated delivery (webhook, feed pull, recovery), including duplicates: append-only. Unauthenticated
+-- webhook requests are NOT logged here (webhook_rejections).
 create table distribution.inbound_deliveries (
   id                    uuid primary key,
   tenant_id             uuid not null,
