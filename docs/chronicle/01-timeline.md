@@ -493,3 +493,10 @@ Each agent's brief and report are in `agents/`.
     `checkpoint.sh` at 97%.
   - The UX heartbeat stays off (no UX rounds at this usage level).
   - The 2026-11-11 17:03 resume task stays as the fallback.
+- **05:17 — Extra usage in use; the three steward reviews launched** <!-- t: now @ 2026-11-08T05:17:16Z -->.
+  - The 05:08 rate-limit event shows seven-day at 100% (`rejected`), with overage allowed and in use (it resets
+    12-01). Work continues on billed extra usage per the owner's "let's keep going". The owner was told.
+  - Launched in parallel with fix round 6, each steward v2.1 with an incremental report and a "verify the proof" mutant
+    step: distribution + Channex (`a8bd950`), day-close (`cb0fbf3`) and migration (`45be8b9`).
+  - Fix round 6 progress: the R6-P1-1, R6-P1-2 and R6-P2-1 fixes are committed and pushed (`898a85e`, `50016a3`,
+    `4822639`).

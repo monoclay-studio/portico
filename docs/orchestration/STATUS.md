@@ -198,6 +198,15 @@
   - The UX heartbeat stays disabled.
   - If the weekly allowance runs out, the 2026-11-11 17:03 resume task continues from this log.
 
+- **2026-11-08 05:2x UTC — extra (overage) usage in use** (seven-day 100%, overage allowed until 12-01; owner told).
+  - Running:
+    - integration-step fix round 6 (P1/P2 fixes pushed at 4822639);
+    - steward reviews of distribution, day-close and migration (reports in `docs/orchestration/reviews/review-{distribution,day-close,migration}.md`, written incrementally).
+  - Next:
+    - re-review #7 after fix round 6;
+    - fix rounds for the three modules after their reviews;
+    - then the STATUS 22:55 order item 4 onward.
+
 ## 1. Owner, product and how to work with the owner
 
 - Owner: founder of **Monoclay LLC** (Delaware, Stripe Atlas), based in the Maldives. Product: **Portico** (final name).
