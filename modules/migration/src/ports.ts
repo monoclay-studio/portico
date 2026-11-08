@@ -390,6 +390,8 @@ export interface RehearsalEvidence {
   jobId: string;
   planFingerprint: string;
   extractFingerprint: string;
+  /** The data and decisions the trial certified (`dataFingerprint`); the live gate compares it with its own. */
+  dataFingerprint: string;
   exact: boolean;
   reports: Array<{ seq: number; fingerprint: string; exact: boolean; generatedAt: string }>;
   certifiedAt: string | null;

@@ -330,33 +330,53 @@ export const IMPORT_AS_IS_ALLOWED: ReadonlySet<string> = new Set([
 
 /**
  * Whether a record may be imported now, given its problems and the decisions on its exceptions:
- * 'import' | 'exception' (blocked, waiting) | 'excluded' (by decision: excluded or accepted as loss).
+ * 'import' | 'exception' (not imported now) | 'excluded' (by decision: excluded or accepted as loss).
+ * `deferred` marks an 'exception' that a person deliberately deferred to after the cutover: it is not imported
+ * now, but it does not hold the cutover (it is decided). An undecided blocking problem always holds it — including a
+ * problem that appeared after a decision on another problem of the same record (decisions are per problem code).
  */
 export function importability(
   record: { problems: readonly Problem[]; payload: unknown },
   decisions: Map<string, ExceptionDecision> | undefined,
-): { verdict: 'import' | 'exception' | 'excluded'; reason: string | null } {
+): { verdict: 'import' | 'exception' | 'excluded'; reason: string | null; deferred: boolean } {
   if (record.payload === null) {
-    const d = [...(decisions?.values() ?? [])].find(
-      (x) => x.outcome === 'excluded' || x.outcome === 'accepted_as_loss',
-    );
-    return d
-      ? { verdict: 'excluded', reason: `Excluded by decision (${d.outcome})` }
-      : { verdict: 'exception', reason: 'The row could not be read' };
+    // An unreadable row is never imported; each of its problems must be decided (excluded, loss or deferred).
+    const codes = record.problems.filter((p) => p.severity === 'blocking').map((p) => p.code);
+    let deferredRow = false;
+    for (const code of codes.length ? codes : ['unreadable_row']) {
+      const d = decisions?.get(code);
+      if (d?.outcome === 'excluded' || d?.outcome === 'accepted_as_loss') continue;
+      if (d?.outcome === 'deferred') {
+        deferredRow = true;
+        continue;
+      }
+      return { verdict: 'exception', reason: 'The row could not be read', deferred: false };
+    }
+    return deferredRow
+      ? { verdict: 'exception', reason: 'Deferred by decision to after the cutover', deferred: true }
+      : { verdict: 'excluded', reason: 'Excluded by decision (unreadable row)', deferred: false };
   }
+  // Every blocking problem needs its own decision: a decision on one problem never covers another (a problem that
+  // appears after a record was excluded holds it again until a person decides that problem too).
+  let excluded: string | null = null;
+  let deferred: string | null = null;
   for (const p of record.problems) {
     if (p.severity !== 'blocking') continue;
     const d = decisions?.get(p.code);
-    if (d?.outcome === 'excluded' || d?.outcome === 'accepted_as_loss')
-      return { verdict: 'excluded', reason: `Excluded by decision (${d.outcome.replace(/_/g, ' ')})` };
-  }
-  for (const p of record.problems) {
-    if (p.severity !== 'blocking') continue;
-    const d = decisions?.get(p.code);
+    if (d?.outcome === 'excluded' || d?.outcome === 'accepted_as_loss') {
+      excluded ??= `Excluded by decision (${d.outcome.replace(/_/g, ' ')})`;
+      continue;
+    }
     if (d?.outcome === 'import_as_is' && IMPORT_AS_IS_ALLOWED.has(p.code)) continue;
-    return { verdict: 'exception', reason: p.message };
+    if (d?.outcome === 'deferred') {
+      deferred ??= `Deferred by decision to after the cutover (${p.message})`;
+      continue;
+    }
+    return { verdict: 'exception', reason: p.message, deferred: false };
   }
-  return { verdict: 'import', reason: null };
+  if (excluded) return { verdict: 'excluded', reason: excluded, deferred: false };
+  if (deferred) return { verdict: 'exception', reason: deferred, deferred: true };
+  return { verdict: 'import', reason: null, deferred: false };
 }
 
 export async function countOpenBlocking(tx: TxContext, jobId: string): Promise<number> {

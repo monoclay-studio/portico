@@ -42,7 +42,14 @@ type StoredSource =
         checksum: string;
       }>;
     }
-  | { type: 'records'; name: string; records: SourceRecord[]; controlTotals: ControlTotal[] };
+  | {
+      type: 'records';
+      name: string;
+      records: SourceRecord[];
+      controlTotals: ControlTotal[];
+      /** Classes this read covers completely (records of these classes it does not hold are missing). */
+      classes?: DataClass[];
+    };
 
 export interface StoredExtract {
   seq: number;
@@ -65,7 +72,8 @@ const KIND_CLASSES: Record<TableKind, DataClass | null> = {
 };
 
 function classesOf(source: StoredSource): DataClass[] {
-  if (source.type === 'records') return [...new Set(source.records.map((r) => r.dataClass))];
+  if (source.type === 'records')
+    return source.classes ?? [...new Set(source.records.map((r) => r.dataClass))];
   const set = new Set<DataClass>();
   for (const t of source.tables) {
     const c = KIND_CLASSES[t.kind];
@@ -299,6 +307,10 @@ export async function storeExtract(
     .values({ tenant_id: tx.tenantId, job_id: job.id, seq, content: JSON.stringify(input.source) })
     .execute();
   let next = job;
+  if (input.kind === 'sync' && job.steps.delta_sync === 'succeeded') {
+    // Data read while in sync was never rehearsed: the delta sync runs again and rehearses it before any freeze.
+    next = await saveJob(tx, job, { steps: { ...job.steps, delta_sync: 'pending' } });
+  }
   if (input.kind === 'initial' || input.kind === 'delta') {
     const steps = { ...job.steps };
     for (const s of RERUN_ON_NEW_EXTRACT)

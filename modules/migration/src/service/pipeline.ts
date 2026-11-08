@@ -5,28 +5,17 @@
  * is also protected by the job row lock and the ledger, so even a broken lease cannot duplicate records).
  */
 import { type PorticoDatabase, sql, withTenantTx } from '@portico/db';
-import { ConflictError, DomainError, newId, type RequestContext } from '@portico/kernel';
+import { ConflictError, DomainError, type RequestContext } from '@portico/kernel';
 import { HUMAN_STARTED, resumePoint, STEP_LABELS, type StepKey } from '../domain/pipeline';
 import { DATA_CLASS_LABELS, type DataClass, type ReservationRecord } from '../domain/records';
 import { P } from '../manifest';
 import { observeSourceAccess, waitingChecklist } from './checklist';
-import {
-  actorKey,
-  assertOpen,
-  db,
-  type Job,
-  loadJob,
-  loadJobFor,
-  type MigrationDeps,
-  saveJob,
-} from './context';
+import { assertOpen, db, type Job, loadJob, loadJobFor, type MigrationDeps, saveJob } from './context';
 import { runCutoverStep, runDeltaSyncStep, runFreezeStep, runVerifyStep, runWindowStep } from './cutover';
-import { decisionsOf } from './exceptions';
 import { extractFromSimulator, loadExtracts, materialize } from './extract';
-import { importAll } from './importer';
 import { runMapStep, runValidateStep } from './plan';
-import { buildReport, latestReports } from './reconcile';
-import { countOpenBlocking, loadSourceRecords } from './state';
+import { certify, evidenceStep, reconcileRehearsal, rehearseHere, rehearseInTrial } from './rehearse';
+import { loadSourceRecords } from './state';
 
 export const LEASE_MS = 10 * 60_000;
 
@@ -248,21 +237,7 @@ async function executeStep(
         : rehearseInTrial(database, deps, ctx, job);
     case 'reconcile':
       return job.purpose === 'rehearsal'
-        ? withTenantTx(database, ctx, async (tx) => {
-            const j = await loadJob(tx, job.id, { lock: true });
-            const rep = await buildReport(tx, deps, j, 'rehearsal');
-            const unexplained = rep.result.differences.filter((d) => !d.explained).length;
-            return rep.result.exact
-              ? ({
-                  status: 'succeeded',
-                  detail: `Report ${rep.seq}: exact (fingerprint ${rep.result.fingerprint}).`,
-                } as const)
-              : ({
-                  status: 'waiting',
-                  detail: `Report ${rep.seq}: ${unexplained} unexplained difference(s). Each is an exception with an owner.`,
-                  owner: 'Migration lead and finance controller',
-                } as const);
-          })
+        ? reconcileRehearsal(database, deps, ctx, job)
         : evidenceStep(database, deps, ctx, job);
     case 'signoff':
       return job.purpose === 'rehearsal'
@@ -279,206 +254,6 @@ async function executeStep(
     case 'rollback_window':
       return runWindowStep(database, deps, ctx, job);
   }
-}
-
-/** Rehearsal jobs import into their own (trial / sandbox) organization. */
-async function rehearseHere(
-  database: PorticoDatabase,
-  deps: MigrationDeps,
-  ctx: RequestContext,
-  job: Job,
-  opts: { failAfter?: number },
-): Promise<StepOutcome> {
-  if (ctx.environment === 'live')
-    throw new DomainError('rehearsal_in_live', 'Rehearsals never import into a live organization.', {
-      status: 409,
-    });
-  const s = await importAll(
-    database,
-    deps,
-    ctx,
-    job.id,
-    opts.failAfter === undefined ? {} : { failAfter: opts.failAfter },
-  );
-  if (ctx.environment === 'trial')
-    await withTenantTx(database, ctx, async (tx) => {
-      const counts: Record<string, number> = {};
-      for (const r of await loadSourceRecords(tx, job.id))
-        counts[r.dataClass] = (counts[r.dataClass] ?? 0) + 1;
-      await deps.ports.platform.recordTrialImport(tx, {
-        sourceSystem: job.sourceSystem,
-        copiedAt: tx.now,
-        recordCounts: counts,
-      });
-    });
-  const detail = `${s.created} created, ${s.updated} updated, ${s.merged} linked, ${s.unchanged} unchanged, ${s.exceptions} waiting on exceptions, ${s.excluded} excluded.`;
-  if (s.unavailable.length)
-    return {
-      status: 'waiting',
-      detail: `${detail} Not available on this server yet: ${s.unavailable.join(', ')} (provider contract requested).`,
-      owner: 'Monoclay onboarding lead',
-    };
-  return { status: 'succeeded', detail };
-}
-
-/** Second rehearsal: re-import (must change nothing) and reconcile again; two exact identical reports certify. */
-async function certify(
-  database: PorticoDatabase,
-  deps: MigrationDeps,
-  ctx: RequestContext,
-  job: Job,
-): Promise<StepOutcome> {
-  const s = await importAll(database, deps, ctx, job.id);
-  return withTenantTx(database, ctx, async (tx) => {
-    const j = await loadJob(tx, job.id, { lock: true });
-    const prev = (await latestReports(tx, j.id, 1))[0];
-    const rep = await buildReport(tx, deps, j, 'certification');
-    const changed = s.created + s.updated;
-    if (!rep.result.exact || !prev?.exact || prev.fingerprint !== rep.result.fingerprint || changed > 0)
-      return {
-        status: 'waiting',
-        detail: `The second rehearsal ${changed > 0 ? `changed ${changed} record(s)` : 'did not reproduce the first report'}; it must reconcile exactly twice in a row. Run it again after resolving the exceptions.`,
-        owner: 'Migration lead',
-      } as const;
-    const extracts = await db(tx)
-      .selectFrom('migration.extracts')
-      .select(['seq', 'fingerprint'])
-      .where('job_id', '=', j.id)
-      .orderBy('seq', 'desc')
-      .limit(1)
-      .execute();
-    const certificate = {
-      planFingerprint: j.planFingerprint,
-      extractFingerprint: extracts[0]?.fingerprint ?? null,
-      exact: true,
-      reports: [
-        {
-          seq: prev.seq,
-          fingerprint: prev.fingerprint,
-          exact: prev.exact,
-          generatedAt: prev.generated_at.toISOString(),
-        },
-        { seq: rep.seq, fingerprint: rep.result.fingerprint, exact: true, generatedAt: tx.now.toISOString() },
-      ],
-      openBlockingExceptions: await countOpenBlocking(tx, j.id),
-      certifiedAt: tx.now.toISOString(),
-    };
-    await saveJob(tx, j, { certificate, state: 'rehearsed' });
-    await db(tx)
-      .insertInto('migration.signoffs')
-      .values({
-        id: newId(tx.now.getTime()),
-        tenant_id: tx.tenantId,
-        job_id: j.id,
-        kind: 'rehearsal_certificate',
-        report_id: rep.id,
-        report_fingerprint: rep.result.fingerprint,
-        signer: actorKey(tx),
-        signer_name: null,
-        note: 'Two consecutive exact reconciliations of the same plan and extract (automatic).',
-        evidence: JSON.stringify(certificate),
-        signed_at: tx.now,
-      })
-      .execute();
-    await tx.emit({
-      type: 'migration.rehearsal.certified',
-      propertyId: j.propertyId,
-      aggregate: { type: 'migration_job', id: j.id },
-      payload: {
-        jobId: j.id,
-        planFingerprint: j.planFingerprint,
-        reports: certificate.reports.map((r) => r.seq),
-      },
-    });
-    return {
-      status: 'succeeded',
-      detail: `Rehearsed twice with zero differences (reports ${prev.seq} and ${rep.seq}).`,
-    } as const;
-  });
-}
-
-/** Production: rehearse through the linked trial organization (same plan, same extract). */
-async function rehearseInTrial(
-  database: PorticoDatabase,
-  deps: MigrationDeps,
-  ctx: RequestContext,
-  job: Job,
-): Promise<StepOutcome> {
-  if (!job.rehearsalLink)
-    return {
-      status: 'waiting',
-      detail: 'Link a trial organization (and its property) where the rehearsal runs.',
-      owner: 'Migration lead',
-    };
-  const link = job.rehearsalLink;
-  const payload = await withTenantTx(database, ctx, async (tx) => {
-    const extracts = await loadExtracts(tx, job.id);
-    const records = await loadSourceRecords(tx, job.id);
-    const controlTotals = extracts.flatMap((e) => materialize(e, job.plan).controlTotals);
-    const decisions = (await decisionsOf(tx, job.id)).map((d) => ({
-      dataClass: d.data_class,
-      sourceKey: d.source_key,
-      code: d.code,
-      outcome: d.outcome as string,
-      resolution: d.resolution,
-    }));
-    return { seq: extracts[extracts.length - 1]?.seq ?? 0, records, controlTotals, decisions };
-  });
-  const evidence = await withTenantTx(database, ctx, (tx) =>
-    deps.ports.rehearsal.rehearse(tx, {
-      trialOrganizationId: link.trialOrganizationId,
-      trialPropertyId: link.trialPropertyId,
-      liveJobId: job.id,
-      sourceAdapter: job.sourceAdapter,
-      sourceSystem: job.sourceSystem,
-      plan: job.plan,
-      extract: { seq: payload.seq, records: payload.records, controlTotals: payload.controlTotals },
-      decisions: payload.decisions,
-    }),
-  );
-  await withTenantTx(database, ctx, async (tx) => {
-    const j = await loadJob(tx, job.id, { lock: true });
-    await saveJob(tx, j, { certificate: { ...evidence } });
-  });
-  return {
-    status: 'succeeded',
-    detail: `Rehearsed in the trial organization (${evidence.reports.length} report(s); ${evidence.exact ? 'exact' : 'not exact yet'}).`,
-  };
-}
-
-async function evidenceStep(
-  database: PorticoDatabase,
-  deps: MigrationDeps,
-  ctx: RequestContext,
-  job: Job,
-): Promise<StepOutcome> {
-  if (!job.rehearsalLink)
-    return { status: 'waiting', detail: 'No trial organization is linked.', owner: 'Migration lead' };
-  const link = job.rehearsalLink;
-  const evidence = await withTenantTx(database, ctx, (tx) =>
-    deps.ports.rehearsal.evidence(tx, { trialOrganizationId: link.trialOrganizationId, liveJobId: job.id }),
-  );
-  await withTenantTx(database, ctx, async (tx) => {
-    const j = await loadJob(tx, job.id, { lock: true });
-    await saveJob(tx, j, { certificate: evidence ? { ...evidence } : null });
-  });
-  if (!evidence?.exact || !evidence.certifiedAt)
-    return {
-      status: 'waiting',
-      detail:
-        'The rehearsal in the trial organization has not reconciled exactly twice yet. Resolve its exceptions there and run it again.',
-      owner: 'Migration lead',
-    };
-  if (evidence.planFingerprint !== job.planFingerprint)
-    return {
-      status: 'waiting',
-      detail: 'The trial rehearsal ran an older plan. Run the rehearsal again.',
-      owner: 'Migration lead',
-    };
-  return {
-    status: 'succeeded',
-    detail: `Rehearsal certified at ${evidence.certifiedAt} (two exact reconciliations).`,
-  };
 }
 
 async function productionSignoff(

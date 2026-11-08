@@ -301,8 +301,14 @@ describe('cutover gate, freeze and window', () => {
         'staff_acceptance',
       ] as const
     ).map((key) => ({ key, status: 'done' as const })),
-    certificate: { planFingerprint: 'P', exact: true },
+    certificate: {
+      planFingerprint: 'P',
+      dataFingerprint: 'D',
+      exact: true,
+      certifiedAt: '2026-11-30T00:00:00Z',
+    },
     planFingerprint: 'P',
+    dataFingerprint: 'D',
     authorization: AUTH,
     jobCreatedBy: 'user:a',
     transition: { status: 'planned', approved: true },
@@ -317,6 +323,11 @@ describe('cutover gate, freeze and window', () => {
   it('lists each blocker in plain language', () => {
     expect(codes({ environment: 'trial' })).toEqual(['not_live']);
     expect(codes({ certificate: null })).toEqual(['no_rehearsal']);
+    const cert = ok.certificate as NonNullable<GateInput['certificate']>;
+    expect(codes({ certificate: { ...cert, certifiedAt: null } })).toEqual(['no_rehearsal']);
+    expect(codes({ certificate: { ...cert, exact: false } })).toEqual(['rehearsal_not_exact']);
+    // R-P1-2: data or decisions changed after the rehearsal (new export, sync, final capture, decision)
+    expect(codes({ dataFingerprint: 'D2' })).toEqual(['rehearsal_stale_data']);
     expect(codes({ planFingerprint: 'Q', authorization: { ...AUTH, planFingerprint: 'Q' } })).toEqual([
       'plan_changed_since_rehearsal',
     ]);

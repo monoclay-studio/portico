@@ -26,7 +26,14 @@ import { P } from '../manifest';
 import { actorKey, assertOpen, db, type Job, loadJobFor, type MigrationDeps, saveJob } from './context';
 import { loadExtracts, materialize, rematerialize } from './extract';
 import { impliedUnitTypes } from './importer';
-import { closeCorrected, loadParsedRecords, loadSourceRecords, raiseException } from './state';
+import {
+  closeCorrected,
+  exceptionDecisions,
+  importability,
+  loadParsedRecords,
+  loadSourceRecords,
+  raiseException,
+} from './state';
 
 /** Recompute suggestions from the current source state, keeping every reviewed decision. */
 export async function computePlan(tx: TxContext, deps: MigrationDeps, job: Job): Promise<MigrationPlan> {
@@ -195,7 +202,7 @@ export async function runValidateStep(
   tx: TxContext,
   deps: MigrationDeps,
   job: Job,
-): Promise<{ blocking: number; warnings: number }> {
+): Promise<{ blocking: number; warnings: number; undecided: number }> {
   const parsed = await loadParsedRecords(tx, job.id);
   // Unit types derived from reservation codes carry their own warning (listed so a person reviews them).
   const records = [...parsed, ...impliedUnitTypes(parsed)];
@@ -264,7 +271,21 @@ export async function runValidateStep(
   }
   // Close record problems that disappeared (never reconciliation, provider or decision exceptions).
   await closeCorrected(tx, job, present, { only: problemCodesOf(records, findings) });
-  return { blocking, warnings };
+  // What holds the cutover is what would NOT be imported without a person's decision — the same verdict the
+  // importer and the rehearsal use (R-P1-4): decided records (import as is, excluded, loss, deferred) never hold it.
+  const decisions = await exceptionDecisions(tx, job.id);
+  let undecided = 0;
+  for (const r of records) {
+    const quality = findings.get(recordId(r.dataClass, r.key)) ?? [];
+    const v = importability(
+      { problems: [...r.problems, ...quality], payload: r.payload },
+      decisions.get(`${r.dataClass}:${r.key}`),
+    );
+    if (v.verdict === 'exception' && !v.deferred) undecided++;
+  }
+  const maskedOpen = decisions.get('guest:')?.get('masked_export');
+  if (maskedOpen && (maskedOpen.status === 'open' || maskedOpen.status === 'in_progress')) undecided++;
+  return { blocking, warnings, undecided };
 }
 
 function problemCodesOf(records: SourceRecord[], findings: Map<string, { code: string }[]>): Set<string> {

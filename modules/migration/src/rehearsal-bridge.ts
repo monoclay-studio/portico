@@ -19,7 +19,7 @@ import {
 } from '@portico/kernel';
 import type { MigrationPlan } from './domain/mapping';
 import { initialSteps } from './domain/pipeline';
-import type { SourceRecord } from './domain/records';
+import { DATA_CLASSES, type SourceRecord } from './domain/records';
 import type { MigrationPorts, RehearsalEvidence, RehearsalPort, RehearsalRequest } from './ports';
 import { db, loadJob, type MigrationDeps, saveJob, toJob } from './service/context';
 import { storeExtract } from './service/extract';
@@ -154,8 +154,32 @@ export function createRehearsalBridge(
             name: `live job ${input.liveJobId}, extract ${input.extract.seq}`,
             records: input.extract.records as SourceRecord[],
             controlTotals: input.extract.controlTotals as never[],
+            // The live state is complete: a class it no longer holds is gone from the rehearsal too.
+            classes: [...DATA_CLASSES],
           },
         });
+        // Decisions mirror the live job exactly: a decision the live job no longer holds is withdrawn here.
+        const liveDecisions = new Set(input.decisions.map((x) => `${x.dataClass}|${x.sourceKey}|${x.code}`));
+        const trialDecided = await db(tx)
+          .selectFrom('migration.exceptions')
+          .select(['id', 'data_class', 'source_key', 'code'])
+          .where('job_id', '=', job.id)
+          .where('outcome', 'in', ['import_as_is', 'excluded', 'accepted_as_loss', 'deferred'])
+          .execute();
+        for (const t of trialDecided)
+          if (!liveDecisions.has(`${t.data_class}|${t.source_key}|${t.code}`))
+            await db(tx)
+              .updateTable('migration.exceptions')
+              .set((eb) => ({
+                status: 'open',
+                outcome: null,
+                resolution: null,
+                closed_by: null,
+                closed_at: null,
+                version: eb('version', '+', 1),
+              }))
+              .where('id', '=', t.id)
+              .execute();
         for (const dec of input.decisions) {
           await db(tx)
             .insertInto('migration.exceptions')
@@ -225,6 +249,7 @@ async function evidenceOf(
     const cert = job.certificate as {
       planFingerprint?: string;
       extractFingerprint?: string;
+      dataFingerprint?: string;
       certifiedAt?: string;
     } | null;
     return {
@@ -232,6 +257,7 @@ async function evidenceOf(
       jobId,
       planFingerprint: cert?.planFingerprint ?? job.planFingerprint ?? '',
       extractFingerprint: cert?.extractFingerprint ?? '',
+      dataFingerprint: cert?.dataFingerprint ?? '',
       exact: !!cert?.certifiedAt,
       reports: reports
         .map((r) => ({

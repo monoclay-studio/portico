@@ -3,6 +3,7 @@
  * rollback window (acceptance criteria §9). Pure.
  */
 import type { TenantEnvironment } from '@portico/kernel';
+import { type CertificateFacts, certificateGap } from './certificate';
 import type { Purpose } from './pipeline';
 
 /** TARGETS (DD11 §7; to be validated with a real hotel and source). */
@@ -105,12 +106,16 @@ export interface GateInput {
   purpose: Purpose;
   environment: TenantEnvironment;
   checklist: ReadonlyArray<{ key: ChecklistKey; status: 'waiting' | 'done' | 'not_applicable' }>;
-  certificate: { planFingerprint: string; exact: boolean } | null;
+  /** The rehearsal certificate (plan + data + decisions it covers). */
+  certificate: CertificateFacts | null;
   planFingerprint: string;
+  /** Fingerprint of the data and decisions that would be cut over now (`dataFingerprint`). */
+  dataFingerprint: string;
   authorization: { planFingerprint: string; grantedBy: string; expiresAt: Date } | null;
   jobCreatedBy: string;
   transition: { status: string; approved: boolean } | null;
   openBlockingExceptions: number;
+  /** Records in the final capture that would not be imported and carry no decision (verdict "exception"). */
   finalExtractBlocking: number;
   now: Date;
 }
@@ -128,14 +133,13 @@ export function evaluateCutoverGate(g: GateInput): GateResult {
     add('not_live', 'A production cutover runs only in the live organization.');
   if (g.purpose === 'rehearsal' && g.environment === 'live')
     add('drill_in_live', 'A cutover drill never runs in the live organization.');
-  if (!g.certificate)
-    add('no_rehearsal', 'No accepted rehearsal: two consecutive exact reconciliations are required.');
-  else if (!g.certificate.exact) add('rehearsal_not_exact', 'The last rehearsal did not reconcile exactly.');
-  else if (g.certificate.planFingerprint !== g.planFingerprint)
-    add(
-      'plan_changed_since_rehearsal',
-      'The mapping changed after the rehearsal. Rehearse again so the cutover runs exactly what was rehearsed.',
-    );
+  const gap = certificateGap(
+    g.certificate,
+    { planFingerprint: g.planFingerprint, dataFingerprint: g.dataFingerprint },
+    // Production imports into live only what was rehearsed; a drill's own cutover is the rehearsal.
+    { bindData: g.purpose === 'production' },
+  );
+  if (gap) add(gap.code, gap.message);
   if (g.purpose === 'production') {
     for (const item of CHECKLIST)
       if (!g.checklist.some((c) => c.key === item.key && c.status !== 'waiting'))
@@ -171,7 +175,7 @@ export function evaluateCutoverGate(g: GateInput): GateResult {
   if (g.finalExtractBlocking > 0)
     add(
       'final_capture_blocking',
-      `${g.finalExtractBlocking} record(s) in the final capture have blocking problems. Resolve them or exclude them by decision.`,
+      `${g.finalExtractBlocking} record(s) in the final capture have blocking problems and no decision. Correct them in the source, or decide them (import as is where allowed, exclude, accept as loss, or defer to after the cutover).`,
     );
   return { passed: blockers.length === 0, blockers };
 }

@@ -18,6 +18,7 @@ import {
   requirePermission,
   ValidationError,
 } from '@portico/kernel';
+import { certificateFacts } from '../domain/certificate';
 import {
   evaluateCutoverGate,
   FREEZE_TARGET_MINUTES,
@@ -28,6 +29,7 @@ import { deltaSize } from '../domain/delta';
 import { pendingReview, planFingerprint } from '../domain/mapping';
 import { P } from '../manifest';
 import type { MigratedDomain } from '../ports';
+import { currentDataFingerprint } from './certificate';
 import { loadChecklist, markCutoverWindow } from './checklist';
 import {
   actorKey,
@@ -40,13 +42,13 @@ import {
   type MigrationDeps,
   saveJob,
 } from './context';
-import { decisionsOf } from './exceptions';
-import { extractFromSimulator, loadExtracts, materialize } from './extract';
+import { extractFromSimulator } from './extract';
 import { importAll } from './importer';
 import type { StepOutcome } from './pipeline';
 import { computePlan, runValidateStep } from './plan';
 import { buildReport } from './reconcile';
-import { countOpenBlocking, loadSourceRecords } from './state';
+import { rehearseAgain } from './rehearse';
+import { countOpenBlocking } from './state';
 
 const migrated = (job: Job) => job.domains as MigratedDomain[];
 
@@ -274,50 +276,25 @@ export async function runDeltaSyncStep(
     j = await saveJob(tx, j, { state: 'in_sync' });
     return { job: j, changes };
   });
-  if (job.purpose === 'production' && res.changes > 0 && job.rehearsalLink) {
-    // Changes since the rehearsal are rehearsed again in the trial organization (same importer, same plan).
-    const link = job.rehearsalLink;
-    const payload = await withTenantTx(database, ctx, async (tx) => {
-      const extracts = await loadExtracts(tx, job.id);
-      return {
-        seq: extracts[extracts.length - 1]?.seq ?? 0,
-        records: await loadSourceRecords(tx, job.id),
-        controlTotals: extracts.flatMap((e) => materialize(e, job.plan).controlTotals),
-        decisions: (await decisionsOf(tx, job.id)).map((d) => ({
-          dataClass: d.data_class,
-          sourceKey: d.source_key,
-          code: d.code,
-          outcome: d.outcome as string,
-          resolution: d.resolution,
-        })),
-      };
-    });
-    const evidence = await withTenantTx(database, ctx, (tx) =>
-      deps.ports.rehearsal.rehearse(tx, {
-        trialOrganizationId: link.trialOrganizationId,
-        trialPropertyId: link.trialPropertyId,
-        liveJobId: job.id,
-        sourceAdapter: job.sourceAdapter,
-        sourceSystem: job.sourceSystem,
-        plan: job.plan,
-        extract: { seq: payload.seq, records: payload.records, controlTotals: payload.controlTotals },
-        decisions: payload.decisions,
-      }),
-    );
-    await withTenantTx(database, ctx, async (tx) => {
-      const j = await loadJob(tx, job.id, { lock: true });
-      await saveJob(tx, j, { certificate: { ...evidence } });
-    });
-  }
+  // Whatever changed since the rehearsal — a sync, a re-uploaded export, a decision — is rehearsed again now, so the
+  // certificate always covers exactly what the cutover would import (R-P1-2).
+  const again = await rehearseAgain(database, deps, ctx, res.job);
+  if (!again.covered)
+    return {
+      status: 'waiting',
+      detail: `In sync, but the rehearsal does not cover the current data yet: ${again.detail}`,
+      owner: 'Migration lead',
+    };
   return {
     status: 'succeeded',
-    detail: `In sync: ${res.changes} change(s) read from ${job.sourceSystem} at this pass. Start the cutover when the old system is frozen.`,
+    detail: `In sync: ${res.changes} change(s) read from ${job.sourceSystem} at this pass.${again.rehearsed ? ' The changes since the rehearsal were rehearsed again and reconcile exactly.' : ''} Start the cutover when the old system is frozen.`,
   };
 }
 
 /**
- * Freeze (started by a person who confirms the old system is frozen): final capture, mapping and quality re-checked,
- * every gate evaluated. A failed gate unfreezes (nothing changed in Portico) and lists the blockers.
+ * Freeze (started by a person who confirms the old system is frozen): final capture; anything that differs from
+ * what was rehearsed is rehearsed again (inside the measured freeze); then mapping, quality and every gate are
+ * evaluated on the state as it is now. A failed gate unfreezes (nothing changed in Portico) and lists the blockers.
  */
 export async function runFreezeStep(
   database: PorticoDatabase,
@@ -326,16 +303,26 @@ export async function runFreezeStep(
   job: Job,
   _opts: unknown,
 ): Promise<StepOutcome> {
-  return withTenantTx(database, ctx, async (tx) => {
+  const capture = await withTenantTx(database, ctx, async (tx) => {
     let j = await loadJob(tx, job.id, { lock: true });
-    // The person confirmed the old system is frozen when starting this step: the freeze is measured from here.
-    const startedAt = tx.now;
     if (j.state !== 'in_sync')
       throw new BusinessRuleError(
         'not_in_sync',
         'The cutover starts from "in sync" (after the delta sync step).',
       );
     if (j.sourceAdapter === 'pms.simulator') j = (await extractFromSimulator(tx, deps, j, 'final')).job;
+    // The person confirmed the old system is frozen when starting this step: the freeze is measured from here.
+    return { job: j, startedAt: tx.now };
+  });
+  const again = await rehearseAgain(database, deps, ctx, capture.job);
+  return withTenantTx(database, ctx, async (tx) => {
+    let j = await loadJob(tx, job.id, { lock: true });
+    if (j.state !== 'in_sync')
+      throw new BusinessRuleError(
+        'not_in_sync',
+        'The cutover starts from "in sync" (after the delta sync step).',
+      );
+    const startedAt = capture.startedAt;
     // New codes in the final capture need a decision: never imported unmapped.
     const plan = await computePlan(tx, deps, j);
     const pending = pendingReview(plan);
@@ -352,11 +339,6 @@ export async function runFreezeStep(
       });
       j = await saveJob(tx, j, { certificate: evidence ? { ...evidence } : null });
     }
-    const cert = j.certificate as {
-      planFingerprint?: string;
-      exact?: boolean;
-      certifiedAt?: string | null;
-    } | null;
     const gate = evaluateCutoverGate({
       purpose: j.purpose,
       environment: tx.environment,
@@ -364,17 +346,17 @@ export async function runFreezeStep(
         key: c.key as Parameters<typeof evaluateCutoverGate>[0]['checklist'][number]['key'],
         status: c.status,
       })),
-      certificate: cert?.certifiedAt
-        ? { planFingerprint: cert.planFingerprint ?? '', exact: cert.exact === true }
-        : null,
+      certificate: certificateFacts(j.certificate),
       planFingerprint: fingerprint,
+      // Computed now, under the job lock: an upload that raced the re-rehearsal makes the certificate stale.
+      dataFingerprint: await currentDataFingerprint(tx, j),
       authorization: await currentAuthorization(tx, j),
       jobCreatedBy: j.createdBy,
       transition: transition
         ? { status: transition.status, approved: !transition.approvalRequired || !!transition.approvedBy }
         : null,
       openBlockingExceptions: await countOpenBlocking(tx, j.id),
-      finalExtractBlocking: quality.blocking,
+      finalExtractBlocking: quality.undecided,
       now: tx.now,
     });
     if (pending.length)
@@ -398,7 +380,7 @@ export async function runFreezeStep(
         target: { type: 'migration_job', id: j.id },
         propertyId: j.propertyId,
         reason: gate.blockers.map((b) => b.code).join(', '),
-        after: { blockers: gate.blockers },
+        after: { blockers: gate.blockers, rehearsedAgain: again.rehearsed },
       });
       return {
         status: 'waiting',
@@ -414,7 +396,11 @@ export async function runFreezeStep(
       action: 'migration.cutover.freeze',
       target: { type: 'migration_job', id: j.id },
       propertyId: j.propertyId,
-      after: { frozenAt: startedAt.toISOString(), transitionId: j.transitionId },
+      after: {
+        frozenAt: startedAt.toISOString(),
+        transitionId: j.transitionId,
+        rehearsedAgain: again.rehearsed,
+      },
     });
     await tx.emit({
       type: 'migration.cutover.frozen',
@@ -422,7 +408,10 @@ export async function runFreezeStep(
       aggregate: { type: 'migration_job', id: j.id },
       payload: { jobId: j.id, frozenAt: startedAt.toISOString() },
     });
-    return { status: 'succeeded', detail: 'Frozen. Final capture taken and every gate passed.' } as const;
+    return {
+      status: 'succeeded',
+      detail: `Frozen. Final capture taken${again.rehearsed ? ', its changes rehearsed again,' : ''} and every gate passed.`,
+    } as const;
   });
 }
 
