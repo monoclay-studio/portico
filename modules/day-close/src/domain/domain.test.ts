@@ -215,14 +215,114 @@ describe('schedule', () => {
     expect(earliestStart('2026-11-07', null, 'Indian/Maldives')).toBeNull();
   });
 
-  it('starts at the next valid local minute on a spring-forward night (EC-DCL-024)', () => {
-    // Europe/London jumps 01:00 → 02:00 on 2027-03-28; 01:30 does not exist that night.
-    const t = scheduledInstant('2027-03-27', '01:30', 'Europe/London');
-    expect(t.toISOString()).toBe('2027-03-28T01:00:00.000Z'); // 02:00 BST
-    // The business date logic is unaffected: the same rule on a normal night.
-    expect(scheduledInstant('2027-03-20', '01:30', 'Europe/London').toISOString()).toBe(
-      '2027-03-21T01:30:00.000Z',
-    );
+  // EC-DCL-024, review P2-1: the first instant whose local wall time is at or after the configured time, east and
+  // west of UTC, gaps at 01:00, 02:00 and midnight, a 30-minute DST zone, and the fall-back overlap (earlier one).
+  it.each([
+    // [business date, local time, zone, expected instant, why]
+    [
+      '2027-03-27',
+      '01:30',
+      'Europe/London',
+      '2027-03-28T01:00:00.000Z',
+      'east/at UTC gap 01:00→02:00: 02:00 BST',
+    ],
+    ['2027-03-20', '01:30', 'Europe/London', '2027-03-21T01:30:00.000Z', 'London, ordinary night'],
+    [
+      '2027-03-13',
+      '02:30',
+      'America/New_York',
+      '2027-03-14T07:00:00.000Z',
+      'west gap 02:00→03:00: 03:00 EDT',
+    ],
+    ['2027-03-13', '02:00', 'America/New_York', '2027-03-14T07:00:00.000Z', 'gap start itself: 03:00 EDT'],
+    ['2027-03-13', '01:30', 'America/New_York', '2027-03-14T06:30:00.000Z', 'just before the gap: 01:30 EST'],
+    ['2027-03-13', '03:00', 'America/New_York', '2027-03-14T07:00:00.000Z', 'gap end: 03:00 EDT'],
+    ['2027-03-13', '02:30', 'America/Los_Angeles', '2027-03-14T10:00:00.000Z', 'west gap: 03:00 PDT'],
+    [
+      '2027-09-04',
+      '00:30',
+      'America/Santiago',
+      '2027-09-05T04:00:00.000Z',
+      'midnight gap 00:00→01:00: 01:00 -03',
+    ],
+    ['2027-03-13', '00:30', 'America/Havana', '2027-03-14T05:00:00.000Z', 'midnight gap (Havana): 01:00 CDT'],
+    [
+      '2027-10-02',
+      '02:30',
+      'Australia/Sydney',
+      '2027-10-02T16:00:00.000Z',
+      'east gap 02:00→03:00: 03:00 AEDT',
+    ],
+    [
+      '2027-10-02',
+      '02:15',
+      'Australia/Lord_Howe',
+      '2027-10-02T15:30:00.000Z',
+      '30-minute gap 02:00→02:30: 02:30',
+    ],
+    [
+      '2027-10-30',
+      '01:30',
+      'Europe/London',
+      '2027-10-31T00:30:00.000Z',
+      'fall-back overlap: the earlier 01:30 BST',
+    ],
+    [
+      '2027-11-06',
+      '01:30',
+      'America/New_York',
+      '2027-11-07T05:30:00.000Z',
+      'west overlap: the earlier 01:30 EDT',
+    ],
+    ['2026-11-07', '02:00', 'Indian/Maldives', '2026-11-07T21:00:00.000Z', 'no DST (Maldives)'],
+    ['2026-11-07', '23:30', 'Pacific/Kiritimati', '2026-11-07T09:30:00.000Z', 'UTC+14 evening'],
+  ])('%s %s %s → %s (%s)', (date, time, zone, expected) => {
+    expect(scheduledInstant(date, time, zone).toISOString()).toBe(expected);
+    // The earliest-start guard (EC-DCL-026) uses the same rule, so it can never let a run start early.
+    expect(earliestStart(date, time, zone)?.toISOString()).toBe(expected);
+  });
+
+  it('the scheduled instant is never before the configured local time on its calendar day (sweep of a year)', () => {
+    for (const zone of ['America/New_York', 'Europe/London', 'Australia/Lord_Howe', 'America/Santiago']) {
+      for (let d = 0; d < 366; d += 1) {
+        const date = new Date(Date.UTC(2027, 0, 1) + d * 86_400_000).toISOString().slice(0, 10);
+        for (const time of ['00:30', '02:00', '02:30', '23:30']) {
+          const t = scheduledInstant(date, time, zone);
+          const local = new Intl.DateTimeFormat('en-CA', {
+            timeZone: zone,
+            hourCycle: 'h23',
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+          })
+            .format(t)
+            .replace(', ', 'T');
+          const day =
+            Number(time.slice(0, 2)) < 12
+              ? new Date(Date.parse(date) + 86_400_000).toISOString().slice(0, 10)
+              : date;
+          expect(local >= `${day}T${time}`, `${zone} ${date} ${time} -> ${t.toISOString()} (${local})`).toBe(
+            true,
+          );
+          // and it is the FIRST such instant: one minute earlier is before the configured time
+          const prev = new Intl.DateTimeFormat('en-CA', {
+            timeZone: zone,
+            hourCycle: 'h23',
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+          })
+            .format(new Date(t.getTime() - 60_000))
+            .replace(', ', 'T');
+          const overlapEarlier = prev >= `${day}T${time}`;
+          expect(overlapEarlier, `${zone} ${date} ${time}: a minute earlier is already ${prev}`).toBe(false);
+        }
+      }
+    }
   });
 
   it('retries transient failures three times five minutes apart and never integrity failures', () => {

@@ -13,7 +13,7 @@ import {
   validatePolicyInput,
 } from '../domain/policy';
 import { scheduledInstant } from '../domain/schedule';
-import { DAY_CLOSE_PERMISSIONS as P } from '../manifest';
+import { ADVANCE_PERMISSION, DAY_CLOSE_PERMISSIONS as P } from '../manifest';
 import { actorKey, type Deps, db, json } from './context';
 
 export async function resolvePolicy(deps: Deps, tx: TxContext, propertyId: string): Promise<ResolvedPolicy> {
@@ -71,13 +71,23 @@ export async function updatePolicy(
   if (currentVersion !== expectedVersion) {
     throw new VersionConflictError('day_close_policy', propertyId, expectedVersion, currentVersion);
   }
+  // A schedule acts for the person who configured it (review P2-12): enabling it, or changing when or how an enabled
+  // schedule closes, needs the sensitive advance permission at the property — `dayClose.policy.manage` alone must not
+  // reach the business date through the scheduler's system authority. Who configured it is recorded.
+  const s = policy.schedule;
+  const scheduleChanged =
+    s.enabled &&
+    (!current?.enabled || current.local_time !== s.localTime || current.auto_continue !== s.autoContinue);
+  if (scheduleChanged) requirePermission(tx, ADVANCE_PERMISSION, { propertyId });
   await deps.ports.platform.setPropertyPolicy(tx, {
     propertyId,
     key: POLICY_KEY,
     value: policy,
     reason: input.reason,
   });
-  await syncSchedule(deps, tx, propertyId, policy, current?.skip_date ?? null);
+  await syncSchedule(deps, tx, propertyId, policy, current?.skip_date ?? null, {
+    configuredBy: scheduleChanged ? actorKey(tx) : (current?.configured_by ?? null),
+  });
   await tx.audit({
     action: 'dayClose.policy.update',
     target: { type: 'property', id: propertyId },
@@ -95,6 +105,7 @@ export async function syncSchedule(
   propertyId: string,
   policy: DayClosePolicy,
   skipDate: string | null,
+  opts: { configuredBy?: string | null } = {},
 ): Promise<void> {
   const property = await deps.ports.platform.getProperty(tx, propertyId);
   const s = policy.schedule;
@@ -116,6 +127,7 @@ export async function syncSchedule(
         local_time: s.localTime,
         timezone: property.timezone,
         auto_continue: s.autoContinue,
+        configured_by: opts.configuredBy ?? null,
         next_due_at: due,
         version: existing.version + 1,
         updated_at: tx.now,
@@ -132,6 +144,7 @@ export async function syncSchedule(
         local_time: s.localTime,
         timezone: property.timezone,
         auto_continue: s.autoContinue,
+        configured_by: opts.configuredBy ?? null,
         next_due_at: due,
         skip_date: skipDate,
         updated_at: tx.now,
@@ -146,7 +159,12 @@ export async function syncSchedule(
       property_id: propertyId,
       event: 'configured',
       business_date: property.businessDate,
-      detail: json({ enabled: s.enabled, localTime: s.localTime, nextDueAt: due?.toISOString() ?? null }),
+      detail: json({
+        enabled: s.enabled,
+        localTime: s.localTime,
+        nextDueAt: due?.toISOString() ?? null,
+        configuredBy: opts.configuredBy ?? null,
+      }),
       actor: actorKey(tx),
       created_at: tx.now,
     })

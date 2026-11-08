@@ -26,6 +26,24 @@ export async function getFacts(
   return row.facts as DayFacts;
 }
 
+/**
+ * Labels for exception codes in the immutable pack (rendered on read; the pack stores codes and references only, so
+ * erasure in the owning module also reaches what the report shows, review P2-6).
+ */
+const EXCEPTION_LABELS: Record<string, string> = {
+  departed_with_balance: 'A departed stay still has an open balance',
+  settled_folio_with_balance: 'A settled folio still has a balance',
+  departure_not_checked_out: 'A departure due today is not checked out',
+  arrival_not_checked_in: 'An arrival due today is not checked in',
+  arrival_transfer_delayed: "An arrival's transfer is delayed",
+  payment_pending_verification: "A payment is waiting for the provider's answer",
+  integration_exception: 'An integration exception is open',
+  unit_without_status: 'A unit has no housekeeping status',
+  night_not_posted: 'A night of an in-house stay had no room charge yet',
+  inventory_not_checked:
+    'The inventory ledger consistency check is not connected: the books were proved without it',
+};
+
 export async function getReport(
   deps: Deps,
   tx: TxContext,
@@ -40,8 +58,47 @@ export async function getReport(
     .where('business_date', '=', date)
     .executeTakeFirst();
   if (!row) throw new NotFoundError('day_report', `${propertyId}:${date}`);
-  const pack = row.pack as DayReport['pack'];
-  const closed = ((pack.managerFlash as Partial<DayFacts>).revenueByChargeCode ?? []) as Array<{
+  const stored = row.pack as DayReport['pack'];
+  // Render messages and names now, from their owners (Day Close's own follow-ups; staff names from the overrides).
+  const issueIds = stored.exceptions
+    .map((e) => e.issueId)
+    .filter((id): id is string => typeof id === 'string');
+  const issues = issueIds.length
+    ? await db(tx)
+        .selectFrom('day_close.issues')
+        .select(['id', 'message'])
+        .where('id', 'in', issueIds)
+        .execute()
+    : [];
+  const issueMessage = new Map(issues.map((i) => [i.id, i.message]));
+  const overrideIds = stored.overrides
+    .map((o) => o.overrideId)
+    .filter((id): id is string => typeof id === 'string');
+  const overrideRows = overrideIds.length
+    ? await db(tx)
+        .selectFrom('day_close.overrides')
+        .select(['id', 'actor_name'])
+        .where('id', 'in', overrideIds)
+        .execute()
+    : [];
+  const byName = new Map(overrideRows.map((o) => [o.id, o.actor_name]));
+  const pack: DayReport['pack'] = {
+    ...stored,
+    exceptions: stored.exceptions.map((e) => ({
+      ...e,
+      message:
+        (typeof e.issueId === 'string' ? issueMessage.get(e.issueId) : undefined) ??
+        EXCEPTION_LABELS[String(e.code)] ??
+        String(e.code),
+    })),
+    overrides: stored.overrides.map((o) => ({
+      ...o,
+      byName: (typeof o.overrideId === 'string' ? byName.get(o.overrideId) : null) ?? null,
+    })),
+  };
+  // Annex, labelled by cause (review P2-3/P2-4/P2-13). The facts are frozen in the advance transaction, so revenue
+  // stamped with the date that differs now committed after the close (in flight while the date advanced).
+  const closed = ((stored.managerFlash as Partial<DayFacts>).revenueByChargeCode ?? []) as Array<{
     chargeCode: string;
     netMinor: number;
   }>;
@@ -53,6 +110,7 @@ export async function getReport(
       chargeCode,
       closedMinor: closed.find((c) => c.chargeCode === chargeCode)?.netMinor ?? 0,
       nowMinor: now.byChargeCode.find((c) => c.chargeCode === chargeCode)?.netMinor ?? 0,
+      cause: 'posted_after_close' as const,
     }))
     .filter((d) => d.closedMinor !== d.nowMinor);
   const entries = now.restatements
@@ -62,7 +120,28 @@ export async function getReport(
       relatesTo: r.relatesTo,
       reason: r.reason,
       amountMinor: r.amountMinor,
+      cause: 'correction',
     }));
+  // Day Close's own postings for this date's service made after the date closed (catch-up nights, agreement lines).
+  const late = await db(tx)
+    .selectFrom('day_close.line_postings')
+    .select(['stay_id', 'line_key', 'kind', 'service_date', 'business_date', 'amount_minor', 'currency'])
+    .where('property_id', '=', propertyId)
+    .where('outcome', '=', 'posted')
+    .where('service_date', '=', date)
+    .where('business_date', '>', date)
+    .orderBy('business_date')
+    .orderBy('line_key')
+    .execute();
+  const byDayClose = late.map((l) => ({
+    stayId: l.stay_id,
+    lineKey: l.line_key,
+    kind: l.kind,
+    serviceDate: l.service_date,
+    postedOn: l.business_date,
+    amount: { amountMinor: Number(l.amount_minor), currency: l.currency },
+    cause: 'late_posting' as const,
+  }));
   return {
     id: `${propertyId}:${date}`,
     propertyId,
@@ -74,7 +153,15 @@ export async function getReport(
       asOf: tx.now.toISOString(),
       revenueDelta,
       entries,
-      changed: revenueDelta.length > 0 || entries.length > 0,
+      latePostings: {
+        byDayClose,
+        otherSources: {
+          status: 'not_connected',
+          reason:
+            "Charges other modules post for this date after it closed (e.g. a restaurant check handed in late) need finance to list postings by service date (CR-19). Until then they appear in the revenue of the day they were posted, with finance's late-posting reason.",
+        },
+      },
+      changed: revenueDelta.length > 0 || entries.length > 0 || byDayClose.length > 0,
     },
     links: [
       { rel: 'run', type: 'day_close_run', id: row.run_id },

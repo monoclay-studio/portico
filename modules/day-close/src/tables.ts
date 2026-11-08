@@ -78,21 +78,63 @@ export interface NightPostingsTable {
   posted_at: Ts;
 }
 
+export interface LinePostingsTable {
+  tenant_id: string;
+  property_id: string;
+  stay_id: string;
+  line_key: string;
+  night: string;
+  service_date: string;
+  kind: string;
+  amount_minor: number;
+  currency: string;
+  outcome: string;
+  entry_id: string | null;
+  run_id: string;
+  business_date: string;
+  posted_at: Ts;
+}
+
 export interface DeferredLinesTable {
   id: string;
   tenant_id: string;
   property_id: string;
   stay_id: string;
+  line_key: string;
   night: string;
   service_date: string;
-  idempotency_key: string;
   line: Json;
   status: string;
+  status_reason: string | null;
   created_run_id: string;
-  posted_run_id: string | null;
-  entry_id: string | null;
-  posted_at: TsNullable;
+  updated_run_id: string;
+  updated_at: Ts;
   version: Generated<number>;
+}
+
+export interface NightDecisionsTable {
+  id: string;
+  tenant_id: string;
+  property_id: string;
+  stay_id: string;
+  night: string;
+  decision: string;
+  run_id: string | null;
+  reason: string;
+  actor: string;
+  created_at: Ts;
+}
+
+export interface WatchedStaysTable {
+  tenant_id: string;
+  property_id: string;
+  stay_id: string;
+  from_night: string;
+  departure: string;
+  reason: string;
+  created_at: Ts;
+  updated_at: Ts;
+  resolved_at: TsNullable;
 }
 
 export interface OverridesTable {
@@ -156,6 +198,7 @@ export interface SchedulesTable {
   local_time: string;
   timezone: string;
   auto_continue: Generated<boolean>;
+  configured_by: string | null;
   next_due_at: TsNullable;
   skip_date: string | null;
   version: Generated<number>;
@@ -179,6 +222,9 @@ export interface DayCloseDB {
   'day_close.step_items': StepItemsTable;
   'day_close.night_postings': NightPostingsTable;
   'day_close.deferred_lines': DeferredLinesTable;
+  'day_close.line_postings': LinePostingsTable;
+  'day_close.night_decisions': NightDecisionsTable;
+  'day_close.watched_stays': WatchedStaysTable;
   'day_close.overrides': OverridesTable;
   'day_close.issues': IssuesTable;
   'day_close.day_facts': DayFactsTable;

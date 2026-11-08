@@ -183,6 +183,49 @@ export function dayCloseHttp(deps: { database: PorticoDatabase; service: DayClos
         (req) => tx(req, (t) => service.getReport(t, req.params.propertyId, req.params.date)),
       );
       app.get(
+        // The record route of `day_report` (manifest record type; id = `{propertyId}:{date}`, review P3-3).
+        '/day-close/reports/:id',
+        {
+          schema: {
+            tags: TAGS,
+            params: z.object({ id: z.string().regex(/^[0-9a-f-]{36}:\d{4}-\d{2}-\d{2}$/) }),
+            response: { 200: c.dayReport },
+          },
+        },
+        (req) => {
+          const [propertyId, date] = [req.params.id.slice(0, 36), req.params.id.slice(37)];
+          return tx(req, (t) => service.getReport(t, propertyId, date));
+        },
+      );
+      app.post(
+        '/day-close/properties/:propertyId/night-decisions',
+        {
+          schema: {
+            tags: TAGS,
+            summary:
+              'Decide a stay-night taken out of Day Close: Day Close posts it, or it was charged another way',
+            params: c.propertyParams,
+            body: c.nightDecisionInput,
+            response: {
+              201: z.object({ stayId: z.string(), night: z.string(), decision: z.string() }),
+            },
+          },
+        },
+        async (req, reply) => {
+          const key = requireIdempotencyKey(req);
+          const r = await runIdempotent(
+            database,
+            req.ctx,
+            { scope: 'dayClose.night.decide', key, request: { params: req.params, body: req.body } },
+            async (t) => ({
+              status: 201,
+              body: await service.decideNight(t, req.params.propertyId, req.body),
+            }),
+          );
+          return reply.status(201).send(r.body);
+        },
+      );
+      app.get(
         '/day-close/properties/:propertyId/days/:date/facts',
         { schema: { tags: TAGS, params: c.dateParams, response: { 200: c.dayFacts } } },
         (req) => tx(req, (t) => service.getFacts(t, req.params.propertyId, req.params.date)),

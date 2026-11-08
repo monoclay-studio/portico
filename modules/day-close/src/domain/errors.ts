@@ -13,6 +13,18 @@ export interface FailureRecord {
   details?: Record<string, unknown>;
 }
 
+/**
+ * 409s that heal on retry: someone else's concurrent change (re-read and retry) or the same request still running.
+ * Every other 409 is a deterministic refusal — e.g. finance's `idempotency_conflict` (the key is held with other
+ * content) never heals, so it is NOT retryable (review P0-2): the scheduler does not retry it in vain and a blocking
+ * follow-up is raised at once.
+ */
+const RETRYABLE_CONFLICTS: ReadonlySet<string> = new Set([
+  'version_conflict',
+  'request_in_progress',
+  'run_in_progress',
+]);
+
 /** PostgreSQL connection / crash classes that mean "the process or the database went away". */
 const TRANSIENT_SQLSTATE = /^(08|57P|40001|40P01|53)/;
 
@@ -21,7 +33,8 @@ export function toFailure(err: unknown): FailureRecord {
     return {
       code: err.code,
       message: err.message,
-      retryable: err.retryable || err.status === 503 || err.status === 409,
+      retryable:
+        err.retryable || err.status === 503 || (err.status === 409 && RETRYABLE_CONFLICTS.has(err.code)),
       ...(err.details ? { details: err.details } : {}),
     };
   }

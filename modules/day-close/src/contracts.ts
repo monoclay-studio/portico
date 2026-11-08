@@ -20,7 +20,9 @@ export const STEP_KEYS = [
   'allowance_close',
   'payments_housekeeping',
   'integrity',
-  'statistics_snapshot',
+  /** Last postings of the day (stays checked in during Day Close) and the blocker re-check (review P2-2/P2-3). */
+  'final_sweep',
+  /** Day facts are frozen in the same transaction that advances the date (DCL-I03 from the state the advance closes). */
   'advance',
   'post_advance',
 ] as const;
@@ -124,7 +126,9 @@ const localTime = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Use HH:MM (24-h
 
 /**
  * Property Day Close policy (platform policy key `dayClose.policy`, inherited organization → property).
- * Saving it is refused if it would not work (unknown codes, integrity codes demoted).
+ * Saving it is refused if it would not work (integrity codes demoted, a code listed both ways, a schedule earlier than
+ * the earliest start). Codes are free text matched against readiness item codes: an unknown code has no effect
+ * (review P3-4 — the catalogue grows with each connected module, so it is not validated against a fixed list).
  */
 export const dayClosePolicy = z
   .object({
@@ -144,8 +148,12 @@ export const dayClosePolicy = z
       .default({ mode: 'auto', protectDelayedTransfers: true, collectFee: 'agreed_guarantee' }),
     /** Nights before the business date checked for "night not posted" (catch-up). */
     catchUpWindowNights: z.number().int().min(1).max(31).default(7),
-    /** A run cannot start before this local time on the business date (EC-DCL-026). null = any time. */
-    earliestStartLocalTime: localTime.nullable().default(null),
+    /**
+     * A run cannot start before this local time of the business date (EC-DCL-026; times before 12:00 are after
+     * midnight). Always set (review P2-5): a daytime close would no-show the afternoon's arrivals. The schedule must
+     * not be earlier, and the no-show step re-checks it.
+     */
+    earliestStartLocalTime: localTime.default('22:00'),
     schedule: z
       .object({
         enabled: z.boolean().default(false),
@@ -277,6 +285,16 @@ export const overrideInput = z
   .object({ itemKey: z.string().min(3).max(300), reason: z.string().min(3).max(500) })
   .strict();
 export const resolveIssueInput = z.object({ resolution: z.string().min(3).max(500) }).strict();
+/** Decide a stay-night a person took out of Day Close (review P1-1): Day Close posts it, or it was charged elsewhere. */
+export const nightDecisionInput = z
+  .object({
+    stayId: uuid,
+    night: localDate,
+    decision: z.enum(['post_by_day_close', 'posted_elsewhere']),
+    reason: z.string().min(3).max(500),
+  })
+  .strict();
+export type NightDecisionInput = z.infer<typeof nightDecisionInput>;
 
 export const runListQuery = z.object({
   from: localDate.optional(),
@@ -344,13 +362,39 @@ export const dayReport = z.object({
     overrides: z.array(z.record(z.string(), z.unknown())),
     steps: z.array(z.record(z.string(), z.unknown())),
   }),
-  /** Computed on read: corrections relating to the date posted after it closed (DCL-R07, EC-DCL-021). */
+  /**
+   * Computed on read (DCL-R07, EC-DCL-021, review P2-3/P2-4/P2-13), each entry labelled by cause:
+   * - `revenueDelta`: revenue stamped with the date that committed after the close froze it (in-flight postings,
+   *   FR-1) — the facts are frozen in the advance transaction, so nothing else can change it;
+   * - `entries`: corrections finance relates to the date (`relatesToBusinessDate`);
+   * - `latePostings`: charges for the date's service posted after it closed — Day Close's own late postings
+   *   (catch-up nights, agreement lines) from its register; others need finance's service-date query (CR-19).
+   */
   restatementsSince: z.object({
     asOf: timestamp,
     revenueDelta: z.array(
-      z.object({ chargeCode: z.string(), closedMinor: z.number().int(), nowMinor: z.number().int() }),
+      z.object({
+        chargeCode: z.string(),
+        closedMinor: z.number().int(),
+        nowMinor: z.number().int(),
+        cause: z.literal('posted_after_close'),
+      }),
     ),
     entries: z.array(z.record(z.string(), z.unknown())),
+    latePostings: z.object({
+      byDayClose: z.array(
+        z.object({
+          stayId: uuid,
+          lineKey: z.string(),
+          kind: z.string(),
+          serviceDate: localDate,
+          postedOn: localDate,
+          amount: money,
+          cause: z.literal('late_posting'),
+        }),
+      ),
+      otherSources: z.object({ status: z.enum(['not_connected']), reason: z.string() }),
+    }),
     changed: z.boolean(),
   }),
   links: z.array(recordLink),

@@ -330,10 +330,13 @@ export async function collectReadiness(
     .orderBy('created_at')
     .execute();
   for (const i of own) {
+    // A decision this run's own override asked for does not block this run (the override is tonight's decision);
+    // it blocks the next close until a person decides (review P1-1).
+    const ownDecision = i.code === 'night_decision_needed' && !!opts.runId && i.run_id === opts.runId;
     raws.push({
       source: 'dayClose',
       code: i.code,
-      severity: i.severity as RawItem['severity'],
+      severity: ownDecision ? 'warning' : (i.severity as RawItem['severity']),
       ref: i.ref_type && i.ref_id ? { type: i.ref_type, id: i.ref_id } : null,
       owner: ((i.owner as { id?: string } | null)?.id as OwnerRole) ?? 'night_audit',
       message: i.message,
@@ -441,6 +444,25 @@ function ownIssueActions(code: string): RawItem['actions'] {
       return [act('reviewLedger', 'Open the ledger check', 'finance', 'finance.ledger.read')];
     case 'levy_not_posted':
       return [act('postCharge', 'Post the levy by hand', 'finance', 'finance.posting.create'), resolve];
+    case 'night_decision_needed':
+      return [
+        act(
+          'decideNight:post_by_day_close',
+          'Let Day Close post this night',
+          'dayClose',
+          P.exceptionOverride,
+        ),
+        act('decideNight:posted_elsewhere', 'It was charged another way', 'dayClose', P.exceptionOverride),
+      ];
+    case 'night_not_posted_departed':
+      return [act('postCharge', 'Post the night in finance', 'finance', 'finance.posting.create'), resolve];
+    case 'posted_line_changed':
+    case 'posting_conflict':
+    case 'posted_from_last_known_agreement':
+    case 'posted_after_close':
+      return [act('openFolio', 'Review the folio', 'finance', 'finance.folio.read'), resolve];
+    case 'close_overdue':
+      return [act('startRun', 'Start Day Close', 'dayClose', P.runStart), resolve];
     default:
       return [resolve];
   }
@@ -467,10 +489,42 @@ export async function getReadiness(
   return r;
 }
 
+/** Business dates of this property whose Day Close completed, before `before` (oldest first). */
+export async function nightsClosed(
+  tx: TxContext,
+  propertyId: string,
+  before: LocalDate,
+): Promise<LocalDate[]> {
+  const rows = await db(tx)
+    .selectFrom('day_close.runs')
+    .select('business_date')
+    .where('property_id', '=', propertyId)
+    .where('status', '=', 'completed')
+    .where('business_date', '<', before)
+    .orderBy('business_date')
+    .execute();
+  return rows.map((r) => r.business_date);
+}
+
+/** The latest decision per night a person took over for a stay (P1-1). */
+export async function latestDecisions(tx: TxContext, stayId: string): Promise<Map<LocalDate, string>> {
+  const rows = await db(tx)
+    .selectFrom('day_close.night_decisions')
+    .select(['night', 'decision'])
+    .where('stay_id', '=', stayId)
+    .orderBy('created_at')
+    .orderBy('id')
+    .execute();
+  const out = new Map<LocalDate, string>();
+  for (const r of rows) out.set(r.night, r.decision);
+  return out;
+}
+
 /**
  * Nights before (and, once the active run's posting step is done, on) the business date whose in-house stays have
  * no Day Close posting (DCL-R04, DCL-I04). Only nights Day Close is responsible for: nights of dates whose own Day
  * Close completed (or the current date after this run posted it) — never nights from before Portico closed days.
+ * A night a person took over is excluded until they decide "Day Close posts it" (review P1-1).
  */
 export async function catchUpNights(
   deps: Deps,
@@ -515,7 +569,26 @@ export async function catchUpNights(
       )
       .execute();
     const done = new Set(posted.map((p) => p.stay_id));
-    for (const s of stays) if (!done.has(s.stayId)) out.push({ stayId: s.stayId, night });
+    // A night a person overrode is a decision, not a gap (P1-1): never caught up unless they chose "post it".
+    const decided = await db(tx)
+      .selectFrom('day_close.night_decisions')
+      .select(['stay_id', 'decision', 'created_at', 'id'])
+      .where('night', '=', night)
+      .where(
+        'stay_id',
+        'in',
+        stays.map((s) => s.stayId),
+      )
+      .orderBy('created_at')
+      .orderBy('id')
+      .execute();
+    const latest = new Map<string, string>();
+    for (const d of decided) latest.set(d.stay_id, d.decision);
+    for (const s of stays) {
+      const d = latest.get(s.stayId);
+      if (!done.has(s.stayId) && d !== 'skip_pending' && d !== 'posted_elsewhere')
+        out.push({ stayId: s.stayId, night });
+    }
   }
   return out;
 }

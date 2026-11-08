@@ -1,6 +1,6 @@
 export * from './contracts';
 export * from './events';
-export { dayCloseJobs } from './jobs';
+export { dayCloseJobs, dayCloseSubscriptions, OVERDUE_GRACE_MS } from './jobs';
 export * from './manifest';
 export type * from './ports';
 export { dayCloseHttp } from './routes';

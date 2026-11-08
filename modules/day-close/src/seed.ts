@@ -21,7 +21,7 @@ export function createDayCloseDemoSeed(service: DayCloseService) {
             reason: 'Demo data: Day Close policy for this sample property',
             policy: {
               noShow: { mode: 'auto', protectDelayedTransfers: true, collectFee: 'agreed_guarantee' },
-              earliestStartLocalTime: guesthouse ? null : '22:00',
+              earliestStartLocalTime: guesthouse ? '23:00' : '22:00',
               schedule: {
                 enabled: false,
                 localTime: guesthouse ? '23:30' : '02:00',

@@ -64,7 +64,20 @@ export function policyProblems(p: DayClosePolicy): string[] {
   for (const c of p.blockingCodes) {
     if (p.warningCodes.includes(c)) out.push(`${c} is listed both as blocking and as a warning.`);
   }
+  // DCL-R05 [MUST] (review P2-5): the schedule starts no earlier than the earliest start.
+  if (businessDayMinute(p.schedule.localTime) < businessDayMinute(p.earliestStartLocalTime)) {
+    out.push(
+      `The scheduled time ${p.schedule.localTime} is earlier than the earliest start ${p.earliestStartLocalTime}: a run at that time would be refused (and could no-show arrivals still due). Move the schedule to ${p.earliestStartLocalTime} or later.`,
+    );
+  }
   return out;
+}
+
+/** Position of a local time within business date D's close window: times before 12:00 are after midnight (D+1). */
+export function businessDayMinute(localTime: string): number {
+  const h = Number(localTime.slice(0, 2));
+  const m = Number(localTime.slice(3, 5));
+  return (h < 12 ? 24 * 60 : 0) + h * 60 + m;
 }
 
 /** Validate a policy before saving (DCL policy endpoint): refused if it would not work. */

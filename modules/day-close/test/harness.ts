@@ -52,6 +52,7 @@ import {
   type DayCloseService,
   type DueStay,
   dayCloseManifest,
+  dayCloseSubscriptions,
   type ServiceConfig,
   type StayNight,
 } from '../src';
@@ -113,7 +114,13 @@ export class FakeIntegration {
   readonly exports: string[] = [];
 }
 
+/** Reservations' agreement lookup (CR-18): connected in the harness by default, off to test the main-branch stub. */
+export class FakeReservationsLookup {
+  connected = true;
+}
+
 export interface Fakes {
+  reservations: FakeReservationsLookup;
   payments: FakePayments;
   inventory: FakeInventory;
   operations: FakeOperations;
@@ -121,7 +128,11 @@ export interface Fakes {
 }
 
 /** Postgres-backed reservations stand-in (dcl_fake.stays), strict about property scope and states. */
-function fakeReservations(rates: RatesService, finance: FinanceService): DayClosePorts['reservations'] {
+function fakeReservations(
+  rates: RatesService,
+  finance: FinanceService,
+  lookup: FakeReservationsLookup,
+): DayClosePorts['reservations'] {
   type Row = {
     id: string;
     property_id: string;
@@ -161,7 +172,11 @@ function fakeReservations(rates: RatesService, finance: FinanceService): DayClos
           and arrival <= ${input.date}::date and departure > ${input.date}::date order by id`.execute(tx.db);
       const out: StayNight[] = [];
       for (const r of rows) {
-        const seg = r.segments.find((s) => input.date >= s.from && input.date < s.to);
+        // Like the real provider, an in-house stay is returned even when its terms do not cover the night (review
+        // P3-10): Day Close must see it and refuse with night_not_in_terms, not miss it.
+        const seg =
+          r.segments.find((s) => input.date >= s.from && input.date < s.to) ??
+          r.segments[r.segments.length - 1];
         if (!seg) continue;
         out.push({
           stayId: r.id,
@@ -179,6 +194,23 @@ function fakeReservations(rates: RatesService, finance: FinanceService): DayClos
         });
       }
       return out;
+    },
+    async getStayAgreement(tx, input) {
+      if (!lookup.connected) throw new ModuleUnavailableError('reservations', 'getStayAgreement');
+      const { rows } = await sql<Row>`select * from dcl_fake.stays where id = ${input.stayId}`.execute(tx.db);
+      const r = rows[0];
+      if (!r || r.property_id !== input.propertyId) return null;
+      return {
+        stayId: r.id,
+        bookingId: r.booking_id,
+        propertyId: r.property_id,
+        status: r.status,
+        arrival: r.arrival,
+        departure: r.departure,
+        commercialType: r.commercial_type as StayNight['commercialType'],
+        occupancy: r.occupancy,
+        segments: r.segments,
+      };
     },
     async listDueArrivals(tx, input) {
       const { rows } = await sql<Row>`select * from dcl_fake.stays where property_id = ${input.propertyId}
@@ -253,6 +285,18 @@ export function allowancesOf(terms: unknown) {
     eligibleChargeCodes: [...a.terms.eligibleChargeCodes],
     remainderPolicy: a.terms.remainderPolicy,
   }));
+}
+
+/** Statutory per-person / per-unit levies of a night in the agreed terms (the same adapter as the composition root). */
+export function nightLeviesOf(terms: unknown, night: LocalDate): Money | null {
+  const t = terms as TermsSnapshot | null;
+  const n = t?.nights?.find((x) => x.date === night);
+  if (!n) return null;
+  const levies = n.taxes.filter(
+    (x) => x.nature === 'statutory' && (x.basis === 'per_person_night' || x.basis === 'per_unit_night'),
+  );
+  if (!levies.length) return null;
+  return { amountMinor: levies.reduce((a, x) => a + x.amount.amountMinor, 0), currency: n.amount.currency };
 }
 
 export function financePortsFor(rates: RatesService): FinancePorts {
@@ -345,11 +389,12 @@ export function buildPorts(rates: RatesService, finance: FinanceService, fakes: 
         }));
       },
     },
-    reservations: fakeReservations(rates, finance),
+    reservations: fakeReservations(rates, finance, fakes.reservations),
     rates: {
       verifyTerms: (terms) => rates.verifyTerms(terms),
       postingPlan: (terms, stayId) => rates.postingPlan(terms as TermsSnapshot, stayId),
       allowances: allowancesOf,
+      nightLevies: nightLeviesOf,
     },
     finance: {
       async postCharge(tx, scope, input) {
@@ -510,6 +555,7 @@ export async function startHarness(config: Partial<ServiceConfig> = {}): Promise
   const rates = ratesService(ratesPortsFor(), { termsSealKey: TEST_SEAL_KEY });
   const finance = createFinance(financePortsFor(rates));
   const fakes: Fakes = {
+    reservations: new FakeReservationsLookup(),
     payments: new FakePayments(),
     inventory: new FakeInventory(),
     operations: new FakeOperations(),
@@ -658,6 +704,46 @@ export interface StayOptions {
   mutateTerms?: (t: TermsSnapshot) => TermsSnapshot;
 }
 
+/**
+ * Quotes per organization and request. A sealed agreement is about the offer, not the stay (the posting plan takes the
+ * stay id separately), so identical requests reuse one real quote. This was the slow part under load (review P2-9):
+ * S09 quoted 112 identical stays through the full rates pipeline.
+ */
+const quoteCache = new WeakMap<Org, Map<string, Promise<Offer>>>();
+
+export async function quoteOffer(
+  h: Harness,
+  org: Org,
+  o: { arrival: LocalDate; departure: LocalDate; occupancy: Occupancy; plan?: string; unitType?: string },
+): Promise<Offer> {
+  const unitType = org.unitTypes.find((u) => u.code === (o.unitType ?? 'BV')) ?? org.unitTypes[0];
+  const planId = org.seeded.ratePlans[o.plan ?? 'BAR'] as string;
+  const key = JSON.stringify([o.arrival, o.departure, o.occupancy, planId, unitType?.id]);
+  let byOrg = quoteCache.get(org);
+  if (!byOrg) {
+    byOrg = new Map();
+    quoteCache.set(org, byOrg);
+  }
+  let p = byOrg.get(key);
+  if (!p) {
+    p = org
+      .run((tx) =>
+        h.rates.quoteDetailed(tx, {
+          propertyId: org.propertyId,
+          nights: { from: o.arrival, to: o.departure },
+          occupancy: o.occupancy,
+          ratePlanIds: [planId],
+          unitTypeIds: [unitType?.id as string],
+          bookingDate: '2026-10-15',
+        }),
+      )
+      .then((q) => q.offers[0] as Offer);
+    byOrg.set(key, p);
+    p.catch(() => byOrg?.delete(key));
+  }
+  return p;
+}
+
 /** Quote real sealed terms with rates, open the stay folio in finance, and store the stay in the fake. */
 export async function addStay(h: Harness, org: Org, o: StayOptions) {
   const stayId = newId();
@@ -665,17 +751,7 @@ export async function addStay(h: Harness, org: Org, o: StayOptions) {
   const unitType = org.unitTypes.find((u) => u.code === (o.unitType ?? 'BV')) ?? org.unitTypes[0];
   const occupancy = o.occupancy ?? { adults: 2, childrenAges: [] };
   const planId = org.seeded.ratePlans[o.plan ?? 'BAR'] as string;
-  const quoted = await org.run((tx) =>
-    h.rates.quoteDetailed(tx, {
-      propertyId: org.propertyId,
-      nights: { from: o.arrival, to: o.departure },
-      occupancy,
-      ratePlanIds: [planId],
-      unitTypeIds: [unitType?.id as string],
-      bookingDate: '2026-10-15',
-    }),
-  );
-  const offer = quoted.offers[0] as Offer;
+  const offer = await quoteOffer(h, org, { ...o, occupancy });
   if (!offer?.bookable)
     throw new Error(`no bookable offer for ${o.plan ?? 'BAR'} ${o.arrival}–${o.departure}`);
   const terms = o.mutateTerms ? o.mutateTerms(offer.terms) : offer.terms;
@@ -696,16 +772,94 @@ export async function addStay(h: Harness, org: Org, o: StayOptions) {
   return { stayId, bookingId, terms, offer };
 }
 
-/** Check a stay in (the fake's state change, as reservations' check-in would). */
+/**
+ * Deliver a reservations stay event to Day Close's real consumer (what the outbox dispatcher does after reservations'
+ * transaction commits), with the payload shape reservations emits (version 2: `stays[]`).
+ */
+export async function deliverStayEvent(
+  org: Org,
+  stayId: string,
+  type:
+    | 'reservations.stay.checkedIn'
+    | 'reservations.stay.extended'
+    | 'reservations.stay.shortened'
+    | 'reservations.stay.checkedOut',
+) {
+  const sub = dayCloseSubscriptions()[0] as ReturnType<typeof dayCloseSubscriptions>[number];
+  await org.run(async (tx) => {
+    const { rows } = await sql<{ property_id: string; arrival: string; departure: string }>`
+      select property_id, arrival::text, departure::text from dcl_fake.stays where id = ${stayId}`.execute(
+      tx.db,
+    );
+    const r = rows[0];
+    if (!r) return;
+    const businessDate = await platform.getBusinessDate(tx, r.property_id);
+    await sub.handle(tx, {
+      id: newId(),
+      tenantId: tx.tenantId,
+      type,
+      occurredAt: tx.now.toISOString(),
+      propertyId: r.property_id,
+      aggregate: { type: 'stay', id: stayId },
+      payload: {
+        stayId,
+        businessDate,
+        stays: [{ stayId, propertyId: r.property_id, arrival: r.arrival, departure: r.departure }],
+      },
+    } as unknown as Parameters<typeof sub.handle>[1]);
+  });
+}
+
+/** Check a stay in (the fake's state change, as reservations' check-in would, then its event is delivered). */
 export async function checkIn(org: Org, stayId: string) {
   await org.run((tx) =>
     sql`update dcl_fake.stays set status = 'in_house' where id = ${stayId}`.execute(tx.db),
   );
+  await deliverStayEvent(org, stayId, 'reservations.stay.checkedIn');
 }
 export async function checkOut(org: Org, stayId: string) {
   await org.run((tx) =>
     sql`update dcl_fake.stays set status = 'checked_out' where id = ${stayId}`.execute(tx.db),
   );
+  await deliverStayEvent(org, stayId, 'reservations.stay.checkedOut');
+}
+
+/**
+ * Re-confirm a stay's price (what reservations does on a rate correction, an occupancy change, an extension or a
+ * shortening): new sealed terms from a real quote, stored on the stay, and the stay event delivered.
+ */
+export async function requote(
+  h: Harness,
+  org: Org,
+  stayId: string,
+  o: {
+    arrival: LocalDate;
+    departure: LocalDate;
+    occupancy: Occupancy;
+    plan?: 'BAR' | 'AI';
+    unitType?: 'BV' | 'WV';
+  },
+) {
+  const offer = await quoteOffer(h, org, o);
+  if (!offer?.bookable) throw new Error('not bookable');
+  const before = await org.run((tx) =>
+    sql<{ departure: string }>`select departure::text from dcl_fake.stays where id = ${stayId}`.execute(
+      tx.db,
+    ),
+  );
+  await org.run((tx) =>
+    sql`update dcl_fake.stays set departure = ${o.departure}::date, occupancy = ${JSON.stringify(o.occupancy)}::jsonb,
+        segments = ${JSON.stringify([{ from: o.arrival, to: o.departure, terms: offer.terms }])}::jsonb
+        where id = ${stayId}`.execute(tx.db),
+  );
+  const prev = before.rows[0]?.departure;
+  if (prev && prev !== o.departure)
+    await deliverStayEvent(
+      org,
+      stayId,
+      o.departure > prev ? 'reservations.stay.extended' : 'reservations.stay.shortened',
+    );
+  return offer.terms;
 }
 export async function extendStay(org: Org, stayId: string, departure: LocalDate) {
   await org.run((tx) =>

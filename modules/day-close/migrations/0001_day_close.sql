@@ -67,7 +67,7 @@ create table day_close.steps (
   tenant_id   uuid not null,
   run_id      uuid not null references day_close.runs(id),
   key         text not null check (key in ('preflight', 'no_shows', 'room_and_package_postings', 'allowance_close',
-                                           'payments_housekeeping', 'integrity', 'statistics_snapshot', 'advance',
+                                           'payments_housekeeping', 'integrity', 'final_sweep', 'advance',
                                            'post_advance')),
   ordinal     int  not null,
   status      text not null check (status in ('pending', 'running', 'completed', 'failed', 'skipped')),
@@ -165,28 +165,96 @@ select core.make_append_only('day_close.night_postings');
 create index night_postings_property_night_idx on day_close.night_postings (tenant_id, property_id, night);
 
 ---------------------------------------------------------------------------------------------------------
--- Lines of a night whose service date is later than the night (e.g. a departure transfer allocated to the last
--- night): posted by the Day Close whose business date reaches the service date — never silently dropped.
+-- Agreement-line register (review P0-1): every plan line Day Close posted, keyed by rates' stable line identity
+-- (`lineKey`: the component and its occurrence, never the night it happens to be allocated to). A re-price that moves
+-- a line to another night keeps its identity, so it is never posted twice and a missing one is visible.
+---------------------------------------------------------------------------------------------------------
+create table day_close.line_postings (
+  tenant_id      uuid not null,
+  property_id    uuid not null,
+  stay_id        uuid not null,
+  line_key       text not null,
+  night          date not null,
+  service_date   date not null,
+  kind           text not null,
+  amount_minor   bigint not null,
+  currency       char(3) not null,
+  -- posted: Day Close posted it; conflict: finance already held the key with other content (follow-up raised).
+  outcome        text not null check (outcome in ('posted', 'conflict')),
+  entry_id       uuid,
+  run_id         uuid not null references day_close.runs(id),
+  business_date  date not null,
+  posted_at      timestamptz not null,
+  primary key (tenant_id, stay_id, line_key)
+);
+select core.enable_tenant_isolation('day_close.line_postings');
+select core.make_append_only('day_close.line_postings');
+create index line_postings_service_idx on day_close.line_postings (tenant_id, property_id, service_date);
+
+---------------------------------------------------------------------------------------------------------
+-- Expected future-dated lines (e.g. the departure transfer, allocated to the last night but served on departure
+-- day): recomputed from the agreement in force at every close (pending → posted | cancelled), posted the moment
+-- their service date becomes the business date (right after the advance, before the guest checks out).
 ---------------------------------------------------------------------------------------------------------
 create table day_close.deferred_lines (
   id               uuid primary key,
   tenant_id        uuid not null,
   property_id      uuid not null,
   stay_id          uuid not null,
+  line_key         text not null,
   night            date not null,
   service_date     date not null,
-  idempotency_key  text not null,
   line             jsonb not null,
-  status           text not null check (status in ('pending', 'posted')),
+  status           text not null check (status in ('pending', 'posted', 'cancelled')),
+  status_reason    text,
   created_run_id   uuid not null,
-  posted_run_id    uuid,
-  entry_id         uuid,
-  posted_at        timestamptz,
+  updated_run_id   uuid not null,
+  updated_at       timestamptz not null,
   version          int not null default 1,
-  unique (tenant_id, idempotency_key)
+  unique (tenant_id, stay_id, line_key)
 );
 select core.enable_tenant_isolation('day_close.deferred_lines');
 create index deferred_lines_due_idx on day_close.deferred_lines (tenant_id, property_id, status, service_date);
+
+---------------------------------------------------------------------------------------------------------
+-- Decisions about a stay-night a person took over (review P1-1): an overridden night is a decision, not a gap.
+-- The latest decision per stay-night wins: skip_pending (blocks until decided), posted_elsewhere, post_by_day_close.
+---------------------------------------------------------------------------------------------------------
+create table day_close.night_decisions (
+  id           uuid primary key,
+  tenant_id    uuid not null,
+  property_id  uuid not null,
+  stay_id      uuid not null,
+  night        date not null,
+  decision     text not null check (decision in ('skip_pending', 'posted_elsewhere', 'post_by_day_close')),
+  run_id       uuid,
+  reason       text not null,
+  actor        text not null,
+  created_at   timestamptz not null
+);
+select core.enable_tenant_isolation('day_close.night_decisions');
+select core.make_append_only('day_close.night_decisions');
+create index night_decisions_stay_idx on day_close.night_decisions (tenant_id, stay_id, night, created_at);
+
+---------------------------------------------------------------------------------------------------------
+-- Stays to keep in sight until their nights are posted (review P2-2): checked in after a night of theirs closed, or
+-- seen at a close and gone before the next one. Lets the next close charge them, or flag them, even after departure.
+---------------------------------------------------------------------------------------------------------
+create table day_close.watched_stays (
+  tenant_id    uuid not null,
+  property_id  uuid not null,
+  stay_id      uuid not null,
+  from_night   date not null,
+  -- Last departure reservations announced for the stay (check-in / extension / shortening / check-out events): the
+  -- bound of the nights to check even when the stay's agreement can no longer be read.
+  departure    date not null,
+  reason       text not null,
+  created_at   timestamptz not null,
+  updated_at   timestamptz not null,
+  resolved_at  timestamptz,
+  primary key (tenant_id, stay_id)
+);
+select core.enable_tenant_isolation('day_close.watched_stays');
 
 ---------------------------------------------------------------------------------------------------------
 -- Overrides of blocking items: permission + reason per item, append-only (EC-DCL-009).
@@ -273,6 +341,8 @@ create table day_close.schedules (
   local_time     text not null check (local_time ~ '^[0-2][0-9]:[0-5][0-9]$'),
   timezone       text not null,
   auto_continue  boolean not null default true,
+  -- Who enabled the schedule (they held platform.businessDate.advance at the property — review P2-12).
+  configured_by  text,
   next_due_at    timestamptz,
   skip_date      date,
   version        int not null default 1,
@@ -285,7 +355,7 @@ create table day_close.schedule_log (
   id            uuid primary key,
   tenant_id     uuid not null,
   property_id   uuid not null,
-  event         text not null check (event in ('configured', 'skipped_today', 'fired', 'fire_refused')),
+  event         text not null check (event in ('configured', 'skipped_today', 'fired', 'fire_refused', 'overdue')),
   business_date date,
   detail        jsonb not null default '{}',
   actor         text not null,
@@ -312,5 +382,18 @@ create or replace function day_close.due_work(p_now timestamptz)
         or (r.status = 'failed' and r.next_retry_at is not null and r.next_retry_at <= p_now)
 $$;
 revoke execute on function day_close.due_work(timestamptz) from public;
+
+-- Dead-man's switch (review P2-7): schedules whose close should have fired and finished (next due long past, or an
+-- active run started long ago). Checked by a separate job; returns routing metadata only.
+create or replace function day_close.overdue_closes(p_now timestamptz, p_grace interval)
+  returns table (tenant_id uuid, property_id uuid)
+  language sql stable security definer set search_path = day_close, pg_temp as $$
+    select s.tenant_id, s.property_id from day_close.schedules s
+     where s.enabled and s.next_due_at is not null and s.next_due_at < p_now - p_grace
+    union
+    select r.tenant_id, r.property_id from day_close.runs r
+     where r.status in ('preflight', 'blocked', 'running', 'failed') and r.started_at < p_now - p_grace * 3
+$$;
+revoke execute on function day_close.overdue_closes(timestamptz, interval) from public;
 
 select core.apply_standard_grants('day_close');

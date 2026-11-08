@@ -1,7 +1,9 @@
 import type { PorticoDatabase, TxContext } from '@portico/db';
 import type { LocalDate, RequestContext } from '@portico/kernel';
+import type { NightDecisionInput } from '../contracts';
 import type { DayClosePorts } from '../ports';
 import { DEFAULT_CONFIG, type Deps, type EngineHooks, type ServiceConfig } from './context';
+import * as decisions from './decisions';
 import { executeRun } from './engine';
 import * as policy from './policy';
 import * as readiness from './readiness';
@@ -52,6 +54,9 @@ export function createDayCloseService(ports: DayClosePorts, config: Partial<Serv
       runs.listIssues(deps, tx, propertyId, status),
     resolveIssue: (tx: TxContext, issueId: string, expectedVersion: number, resolution: string) =>
       runs.resolveIssue(deps, tx, issueId, expectedVersion, resolution),
+    // stay-night decisions (review P1-1)
+    decideNight: (tx: TxContext, propertyId: string, input: NightDecisionInput) =>
+      decisions.decideNight(deps, tx, propertyId, input),
     // reports (DCL-R07, R08)
     getReport: (tx: TxContext, propertyId: string, date: LocalDate) =>
       reports.getReport(deps, tx, propertyId, date),
@@ -72,9 +77,12 @@ export function createDayCloseService(ports: DayClosePorts, config: Partial<Serv
       scheduler.fireSchedule(deps, database, ctx, propertyId),
     autoResume: (database: PorticoDatabase, ctx: RequestContext, runId: string) =>
       scheduler.autoResume(deps, database, ctx, runId),
+    raiseOverdue: (database: PorticoDatabase, ctx: RequestContext, propertyId: string, graceMs: number) =>
+      scheduler.raiseOverdue(deps, database, ctx, propertyId, graceMs),
   };
 }
 
 export type DayCloseService = ReturnType<typeof createDayCloseService>;
 export { type EngineHooks, type ServiceConfig, SimulatedCrash } from './context';
+export { onStayEvent } from './decisions';
 export type { StartInput } from './runs';

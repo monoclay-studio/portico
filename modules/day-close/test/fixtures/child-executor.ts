@@ -15,6 +15,7 @@ import {
   FakeInventory,
   FakeOperations,
   FakePayments,
+  FakeReservationsLookup,
   financePortsFor,
   ratesPortsFor,
   TEST_SEAL_KEY,
@@ -32,6 +33,7 @@ const db = createDatabase({ connectionString: appUrl, clock: fixedClock(nowIso),
 const rates = ratesService(ratesPortsFor(), { termsSealKey: TEST_SEAL_KEY });
 const finance = createFinance(financePortsFor(rates));
 const fakes = {
+  reservations: new FakeReservationsLookup(),
   payments: new FakePayments(),
   inventory: new FakeInventory(),
   operations: new FakeOperations(),

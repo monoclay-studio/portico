@@ -14,8 +14,8 @@ export const STEP_LABELS: Record<StepKey, string> = {
   allowance_close: 'Allowance close',
   payments_housekeeping: 'Payments housekeeping',
   integrity: 'Books balance',
-  statistics_snapshot: 'Day statistics',
-  advance: 'Advance business date',
+  final_sweep: 'Final sweep and re-check',
+  advance: 'Freeze day statistics and advance business date',
   post_advance: 'Day report and exports',
 };
 

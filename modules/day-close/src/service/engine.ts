@@ -46,12 +46,10 @@ async function notify(
   run: RunRow,
   type: (typeof DAY_CLOSE_EVENTS)[keyof typeof DAY_CLOSE_EVENTS],
   payload: Record<string, unknown>,
+  roles: readonly string[] = ['night_audit', 'front_office_manager'],
 ) {
   const mode = assertExternalEffectAllowed(tx, 'message.staff');
-  await emitRunEvent(tx, run, type, {
-    ...payload,
-    notification: { roles: ['night_audit', 'front_office_manager'], mode },
-  });
+  await emitRunEvent(tx, run, type, { ...payload, notification: { roles, mode } });
 }
 
 async function claim(
@@ -209,15 +207,17 @@ export async function executeRun(
             blockers: outcome.blockers.map((b) => b.key),
           }),
         });
-        await tx.audit({
-          action: 'dayClose.run.blocked',
-          target: { type: 'day_close_run', id: runId },
-          propertyId: run.property_id,
-          after: { blockers: outcome.blockers.map((b) => ({ key: b.key, code: b.code })) },
-        });
-        // Tell the duty roles when the list of blockers changes — not on every automatic re-check.
+        // Audit and tell the duty roles when the list of blockers changes — not on every automatic re-check
+        // (review P3-1: a blocked auto-close re-checks every minute).
         const keys = outcome.blockers.map((b) => b.key).sort();
         const changed = keys.join('|') !== claimed.previousBlockers.join('|');
+        if (changed)
+          await tx.audit({
+            action: 'dayClose.run.blocked',
+            target: { type: 'day_close_run', id: runId },
+            propertyId: run.property_id,
+            after: { blockers: outcome.blockers.map((b) => ({ key: b.key, code: b.code })) },
+          });
         if (r && changed)
           await notify(tx, r, DAY_CLOSE_EVENTS.runBlocked, { blocking: outcome.blockers.length });
       });
@@ -260,7 +260,7 @@ export async function executeRun(
 }
 
 async function recordFailure(
-  _deps: Deps,
+  deps: Deps,
   database: PorticoDatabase,
   ctx: RequestContext,
   run: RunRow,
@@ -274,6 +274,8 @@ async function recordFailure(
   },
 ) {
   await withTenantTx(database, ctx, async (tx) => {
+    // Fenced like every other executor write (review P3-2): a stale executor that lost its lease records nothing.
+    await heartbeat(tx, run.id, owner, deps.config.leaseMs);
     const failure = outcome.error;
     await setStep(tx, run.id, step, {
       status: 'failed',
@@ -308,7 +310,16 @@ async function recordFailure(
       propertyId: run.property_id,
       after: { step, code: failure.code, retryable: failure.retryable, nextRetryAt: retryAt },
     });
-    if (r) await notify(tx, r, DAY_CLOSE_EVENTS.runFailed, { step, code: failure.code });
+    // An integrity failure is owned by finance: finance is told too (review P3-6; it still needs CR-13 to open the
+    // Day Close issue).
+    if (r)
+      await notify(
+        tx,
+        r,
+        DAY_CLOSE_EVENTS.runFailed,
+        { step, code: failure.code },
+        failure.integrity ? ['night_audit', 'front_office_manager', 'finance'] : undefined,
+      );
   });
 }
 

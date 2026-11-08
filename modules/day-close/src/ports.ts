@@ -118,6 +118,28 @@ export interface ReservationsPort {
     tx: TxContext,
     input: { propertyId: string; stayId: string; idempotencyKey: string },
   ): Promise<NoShowOutcome>;
+  /**
+   * CONTRACT REQUEST (reservations, CR-18): the stay's agreement in force now, whatever its status (also after
+   * check-out), so a close can reconcile what it posted with a stay that changed after its last night.
+   * The adapter refuses a stay of another property. null = unknown stay.
+   */
+  getStayAgreement(
+    tx: TxContext,
+    input: { propertyId: string; stayId: string },
+  ): Promise<StayAgreement | null>;
+}
+
+export interface StayAgreement {
+  stayId: string;
+  bookingId: string;
+  propertyId: string;
+  status: string;
+  arrival: LocalDate;
+  departure: LocalDate;
+  commercialType: 'standard' | 'complimentary' | 'house_use';
+  occupancy: Occupancy;
+  /** Agreed terms per segment (half-open night ranges), opaque to Day Close. */
+  segments: Array<{ from: LocalDate; to: LocalDate; terms: unknown }>;
 }
 
 // ───────────────────────────── rates (pure posting plan) ─────────────────────────────
@@ -127,6 +149,9 @@ export type TaxInclusionMode = 'exclusive' | 'inclusive' | 'rules' | 'rule_defau
 /** Rates' `PostingLine` (the fields Day Close reads; structurally checked against rates at binding). */
 export interface PostingLine {
   idempotencyKey: string;
+  /** Rates' stable line identity (component + occurrence, never the allocated night): Day Close's posting key. */
+  lineKey: string;
+  occurrence: { rhythm: 'nightly' | 'arrival' | 'departure' | 'days_of_stay'; stayNight: number };
   kind: 'room' | 'inclusion' | 'allowance' | 'added';
   nightDate: LocalDate;
   serviceDate: LocalDate;
@@ -158,6 +183,8 @@ export interface RatesPort {
   postingPlan(terms: unknown, stayId: string): PostingLine[];
   /** Allowance entitlements of the agreement. */
   allowances(terms: unknown): AllowanceEntitlement[];
+  /** Statutory per-person / per-unit levies (e.g. Green Tax) the agreement carries for a night (pure). */
+  nightLevies(terms: unknown, night: LocalDate): Money | null;
 }
 
 // ───────────────────────────── finance ─────────────────────────────

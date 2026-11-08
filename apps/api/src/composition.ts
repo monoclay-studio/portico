@@ -13,6 +13,7 @@ import {
   dayCloseJobs,
   dayCloseManifest,
   dayCloseSearch,
+  dayCloseSubscriptions,
 } from '@portico/day-close';
 import {
   CORE_JOBS,
@@ -694,6 +695,12 @@ export function compose(database: PorticoDatabase, options: CompositionOptions =
         (await reservationsForDayClose.listDueArrivals(asSystem(tx), input)).map(dueStay),
       listDueDepartures: async (tx, input) =>
         (await reservationsForDayClose.listDueDepartures(asSystem(tx), input)).map(dueStay),
+      // CONTRACT REQUEST CR-18 (reservations): the stay's agreement in force whatever its status. Until it exists,
+      // Day Close posts departed stays' remaining agreement lines from the last agreement it saw (flagged) and raises
+      // a blocking follow-up for an unposted night of a departed stay.
+      getStayAgreement: async () => {
+        throw new ModuleUnavailableError('reservations', 'getStayAgreement');
+      },
       async markNoShow(tx, input) {
         // ADR-0015 §3: the stay must belong to the property Day Close authorized.
         const st = await reservationsForDayClose.getStay(asSystem(tx), input.stayId);
@@ -728,6 +735,19 @@ export function compose(database: PorticoDatabase, options: CompositionOptions =
           eligibleChargeCodes: [...a.terms.eligibleChargeCodes],
           remainderPolicy: a.terms.remainderPolicy,
         })),
+      // Statutory per-person / per-unit levies of the night in the sealed terms (e.g. Green Tax), for the
+      // `levy_not_posted` follow-up on zero-price nights (CR-10).
+      nightLevies: (terms, night) => {
+        const n = (terms as Partial<TermsSnapshot>).nights?.find((x) => x.date === night);
+        const levies = (n?.taxes ?? []).filter(
+          (x) => x.nature === 'statutory' && (x.basis === 'per_person_night' || x.basis === 'per_unit_night'),
+        );
+        if (!n || !levies.length) return null;
+        return {
+          amountMinor: levies.reduce((a, x) => a + x.amount.amountMinor, 0),
+          currency: n.amount.currency,
+        };
+      },
     },
     finance: {
       async postCharge(tx, scope, input) {
@@ -867,6 +887,7 @@ export function compose(database: PorticoDatabase, options: CompositionOptions =
       ...operationsSubscriptions(operationsPorts),
       ...integrationSubscriptions(integrationDeps),
       ...payments.subscriptions,
+      ...dayCloseSubscriptions(),
     ],
     searchProviders,
     jobs: [

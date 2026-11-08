@@ -1,34 +1,61 @@
 /**
  * Scheduler time rules (DCL-R05, EC-DCL-024): a schedule time belongs to a business date D. Times before noon fall
- * after midnight (calendar day D+1, e.g. 02:00); times from noon fall on D itself (e.g. 23:30). In a DST gap the
- * next valid local minute is used (kernel `zonedTimeToInstant`). Retries of transient failures: 3 × 5 minutes.
+ * after midnight (calendar day D+1, e.g. 02:00); times from noon fall on D itself (e.g. 23:30). The instant is the
+ * first instant whose local wall time on that calendar day is at or after the configured time (review P2-1):
+ * - in a spring-forward gap, the end of the gap (New York 02:30 → 03:00 EDT; Lord Howe 02:15 → 02:30);
+ * - in a fall-back overlap, the EARLIER of the two occurrences (London 01:30 on the last Sunday of October → 01:30 BST).
+ * Computed directly from the offsets either side of the date, never by correcting a guess in one direction.
+ * Retries of transient failures: 3 × 5 minutes.
  */
-import { addDays, instantToZoned, type LocalDate, zonedTimeToInstant } from '@portico/kernel';
+import { addDays, instantToZoned, type LocalDate } from '@portico/kernel';
 
 export const RETRY_LIMIT = 3;
 export const RETRY_DELAY_MS = 5 * 60_000;
+const MINUTE = 60_000;
+const HOUR = 60 * MINUTE;
 
 export function scheduledInstant(businessDate: LocalDate, localTime: string, timeZone: string): Date {
   const hour = Number(localTime.slice(0, 2));
   const calendarDay = hour < 12 ? addDays(businessDate, 1) : businessDate;
-  return nextValidLocalMinute(calendarDay, localTime, timeZone);
+  return firstInstantAtOrAfter(calendarDay, localTime, timeZone);
 }
 
+/** Minutes the zone is ahead of UTC at an instant (minute precision, from the zone's own wall clock). */
+function offsetMs(instant: Date, timeZone: string): number {
+  const z = instantToZoned(instant, timeZone);
+  const wall = Date.parse(`${z.date}T${z.time}:00Z`);
+  return wall - Math.floor(instant.getTime() / MINUTE) * MINUTE;
+}
+
+const wallKey = (instant: Date, timeZone: string): string => {
+  const z = instantToZoned(instant, timeZone);
+  return `${z.date}T${z.time}`;
+};
+
 /**
- * The instant of `localTime` on `date`; when that local time does not exist (spring-forward gap) the first local
- * minute after the gap (e.g. 01:30 on a 01:00 → 02:00 night runs at 02:00).
+ * The first instant whose local wall time (in `timeZone`) is at or after `localTime` on `date`. Valid local times map
+ * to their instant (the earlier one in an overlap); a time inside a gap maps to the instant the gap ends.
  */
-export function nextValidLocalMinute(date: LocalDate, localTime: string, timeZone: string): Date {
-  let t = zonedTimeToInstant(date, localTime, timeZone);
-  const z = instantToZoned(t, timeZone);
-  if (z.date === date && z.time === localTime) return t;
-  for (let i = 0; i < 24 * 60; i++) {
-    const prev = new Date(t.getTime() - 60_000);
-    const pz = instantToZoned(prev, timeZone);
-    if (pz.date < date || (pz.date === date && pz.time < localTime)) break;
-    t = prev;
+export function firstInstantAtOrAfter(date: LocalDate, localTime: string, timeZone: string): Date {
+  const target = `${date}T${localTime}`;
+  const wall = Date.parse(`${target}:00Z`);
+  // Offsets a day either side bracket at most one transition (zones change offset at most twice a year).
+  const before = offsetMs(new Date(wall - 24 * HOUR), timeZone);
+  const after = offsetMs(new Date(wall + 24 * HOUR), timeZone);
+  const candidates = [...new Set([wall - before, wall - after])]
+    .sort((a, b) => a - b)
+    .filter((c) => wallKey(new Date(c), timeZone) === target);
+  if (candidates.length) return new Date(candidates[0] as number); // the earlier occurrence in an overlap
+  // In a gap: binary-search (minute precision) the first instant whose wall time is at or after the target. Between
+  // the two candidates the wall clock only jumps forward, so the predicate is monotone there.
+  let lo = Math.min(wall - before, wall - after) - HOUR;
+  let hi = Math.max(wall - before, wall - after) + HOUR;
+  while (hi - lo > MINUTE) {
+    const mid = lo + Math.floor((hi - lo) / 2 / MINUTE) * MINUTE;
+    if (wallKey(new Date(mid), timeZone) >= target) hi = mid;
+    else lo = mid;
   }
-  return t;
+  return new Date(hi);
 }
 
 /** The earliest instant a run for D may start (EC-DCL-026); null when the policy sets no limit. */
