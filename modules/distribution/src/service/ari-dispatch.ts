@@ -155,7 +155,7 @@ type Claim =
  * DST-R15 / DST-I05: no ARI at all while another system is authoritative for availability (two systems would
  * control live inventory); no rates or restrictions while another system is authoritative for rates.
  */
-async function publicationBlockedBy(
+export async function publicationBlockedBy(
   tx: TxContext,
   deps: DistributionDeps,
   conn: ConnectionRow,
@@ -181,23 +181,27 @@ async function claim(
 ): Promise<Claim> {
   return withTenantTx(database, ctx, async (tx) => {
     const conn = await loadConnection(tx, connectionId);
-    if (conn.status !== 'active' || conn.credential_state === 'invalid')
+    if (conn.status !== 'active' || conn.credential_state !== 'valid')
       return { kind: 'skip', nextDueAt: null };
     await lockAri(tx, conn.id, kind);
     const blocked = await publicationBlockedBy(tx, deps, conn, kind);
     if (blocked) {
-      await raiseException(tx, {
-        connectionId: conn.id,
-        propertyId: conn.property_id,
-        code: 'publication_blocked',
-        dedupeKey: `publication_blocked:${kind}`,
-        severity: 'routine',
-        problem: blocked,
-        businessImpact: 'The channel keeps the values it had; changes made in Portico are not published.',
-        responsibleParty: 'hotel',
-        nextStep:
-          'Publish from the system of record, or make Portico the system of record again; Portico then re-sends everything.',
-      });
+      await raiseException(
+        tx,
+        {
+          connectionId: conn.id,
+          propertyId: conn.property_id,
+          code: 'publication_blocked',
+          dedupeKey: `publication_blocked:${kind}`,
+          severity: 'routine',
+          problem: blocked,
+          businessImpact: 'The channel keeps the values it had; changes made in Portico are not published.',
+          responsibleParty: 'hotel',
+          nextStep:
+            'Publish from the system of record, or make Portico the system of record again; Portico then re-sends everything.',
+        },
+        { standing: true },
+      );
       return { kind: 'skip', nextDueAt: null };
     }
     await autoResolve(tx, conn.id, `publication_blocked:${kind}`, 'Portico is the system of record again.');
@@ -206,17 +210,21 @@ async function claim(
       hubCtx = await hubContext(tx, deps, conn);
     } catch (err) {
       if (!(err instanceof DomainError)) throw err;
-      await raiseException(tx, {
-        connectionId: conn.id,
-        propertyId: conn.property_id,
-        code: 'publication_refused',
-        dedupeKey: `publication_refused:${err.code}`,
-        severity: 'urgent',
-        problem: err.message,
-        businessImpact: 'Availability and rates are not published to this channel.',
-        responsibleParty: 'monoclay',
-        nextStep: 'Contact Monoclay support; the connection must be set up for this environment.',
-      });
+      await raiseException(
+        tx,
+        {
+          connectionId: conn.id,
+          propertyId: conn.property_id,
+          code: 'publication_refused',
+          dedupeKey: `publication_refused:${err.code}`,
+          severity: 'urgent',
+          problem: err.message,
+          businessImpact: 'Availability and rates are not published to this channel.',
+          responsibleParty: 'monoclay',
+          nextStep: 'Contact Monoclay support; the connection must be set up for this environment.',
+        },
+        { standing: true },
+      );
       return { kind: 'skip', nextDueAt: null };
     }
     const open = await openMessage(tx, conn.id, kind, true);

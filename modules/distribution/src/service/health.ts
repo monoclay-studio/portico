@@ -21,6 +21,7 @@ import {
   type ConnectionRow,
   type DistributionDeps,
   db,
+  hubBlocker,
   iso,
   loadConnection,
   provenanceOfTarget,
@@ -87,10 +88,12 @@ export async function gatherFacts(
       }
     }
   }
+  const hub = conn.status === 'active' || conn.status === 'paused' ? await hubBlocker(tx, deps, conn) : null;
   return {
     status: conn.status,
     credentialState: conn.credential_state,
     publicationBlocked: blocked,
+    hubRefused: hub && hub.code !== 'credentials_invalid' ? hub : null,
     oldestUnconfirmedChangeAt: minDate([dirty?.at, msgs?.oldest]),
     ariFailingSince: minDate([msgs?.failing]),
     ackFailingSince: minDate([ack?.at]),
@@ -204,7 +207,12 @@ function banner(conn: ConnectionRow, r: HealthResult, pendingNights: number): He
     failing: 'Check the hub status and the exception list; consider closing more inventory on this channel.',
     credentials_invalid: 'Replace the hub API key in the connection and verify it.',
     paused: 'Resume the connection to publish the queued changes.',
-    blocked: 'Publish from the system of record, or make Portico the system of record again.',
+    blocked:
+      r.blockedBy === 'hub'
+        ? conn.credential_state === 'unverified'
+          ? 'Verify the hub API key in the connection; queued changes and acknowledgements are sent once it is verified.'
+          : 'Contact Monoclay support: this connection is not allowed to reach the hub in this environment.'
+        : 'Publish from the system of record, or make Portico the system of record again.',
   };
   return {
     severity: urgent ? 'urgent' : 'warning',

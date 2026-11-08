@@ -19,6 +19,11 @@ export interface HealthFacts {
   credentialState: 'unverified' | 'valid' | 'invalid';
   /** Data authority makes publication impossible (DST-R15). */
   publicationBlocked: string | null;
+  /**
+   * No hub call can progress until a person or another system acts (key not verified for this property, the
+   * environment or live scope refuses the hub) — P1-1. Refused credentials are `credentialState: 'invalid'`.
+   */
+  hubRefused: { code: string; message: string } | null;
   /** Oldest change Portico made that the channel has not acknowledged yet (queued or in flight). */
   oldestUnconfirmedChangeAt: Date | null;
   /** Earliest first failure among open ARI messages (null when none is failing). */
@@ -42,6 +47,8 @@ export interface HealthResult {
   reason: string;
   /** Since when the channel may not reflect Portico (null when connected). */
   staleSince: string | null;
+  /** For `blocked`: what blocks — another system of record, or the hub path (decides the next step shown). */
+  blockedBy?: 'authority' | 'hub';
 }
 
 const age = (d: Date | null, now: Date) => (d ? now.getTime() - d.getTime() : -1);
@@ -66,8 +73,16 @@ export function computeHealth(f: HealthFacts): HealthResult {
       staleSince: stale ?? f.now.toISOString(),
     };
   }
+  if (f.hubRefused) {
+    return {
+      health: 'blocked',
+      reason: `${f.hubRefused.message} Nothing is sent to or acknowledged at the hub.`,
+      staleSince: stale ?? f.now.toISOString(),
+      blockedBy: 'hub',
+    };
+  }
   if (f.publicationBlocked) {
-    return { health: 'blocked', reason: f.publicationBlocked, staleSince: stale };
+    return { health: 'blocked', reason: f.publicationBlocked, staleSince: stale, blockedBy: 'authority' };
   }
   const failingSince = [f.ariFailingSince, f.ackFailingSince, f.applyFailingSince]
     .filter((d): d is Date => d !== null)

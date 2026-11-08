@@ -139,6 +139,45 @@ export async function hubContext(
   };
 }
 
+/**
+ * Why no hub call can make progress for this connection right now, or null (P1-1). Work waiting on such a condition
+ * contributes NO due instant to the scheduler: it waits on a person or on another system, and the transition that
+ * removes the condition pulls the schedule (verify / replace key → `scheduleTenant`). Conditions that change outside
+ * this module (the organization's environment, the live-scope grant) are re-checked at the organization's
+ * 15-minute ceiling wake, never every tick. Reads only; never calls the hub.
+ */
+export async function hubBlocker(
+  tx: TxContext,
+  deps: DistributionDeps,
+  conn: ConnectionRow,
+): Promise<{ code: string; message: string } | null> {
+  if (conn.credential_state === 'invalid')
+    return { code: 'credentials_invalid', message: 'The hub refused the API key.' };
+  // A replaced key is proven against THIS connection's hub property (Verify) before any hub work uses it (P2-6).
+  if (conn.credential_state === 'unverified')
+    return {
+      code: 'credentials_unverified',
+      message: 'The API key has not been verified for this hub property yet.',
+    };
+  try {
+    const mode = hubModeFor(tx, conn);
+    if (mode === 'live')
+      await deps.ports.liveScope.assertLiveChannelAllowed(tx, {
+        propertyId: conn.property_id,
+        connectionId: conn.id,
+      });
+  } catch (err) {
+    if (err instanceof DomainError) return { code: err.code, message: err.message };
+    throw err;
+  }
+  if (!conn.credential_ref)
+    return {
+      code: 'hub_credential_missing',
+      message: 'This connection has no API key. Add the hub API key to continue.',
+    };
+  return null;
+}
+
 /** Pull the organization's next scheduler wake-up earlier (never later). */
 export async function scheduleTenant(tx: TxContext, at: Date): Promise<void> {
   await sql`insert into distribution.tenant_schedule (tenant_id, next_due_at, lease_until)

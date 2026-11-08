@@ -28,9 +28,16 @@ import {
   restrictionsChangedPayload,
 } from '../events';
 import { markPropertyDirty } from './ari-dirty';
-import { dispatchKind, nextBudgetSlot } from './ari-dispatch';
+import { dispatchKind, nextBudgetSlot, publicationBlockedBy } from './ari-dispatch';
 import { checkDiscrepancies } from './calendar';
-import { type ConnectionRow, type DistributionDeps, db, loadConnection, settingsOf } from './common';
+import {
+  type ConnectionRow,
+  type DistributionDeps,
+  db,
+  hubBlocker,
+  loadConnection,
+  settingsOf,
+} from './common';
 import { onAuthorityChanged, requestResync } from './connections';
 import { nextHealthDue, refreshHealth } from './health';
 import { dispatchAcks, escalateParked, PARK_ESCALATION_MS, processInbound, pullFeed } from './inbound';
@@ -45,6 +52,8 @@ export interface TenantWorkResult {
 }
 
 const MAX_SENDS_PER_KIND_PER_TICK = 5;
+/** Longest an organization with connections sleeps (re-check of external conditions; feed-pull cadence). */
+const CEILING_MS = 15 * 60_000;
 
 async function connectionWork(
   database: PorticoDatabase,
@@ -96,18 +105,37 @@ async function connectionWork(
   });
 }
 
-async function nextDue(tx: Parameters<typeof refreshHealth>[0], conns: ConnectionRow[]): Promise<Date> {
-  const candidates: Date[] = [new Date(tx.now.getTime() + 15 * 60_000)];
+/**
+ * The next instant at which some work of this organization can actually PROGRESS (P1-1). Work that waits on a person
+ * or on another system contributes nothing: hub work while the key is refused or unverified or the environment /
+ * live scope refuses the hub (`hubBlocker`), ARI of a kind another system of record controls
+ * (`publicationBlockedBy`), ARI of a paused connection. The transitions that remove those conditions pull the
+ * schedule themselves (verify, resume, authority back → resync). Health instants count only while they are in the
+ * future (one wake when the oldest change crosses the freshness target, never one per pass). The ceiling (15 min)
+ * re-checks conditions that change outside this module (environment, live scope) and is the feed-pull cadence.
+ */
+export async function nextDue(
+  tx: Parameters<typeof refreshHealth>[0],
+  deps: DistributionDeps,
+  conns: ConnectionRow[],
+): Promise<Date> {
+  const now = tx.now.getTime();
+  const candidates: Date[] = [new Date(now + CEILING_MS)];
   const push = (d: Date | string | null | undefined) => {
     if (d) candidates.push(new Date(d));
   };
+  const pushFuture = (d: Date | string | null | undefined) => {
+    if (d && new Date(d).getTime() > now) candidates.push(new Date(d));
+  };
   for (const c of conns) {
     if (c.status === 'disconnected' || c.status === 'setup') continue;
-    push(c.next_feed_pull_at);
+    const hubBlocked = (await hubBlocker(tx, deps, c)) !== null;
+    if (!hubBlocked) push(c.next_feed_pull_at);
     if (c.status === 'active') push(c.next_full_sync_at);
-    push(await nextHealthDue(tx, c));
-    if (c.status === 'active') {
+    pushFuture(await nextHealthDue(tx, c));
+    if (c.status === 'active' && !hubBlocked) {
       for (const kind of ARI_KINDS) {
+        if (await publicationBlockedBy(tx, deps, c, kind)) continue;
         const open = await db(tx)
           .selectFrom('distribution.ari_messages')
           .select(['next_attempt_at', 'lease_until', 'status'])
@@ -123,9 +151,11 @@ async function nextDue(tx: Parameters<typeof refreshHealth>[0], conns: Connectio
           .where('kind', '=', kind)
           .executeTakeFirst();
         if (dirty?.at && !open) push(await nextBudgetSlot(tx, c, kind));
-        // Re-evaluate health when the oldest unconfirmed change crosses the freshness target.
+        // Re-evaluate health once, when the oldest unconfirmed change crosses the freshness target.
         if (dirty?.at)
-          push(new Date(new Date(dirty.at).getTime() + settingsOf(c).freshnessTargetSeconds * 1000 + 1000));
+          pushFuture(
+            new Date(new Date(dirty.at).getTime() + settingsOf(c).freshnessTargetSeconds * 1000 + 1000),
+          );
       }
     }
     const rp = await db(tx)
@@ -141,12 +171,14 @@ async function nextDue(tx: Parameters<typeof refreshHealth>[0], conns: Connectio
       .where('connection_id', '=', c.id)
       .executeTakeFirst();
     push(rp?.apply);
-    push(rp?.ack);
-    push(rp?.lease);
-    if (rp?.parked) push(new Date(new Date(rp.parked).getTime() + PARK_ESCALATION_MS));
+    if (!hubBlocked) {
+      push(rp?.ack);
+      push(rp?.lease);
+    }
+    if (rp?.parked) pushFuture(new Date(new Date(rp.parked).getTime() + PARK_ESCALATION_MS));
   }
   const min = Math.min(...candidates.map((d) => d.getTime()));
-  return new Date(Math.max(tx.now.getTime() + 1000, min));
+  return new Date(Math.max(now + 1000, min));
 }
 
 /** All due distribution work of one organization (in its own context and environment). */
@@ -179,7 +211,7 @@ export async function runTenantWork(
       .selectAll()
       .where('status', 'in', ['active', 'paused'])
       .execute();
-    const at = await nextDue(tx, fresh);
+    const at = await nextDue(tx, deps, fresh);
     await sql`insert into distribution.tenant_schedule (tenant_id, next_due_at, lease_until)
               values (${tx.tenantId}::uuid, ${at}, null)
               on conflict (tenant_id) do update set next_due_at = excluded.next_due_at, lease_until = null`.execute(

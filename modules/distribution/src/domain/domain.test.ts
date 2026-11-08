@@ -298,6 +298,7 @@ const facts = (over: Partial<HealthFacts> = {}): HealthFacts => ({
   status: 'active',
   credentialState: 'valid',
   publicationBlocked: null,
+  hubRefused: null,
   oldestUnconfirmedChangeAt: null,
   ariFailingSince: null,
   ackFailingSince: null,

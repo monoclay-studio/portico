@@ -746,7 +746,7 @@ export async function dispatchAcks(
 ): Promise<{ sent: number; acked: number }> {
   const claimed = await withTenantTx(database, ctx, async (tx) => {
     const conn = await loadConnection(tx, connectionId);
-    if (conn.status === 'disconnected' || conn.credential_state === 'invalid') return null;
+    if (conn.status === 'disconnected' || conn.credential_state !== 'valid') return null;
     let hubCtx: Awaited<ReturnType<typeof hubContext>>;
     try {
       hubCtx = await hubContext(tx, deps, conn);
@@ -914,7 +914,7 @@ export async function pullFeed(
 ): Promise<{ stored: number; duplicates: number; unparseable: number; failed: boolean }> {
   const pre = await withTenantTx(database, ctx, async (tx) => {
     const conn = await loadConnection(tx, connectionId);
-    if (conn.status === 'disconnected' || conn.status === 'setup' || conn.credential_state === 'invalid')
+    if (conn.status === 'disconnected' || conn.status === 'setup' || conn.credential_state !== 'valid')
       return null;
     try {
       return { conn, hubCtx: await hubContext(tx, deps, conn) };
@@ -1044,12 +1044,14 @@ export async function recoverSince(
 ): Promise<{ listed: number; fetched: number; stored: number; notAtChannel: number }> {
   const pre = await withTenantTx(database, ctx, async (tx) => {
     const conn = await loadConnection(tx, connectionId);
-    if (conn.status === 'disconnected' || conn.credential_state === 'invalid') {
+    if (conn.status === 'disconnected' || conn.credential_state !== 'valid') {
       throw new BusinessRuleError(
         'hub_not_reachable',
         conn.status === 'disconnected'
           ? 'The connection is disconnected.'
-          : 'The hub refused the API key: replace and verify it before asking the hub for bookings.',
+          : conn.credential_state === 'invalid'
+            ? 'The hub refused the API key: replace and verify it before asking the hub for bookings.'
+            : 'The API key has not been verified for this hub property: verify it before asking the hub for bookings.',
       );
     }
     return { conn, hubCtx: await hubContext(tx, deps, conn) };

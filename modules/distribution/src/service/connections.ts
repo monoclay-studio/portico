@@ -72,10 +72,13 @@ export function connectionView(tx: TxContext, deps: DistributionDeps, c: Connect
     });
   }
   if (c.credential_state === 'unverified' && c.status !== 'disconnected') {
+    const inUse = c.status === 'active' || c.status === 'paused';
     issues.push({
       code: 'credentials_unverified',
-      severity: 'warning',
-      message: 'The API key has not been verified yet.',
+      severity: inUse ? 'blocking' : 'warning',
+      message: inUse
+        ? 'A new API key was entered: nothing is sent to or acknowledged at the hub until it is verified.'
+        : 'The API key has not been verified yet.',
     });
   }
   if (c.health !== 'connected' && c.status === 'active') {
@@ -301,11 +304,15 @@ export async function verifyConnection(
     });
     if (failure?.failure.class === 'auth') await markCredentialsInvalid(tx, conn, failure.message);
     const state = failure ? (failure.failure.class === 'auth' ? 'invalid' : conn.credential_state) : 'valid';
+    const inUse = conn.status === 'active' || conn.status === 'paused';
     const updated = await db(tx)
       .updateTable('distribution.connections')
       .set({
         credential_state: state,
         ...(failure ? {} : { webhook_registered_at: conn.webhook_registered_at ?? tx.now }),
+        // The unblocking transition (P1-1): bookings the hub may have sent while the key was refused or unverified
+        // are pulled at once, and queued ARI and acknowledgements become due again.
+        ...(!failure && inUse ? { next_feed_pull_at: tx.now } : {}),
         updated_at: tx.now,
         version: sql`version + 1`,
       })
@@ -314,7 +321,7 @@ export async function verifyConnection(
       .executeTakeFirstOrThrow();
     if (!failure) {
       await autoResolve(tx, conn.id, 'credentials_invalid', 'The API key was verified.');
-      if (conn.status === 'active') await scheduleTenant(tx, tx.now);
+      if (inUse) await scheduleTenant(tx, tx.now);
     }
     await tx.audit({
       action: 'distribution.connection.verified',
@@ -599,7 +606,11 @@ export async function updateSettings(
   return connectionView(tx, deps, updated);
 }
 
-/** Replace the hub API key (the old one is destroyed). The connection must be verified again. */
+/**
+ * Replace the hub API key (the old one is destroyed). The connection must be verified again: until Verify proves the
+ * new key against this connection's hub property, no hub work uses it (`hubBlocker`), and Verify is the transition
+ * that pulls the schedule — rotation alone contributes no due instant.
+ */
 export async function rotateCredential(
   tx: TxContext,
   deps: DistributionDeps,
@@ -710,21 +721,27 @@ export async function onAuthorityChanged(
   const a = await deps.ports.platform.getDataAuthority(tx, propertyId, domain);
   for (const conn of conns) {
     if (a.authority === 'external') {
-      await raiseException(tx, {
-        connectionId: conn.id,
-        propertyId,
-        code: 'publication_blocked',
-        dedupeKey: `publication_blocked:${domain === 'availability' ? 'availability' : 'restrictions'}`,
-        severity: 'routine',
-        problem: `${a.systemName ?? 'Another system'} became the system of record for ${domain}: Portico stopped publishing it to this channel.`,
-        businessImpact: 'The channel keeps the last values Portico sent until the other system publishes.',
-        responsibleParty: 'hotel',
-        nextStep: 'Publish from the system of record, or make Portico the system of record again.',
-      });
+      await raiseException(
+        tx,
+        {
+          connectionId: conn.id,
+          propertyId,
+          code: 'publication_blocked',
+          dedupeKey: `publication_blocked:${domain === 'availability' ? 'availability' : 'restrictions'}`,
+          severity: 'routine',
+          problem: `${a.systemName ?? 'Another system'} became the system of record for ${domain}: Portico stopped publishing it to this channel.`,
+          businessImpact: 'The channel keeps the last values Portico sent until the other system publishes.',
+          responsibleParty: 'hotel',
+          nextStep: 'Publish from the system of record, or make Portico the system of record again.',
+        },
+        { standing: true },
+      );
     } else {
+      // Authority returned: the unblocking transition pulls the schedule (requestResync → markDirty → schedule).
+      // Availability authority also blocks restrictions (no ARI at all), so its return re-sends both kinds.
       await requestResync(tx, deps, conn, {
         trigger: 'authority',
-        kinds: [domain === 'availability' ? 'availability' : 'restrictions'],
+        kinds: domain === 'availability' ? ['availability', 'restrictions'] : ['restrictions'],
       });
     }
   }

@@ -24,10 +24,27 @@ export interface RaiseInput {
   refs?: Array<{ type: string; id: string }>;
 }
 
+/**
+ * Raise (or count) an exception. `standing: true` is for a CONDITION re-evaluated on every pass (publication
+ * blocked, hub refused for this environment): it is written once when the condition starts and nothing is written
+ * while it stays open — the exception records the state change, not every pass that observes it (P1-1).
+ */
 export async function raiseException(
   tx: TxContext,
   input: RaiseInput,
+  opts: { standing?: boolean } = {},
 ): Promise<{ id: string; created: boolean }> {
+  if (opts.standing) {
+    // A plain read (no row lock: FOR UPDATE would itself write the tuple on every pass).
+    const open = await db(tx)
+      .selectFrom('distribution.exceptions')
+      .select('id')
+      .where('connection_id', '=', input.connectionId)
+      .where('dedupe_key', '=', input.dedupeKey)
+      .where('status', '=', 'open')
+      .executeTakeFirst();
+    if (open) return { id: open.id, created: false };
+  }
   for (let attempt = 0; attempt < 2; attempt++) {
     const existing = await db(tx)
       .selectFrom('distribution.exceptions')
@@ -37,6 +54,7 @@ export async function raiseException(
       .where('status', '=', 'open')
       .forUpdate()
       .executeTakeFirst();
+    if (existing && opts.standing) return { id: existing.id, created: false };
     if (existing) {
       await db(tx)
         .updateTable('distribution.exceptions')
