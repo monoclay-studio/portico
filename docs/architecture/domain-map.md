@@ -429,10 +429,32 @@ Breaking changes (no consumer outside the composition root, all bound in the sam
   money with no agreement; unknown → an unknown owner that fails closed).
 - **Ledger penalty:** `LedgerPort.penaltyOwedOn(tx, folioId, stayId)` (finance: the `penalty:no_show` /
   `penalty:cancellation` postings followed through corrections and transfers); the `no_show` limit is
-  min(record, ledger) − collected, within what the folio owes.
+  min(record, ledger) − collected, within what the folio owes. *Round 7:* the ledger balance alone, net of every method.
 - **Forfeit:** finance `PaymentsPort.cardDepositForfeitProblem(tx, { bookingId, amountMinor })` before
-  `forfeitDeposit`; a card-funded deposit is kept only up to the booking's recorded penalties.
+  `forfeitDeposit`. *Superseded in round 7:* the limit is the penalty still owed on the ledger, not the recorded
+  penalty, and the forfeit settles it (below).
 - **Deposit owed:** reservations sums it per stay (segments share their agreement's deposit by nights kept).
+
+### Integration-step fix round 7 (re-review #7, ADR-0015 Amendment 6)
+
+- **One balance per obligation (rule 1):** each penalty is the balance of its `penalty:*` postings on the ledger,
+  followed through transfers and corrections (finance `penaltyOn(tx, folioId, stayId)`, `penaltyFoliosOfStay`), less
+  every payment, deposit application and refund that landed on it. `LedgerPort.penaltyOwedOn` returns that balance;
+  payments limits `no_show` to it, less what is in flight, within what the folio owes. Deposit due is limited by
+  `LedgerPort.depositsReceivedFor` (finance `depositReceivedMinor`: every deposit movement except applications and forfeits, so what was received net of refunds),
+  plus payments not yet posted.
+- **Forfeit settles the penalty:** `forfeitDeposit` takes the booking's collection locks, reads the penalty owed per
+  carrying folio and applies the deposit there (`forfeit_exceeds_penalty_owed` above it). Only with no penalty owed
+  does it fall back to the deposit-outflow forfeit, which refuses card money (`cardDepositForfeitProblem`).
+- **Moved credits keep their counterpart's owner (R7-P1-2):** a credit moved off a folio (`transfer_out` > 0, or
+  `transfer_in` < 0) is classified as debt owned by the peer folio's owner; `transferPostings` checks the source side
+  too (`assertDebtMayLand` against the destination's owners) and refuses `transfer_not_covered_by_card_consent`.
+- **Capture:** the request hash includes `purpose` and the separate-collection reason; every capture of a card hold,
+  whoever initiated it, runs `assertWithinFact`. **Recorded hold completion:** `recordPayment` with `authorizationId`
+  requires the hold's property and booking family (`authorization_other_reference`) and at most its remainder
+  (`capture_exceeds_hold`).
+- **Port changes (additive):** `LedgerPort.depositsReceivedFor`; `BookingDirectoryPort.describeBooking` returns
+  `stayIds`.
 
 ## Rules for changing a contract
 
