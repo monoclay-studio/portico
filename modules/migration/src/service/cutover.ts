@@ -48,7 +48,7 @@ import { acquireLease, releaseLease } from './lease';
 import type { StepOutcome } from './pipeline';
 import { computePlan, runValidateStep } from './plan';
 import { buildReport } from './reconcile';
-import { rehearseAgain } from './rehearse';
+import { closeRehearsalCopy, rehearseAgain } from './rehearse';
 import { countOpenBlocking } from './state';
 
 const migrated = (job: Job) => job.domains as MigratedDomain[];
@@ -525,6 +525,7 @@ export async function runWindowStep(
     if (j.state === 'rolled_back') return { status: 'succeeded', detail: 'Rolled back.' } as const;
     if (j.rollbackWindowEndsAt && tx.now.getTime() >= j.rollbackWindowEndsAt.getTime()) {
       await saveJob(tx, j, { state: 'completed' });
+      closeRehearsalCopy(tx, _deps, j, 'completed');
       await tx.emit({
         type: 'migration.job.completed',
         propertyId: j.propertyId,
@@ -652,6 +653,7 @@ export async function approveRollback(tx: TxContext, deps: MigrationDeps, jobId:
   if (t.status === 'planned') await deps.ports.platform.freezeTransition(tx, job.rollbackTransitionId);
   if (t.status !== 'effective') await deps.ports.platform.completeTransition(tx, job.rollbackTransitionId);
   const next = await saveJob(tx, job, { state: 'rolled_back', rolledBackAt: tx.now });
+  closeRehearsalCopy(tx, deps, job, 'cancelled');
   await tx.audit({
     action: 'migration.rollback.complete',
     target: { type: 'migration_job', id: job.id },
@@ -822,6 +824,7 @@ export async function cancelJob(
       await deps.ports.platform.cancelTransition(tx, job.transitionId, `Migration cancelled: ${reason}`);
   }
   const next = await saveJob(tx, job, { state: 'cancelled' });
+  closeRehearsalCopy(tx, deps, job, 'cancelled');
   await tx.audit({
     action: 'migration.job.cancel',
     target: { type: 'migration_job', id: job.id },

@@ -242,7 +242,41 @@ export function createRehearsalBridge(
       });
       return jobId ? evidenceOf(database, ctx, jobId) : null;
     },
+    async close(live, input) {
+      const d = deps();
+      const ctx = await trialContext(database, d.ports, live, input.trialOrganizationId);
+      await withTenantTx(database, ctx, (tx) => endMirror(tx, input.liveJobId, input.outcome, 'The live migration ended.'));
+    },
   };
+}
+
+/**
+ * End a rehearsal copy (mirror job) in the trial organization: it then follows the retention purge of ended jobs.
+ * Used by the bridge (live side ended) and by housekeeping (live job ended or no longer exists).
+ */
+export async function endMirror(
+  tx: TxContext,
+  liveJobId: string,
+  outcome: 'completed' | 'cancelled',
+  reason: string,
+): Promise<boolean> {
+  const row = await db(tx)
+    .selectFrom('migration.jobs')
+    .selectAll()
+    .where(sql<boolean>`live_job_ref ->> 'jobId' = ${liveJobId}`)
+    .forUpdate()
+    .executeTakeFirst();
+  if (!row || ['completed', 'rolled_back', 'cancelled', 'failed'].includes(row.state)) return false;
+  const job = toJob(row);
+  await saveJob(tx, job, { state: outcome });
+  await tx.audit({
+    action: 'migration.rehearsal.close',
+    target: { type: 'migration_job', id: job.id },
+    propertyId: job.propertyId,
+    reason,
+    after: { liveJobId, outcome },
+  });
+  return true;
 }
 
 /**

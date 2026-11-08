@@ -59,6 +59,26 @@ export async function createJob(tx: TxContext, deps: MigrationDeps, input: Creat
       'rehearsal_link_live_only',
       'Only a live migration links a trial organization.',
     );
+  if (purpose === 'production') {
+    // One property, one migrated history (R-P1-7): until records can be matched across sources, a production
+    // migration is refused when the property already holds records imported from ANOTHER source (another adapter,
+    // or the same adapter with another account). The same source dedupes through the import ledger.
+    const namespace = ledgerNamespace({ sourceAdapter: adapter.key, sourceRef: input.sourceRef ?? null });
+    const other = await db(tx)
+      .selectFrom('migration.import_ledger')
+      .select(['source_system', 'last_job_id'])
+      .where('property_id', '=', input.propertyId)
+      .where('source_system', '!=', namespace)
+      .where('state', 'in', ['imported', 'merged'])
+      .limit(1)
+      .executeTakeFirst();
+    if (other)
+      throw new BusinessRuleError(
+        'property_already_migrated',
+        `This property already holds records migrated from another source (${other.source_system}). A second migration from a different source would create every booking and guest again. Continue with the same source, or ask Monoclay onboarding to reconcile the two sources first.`,
+        { sourceSystem: other.source_system, jobId: other.last_job_id },
+      );
+  }
   const scope: DataClass[] = input.scope ?? [
     ...new Set<DataClass>([...adapter.provides, 'deposit', 'in_house_balance', 'ar_open_item']),
   ];

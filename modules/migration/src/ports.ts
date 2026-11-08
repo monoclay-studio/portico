@@ -420,6 +420,14 @@ export interface RehearsalPort {
     tx: TxContext,
     input: { trialOrganizationId: string; liveJobId: string },
   ): Promise<RehearsalEvidence | null>;
+  /**
+   * The live job ended (completed, rolled back, cancelled, failed): its rehearsal copy in the trial organization ends
+   * with it, so the same retention purge reaches it (R-P1-6). Idempotent.
+   */
+  close(
+    tx: TxContext,
+    input: { trialOrganizationId: string; liveJobId: string; outcome: 'completed' | 'cancelled' },
+  ): Promise<void>;
 }
 
 export interface MigrationPorts {

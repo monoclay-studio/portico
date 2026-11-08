@@ -15,6 +15,7 @@ export const RETENTION_DAYS_AFTER_END = 30;
 export async function purgeSourceData(
   tx: TxContext,
   job: Job,
+  reason = `Retention: ${RETENTION_DAYS_AFTER_END} days after the migration ended.`,
 ): Promise<{ payloads: number; records: number }> {
   const payloads = await db(tx)
     .deleteFrom('migration.extract_payloads')
@@ -30,7 +31,7 @@ export async function purgeSourceData(
     action: 'migration.sourceData.purge',
     target: { type: 'migration_job', id: job.id },
     propertyId: job.propertyId,
-    reason: `Retention: ${RETENTION_DAYS_AFTER_END} days after the migration ended.`,
+    reason,
     after: { payloads: Number(payloads.numDeletedRows), records: Number(records.numUpdatedRows) },
   });
   return { payloads: Number(payloads.numDeletedRows), records: Number(records.numUpdatedRows) };

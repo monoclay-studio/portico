@@ -310,19 +310,33 @@ select core.enable_tenant_isolation('migration.card_recollections');
 ---------------------------------------------------------------------------------------------------------
 -- Routing metadata for the scheduler (reminders, rollback-window closing, retention purge): tenant ids only.
 ---------------------------------------------------------------------------------------------------------
-create or replace function migration.tenants_with_open_jobs(p_limit int)
-  returns table (tenant_id uuid, environment text)
+create or replace function migration.tenants_with_open_jobs(p_after uuid, p_limit int)
+  returns table (tenant_id uuid, environment text, closed boolean)
   language sql stable security definer set search_path = migration, pg_temp as $$
-    select t.tenant_id, e.env
+    -- Paged by tenant id (a cursor), so every tenant is visited however many there are (R-P2-7). A tenant leaves
+    -- the set once its jobs have ended and been purged (rehearsal copies end with their live job, R-P1-6). A closed
+    -- organization (an ended trial) is still listed, flagged, so its source data is purged at once.
+    select t.tenant_id, s.environment, coalesce(s.status = 'closed', false)
       from (select distinct j.tenant_id from migration.jobs j
-             where j.state not in ('completed', 'rolled_back', 'cancelled', 'failed')
-                or j.purged_at is null) t
-      cross join lateral (select platform.tenant_environment(t.tenant_id) as env) e
-     where e.env is not null
+             where (j.state not in ('completed', 'rolled_back', 'cancelled', 'failed') or j.purged_at is null)
+               and (p_after is null or j.tenant_id > p_after)) t
+      cross join lateral (select * from platform.tenant_summaries(array[t.tenant_id])) s
+     order by t.tenant_id
      limit p_limit
 $$;
-revoke execute on function migration.tenants_with_open_jobs(int) from public;
-grant execute on function migration.tenants_with_open_jobs(int) to portico_app;
+revoke execute on function migration.tenants_with_open_jobs(uuid, int) from public;
+grant execute on function migration.tenants_with_open_jobs(uuid, int) to portico_app;
+
+-- The state of a live job, for its rehearsal copy in a trial organization (routing metadata only: one state word,
+-- 'missing' when the job or its organization no longer exists). Lets the trial's housekeeping end the copy even when
+-- the live side cannot answer (R-P1-6).
+create or replace function migration.live_job_state(p_job uuid)
+  returns text
+  language sql stable security definer set search_path = migration, pg_temp as $$
+    select coalesce((select j.state from migration.jobs j where j.id = p_job), 'missing')
+$$;
+revoke execute on function migration.live_job_state(uuid) from public;
+grant execute on function migration.live_job_state(uuid) to portico_app;
 
 select core.apply_standard_grants('migration');
 -- Append-only after the standard grants (the grants would otherwise restore update/delete).

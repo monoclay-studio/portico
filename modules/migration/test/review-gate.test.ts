@@ -108,6 +108,7 @@ describe('R-P1-2 the certificate binds plan AND data AND decisions', () => {
         rehearsal: {
           rehearse: async () => stale as never,
           evidence: async () => stale as never,
+          close: async () => {},
         },
       },
     };

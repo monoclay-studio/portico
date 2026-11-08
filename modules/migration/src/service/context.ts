@@ -198,7 +198,7 @@ export function assertOpen(job: Job): void {
   if (['completed', 'rolled_back', 'cancelled'].includes(job.state))
     throw new ConflictError(
       'migration_closed',
-      `This migration is ${job.state.replace('_', ' ')}; start a new one to move more data.`,
+      `This migration is ${job.state.replace('_', ' ')} and does not change any more. To migrate this property again, start a new migration from the same source (the import ledger prevents duplicates); a different source is refused while this one's records are in Portico.`,
       { state: job.state },
     );
 }

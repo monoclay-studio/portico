@@ -4,7 +4,7 @@
  * AND the data and decisions (R-P1-2): `rehearseAgain` re-runs the rehearsal whenever what would be cut over no
  * longer matches what was certified (a sync, a re-upload, a final capture, a decision).
  */
-import { type PorticoDatabase, withTenantTx } from '@portico/db';
+import { type PorticoDatabase, type TxContext, withTenantTx } from '@portico/db';
 import { DomainError, newId, type RequestContext } from '@portico/kernel';
 import { certificateFacts, certificateGap } from '../domain/certificate';
 import { currentDataFingerprint, rehearsalPayload } from './certificate';
@@ -271,4 +271,29 @@ export async function rehearseAgain(
     rehearsed: true,
     detail: `${after.message}${outcome.status === 'succeeded' ? '' : ` ${outcome.detail}`}`,
   };
+}
+
+/**
+ * The live job ended: close its rehearsal copy in the trial organization after this transaction commits (the copy
+ * then follows the same retention purge). If the trial cannot be reached now, housekeeping closes it later.
+ */
+export function closeRehearsalCopy(
+  tx: TxContext,
+  deps: MigrationDeps,
+  job: Job,
+  outcome: 'completed' | 'cancelled',
+): void {
+  const link = job.rehearsalLink;
+  if (job.purpose !== 'production' || !link) return;
+  tx.afterCommit(async () => {
+    try {
+      await deps.ports.rehearsal.close(tx, {
+        trialOrganizationId: link.trialOrganizationId,
+        liveJobId: job.id,
+        outcome,
+      });
+    } catch {
+      // The trial side is unavailable (expired, deleted): housekeeping in the trial closes the copy.
+    }
+  });
 }
