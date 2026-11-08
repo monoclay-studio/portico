@@ -407,6 +407,6 @@ describe('P2-11: a zero-price night still owes its statutory levy — and says s
     const issues = await org.run((tx) => h.service.listIssues(tx, org.propertyId, 'open'), org.auditor);
     const levy = issues.find((i) => i.code === 'levy_not_posted' && i.ref?.id === s.stayId);
     expect(levy?.owner).toMatchObject({ kind: 'department', id: 'finance' });
-    expect((levy?.details.levy as { amountMinor: number }).amountMinor).toBe(2_400); // Green Tax 2 × USD 12
+    expect(levy?.details.levy).toMatchObject({ amountMinor: 2_400 }); // Green Tax 2 × USD 12
   });
 });
