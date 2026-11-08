@@ -35,6 +35,7 @@ export interface ConnectionsTable {
   last_full_sync_at: TsN;
   next_full_sync_at: TsN;
   activated_at: TsN;
+  verified_at: TsN;
   created_by: string;
   created_at: Ts;
   updated_at: Ts;

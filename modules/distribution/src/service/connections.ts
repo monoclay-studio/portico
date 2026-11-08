@@ -5,7 +5,7 @@
  * settings, key and token rotation, full and range resync (non-destructive: values are re-sent, nothing is
  * unlisted). Live organizations cannot activate a production connection until the live-scope port allows it.
  */
-import { type PorticoDatabase, sql, type TxContext, withTenantTx } from '@portico/db';
+import { type PorticoDatabase, sql, type TxContext, withSavepoint, withTenantTx } from '@portico/db';
 import {
   BusinessRuleError,
   ConflictError,
@@ -232,6 +232,7 @@ export async function createConnection(
         last_full_sync_at: null,
         next_full_sync_at: null,
         activated_at: null,
+        verified_at: null,
         created_by: actorKey(tx),
         created_at: tx.now,
         updated_at: tx.now,
@@ -242,7 +243,7 @@ export async function createConnection(
     if ((err as { code?: string }).code === '23505') {
       throw new ConflictError(
         'connection_exists',
-        'This property already has a connection to this hub, or this hub property is already connected (possibly by another organization). Disconnect the other connection first, or contact Monoclay support if the hub property is not yours.',
+        'This property already has a connection to this hub, or this hub property is already connected in this organization. Disconnect the other connection first.',
       );
     }
     throw err;
@@ -258,7 +259,12 @@ export async function createConnection(
 
 /**
  * Verify the key (harmless read) and register booking notifications at the hub with the webhook token. Hub calls
- * happen between two transactions; the outcome is recorded on the connection and in the exchange log.
+ * happen between two transactions; the outcome is recorded on the connection and in the exchange log, and that
+ * record COMMITS before a failure is reported (a refused key stays recorded as refused).
+ *
+ * P2-6: the first successful Verify is the proof of control that claims a production hub property globally
+ * (`verified_at`). A hub property another connection has already proven is refused BEFORE any hub call; a race
+ * between two proofs is decided by the directory's unique index (the later one is refused).
  */
 export async function verifyConnection(
   database: PorticoDatabase,
@@ -271,6 +277,7 @@ export async function verifyConnection(
     requireOnConnection(tx, conn, P.connectionManage);
     if (conn.status === 'disconnected')
       throw new BusinessRuleError('connection_disconnected', 'The connection is disconnected.');
+    if (await claimedElsewhere(tx, conn.id)) throw claimedError();
     return {
       conn,
       hubCtx: await hubContext(tx, deps, conn),
@@ -291,7 +298,7 @@ export async function verifyConnection(
     if (!(err instanceof HubError)) throw err;
     failure = err;
   }
-  return withTenantTx(database, ctx, async (tx) => {
+  const out = await withTenantTx(database, ctx, async (tx) => {
     const conn = await loadConnection(tx, connectionId, { forUpdate: true });
     await recordExchange(tx, {
       connectionId: conn.id,
@@ -305,21 +312,31 @@ export async function verifyConnection(
     if (failure?.failure.class === 'auth') await markCredentialsInvalid(tx, conn, failure.message);
     const state = failure ? (failure.failure.class === 'auth' ? 'invalid' : conn.credential_state) : 'valid';
     const inUse = conn.status === 'active' || conn.status === 'paused';
-    const updated = await db(tx)
-      .updateTable('distribution.connections')
-      .set({
-        credential_state: state,
-        ...(failure ? {} : { webhook_registered_at: conn.webhook_registered_at ?? tx.now }),
-        // The unblocking transition (P1-1): bookings the hub may have sent while the key was refused or unverified
-        // are pulled at once, and queued ARI and acknowledgements become due again.
-        ...(!failure && inUse ? { next_feed_pull_at: tx.now } : {}),
-        updated_at: tx.now,
-        version: sql`version + 1`,
-      })
-      .where('id', '=', conn.id)
-      .returningAll()
-      .executeTakeFirstOrThrow();
-    if (!failure) {
+    let claimed = true;
+    let updated = conn;
+    try {
+      updated = await withSavepoint(tx, 'dst_verify', () =>
+        db(tx)
+          .updateTable('distribution.connections')
+          .set({
+            credential_state: state,
+            ...(failure ? {} : { webhook_registered_at: conn.webhook_registered_at ?? tx.now }),
+            ...(failure ? {} : { verified_at: conn.verified_at ?? tx.now }),
+            // The unblocking transition (P1-1): bookings the hub may have sent while the key was refused or
+            // unverified are pulled at once, and queued ARI and acknowledgements become due again.
+            ...(!failure && inUse ? { next_feed_pull_at: tx.now } : {}),
+            updated_at: tx.now,
+            version: sql`version + 1`,
+          })
+          .where('id', '=', conn.id)
+          .returningAll()
+          .executeTakeFirstOrThrow(),
+      );
+    } catch (err) {
+      if ((err as { code?: string }).code !== '23505') throw err;
+      claimed = false; // another connection proved this hub property first (race)
+    }
+    if (!failure && claimed) {
       await autoResolve(tx, conn.id, 'credentials_invalid', 'The API key was verified.');
       if (inUse) await scheduleTenant(tx, tx.now);
     }
@@ -327,22 +344,38 @@ export async function verifyConnection(
       action: 'distribution.connection.verified',
       target: { type: RECORD.connection, id: conn.id },
       propertyId: conn.property_id,
-      after: { credentials: state, ok: !failure },
-      reason: failure?.message ?? null,
+      after: { credentials: state, ok: !failure && claimed },
+      reason: failure?.message ?? (claimed ? null : 'hub property already proven by another connection'),
     });
-    if (failure) {
-      throw new DomainError(
-        'hub_verification_failed',
-        `${failure.message} The connection was not verified; nothing changed at the channel.`,
-        {
-          status: 502,
-          details: { class: failure.failure.class },
-          retryable: failure.failure.class !== 'payload',
-        },
-      );
-    }
-    return connectionView(tx, deps, updated);
+    return { view: connectionView(tx, deps, updated), claimed };
   });
+  if (failure) {
+    throw new DomainError(
+      'hub_verification_failed',
+      `${failure.message} The connection was not verified; nothing changed at the channel.`,
+      {
+        status: 502,
+        details: { class: failure.failure.class },
+        retryable: failure.failure.class !== 'payload',
+      },
+    );
+  }
+  if (!out.claimed) throw claimedError();
+  return out.view;
+}
+
+async function claimedElsewhere(tx: TxContext, connectionId: string): Promise<boolean> {
+  const r = await sql<{
+    claimed: boolean;
+  }>`select distribution.hub_property_claimed_elsewhere(${connectionId}::uuid) as claimed`.execute(tx.db);
+  return r.rows[0]?.claimed === true;
+}
+
+function claimedError(): ConflictError {
+  return new ConflictError(
+    'hub_property_claimed',
+    'This hub property is already connected and verified by another connection (possibly another organization). Nothing was sent to the hub. If the hub property is yours, contact Monoclay support.',
+  );
 }
 
 async function assertAuthority(tx: TxContext, deps: DistributionDeps, conn: ConnectionRow) {

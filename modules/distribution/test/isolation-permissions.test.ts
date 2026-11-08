@@ -170,7 +170,7 @@ describe('permissions at the record’s property', () => {
 });
 
 describe('external identifiers', () => {
-  it('a production hub property can be claimed by one active connection across ALL organizations', async () => {
+  it('creating a connection claims nothing across organizations (the proven claim: test/hub-claim.test.ts)', async () => {
     const a = await setupOrg(h, { environment: 'live' });
     const b = await setupOrg(h, { environment: 'live' });
     const create = (org: typeof a) =>
@@ -183,7 +183,7 @@ describe('external identifiers', () => {
         }),
       );
     await create(a);
-    await expect(create(b)).rejects.toMatchObject({ code: 'connection_exists' });
+    await expect(create(b)).resolves.toBeDefined();
   });
 });
 

@@ -44,6 +44,9 @@ create table distribution.connections (
   last_full_sync_at     timestamptz,
   next_full_sync_at     timestamptz,
   activated_at          timestamptz,
+  -- First successful Verify: proof that a key for this hub property worked (P2-6). Only a proven connection holds
+  -- the global claim on a production hub property; it keeps it until disconnected (a key rotation re-verifies).
+  verified_at           timestamptz,
   created_by            text not null,
   created_at            timestamptz not null,
   updated_at            timestamptz not null,
@@ -429,7 +432,8 @@ create policy tenant_isolation on distribution.tenant_schedule
 ---------------------------------------------------------------------------------------------------------
 -- Webhook routing directory: maps the public endpoint id to its organization WITHOUT exposing tenant data.
 -- Not readable by the application role; kept in sync by a trigger; read only through route_webhook().
--- A production hub property can be claimed by one active connection across all organizations.
+-- A production hub property can be CLAIMED by one connection across all organizations, and only by proof of
+-- control (P2-6): a connection claims it at its first successful Verify; an unproven connection never blocks one.
 ---------------------------------------------------------------------------------------------------------
 create table distribution.webhook_directory (
   endpoint_id           uuid primary key,
@@ -438,20 +442,22 @@ create table distribution.webhook_directory (
   hub                   text not null,
   external_property_id  text not null,
   target                text not null,
-  active                boolean not null
+  active                boolean not null,
+  claimed               boolean not null default false
 );
 create unique index webhook_directory_production_uq on distribution.webhook_directory (hub, external_property_id)
-  where active and target = 'production';
+  where claimed and target = 'production';
 
 create or replace function distribution.sync_webhook_directory() returns trigger
   language plpgsql security definer set search_path = distribution, pg_temp as $$
 begin
-  insert into distribution.webhook_directory (endpoint_id, tenant_id, connection_id, hub, external_property_id, target, active)
+  insert into distribution.webhook_directory (endpoint_id, tenant_id, connection_id, hub, external_property_id, target,
+                                             active, claimed)
     values (new.webhook_endpoint_id, new.tenant_id, new.id, new.hub, new.external_property_id, new.target,
-            new.status <> 'disconnected')
+            new.status <> 'disconnected', new.status <> 'disconnected' and new.verified_at is not null)
     on conflict (connection_id) do update
       set endpoint_id = excluded.endpoint_id, external_property_id = excluded.external_property_id,
-          target = excluded.target, active = excluded.active;
+          target = excluded.target, active = excluded.active, claimed = excluded.claimed;
   return new;
 end $$;
 create trigger sync_webhook_directory after insert or update on distribution.connections
@@ -466,6 +472,23 @@ create or replace function distribution.route_webhook(p_endpoint_id uuid)
      where d.endpoint_id = p_endpoint_id
        and d.active
        and e.env is not null
+$$;
+
+-- Whether ANOTHER connection (any organization) holds the proven claim on this hub property. Reveals one bit, only
+-- for the caller's own connection's hub property; used to refuse Verify before any hub call (P2-6).
+create or replace function distribution.hub_property_claimed_elsewhere(p_connection_id uuid)
+  returns boolean
+  language sql stable security definer set search_path = distribution, pg_temp as $$
+    select exists (
+      select 1
+        from distribution.webhook_directory mine
+        join distribution.webhook_directory other
+          on other.hub = mine.hub and other.external_property_id = mine.external_property_id
+         and other.target = mine.target and other.connection_id <> mine.connection_id
+       where mine.connection_id = p_connection_id
+         and mine.tenant_id = core.current_tenant_id()
+         and mine.target = 'production'
+         and other.claimed)
 $$;
 
 create or replace function distribution.claim_due_tenants(p_now timestamptz, p_limit int, p_lease_seconds int)
@@ -490,5 +513,7 @@ revoke all on distribution.webhook_directory from portico_app;
 revoke execute on function distribution.sync_webhook_directory() from public, portico_app;
 revoke execute on function distribution.route_webhook(uuid) from public;
 revoke execute on function distribution.claim_due_tenants(timestamptz, int, int) from public;
+revoke execute on function distribution.hub_property_claimed_elsewhere(uuid) from public;
+grant execute on function distribution.hub_property_claimed_elsewhere(uuid) to portico_app;
 grant execute on function distribution.route_webhook(uuid) to portico_app;
 grant execute on function distribution.claim_due_tenants(timestamptz, int, int) to portico_app;

@@ -173,16 +173,29 @@ export async function hubBlocker(
       code: 'credentials_unverified',
       message: 'The API key has not been verified for this hub property yet.',
     };
+  let mode: HubMode;
   try {
-    const mode = hubModeFor(tx, conn);
-    if (mode === 'live')
+    mode = hubModeFor(tx, conn);
+  } catch (err) {
+    if (err instanceof DomainError) return { code: err.code, message: err.message };
+    throw err;
+  }
+  if (mode === 'live') {
+    try {
       await deps.ports.liveScope.assertLiveChannelAllowed(tx, {
         propertyId: conn.property_id,
         connectionId: conn.id,
       });
-  } catch (err) {
-    if (err instanceof DomainError) return { code: err.code, message: err.message };
-    throw err;
+    } catch (err) {
+      // Fail closed: whatever the live-scope check answers other than "allowed" blocks the hub.
+      return {
+        code: err instanceof DomainError ? err.code : 'live_scope_refused',
+        message:
+          err instanceof DomainError
+            ? err.message
+            : 'Publishing to a live channel is not authorized for this property.',
+      };
+    }
   }
   if (!conn.credential_ref)
     return {
