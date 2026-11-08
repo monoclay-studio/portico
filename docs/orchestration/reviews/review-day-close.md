@@ -19,7 +19,7 @@ the stay.
 | **Scratch copy** | detached worktree of `cb0fbf3` merged with `main` @ `2df56d1` (local merge `d2726cc`, clean). `main` moved to `0b108b6` during the review (docs only), so no re-merge |
 | **Playbook** | steward-reviewer v2.1 (launch brief v2), plus the queued v3 items the brief asked for (gates with `--force`, exit codes, default-concurrency run; mutation spot-check) |
 | **Counts** | **P0 2 · P1 1 · P2 14 · P3 12** |
-| **Patterns** | 61 in groups A–E: **44 applicable** (16 probed, 26 code-read, 2 applied as review steps: AP-45, AP-54); **0 applicable left unprobed**; 17 not applicable (reasons in § 2). Group F not applicable (no UI review) |
+| **Patterns** | 61 in groups A–E: **44 applicable** (16 probed, 26 code-read, 2 applied as review steps: AP-45, AP-54); **0 applicable left unprobed**; 17 not applicable (reasons in § 1). Group F not applicable (no UI review) |
 | **Mutants** | Builder's **M2** (heartbeat lease-owner check) **killed**, **M16** (advance completion in the same transaction) **killed**; my **R1** (seal check in the pre-grant) **survived** → P2-8 |
 | **PoCs** | `docs/orchestration/reviews/day-close-poc/*.test.ts.txt` (§ 9) |
 
@@ -33,7 +33,7 @@ the stay.
 
 ---
 
-## 2. Coverage declaration
+## 1. Coverage declaration
 
 ### Checklist (launch brief items 1–15)
 
@@ -120,13 +120,13 @@ the stay.
 
 ---
 
-## 1. Command results (scratch copy, exit codes from files, `PORTICO_TEST_DB_PREFIX=review_dayclose`)
+## 2. Command results (scratch copy, exit codes from files, `PORTICO_TEST_DB_PREFIX=review_dayclose`)
 
 | Command | Result |
 |---|---|
 | `pnpm install --frozen-lockfile` | exit 0 |
-| `pnpm lint` (`biome check . --error-on-warnings` + boundaries) | exit 0 |
-| `pnpm turbo run typecheck --force` | exit 0 |
+| `pnpm lint` (`biome check . --error-on-warnings` + boundaries) | exit 0 (re-run into `scratchpad/gates-dayclose/` after the orchestrator's heads-up about the shared `scratchpad/gates/` folder: exit 0, 863 files, boundaries OK; my results never used that folder) |
+| `pnpm turbo run typecheck --force` | exit 0 (re-run: exit 0, 19/19, 0 cached) |
 | `pnpm turbo run test --force --concurrency=2` | **exit 0** — 17/17 tasks, 0 cached, 5 m 58 s; day-close 11 files / 87 tests, api 18 / 71 |
 | `pnpm turbo run test --force` (default concurrency), run 1 | **exit 1** — day-close: S09 "resumes at the remaining 45…" and "a day with nothing blocking…" **timed out at 60 s**; api: the tracked demo-seed flake (`rates.test.ts` › "prices every demo property…", 30 s). Machine: 4 cores, load average ≈ 12 (other reviews running) |
 | same, run 2 | exit 0 — but S09 took **43.2 s** of its 60 s (builder: 9.4 s; alone: within a 20 s suite) |
@@ -463,7 +463,7 @@ the tracked api demo-seed flake → P2-9.
   `apps/api` demo-seed flake (`rates.test.ts` › "prices every demo property…", 30 s), **day-close** failed:
   `scenario-s09…` › "resumes at the remaining 45…" and `lifecycle-and-security` › "a day with nothing blocking…",
   both at the 60 s limit. The same package passes in ~20 s alone and under `--concurrency=2`. The builder reported
-  "the day-close tests pass under both concurrency settings". Flake rate: see § Command results.
+  "the day-close tests pass under both concurrency settings". Flake rate: see § 2.
 - **Fix.** Reduce the per-test work under load (S09 creates 112 stays through real rates quotes; the attention test
   40) or raise those tests' timeouts deliberately with a comment, and record the flake in `pending-fixes.md`.
 
@@ -535,14 +535,14 @@ the tracked api demo-seed flake → P2-9.
 |---|---|---|---|
 | P3-1 | `service/engine.ts:199-224`, `scheduler.ts:47-79` | `R-CHURN`: a blocked auto-close writes a `dayClose.run.blocked` audit row and bumps the run version **every minute** (6 audits, version 13 after 6 ticks), so a person's `If-Match` races the worker; once the run is stuck past the next due time the schedule re-fires **every minute** (`fired` ×5 in 4 minutes) | Audit only when the blockers change (as notifications already do); set `next_due_at` from the run's date, not `businessDate+1`, while a run is active |
 | P3-2 | `service/engine.ts:262-313` | `recordFailure` writes the step failure, the integrity issue and the `run.fail` audit without the lease fence (only `release` is fenced): a stale executor can mark a step another executor is running as failed and raise an integrity alarm | Heartbeat first in `recordFailure` (throw `LeaseLostError` like every other executor write) |
-| P3-3 | `src/manifest.ts:37` | Record type `day_report` declares route `/day-close/reports/:id`; no such route exists (`routes.ts:180-184` uses `/properties/:propertyId/days/:date/report`) | Add the route or fix the declared route |
+| P3-3 | `src/manifest.ts:38` | Record type `day_report` declares route `/day-close/reports/:id`; no such route exists (`routes.ts:180-184` uses `/properties/:propertyId/days/:date/report`) | Add the route or fix the declared route |
 | P3-4 | `contracts.ts:126`, `domain/policy.ts:57-68` | Comment says saving refuses "unknown codes"; unknown codes are accepted (a typo in `warningCodes` silently has no effect) | Validate codes against the known catalogue, or fix the comment |
 | P3-5 | `steps/index.ts:269-278` | Integrity passes when the inventory consistency check is "not connected" (recorded as `checked: false`, but the run says the books proved balanced) | Show "inventory not checked" as a warning in the report and readiness; never as a silent pass |
 | P3-6 | README DCL-R02.6, `engine.ts:53` | "Raises a blocking alarm to finance": the alarm is a Day Close issue owned by the finance department, but identity's `finance` template has no `dayClose.*` (CR-13), and run notifications go to `night_audit`/`front_office_manager` only — finance is told nothing on main | Say so in the README until CR-13; include finance in the integrity-failure notification roles |
 | P3-7 | `apps/api/src/composition.ts` (`markNoShow` property check) | Untested (builder admits it); stays cannot be created in the composed app on main | Cover it when integration-step lands; keep the README line |
 | P3-8 | `src/events.ts` | Event payload Zod schemas not exported (builder self-check item 22 "no") | Export them for consumers (CR-14/15) |
 | P3-9 | `scheduler.ts:71-77` | Reverse order (AP-08): a manual run created first (e.g. `execute:false`) pre-empts the schedule's auto-continue; the guesthouse auto-close silently becomes a manual run | Let the schedule adopt an active run for its date (set `auto_continue`) or say so in the run view |
-| P3-10 | `test/harness.ts:172-173` | The reservations fake silently drops an in-house stay whose terms do not cover the night (AP-41); the real provider would return it and Day Close would raise `night_not_in_terms` | Return it and let the test see the refusal |
+| P3-10 | `test/harness.ts:164-165` | The reservations fake silently drops an in-house stay whose terms do not cover the night (AP-41); the real provider would return it and Day Close would raise `night_not_in_terms` | Return it and let the test see the refusal |
 | P3-11 | `service/readiness.ts:221-344`; `steps/index.ts:339-371` | DCL-R01 [MUST] sources not aggregated and not in Known gaps: incomplete check-ins/outs, failed collection items, unresolved relocations/inventory conflicts, unacknowledged handovers; DCL-R02.7 facts omit **cancellations** (departures and nationality are documented as missing) | List them in Known gaps with the owning contract request, or add the sources |
 | P3-12 | `steps/index.ts:104-106` | The no-show step honours an override of `arrival_transfer_delayed`, but that item is a warning and `overrideItem` refuses it (`runs.ts:286`): dead branch | Remove it or make the item overridable on purpose |
 
