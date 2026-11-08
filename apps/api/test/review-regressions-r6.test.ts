@@ -517,3 +517,55 @@ describe('R6-P3-1 — a card-funded deposit is kept as revenue only up to a reco
     expect(codeOf(await forfeit(10_000))).toBe('accepted');
   });
 });
+
+// ───────────────────────── P3: card money still in flight (reviewer mutant R6-M1) ─────────────────────────
+
+describe('R6-P3-4 — card money not yet on the ledger still counts where it lands', () => {
+  it('a card payment pending verification on Vera’s folio: Otto’s charge is not moved onto it', async () => {
+    const org = await organization(s);
+    const k = await kandu(s, org, '2027-03-10');
+    const { finance } = s.c.services;
+    const desk = org.staff('front_desk', 'Hassan', [k.id]);
+    const gm = org.staff('general_manager', 'GM', [k.id]);
+    const { profileId: vera } = await guestWithCard(s, org, k, { firstName: 'Vera', lastName: 'Victim' });
+    const { profileId: otto } = await guestWithCard(
+      s,
+      org,
+      k,
+      { firstName: 'Otto', lastName: 'Other' },
+      'pm_card_mastercard',
+    );
+    const v1 = await bookFor(org, k, desk, vera, '2027-06-10', '2027-06-12');
+    const y = await bookFor(org, k, desk, otto, '2027-06-10', '2027-06-12');
+    const f1 = await folioOfStay(org, k, v1.stays[0]?.id as string, vera);
+    const fy = await folioOfStay(org, k, y.stays[0]?.id as string, otto);
+    const card = await methodFor(
+      org,
+      k,
+      { type: 'guest_profile', id: vera },
+      { purposes: ['balance'], bookingIds: [v1.id] },
+      'sim_timeout_then_succeeded',
+    );
+    await owe(org, k, desk, v1.stays[0]?.id as string, 50_000, 'Vera dinner');
+    await owe(org, k, desk, y.stays[0]?.id as string, 40_000, 'Otto spa');
+    expect(codeOf(await cardCharge(desk, k, card.id, { type: 'folio', id: f1 }, 50_000))).toBe('accepted');
+    expect((await paymentsOn(f1)).map((p) => p.status)).toEqual(['pending_verification']);
+    const ottoCharge = (
+      await sql<{
+        id: string;
+      }>`select id from finance.postings where folio_id = ${fy} and kind = 'charge'`.execute(s.t.admin.kysely)
+    ).rows[0]?.id as string;
+    const moved = await settle(
+      org.run(gm, (tx) =>
+        finance.transferPostings(tx, {
+          fromFolioId: fy,
+          toFolioId: f1,
+          items: [{ postingId: ottoCharge }],
+          reason: 'Guest asked',
+          idempotencyKey: newId(),
+        }),
+      ),
+    );
+    expect(codeOf(moved)).toBe('transfer_not_covered_by_card_consent');
+  });
+});
