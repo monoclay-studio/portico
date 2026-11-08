@@ -572,4 +572,9 @@ the tracked api demo-seed flake → P2-9.
   - `day-close-poc/zz-review-late.test.ts.txt` — `R-LATE`
   - `day-close-poc/zz-review-dst-standalone.mjs.txt` — the DST computation for London, New York, Los Angeles,
     Santiago, Sydney without the workspace
-- Nothing committed. The scratch worktree and every `review_dayclose*` database were removed at the end (§ below).
+- Nothing committed by me (the orchestrator's `wip(reviews)` checkpoints hold earlier partial versions of this file).
+- Clean-up done: the scratch worktree `scratchpad/review-dayclose-copy` was removed (`git worktree remove --force` +
+  `prune`); the two leftover databases `review_dayclose_3651156e94` and `review_dayclose_929a7e57f5` were dropped
+  (0 `review_dayclose*` databases remain). Gate and probe logs stay in `scratchpad/rv-dcl/` and
+  `scratchpad/gates-dayclose/`. The worktree under review (`/home/user/wt/day-close`) was never modified and is still
+  at `cb0fbf3`.
