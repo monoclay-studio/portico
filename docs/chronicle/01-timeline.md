@@ -520,3 +520,11 @@ Each agent's brief and report are in `agents/`.
   - When the wave is done: checkpoint, then pause. The 17:03 Wednesday resume task picks up the STATUS order.
 - **05:38 — Owner: "don't let it effect your current work though. AT ALL"** <!-- t: owner:4f98af2a @ 2026-11-08T05:38:33.867Z -->. The scope limit never lowers the rigor of the current wave: full reviews,
   full fix rounds with self-check v6, re-reviews until clean, and the full merge procedure.
+- **05:44 — Distribution steward review: merge after fixes** <!-- t: agent-a45cae866e44c3c5b @ 2026-11-08T05:44:39.770Z (Steward review: distribution + Channex) --> (P0 0 · P1 2 · P2 9 · P3 9).
+  - Held under attack: the budget under real concurrency, a 429 storm, durable storage before the 200, ack after
+    commit, environment safety and live refusal, isolation, secrets.
+  - **P1-1:** a revoked key or external authority made the org re-run its work every second forever. That breaks the
+    owner's "no polling loops" requirement.
+  - **P1-2:** revision ordering on `Date.parse` and arrival time could lose a modification or strand a creation.
+  - The reviewer's own mutant survived: the per-booking ordered wait was untested.
+  - Fix round 1 went to the distribution builder with self-check v6.

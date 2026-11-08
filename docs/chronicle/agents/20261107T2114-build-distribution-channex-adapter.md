@@ -1,6 +1,6 @@
 # Agent run: Build distribution + Channex adapter
 
-- Started: 2026-11-07T21:14:50.867Z · last activity: 2026-11-07T22:33:51.180Z
+- Started: 2026-11-07T21:14:50.867Z · last activity: 2026-11-08T05:45:24.932Z
 - Turns: 263 · tool uses: 270 · output tokens: 475,823
 - Type: general-purpose
 
@@ -83,6 +83,71 @@ A steward review will follow.
 
 ````text
 [handback-send-enforce] Your report has not been delivered. Call SubagentHandback({message: <your full report>}) now; the call ends your run.
+````
+
+## Follow-up message (2026-11-08T05:45:24.894Z)
+
+````text
+The coordinator sent a message while you were working:
+Distribution fix round 1. The steward review says "merge after fixes": P0 0, P1 2, P2 9, P3 9.
+
+Much held up well under attack:
+- the budget held under real concurrency;
+- a 429 storm handled correctly;
+- revisions stored durably before the 200;
+- ack only after a committed outcome;
+- environment safety and live refusal;
+- tenant isolation and secrets.
+
+Thank you.
+
+**Read first, all on main:**
+- `docs/orchestration/reviews/review-distribution.md`
+- the probes in `docs/orchestration/reviews/distribution-poc/zz-review-{a,b,c}.test.ts.txt`
+- the "distribution fix round 1" line in `docs/orchestration/pending-fixes.md`
+
+Merge main into `feat/distribution-channex` first.
+
+**Must fix before merge:**
+1. **P1-1, a polling loop.** A revoked key (E04), or an external system of record, plus one pending change makes the org re-run all its work every 1 s, forever (`jobs.ts:118-128`). It also rewrites the exception every pass and starves the shared scheduler.
+   - Work that cannot progress must be parked until the blocking state changes: the key is re-verified, or authority returns.
+   - The exception is written once per state change.
+   - Turn the probes A1/A2 into regression tests.
+2. **P1-2, revision ordering.** Today it uses `Date.parse` (millisecond precision, zone-less strings read as local time), breaks ties with a hash and falls back to arrival time.
+   - Order on the hub's own sequence where it exists, otherwise on timezone-safe timestamps with a deterministic, causal tie-break.
+   - A modification carrying the creation's timestamp must be applied, never acknowledged as `stale` (A3).
+   - A cancellation that arrives first must never strand the creation (A4).
+   - Mark any assumption about Channex's ordering fields as unverified in `wire.ts`, and add it to the R4 staging checklist.
+3. **P2-1:** add a test that fails when the per-booking ordered wait (`inbound.ts:680`) is disabled. It survived the reviewer's mutant. Also correct parity row PAR-DST-023.
+4. **G-1:** zero lint warnings. Main now runs `--error-on-warnings`; the merged copy failed with your 7 warnings.
+
+**Then the P2s:**
+- **P2-2:** the budget must not depend on synchronized worker clocks or on latency jitter. Use DB time and a safety margin, so the hub never sees more than its limit in any 60 s.
+- **P2-3/P2-4:**
+  - An unrecognised hub answer fails closed. That covers a warning with no index and a 200 carrying `errors`.
+  - The simulator must stop mirroring the adapter's 7 unverified assumptions, so drift becomes visible.
+  - Move the 4 wire assumptions from `client.ts` into `wire.ts`.
+- **P2-5:** webhook rate limits per endpoint, not per IP (every tenant shares Channex's IPs). Unauthenticated posts are not stored permanently.
+- **P2-6:** a live tenant cannot claim a production hub property before proving access to it.
+- **P2-7:** an erasure path for guest data in stored revisions. Coordinate with guests' erasure contract; if it needs a guests port, declare it and bind a strict fake.
+- **P2-8:** an unparseable change event raises an exception, never a silent drop.
+
+**Then the cheap P3s.**
+
+**Self-check v6** (`docs/quality/playbooks/module-builder-self-check.md`). Include the tables:
+- § 5.1 state machines for a revision and for a connection's health, with external holders (the hub);
+- pasted writer searches;
+- a control-fact grid with an input-source column;
+- the § 5.4 mutation table for every P1/P2 guard (each guard removed → its named test fails → restored);
+- the § 6 claim ledger over the README, the spec and the parity rows you touch.
+
+**How to work:**
+- Commit after every meaningful step.
+- Do not push.
+- Never amend or rewrite commits.
+- Gates: `pnpm lint`, `pnpm turbo run typecheck --force`, `pnpm turbo run test --force --concurrency=2`, all exit 0.
+
+Address this before completing your current task.
 ````
 
 ## Report (2026-11-07T22:33:51.080Z)
