@@ -63,6 +63,8 @@ Related permanent records the chronicle points to rather than copies:
   `extract.py` now reads every project folder of the session, so all 61 agent runs have full logs, and usage covers
   the whole session from 06:40 UTC on 2026-11-07.
 - The orchestrator's own reasoning is summarised in the timeline, not reproduced.
+- At the owner's request, non-work conversation between 07:10 and 09:18 UTC on 2026-11-08 is not recorded
+  (`EXCLUDED_OWNER_WINDOWS` in `tools/chronicle/extract.py`). No work decisions were made in that window.
 
 Privacy: no secrets, credentials or personal data belong here. The owner's messages are kept verbatim because the
 owner asked for this record. Before anything is published externally, review the verbatim files.

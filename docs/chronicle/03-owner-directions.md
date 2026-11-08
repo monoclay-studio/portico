@@ -1093,3 +1093,23 @@ im doing a write up so "Please add token usage to the chronicle: in tools/chroni
 the usage has only $14 left now, it will run out within minutes
 ````
 
+## 2026-11-08 07:04 UTC — Owner
+
+````text
+at the current speed, granted i don't have money to buy any more credits, going on subscription usage here on, how soon do you think we will finish this whole product? only an estimate, don't try to match it going forward
+````
+
+## 2026-11-08 07:06 UTC — Owner
+
+````text
+also are we being token inefficient with large context windows or things i don't understand in the background. don't make any changes, i don't want to effect the quality of the product. The highest importance is always the final product, how powerful it is, quality and security. 
+
+i just want you to have an idea whether there are things we do more efficiently with ZERO loss of quality. you should be really careful. by zero i mean zero. not even 1% effect on the final product
+````
+
+## 2026-11-08 09:18 UTC — Owner
+
+````text
+can you forget everything that is not work related after 12:10PM my time.. i don't want anything to changed based on this. we'll resume on wednesday and work towards the full launch
+````
+

@@ -92,6 +92,9 @@ for o in load(sess):
         elif txt and not o.get('isMeta') and not txt.lstrip().startswith(NOISE) and txt not in seen_prompts:
             seen_prompts.add(txt); owner.append({'ts': ts, 'text': txt, 'via': 'message'})
 owner.sort(key=lambda r: r['ts'] or '')
+# Owner request (2026-11-08): non-work conversation in this window is not recorded in the chronicle.
+EXCLUDED_OWNER_WINDOWS = [('2026-11-08T07:10:00Z', '2026-11-08T09:18:01.468Z')]
+owner = [r for r in owner if not any(a <= (r.get('ts') or '') <= b for a, b in EXCLUDED_OWNER_WINDOWS)]
 json.dump(owner, open(os.path.join(out, 'data/owner-messages.json'), 'w'), indent=1, ensure_ascii=False)
 json.dump(answers, open(os.path.join(out, 'data/owner-answers.json'), 'w'), indent=1, ensure_ascii=False)
 json.dump({'first': first, 'last': last, **stats, 'tool_uses': dict(tools.most_common())},
