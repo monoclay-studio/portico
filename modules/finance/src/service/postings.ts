@@ -1389,6 +1389,8 @@ export async function transferPostings(
       if (root.kind === 'payment') movedMoney.paymentIds.push(root.id);
       else if (root.kind === 'deposit') movedMoney.depositBookingIds.push(root.bookingId);
       else if (root.kind === 'debt') movedDebt.push(root.owner);
+      // R6-P1-2: an origin that cannot be established is an unknown owner — refused wherever card money is.
+      else if (root.kind === 'unknown') movedDebt.push({ type: 'unknown_origin', id: root.postingId });
       else if (root.kind === 'folio_balance') {
         const src = await folioProvenance(tx, root.folioId);
         movedDebt.push(src.owner, ...src.debtOwners);

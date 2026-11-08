@@ -16,6 +16,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   applied,
   bookingInput,
+  cardholderConfirms,
   guestWithCard,
   kandu,
   organization,
@@ -317,5 +318,104 @@ describe('R6-P1-1 — consent is judged on the purpose of the money where it lan
     expect(codeOf(await capture2())).toBe('mandate_purpose_not_covered');
     expect(codeOf(await capture2('no_show'))).toBe('accepted');
     expect((await paymentsOn(folioId)).map((p) => p.purpose)).toEqual(['no_show']);
+  });
+});
+
+// ───────────────────────── R6-P1-2: every posting has an owner ─────────────────────────
+
+describe('R6-P1-2 — a refund posting is the debt of the stay it was refunded on; moving it never lets another card pay it', () => {
+  async function ottoRefunded(org: ScenarioOrg, k: K) {
+    const { payments } = s.c.services;
+    const desk = org.staff('front_desk', 'Hassan', [k.id]);
+    const gm = org.staff('general_manager', 'GM', [k.id]);
+    const { profileId: vera, card } = await guestWithCard(s, org, k, {
+      firstName: 'Vera',
+      lastName: 'Victim',
+    });
+    const { profileId: otto } = await guestWithCard(
+      s,
+      org,
+      k,
+      { firstName: 'Otto', lastName: 'Other' },
+      'pm_card_mastercard',
+    );
+    const v1 = await bookFor(org, k, desk, vera, '2027-06-10', '2027-06-12');
+    const y = await bookFor(org, k, desk, otto, '2027-06-10', '2027-06-12');
+    await cardholderConfirms(s, org, card.id, v1.id);
+    const f1 = await folioOfStay(org, k, v1.stays[0]?.id as string, vera);
+    const fy = await folioOfStay(org, k, y.stays[0]?.id as string, otto);
+    await owe(org, k, desk, y.stays[0]?.id as string, 30_000, 'Otto spa');
+    const acct = await simAccount(org, k.legalEntityId);
+    const req = await org.run(desk, (tx) =>
+      payments.tx.createPaymentRequest(tx, {
+        propertyId: k.id,
+        payer: { type: 'guest_profile', id: otto, name: 'Otto' },
+        amount: usd(30_000),
+        purpose: 'balance',
+        ref: { type: 'folio', id: fy },
+        expiresAt: new Date(s.clock.now().getTime() + 86_400_000).toISOString(),
+        businessKey: newId(),
+      }),
+    );
+    await payments.ensurePaymentLink(gm, req.id);
+    await payments.simulateRequestPayment(gm, req.id);
+    await payments.deliverSimulatorWebhooks(gm, acct);
+    await s.drain();
+    const pid = (
+      await sql<{
+        id: string;
+      }>`select id from payments.payments where ref_id = ${fy} and status = 'succeeded'`.execute(
+        s.t.admin.kysely,
+      )
+    ).rows[0]?.id as string;
+    await org.run(gm, (tx) =>
+      payments.tx.refund(tx, {
+        paymentId: pid,
+        amount: usd(30_000),
+        reason: 'Goodwill',
+        businessKey: newId(),
+      }),
+    );
+    await payments.deliverSimulatorWebhooks(gm, acct);
+    await s.drain();
+    const refundPosting = (
+      await sql<{
+        id: string;
+      }>`select id from finance.postings where folio_id = ${fy} and kind = 'refund'`.execute(s.t.admin.kysely)
+    ).rows[0]?.id as string;
+    expect(refundPosting).toBeTruthy();
+    const transfer = () =>
+      settle(
+        org.run(gm, (tx) =>
+          s.c.services.finance.transferPostings(tx, {
+            fromFolioId: fy,
+            toFolioId: f1,
+            items: [{ postingId: refundPosting }],
+            reason: 'Guest asked',
+            idempotencyKey: newId(),
+          }),
+        ),
+      );
+    return { desk, card, v1, f1, fy, transfer };
+  }
+
+  it('PoC R6-B flipped (refund moved first): the card is refused for the folio that now carries Otto’s refunded spa', async () => {
+    const org = await organization(s);
+    const k = await kandu(s, org, '2027-03-10');
+    const { desk, card, f1, transfer } = await ottoRefunded(org, k);
+    expect(codeOf(await transfer())).toBe('accepted'); // no card money on Vera's folio yet
+    const r = await cardCharge(desk, k, card.id, { type: 'folio', id: f1 }, 30_000);
+    expect(codeOf(r)).toBe('mandate_reference_not_covered'); // flipped FINDING
+    expect(await paymentsOn(f1)).toEqual([]);
+  });
+
+  it('sibling (card first): Otto’s refund is not moved onto Vera’s folio once her card money is there', async () => {
+    const org = await organization(s);
+    const k = await kandu(s, org, '2027-03-10');
+    const { desk, card, v1, f1, transfer } = await ottoRefunded(org, k);
+    await owe(org, k, desk, v1.stays[0]?.id as string, 50_000, 'Vera dinner');
+    expect(codeOf(await cardCharge(desk, k, card.id, { type: 'folio', id: f1 }, 50_000))).toBe('accepted');
+    await s.drain();
+    expect(codeOf(await transfer())).toBe('transfer_not_covered_by_card_consent');
   });
 });

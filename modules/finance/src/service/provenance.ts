@@ -35,7 +35,10 @@ type Root =
   | { kind: 'payment'; id: string }
   | { kind: 'deposit'; bookingId: string }
   | { kind: 'folio_balance'; folioId: string }
-  | { kind: 'none' };
+  /** Money with no cardholder agreement behind it (cash, tender, cheque): no coverage constraint. */
+  | { kind: 'other_money' }
+  /** A posting whose origin cannot be established: treated as debt of an unknown owner (fails closed). */
+  | { kind: 'unknown'; postingId: string };
 
 const key = (o: Owner) => `${o.type}:${o.id}`;
 
@@ -102,7 +105,7 @@ async function rootOf(tx: TxContext, p0: PostingLite): Promise<Root> {
       }
       // A balance transfer (no item): it carries the other folio's debt.
       const peer = p.transfer_peer_id ? await posting(tx, p.transfer_peer_id) : undefined;
-      return peer ? { kind: 'folio_balance', folioId: peer.folio_id } : { kind: 'none' };
+      return peer ? { kind: 'folio_balance', folioId: peer.folio_id } : { kind: 'unknown', postingId: p.id };
     }
     if (p.kind === 'tax' && p.parent_posting_id) {
       p = await posting(tx, p.parent_posting_id);
@@ -115,26 +118,28 @@ async function rootOf(tx: TxContext, p0: PostingLite): Promise<Root> {
     if (p.kind === 'payment') {
       return p.payment_ref_type === 'payment' && p.payment_ref_id
         ? { kind: 'payment', id: p.payment_ref_id }
-        : { kind: 'none' };
+        : { kind: 'other_money' };
     }
     if (p.kind === 'deposit_application') {
       return p.source_type === 'booking' && p.source_id
         ? { kind: 'deposit', bookingId: p.source_id }
-        : { kind: 'none' };
+        : { kind: 'unknown', postingId: p.id };
     }
-    if (p.kind === 'refund') return { kind: 'none' };
+    // Re-review #6 R6-P1-2 (Amendment 5 rule 2): every other posting — a refund (it takes back credit), a reversal, a
+    // correction, an allowance, a forfeit, a receivables transfer, a paid-out — is debt (or a debt reduction) of the
+    // owner of the folio it was first posted on (or of the billing rule that routed it). Nothing is "none".
     const owner = p.billing_rule_id
       ? await ruleOwner(tx, p.billing_rule_id)
       : await folioOwner(tx, p.folio_id);
-    return owner ? { kind: 'debt', owner } : { kind: 'none' };
+    return owner ? { kind: 'debt', owner } : { kind: 'unknown', postingId: p.id };
   }
-  return { kind: 'none' };
+  return { kind: 'unknown', postingId: p0.id };
 }
 
 /** The money (payment or deposit application) or debt owner a posting carries, for a transfer check. */
 export async function postingRoot(tx: TxContext, postingId: string): Promise<Root> {
   const p = await posting(tx, postingId);
-  return p ? rootOf(tx, p) : { kind: 'none' };
+  return p ? rootOf(tx, p) : { kind: 'unknown', postingId };
 }
 
 export async function folioProvenance(
@@ -165,6 +170,8 @@ export async function folioProvenance(
     if (root.kind === 'debt') addDebt(root.owner, amount);
     else if (root.kind === 'payment') pays.set(root.id, (pays.get(root.id) ?? 0) + amount);
     else if (root.kind === 'deposit') deps.set(root.bookingId, (deps.get(root.bookingId) ?? 0) + amount);
+    else if (root.kind === 'unknown')
+      addDebt({ type: 'unknown_origin', id: root.postingId }, Math.abs(amount));
     else if (root.kind === 'folio_balance' && amount > 0 && !seen.has(root.folioId)) {
       // A balance moved here from another folio carries that folio's owner and every origin of its debt.
       const other = await folioProvenance(tx, root.folioId, seen);
