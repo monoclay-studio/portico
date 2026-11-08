@@ -458,3 +458,16 @@ Each agent's brief and report are in `agents/`.
   - Escape note for quality round 4: four rounds of "one step beyond" in consent. The builder's control-fact grid had
     no input-source column.
 - **23:55 — Fix round 5 sent** <!-- t: now @ 2026-11-07T23:55:55Z --> with self-check v6 plus an input-source column and a list of every money-moving writer.
+- **00:50 — Integration-step fix round 5 done** <!-- t: agent-a29fdf2e9c7d0e9dc @ 2026-11-08T00:50:31.897Z (Integration step: bind module ports) -->; head `333a83e`, pushed. The class was closed, not the path.
+  - Purposes are derived from facts: the deposit schedule, the folio balance, and a no-show or cancellation penalty
+    that reservations recorded.
+  - Finance tracks each folio's debt origins through transfers and routing. It asks payments before applying deposits,
+    transfers or routes. Payments re-checks the destination under the collection lock.
+  - Staff agreements need an amount limit.
+  - Link-stopped is finance-only, needs an open exception and If-Match, and never applies to a "completed" link.
+  - The input-source grid has no client-label cell. 26 mutants, all killed; M6 is now deterministic.
+  - The residuals are recorded, each bounded by `maxAmount`.
+- **00:51 — Focused re-review #6 launched** <!-- t: now @ 2026-11-08T00:51:16Z --> (seven-day ≈ 93%). Budget-capped; the report is written incrementally, so a stop loses nothing.
+  - Focus: regressions in normal front-desk flows caused by the stricter consent model.
+  - Rationale: whatever is unused at the weekly reset is lost, and merging integration-step before the pause lets the
+    restart begin with downstream work.

@@ -159,7 +159,8 @@
     - `feat/day-close` @ cb0fbf3: 22 mutants red; 17 contract requests.
   - **RESUME ORDER** (each from its latest playbook; every brief requires self-check v6):
     1. Integration-step: re-review #5 said merge after fixes (2 P1, the same consent class). Fix round 5 (ADR-0015
-       Amendment 4) was sent at 23:56 and is running. Then a focused re-review #6 → merge if clean. Quality round 4 input:
+       Amendment 4) DONE at 333a83e (pushed, 00:50). Focused re-review #6 launched 00:52 → `reviews/review-integration-step-6.md`
+       (written incrementally; if stopped, resume the reviewer from its partial report). Merge if clean, else fix round 6. Quality round 4 input:
        four rounds of "one step beyond" in consent; the builder grid lacked an input-source column.
     2. Steward reviews of distribution and day-close (in parallel). Then fix rounds, then merge.
     3. Steward review of migration (`feat/migration` @ 45be8b9, built 23:27: 95 module tests, gates green; MIG-CR-1 blocks real runs), in parallel with item 2.
