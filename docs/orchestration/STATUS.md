@@ -181,6 +181,17 @@
   - At 97%: stop re-review #6 and commit its partial report as WIP.
   - The resume order is the 22:55 entry above, with item 1 updated: re-review #6 is running on `333a83e`.
 
+- **2026-11-08 01:11 UTC — PAUSED for the weekly reset (seven-day ≈ 95%).**
+  - `tools/checkpoint.sh` pushed every branch. The one exception is `ux/lab`: a disposable lab branch whose remote
+    diverged. It is not force-pushed; `tools/ux-lab.sh refresh` rebuilds it.
+  - No agents are running.
+  - The usage-check task and the 3-hour UX heartbeat are **disabled**, so they spend nothing while paused. Re-enable
+    both on resume: the heartbeat is "Portico continuous UX loop heartbeat"; the usage-check chain is "Usage guardrail
+    check", restarted with a new time.
+  - The resume task fires at **2026-11-11 17:03 UTC**.
+  - **First action on resume:** send integration-step fix round 6 (pending-fixes line; ADR-0015 Amendment 5). In
+    parallel, the steward reviews of distribution, day-close and migration.
+
 ## 1. Owner, product and how to work with the owner
 
 - Owner: founder of **Monoclay LLC** (Delaware, Stripe Atlas), based in the Maldives. Product: **Portico** (final name).
