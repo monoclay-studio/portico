@@ -6,7 +6,7 @@ packages:
 # Single source of truth for dependency versions. Packages reference these as "catalog:".
 catalog:
   "@biomejs/biome": 2.6.6
-  "@types/node": ^22.15.0
+  "@types/node": ^26.6.6
   "@types/pg": 8.23.1
   turbo: 2.11.10
   typescript: 7.0.2
